@@ -1,5 +1,8 @@
 # 机器适配 V2 设计文档
 
+> **历史设计文档：** 本文中的模板生成和矩阵检查流程已由 FatCat 原生来源目录取代。
+> 当前维护流程见 `docs/machine-adapter-v2-maintenance.md`。
+
 ## 先说结论
 
 Lumina 需要把现在靠 `config.py` 和 `printer_profiles/*.json` 手工维护的机器适配，升级为一套 **开发期原生读取切片软件 profile，再生成 Lumina 内置设备注册表** 的流程。
@@ -57,7 +60,7 @@ Lumina 目前的 3MF 元数据适配主要散落在这些位置：
 3. `Application` / client version stamp 仍然有硬编码。
 4. 同一机型在不同切片软件下的 profile 差异没有被显式建模。
 5. 机器缩略图、厂商图标、型号分组没有统一资产来源。
-6. `scripts/verify_3mf_template_matrix.py` 当前导入 helper 已失效，说明元数据矩阵校验入口需要跟着重建。
+6. 当时的 `scripts/verify_3mf_template_matrix.py` 导入 helper 已失效；这一历史计划后来由 FatCat 原生来源目录取代。
 
 ## 本机观察到的 profile 来源
 
@@ -587,6 +590,8 @@ python tools/machine_adapter/import_profiles.py `
 - 受保护工艺字段在导入前后保持当前行为，例如 `0.08mm` 层高不会被原生 `0.20mm Standard` 覆盖。
 
 ### 矩阵测试
+
+> **已废弃（2026-09-28）：** 本节假设模板文件仍由 Lumina 管理。其矩阵脚本和模板来源已随原生来源目录切换删除；当前维护说明见 `docs/machine-adapter-v2-maintenance.md`。以下内容仅保留为历史设计记录。
 
 修复 `scripts/verify_3mf_template_matrix.py`，让它从 registry 获取所有 supported device profile：
 

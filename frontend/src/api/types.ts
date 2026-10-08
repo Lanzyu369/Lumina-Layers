@@ -165,6 +165,7 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   nozzle_size?: string;
   device_profile_id?: string;
   build_plate_id?: string;
+  custom_3mf_template_id?: string | null;
   enable_base_layer_height_modifier?: boolean;
   enable_wipe_tower_auto_placement?: boolean;
   use_cached_matched_rgb?: boolean;
@@ -701,6 +702,7 @@ export interface CalibrationGenerateRequest {
   nozzle_size?: string;
   device_profile_id?: string;
   build_plate_id?: string;
+  custom_3mf_template_id?: string | null;
 }
 
 // ========== Calibration Response Models ==========
@@ -734,6 +736,7 @@ export interface SingleStageKitGenerateRequest {
   nozzle_size?: string;
   device_profile_id?: string;
   build_plate_id?: string;
+  custom_3mf_template_id?: string | null;
 }
 
 export interface SingleStageKitResponse {
@@ -1870,6 +1873,7 @@ export interface BatchConvertParams {
   nozzle_size?: string;
   device_profile_id?: string;
   build_plate_id?: string;
+  custom_3mf_template_id?: string | null;
   enable_base_layer_height_modifier?: boolean;
   enable_wipe_tower_auto_placement?: boolean;
 }
@@ -1982,6 +1986,7 @@ export interface RecipeSwatchRequest {
   nozzle_size?: string;
   device_profile_id?: string;
   build_plate_id?: string;
+  custom_3mf_template_id?: string | null;
 }
 
 export interface RecipeSwatchResponse {
@@ -2012,6 +2017,7 @@ export interface MaterialRecipeSwatchRequest {
   nozzle_size?: string;
   device_profile_id?: string;
   build_plate_id?: string;
+  custom_3mf_template_id?: string | null;
 }
 
 export interface MaterialRecipeSwatchResponse {
@@ -2244,6 +2250,7 @@ export interface PrinterListResponse {
 // ========== Settings Models ==========
 
 export interface UserSettings {
+  custom_3mf_template_id?: string | null;
   language: "zh" | "en";
   theme: "light" | "dark";
   last_lut: string;

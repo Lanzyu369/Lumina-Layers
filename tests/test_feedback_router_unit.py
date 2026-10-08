@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -856,6 +857,31 @@ def test_submit_bug_report_uploads_sanitized_ticket_to_feedback_server(
         description=DESCRIPTION_RAW_DIAGNOSTICS,
         screenshot_data_url="data:image/png;base64," + ("a" * 1024),
     )
+    from core import custom_3mf_templates
+
+    template_settings = {
+        "layer_height": "0.16",
+        "filament_settings_id": ["Native PLA"],
+        "print_host": "fake-private-printer.local",
+        "printhost_apikey": "fake-private-api-key",
+        "printhost_password": "fake-private-password",
+        "printhost_user": "fake-private-user",
+        "printhost_cafile": "/fake/private/certificate.pem",
+        "host_type": "octoprint",
+        "nested": [{"printhost_future_option": "fake-private-option", "wall_loops": "3"}],
+    }
+    monkeypatch.setattr(custom_3mf_templates, "load_template", lambda _id: template_settings)
+    payload["context"]["custom_3mf_template_id"] = "00000000-0000-4000-8000-000000000001"
+    private_path.parent.mkdir()
+    with zipfile.ZipFile(private_path, "w") as project:
+        project.writestr("3D/3dmodel.model", b"GEOMETRY")
+        project.writestr("Metadata/project_settings.config", json.dumps(template_settings))
+    original_project_bytes = private_path.read_bytes()
+    from api.dependencies import get_file_registry
+
+    artifact_id = get_file_registry().register_path(
+        session_id="session-abcdef", path=str(private_path), filename="model.3mf",
+    )
     payload["context"]["recent_client_logs"] = [
         {
             "timestamp": "2026-05-10T01:02:03.000Z",
@@ -875,7 +901,7 @@ def test_submit_bug_report_uploads_sanitized_ticket_to_feedback_server(
     ]
     payload["context"]["active_final_artifact_ref"] = {
         "session_id": "session-abcdef",
-        "download_url": None,
+        "download_url": f"/api/files/{artifact_id}",
         "artifact_type": "3mf",
         "disk_path": private_path.as_posix(),
         "source": "converter",
@@ -896,11 +922,27 @@ def test_submit_bug_report_uploads_sanitized_ticket_to_feedback_server(
     # The same ticket.json, index.md and summary.txt the old email carried.
     assert document["index_md"] and document["summary_txt"]
     assert "submission" not in document["ticket"]
-    assert [item.name for item in bundle.files] == ["screenshot.png"]
-    assert document["attachments"][0]["kind"] == "screenshot"
+    assert [item.name for item in bundle.files] == ["final.3mf", "screenshot.png"]
+    assert {item["kind"] for item in document["attachments"]} == {"final_artifact", "screenshot"}
 
     uploaded_text = json.dumps(document, ensure_ascii=False)
     _assert_description_diagnostics_redacted(uploaded_text)
+    assert "fake-private" not in uploaded_text
+    assert "certificate.pem" not in uploaded_text
+    expected_template_settings = {
+        "layer_height": "0.16",
+        "filament_settings_id": ["Native PLA"],
+        "nested": [{"wall_loops": "3"}],
+    }
+    assert document["ticket"]["context"]["custom_3mf_template_snapshot"] == {
+        "status": "captured", "settings": expected_template_settings,
+    }
+    assert template_settings["printhost_apikey"] == "fake-private-api-key"
+    final_project = next(item.path for item in bundle.files if item.name == "final.3mf")
+    with zipfile.ZipFile(final_project) as project:
+        assert project.read("3D/3dmodel.model") == b"GEOMETRY"
+        assert json.loads(project.read("Metadata/project_settings.config")) == expected_template_settings
+    assert private_path.read_bytes() == original_project_bytes
     assert "disk_path" not in document["ticket"]["context"]["active_final_artifact_ref"]
     assert private_path.as_posix() not in uploaded_text
     assert feedback_root.as_posix() not in uploaded_text
@@ -913,7 +955,8 @@ def test_submit_bug_report_uploads_sanitized_ticket_to_feedback_server(
 
     ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
     assert ticket_json["submission"]["status"] == "submitted"
-    assert ticket_json["submission"]["uploaded_attachments"] == ["screenshot.png"]
+    assert ticket_json["context"]["custom_3mf_template_snapshot"]["settings"] == expected_template_settings
+    assert ticket_json["submission"]["uploaded_attachments"] == ["final.3mf", "screenshot.png"]
     assert "email" not in ticket_json
 
     status_response = client.get(f"/api/feedback/bug-report/{data['ticket_id']}/status")

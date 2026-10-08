@@ -34,7 +34,7 @@ Use a multi-context layout organized by business system or workflow: root `CONTE
 - `api/`: FastAPI routers, schemas, session/file lifecycle, and worker orchestration
 - `frontend/src/`: React 19, TypeScript, Zustand, Axios, Three.js, Tailwind, and Vitest
 - `tests/` and `frontend/src/__tests__/`: backend/frontend regression coverage
-- `printer_profiles/`, `assets/`, `lut-preset/`: templates, runtime assets, and LUT presets
+- `machine_registry/`, `assets/`, `lut-preset/`: device picker assets, runtime assets, and LUT presets; native 3MF configuration is maintained by the external FatCat package
 
 ## Common Commands
 

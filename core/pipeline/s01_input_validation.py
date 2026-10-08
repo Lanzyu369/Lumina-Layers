@@ -20,7 +20,10 @@ from core.pipeline._input_validation_common import (
     _resolve_lut_path_or_error,
     _validate_vector_svg_input,
 )
-from core.pipeline.preview_color_utils import build_palette_preview_colors
+from core.pipeline.preview_color_utils import (
+    build_lut_material_types,
+    build_palette_preview_colors,
+)
 from core.pipeline.svg_opacity import should_use_opacity_safe_svg_raster_fallback
 from utils.lut_manager import LUTManager
 
@@ -199,6 +202,7 @@ def run(ctx: dict) -> dict:
             extra={"event": "s01_lut_path_resolved", "path": str(actual_lut_path)},
         )
         color_conf = ColorSystem.get(color_mode)
+        lut_metadata = None
 
         # For Merged LUTs, extract slot_names and preview_colors from LUT metadata.
         # Use metadata.palette order (same as LUTManager.name_to_idx) so that
@@ -257,6 +261,7 @@ def run(ctx: dict) -> dict:
         ctx["color_conf"] = color_conf
         ctx["slot_names"] = slot_names
         ctx["preview_colors"] = preview_colors
+        ctx["material_types"] = build_lut_material_types(lut_metadata, slot_names)
 
     slot_names = ctx["slot_names"]
     preview_colors = ctx["preview_colors"]

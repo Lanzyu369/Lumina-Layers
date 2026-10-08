@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { saveSettings } from "../api/system";
+import {
+  deleteCustom3mfTemplate,
+  importCustom3mfTemplate,
+  saveSettings,
+  type Custom3mfTemplate,
+} from "../api/system";
 import type { UserSettings } from "../api/types";
 import {
   invalidateGeneratedArtifacts,
@@ -81,6 +86,7 @@ export interface SettingsState {
   slicerSoftware: string;
   deviceProfileId: string;
   buildPlateId: string;
+  custom3mfTemplateId: string | null;
   buildPlateSelections: Record<string, string>;
   customSlicerPath: string;
   customSlicerId: string;
@@ -149,6 +155,9 @@ export interface SettingsActions {
   setPrinterModel: (id: string) => void;
   setSlicerSoftware: (id: string) => void;
   setDeviceProfileId: (id: string) => void;
+  setCustom3mfTemplateId: (id: string | null) => void;
+  importCustom3mfTemplate: (file: File, name: string) => Promise<Custom3mfTemplate>;
+  deleteCustom3mfTemplate: (id: string) => Promise<void>;
   setBuildPlateForMachine: (machineProfileId: string, plateId: string) => void;
   setCustomSlicerPath: (path: string) => void;
   setCustomSlicerId: (id: string) => void;
@@ -188,6 +197,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   slicerSoftware: "BambuStudio",
   deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
   buildPlateId: "",
+  custom3mfTemplateId: null,
   buildPlateSelections: {},
   customSlicerPath: "",
   customSlicerId: "",
@@ -326,6 +336,12 @@ export function deriveBackendDeviceSettingsPatch(
     settings.language === "zh" || settings.language === "en"
       ? settings.language
       : undefined,
+  );
+  setScalarIfFresh(
+    "custom3mfTemplateId",
+    typeof settings.custom_3mf_template_id === "string"
+      ? settings.custom_3mf_template_id || null
+      : settings.custom_3mf_template_id === null ? null : undefined,
   );
   setScalarIfFresh(
     "theme",
@@ -636,6 +652,45 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         invalidateGeneratedArtifacts();
       },
 
+      setCustom3mfTemplateId: (id: string | null) => {
+        if (get().custom3mfTemplateId === id) return;
+        set({ custom3mfTemplateId: id });
+        invalidateGeneratedArtifacts({ preservePreviews: true });
+        void get().syncToBackend();
+      },
+
+      /** Import and select unless the user changed selection while awaiting the API.
+       * 导入模板；等待期间用户更改过的模板或切片软件选择优先保留。
+       */
+      importCustom3mfTemplate: async (file, name) => {
+        const { slicerSoftware } = get();
+        let selectionUnchanged = true;
+        const unsubscribe = useSettingsStore.subscribe((current, previous) => {
+          if (
+            current.custom3mfTemplateId !== previous.custom3mfTemplateId ||
+            current.slicerSoftware !== previous.slicerSoftware
+          ) {
+            selectionUnchanged = false;
+          }
+        });
+        try {
+          const template = await importCustom3mfTemplate(file, name, slicerSoftware);
+          if (selectionUnchanged) get().setCustom3mfTemplateId(template.id);
+          return template;
+        } finally {
+          unsubscribe();
+        }
+      },
+
+      /** Clear a deleted selection independently of the settings panel lifecycle.
+       * 删除成功后清理仍指向该模板的全局选择，不依赖设置面板是否挂载。
+       */
+      deleteCustom3mfTemplate: async (id) => {
+        await deleteCustom3mfTemplate(id);
+        const current = get();
+        if (current.custom3mfTemplateId === id) current.setCustom3mfTemplateId(null);
+      },
+
       setBuildPlateForMachine: (machineProfileId: string, plateId: string) => {
         const current = get();
         if (
@@ -811,6 +866,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             slicer_software: state.slicerSoftware,
             device_profile_id: state.deviceProfileId,
             build_plate_id: state.buildPlateId,
+            custom_3mf_template_id: state.custom3mfTemplateId,
             build_plate_selections: state.buildPlateSelections,
             custom_slicer_path: state.customSlicerPath,
             custom_slicer_id: state.customSlicerId,

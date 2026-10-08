@@ -125,8 +125,6 @@ def discover_local_import_sources(
                     source_root=source_root,
                     source_version=_vendor_source_version(source_root, vendor_key),
                     vendor_keys=(vendor_key,),
-                    application_metadata=provider.default_application_metadata,
-                    client_version=provider.default_client_version,
                 )
             )
     return sources

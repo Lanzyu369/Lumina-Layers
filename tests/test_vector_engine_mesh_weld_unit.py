@@ -24,6 +24,11 @@ from core.vector_engine import (
     _concatenate_meshes_fast,
 )
 from utils.bambu_3mf_writer import BambuStudio3MFWriter
+from utils.fatcat_metadata import (
+    build_model_metadata_request,
+    compose_builtin_project_settings,
+    compose_model_metadata,
+)
 
 
 def _edge_incidence_counts(mesh: trimesh.Trimesh) -> np.ndarray:
@@ -288,8 +293,6 @@ def test_run_length_keeps_point_touching_shells_independent() -> None:
     assert len(combined.split(only_watertight=False)) == 2
 
 
-
-
 def test_materialization_keeps_body_when_subgrid_residue_collapses() -> None:
     """Writer-zero residue cannot poison a neighbouring printable body."""
 
@@ -476,9 +479,23 @@ def test_build_mesh_exports_one_editable_3mf_part_per_used_material() -> None:
         )
 
     assert [entry.object_name for entry in writer.objects] == slot_names
-    model_settings = ET.fromstring(
-        writer._build_model_settings_bytes([2, 3, 4, 5], 6, [0, 1, 2, 3])
+    target = writer._select_metadata_target()
+    project = compose_builtin_project_settings(
+        writer._build_fatcat_project_request(writer._build_material_palette()[0], target),
     )
+    request = build_model_metadata_request(
+        target=target, assembly_id=6, object_ids=[2, 3, 4, 5], entries=writer.objects,
+        material_index_by_object=[0, 1, 2, 3], output_path=writer.output_path,
+        bed_type=project["metadata_defaults"]["plate_value"],
+    )
+    request["component_inputs"] = {}
+    composed_model = compose_model_metadata(project["project_settings_json"], request)
+    model_settings_xml = next(
+        part["content"]
+        for part in composed_model["parts"]
+        if part["role"] == "model_settings"
+    )
+    model_settings = ET.fromstring(model_settings_xml)
     assert len(model_settings.findall("./object/part")) == len(slot_names)
 
 

@@ -321,6 +321,7 @@ export function applyImport(
       importedPlateSelections,
     );
     settingsState.setBuildPlateForMachine(machineProfileId, nextBuildPlateId);
+    settingsState.setCustom3mfTemplateId(conv.device.custom_3mf_template_id ?? null);
     if (
       typeof conv.base.svg_pixels_per_mm === "number" &&
       conv.base.svg_pixels_per_mm !== settingsState.svgPixelsPerMm

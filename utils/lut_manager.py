@@ -2334,7 +2334,7 @@ class LUTManager:
         palette = [
             PaletteEntry(
                 color=str(item.get("color", "")),
-                material=str(item.get("material", "PLA Basic")),
+                material=str(item.get("material", native_ctx.material_type) or ""),
             )
             for item in palette_raw
             if isinstance(item, dict) and str(item.get("color", ""))
@@ -2518,7 +2518,7 @@ class LUTManager:
         palette = [
             PaletteEntry(
                 color=str(item.get("color", "")),
-                material=str(item.get("material", "PLA Basic")),
+                material=str(item.get("material", native_ctx.material_type) or ""),
             )
             for item in palette_raw
             if isinstance(item, dict) and str(item.get("color", ""))

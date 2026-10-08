@@ -41,6 +41,8 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         preserve_template_filament_slots: bool | None = None,
+        material_types: dict[str, str | None] | None = None,
+        custom_3mf_template_id: str | None = None,
     ) -> str:
         captured["scene"] = scene
         captured["output_path"] = output_path
@@ -67,6 +69,8 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         captured["device_profile_id"] = device_profile_id
         captured["build_plate_id"] = build_plate_id
         captured["preserve_template_filament_slots"] = preserve_template_filament_slots
+        captured["material_types"] = material_types
+        captured["custom_3mf_template_id"] = custom_3mf_template_id
         return output_path
 
     monkeypatch.setattr(s09_export_3mf, "MODELS_DIR", str(tmp_path))
@@ -90,6 +94,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         "printer_id": "bambu-h2d",
         "slicer": "BambuStudio",
         "build_plate_id": "smooth-pei-plate",
+        "custom_3mf_template_id": "selected-native-template",
     }
 
     result = s09_export_3mf.run(ctx)
@@ -107,6 +112,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         "yellow",
     ]
     assert captured["build_plate_id"] == "smooth-pei-plate"
+    assert captured["custom_3mf_template_id"] == "selected-native-template"
 
 
 def _make_minimal_s09_ctx(tmp_path, **extra_ctx) -> dict:
@@ -349,8 +355,6 @@ def test_s09_empty_scene_error_log_has_actionable_fields(tmp_path, caplog) -> No
     empty_scene = trimesh.Scene()
     ctx = _make_minimal_s09_ctx(tmp_path, scene=empty_scene)
 
-    logger = logging.getLogger("lumina.core.pipeline.s09_export_3mf")
-    logger.addHandler(caplog.handler)
     caplog.set_level(logging.ERROR, logger="lumina.core.pipeline.s09_export_3mf")
 
     with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
@@ -358,10 +362,7 @@ def test_s09_empty_scene_error_log_has_actionable_fields(tmp_path, caplog) -> No
         "generate_model_filename",
         lambda *_args: "empty-scene.3mf",
     ), patch.object(s09_export_3mf, "export_scene_with_bambu_metadata", autospec=True) as mock_export:
-        try:
-            result = s09_export_3mf.run(ctx)
-        finally:
-            logger.removeHandler(caplog.handler)
+        result = s09_export_3mf.run(ctx)
 
     assert result["error"] == "[ERROR] Mesh generation failed: No valid meshes generated"
     assert "out_path" not in result
@@ -386,8 +387,6 @@ def test_s09_empty_scene_error_log_has_actionable_fields(tmp_path, caplog) -> No
 def test_s09_writer_error_log_has_actionable_fields(tmp_path, caplog) -> None:
     ctx = _make_minimal_s09_ctx(tmp_path)
 
-    logger = logging.getLogger("lumina.core.pipeline.s09_export_3mf")
-    logger.addHandler(caplog.handler)
     caplog.set_level(logging.ERROR, logger="lumina.core.pipeline.s09_export_3mf")
 
     with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
@@ -396,10 +395,7 @@ def test_s09_writer_error_log_has_actionable_fields(tmp_path, caplog) -> None:
         lambda *_args: "writer-failed.3mf",
     ), patch.object(s09_export_3mf, "export_scene_with_bambu_metadata", autospec=True) as mock_export:
         mock_export.side_effect = RuntimeError("writer unavailable")
-        try:
-            result = s09_export_3mf.run(ctx)
-        finally:
-            logger.removeHandler(caplog.handler)
+        result = s09_export_3mf.run(ctx)
 
     assert result["error"] == "[ERROR] 3MF export failed: writer unavailable"
     assert "out_path" not in result

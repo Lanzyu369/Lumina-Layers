@@ -68,6 +68,8 @@ class MaterialParams:
             (白底零厚度颜色 linear RGB)
         estimated_rgb: (3,) sRGB uint8 estimated material color for preview.
             (预览用 sRGB uint8 预估耗材颜色)
+        material_type: Explicit archive material type, or None when absent.
+            (档案明确记录的材料类型，缺失时为 None)
     """
 
     name: str
@@ -76,6 +78,7 @@ class MaterialParams:
     k: np.ndarray       # (3,) float64
     C0_white: np.ndarray  # (3,) float64, linear
     estimated_rgb: np.ndarray  # (3,) uint8
+    material_type: str | None = None
 
 
 # ---------------------------------------------------------------------------

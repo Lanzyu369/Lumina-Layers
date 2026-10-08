@@ -133,11 +133,11 @@ def test_calibration_board_registry_quarter_nozzle_keeps_ac_project_profiles(
         )
 
     assert settings["printer_settings_id"] == "Anycubic Kobra X 0.25 nozzle"
-    assert settings["print_settings_id"] == "0.08mm Standard @Anycubic Kobra X 0.25 nozzle"
+    assert settings["print_settings_id"] == "0.10mm Standard @Anycubic Kobra X 0.25 nozzle"
     assert settings["default_print_profile"] == "0.10mm Standard @Anycubic Kobra X 0.25 nozzle"
     assert settings["filament_settings_id"] == [
         "Anycubic PLA @Anycubic Kobra X 0.25 nozzle",
-    ] * 8
+    ] * 2
     assert settings["nozzle_diameter"] == ["0.25"]
     assert "0.2 nozzle" not in json.dumps(settings)
 

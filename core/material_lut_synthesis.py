@@ -295,6 +295,11 @@ def load_material_params(
         k=k,
         C0_white=C0_white,
         estimated_rgb=estimated_rgb,
+        material_type=(
+            archive["material_type"].strip() or None
+            if isinstance(archive.get("material_type"), str)
+            else None
+        ),
     )
 
 

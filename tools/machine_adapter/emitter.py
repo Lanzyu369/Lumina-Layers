@@ -6,7 +6,6 @@ import re
 from typing import Any
 
 from config import format_native_nozzle_size, normalize_nozzle_size
-from core.machine_process_overlay import apply_lumina_process_overlay
 from tools.machine_adapter.providers import MachineAdapterProvider
 from tools.machine_adapter.resolver import ResolvedMachineProfile
 
@@ -32,19 +31,6 @@ _VENDOR_SLUG_BY_VENDOR_KEY = {
 def _slug(value: str) -> str:
     lowered = value.strip().lower()
     return re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
-
-
-def _safe_path_segment(value: str) -> str:
-    segment = value.strip()
-    if (
-        not segment
-        or segment in {".", ".."}
-        or ".." in segment
-        or "/" in segment
-        or "\\" in segment
-    ):
-        raise ValueError(f"Unsafe machine registry path segment: {value!r}")
-    return segment
 
 
 def _first_nozzle(settings: dict[str, Any]) -> str:
@@ -113,31 +99,25 @@ def _content_revision(settings: dict[str, Any], source_hashes: list[str], source
     return f"sha256:{digest.hexdigest()}"
 
 
-def _application_metadata(provider: MachineAdapterProvider, source_version: str) -> str:
-    if provider.default_application_metadata is not None:
-        return provider.default_application_metadata
-    if provider.slicer_id == "ElegooSlicer":
-        return f"ElegooSlicer-{source_version}"
-    return f"BambuStudio-{source_version}"
-
-
-def _project_format_version(provider: MachineAdapterProvider, source_version: str) -> str:
-    """Return the project schema version written inside exported 3MF files."""
-
-    application = _application_metadata(provider, source_version)
-    if application.startswith("BambuStudio-"):
-        return application.removeprefix("BambuStudio-")
-    return source_version
-
-
 def build_device_registry_entry(
     *,
     provider: MachineAdapterProvider,
     source_version: str,
     profile: ResolvedMachineProfile,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> dict[str, Any]:
+    """Build a UI registry entry from the exact native machine profile.
+    从精确原生机器配置构建设备 UI 注册表条目。
+
+    Args:
+        provider: Selected slicer profile provider.（所选软件配置来源）
+        source_version: Version declared by the source.（来源声明版本）
+        profile: Resolved native printer profile.（已解析的原生打印机配置）
+
+    Returns:
+        UI registry entry without project settings or metadata templates.
+        （不含项目设置或元数据模板的 UI 注册表条目）
+    """
     settings = dict(profile.settings)
-    safe_source_version = _safe_path_segment(source_version)
     printer_model = str(settings.get("printer_model") or profile.name)
     nozzle = _first_nozzle(settings)
     vendor_slug = _VENDOR_SLUG_BY_VENDOR_KEY.get(
@@ -148,19 +128,7 @@ def build_device_registry_entry(
     machine_profile_id = f"{provider.slicer_id}:{vendor_slug}:{machine_slug}"
     device_profile_id = f"{machine_profile_id}:{nozzle}"
     source_hashes = [item.sha256 for item in profile.source_files]
-    template = apply_lumina_process_overlay(
-        settings,
-        source_profile_name=profile.name,
-        slicer_id=provider.slicer_id,
-    )
-    if provider.slicer_id in {"FlashStudio", "QIDIStudio"}:
-        # Vendor profile bundles and saved-project schemas are independent
-        # version contracts. Preserve the observed native project version.
-        template["version"] = _project_format_version(provider, safe_source_version)
-    if provider.slicer_id == "QIDIStudio":
-        template["printer_variant"] = nozzle
-        template.setdefault("printer_extruder_id", ["1"])
-    revision = _content_revision(template, source_hashes, safe_source_version)
+    revision = _content_revision(settings, source_hashes, source_version)
     bed_width, bed_depth = _bed_size(settings)
 
     entry = {
@@ -176,14 +144,8 @@ def build_device_registry_entry(
         "thumbnail": "",
         "nozzle_size": nozzle,
         "source_profile_name": profile.name,
-        "template": (
-            f"slicers/{provider.slicer_id}/{safe_source_version}/metadata_templates/"
-            f"{machine_slug}_{nozzle.replace('.', '_')}.json"
-        ),
         "revision": revision,
         "supported": True,
-        "application_metadata": _application_metadata(provider, safe_source_version),
-        "sidecar_policy": provider.sidecar_policy,
         "source_hashes": source_hashes,
     }
-    return entry, template
+    return entry

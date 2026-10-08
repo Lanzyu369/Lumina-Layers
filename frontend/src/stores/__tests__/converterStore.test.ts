@@ -140,7 +140,7 @@ describe('Converter_Store 底板厚度与填充率', () => {
     expect(useConverterStore.getState().backing_infill_density_percent).toBe(100);
   });
 
-  it('forces unsupported relief and puzzle flows back to 100 percent', () => {
+  it('keeps flat puzzle infill and persists it while relief stays solid', () => {
     const store = useConverterStore.getState();
     store.setBackingInfillDensityPercent(20);
     store.setEnableRelief(true);
@@ -149,7 +149,10 @@ describe('Converter_Store 底板厚度与填充率', () => {
     store.setEnableRelief(false);
     store.setBackingInfillDensityPercent(25);
     store.setPuzzleEnabled(true);
-    expect(useConverterStore.getState().backing_infill_density_percent).toBe(100);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(25);
+    expect(localStorage.getItem('lumina_backingInfillDensityPercent')).toBe('25');
+    store.setPuzzleEnabled(false);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(25);
   });
 
   it('forces model-surface flow back to 100 percent', () => {

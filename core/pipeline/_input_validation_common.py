@@ -214,6 +214,10 @@ def _apply_material_archive_branch(
     ctx["actual_lut_path"] = "__material_archive__"
     ctx["color_conf"] = color_conf
     ctx["slot_names"] = slot_names
+    ctx["material_types"] = {
+        name: material.material_type
+        for name, material in zip(slot_names, materials)
+    }
     ctx["preview_colors"] = preview_colors
     ctx["color_layers"] = material_layer_count
     ctx["layer_height_mm"] = material_layer_height

@@ -1,530 +1,159 @@
-# 机器适配 V2 维护手册
+# 机器与 3MF 来源维护手册
 
-## 目的
+本文记录当前机器选择、原生配置和 3MF 导出的维护边界。设备选择界面仍由
+Lumina 维护；原生切片配置和 3MF 项目元数据由 FatCat 维护。
 
-本文档给下一次升级切片软件、同步新机型、准备 PR 时使用。它描述的是实际维护流程，不是早期设计讨论。
+## 数据归属
 
-机器适配 V2 的目标是：
+- **FatCat** 维护各切片器精确版本的原生机器、工艺和材料来源，解析继承链，
+  并提供 Python 与 C++ 公共入口。来源索引、target contract 和 canonical
+  身份都位于 FatCat 仓库；Lumina 运行时不读取 FatCat wheel 的私有目录结构。
+- **Lumina** 维护 `machine_registry/registry.json` 中的设备选择身份、缩略图、
+  喷嘴选择、热床尺寸和 UI 板面选项。`tools/machine_adapter/` 从明确的本机
+  切片器来源更新 picker 数据，不再生成或读取项目配置快照。
+- Lumina 继续负责用户材料选择、几何、布局以及本产品明确要求的层高、线宽、
+  填充等工艺参数。自定义 3MF 模板通过现有显式项目入口保留其原有字段。
+- OrcaSlicer 2.2.4 的 U1 0.4 完整旧项目兼容来源由 FatCat 安装包维护。
+  FatCat 通用来源合成入口将其历史工艺与 2.4.2 原生机器和材料结合，保留
+  2.2.4 工艺来源记录。Lumina 不保存兼容文件，也不按机型探测或选择兼容路径。
 
-- 开发期读取 Bambu/Orca/Snapmaker/Elegoo/Anycubic/Flash Studio/QIDI Studio 的原生 profile JSON。
-- 生成 Lumina 内置 `machine_registry/`，随仓库发布。
-- 用户端只读取 Lumina 内置 registry，不扫描用户本机切片器安装目录。
-- 严格按 `切片软件 -> 机器型号 -> 喷嘴 -> revision` 区分 profile，避免同名机型串模板。
-- 保留 Lumina 当前工艺要求，例如细层高、材料槽位、底板层高修改器和 3MF sidecar 规则。
+Lumina 不再维护 `printer_profiles/*.json` 或
+`machine_registry/**/metadata_templates/*.json`。设备 picker 中不应出现
+`template` 文件路径。
 
-## 当前数据边界
+## 设备身份
 
-核心运行数据：
+每个 UI 喷嘴项使用稳定的 `device_profile_id`，并保留切片器原生
+`source_profile_name`、喷嘴值和 `revision`。不要只根据品牌或相似机型名推断来源。
+旧 UI 设备 ID 到 FatCat 稳定 `machine_uid` / `nozzle_uid` 的映射必须同时匹配
+切片器、原生 profile 名和喷嘴。
 
-- `machine_registry/registry.json`
-- `machine_registry/slicers/<Slicer>/<source_version>/metadata_templates/*.json`
-- `machine_registry/slicers/<Slicer>/<source_version>/assets/*_cover.*`
-- `printer_profiles/*.json`
-- `config.py`
-- `utils/bambu_3mf_writer.py`
-- `api/routers/system.py`
-- `frontend/src/components/SettingsPanel.tsx`
-- `frontend/src/utils/settingsOptionIds.ts`
+设备目录只保留 UI 所需的来源身份和硬件事实：
 
-开发期工具：
+| 字段 | 用途 |
+|---|---|
+| `source_version` | profile 来源包的版本 |
+| `revision` | UI picker 来源记录的原生 profile 内容哈希 |
 
-- `tools/machine_adapter/resolver.py`
-- `tools/machine_adapter/providers.py`
-- `tools/machine_adapter/emitter.py`
-- `tools/machine_adapter/import_profiles.py`
-- `tools/machine_adapter/sync_local_profiles.py`
+3MF 的 Application、客户端版本头和附属文件策略由 FatCat 根据实际目标
+软件版本生成。Lumina 的目录、provider 和导入命令不保存或覆盖这些值。
 
-重要约束：
+## 更新 Lumina 设备 picker
 
-- 不要提交本机安装路径、用户设置、临时 3MF/GLB、`output/`、`materials/*/usage_stats.json`。
-- `machine_registry/` 是生成结果，允许提交。
-- `materials/` 是用户耗材数据，本工作流默认不碰。
-- ElegooSlicer、AnycubicSlicerNext、Flash Studio 和 QIDI Studio 虽然基于 Bambu/Orca 链路，但 3MF header、Application、sidecar 规则仍要按各自切片器处理。
+只在需要刷新 UI 可选机型、喷嘴或资产时更新 Lumina registry。已经安装并运行过
+目标切片器时，可用本机 profile：
 
-## Registry 粒度
-
-每个可选设备 profile 的身份是：
-
-```text
-device_profile_id = <slicer_id>:<vendor_slug>:<machine_slug>:<nozzle_size>
+```bash
+python tools/machine_adapter/sync_local_profiles.py --output machine_registry
 ```
 
-示例：
+只导入单个已知来源时，明确填写切片器、来源版本、厂商边界和输出目录：
 
-```text
-BambuStudio:bbl:bambu-lab-h2d:0.2
-ElegooSlicer:elegoo:elegoo-centauri-carbon-2:0.2
-AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25
-FlashStudio:flashforge:flashforge-ad5x:0.25
-QIDIStudio:qidi:q2:0.2
+```bash
+python tools/machine_adapter/import_profiles.py \
+  --slicer AnycubicSlicerNext \
+  --source-root "$HOME/Library/Application Support/AnycubicSlicerNext/system" \
+  --source-version 1.3.2605.22 \
+  --vendor Anycubic \
+  --output /tmp/anycubic-registry-review
 ```
 
-注意：`device_profile_id` 的最后一段必须保留切片软件原生喷嘴值，而不是使用 Lumina 老模板的 0.1mm 归一化结果。Anycubic Kobra X 使用 `0.25`，如果被归并成 `0.2`，UI 文案和 3MF writer 的 registry 校验都会产生误导。
+`import_profiles.py` 生成 picker 来源数据；它不提取或生成 3MF 的机器、材料或
+工艺项目配置。合并生成结果前，先检查 slicer/version、正式 machine list、
+喷嘴原生值和 profile revision。Flash Studio、QIDI Studio 等来源仍须按 provider
+中声明的正式 profile 边界导入，不要因为目录中存在额外 JSON 就扩大支持范围。
 
-## 当前支持范围
+更新 `registry.json` 时确认：
 
-当前 registry 覆盖：
+- 每个受支持 nozzle 项保留准确的原生 `source_profile_name`、喷嘴值和 revision。
+- 所有缩略图和板面图片路径都是 registry 根目录内的相对路径，且文件存在。
+- `supported_build_plate_ids` 只表达当前 UI 已支持的板面选择；空选择保持旧有含义。
+- 导出 JSON 中不存在 nozzle `template` 路径，也不生成 metadata template 目录。
 
-- BambuStudio
-- OrcaSlicer
-- SnapmakerOrca
-- ElegooSlicer
-- AnycubicSlicerNext
-- FlashStudio
-- QIDIStudio
+`machine_registry/registry.json`、图片和版面事实属于 Lumina UI 数据；不要把这些
+数据复制进 FatCat 原生配置快照。
 
-当前已经人工验收过的代表机型：
+### Prusa 设备图片
 
-- Bambu Lab H2D `0.2` / `0.4`
-- Bambu Lab X2D `0.4`
-- Bambu Lab A2L `0.4`
-- Elegoo Centauri Carbon 2 `0.2` / `0.4`
-- Anycubic Kobra X `0.25` / `0.4`
-- Snapmaker U1 `0.4`
-- Flashforge AD5X `0.25` / `0.4`
-- Flashforge Creator 5 `0.25` / `0.4`
-- Flashforge Creator 5 Pro `0.25` / `0.4`
-- Flashforge Guider 3 Ultra `0.4`
-- Flashforge Guider4 `0.25` / `0.4`
-- Flashforge Guider4 Pro `0.25` / `0.4`
-- QIDI Q2 `0.2` / `0.4`
-- QIDI Q2C `0.2` / `0.4`
-- QIDI X-Max 4 `0.2` / `0.4`
-- QIDI X-Plus 5 `0.4`
+Prusa 机型、容量和尺寸由已安装 FatCat 的公共目录读取，不在 Lumina 复制工艺
+或材料配置。设备图片使用独立的 `picker-assets.json`，按稳定 `machine_uid`
+引用同版本原生配置指定图片的 512 像素 PNG；MMU、喷头数量等变体沿用上游
+图片选择。原始 SVG 留在上游来源目录，不作为数千行图片描述提交进本体。
 
-## 升级前准备
+用当前 FatCat 依赖及对应 PrusaResearch 原生图片目录刷新：
 
-1. 从 `origin/dev-refactor` 新建分支，例如：
-
-```powershell
-git fetch origin
-git switch -c Min/feat/machine-adapter-v2-refresh origin/dev-refactor
+```bash
+python -m tools.machine_adapter.sync_prusa_assets \
+  --asset-root /path/to/PrusaResearch/assets \
+  --registry-root machine_registry
 ```
 
-2. 打开各切片软件一次，让它们完成 profile 下载/迁移。
+该命令只读取公共配置结果并渲染引用图片，不生成几何或 3MF，也不保存原生
+工艺快照。图片及索引随 `machine_registry/` 一起安装，运行时无需联网或安装
+PrusaSlicer。来源记录见该版本目录中的 `SOURCES.md`。
 
-3. 记录版本：
+设备列表的切片软件支持范围直接取已加载的设备目录。`PrinterProfile`
+只保存几何和设备选择使用的硬件事实；旧模板文件名、切片器模板映射和
+拼接模板文件名的方法已经删除。
 
-```powershell
-$env:LUMINA_BAMBU_STUDIO_EXE = '<path-to-bambu-studio.exe>'
-$env:LUMINA_ELEGOO_SLICER_EXE = '<path-to-elegoo-slicer.exe>'
-$env:LUMINA_ANYCUBIC_SLICER_EXE = '<path-to-AnycubicSlicerNext.exe>'
+## 更新 FatCat 原生配置
 
-(Get-Item $env:LUMINA_BAMBU_STUDIO_EXE).VersionInfo | Select-Object ProductVersion,FileVersion
-(Get-Item $env:LUMINA_ELEGOO_SLICER_EXE).VersionInfo | Select-Object ProductVersion,FileVersion
-(Get-Item $env:LUMINA_ANYCUBIC_SLICER_EXE).VersionInfo | Select-Object ProductVersion,FileVersion
+原生项目源的更新在 FatCat 仓库完成。`scripts/sync_native_project_sources.py`
+使用 FatCat 中的 source map、target contract 和明确指定的切片器安装包提取原生
+profile 及其继承闭包。脚本不 import Lumina，也不依赖 Lumina checkout。更新机器
+绑定与耗材 profile 时，使用 FatCat 的 `sync_native_machine_bindings.py` 和
+`sync_installed_material_profiles.py`，并按精确 slicer/version/machine/nozzle
+来源记录生成，不能用其他软件或近似机型默认补缺。
+
+示例（命令在 FatCat 仓库中运行）：
+
+```bash
+python3 scripts/sync_native_project_sources.py \
+  --application-root BambuStudio=/Applications/BambuStudio.app \
+  --application-root OrcaSlicer=/Applications/OrcaSlicer.app
 ```
 
-Anycubic 还要记录：
-
-```powershell
-$anycubicRoot = Split-Path -Parent $env:LUMINA_ANYCUBIC_SLICER_EXE
-Get-Content -Encoding UTF8 (Join-Path $anycubicRoot 'resources\build-version.txt')
-Get-Content -Encoding UTF8 (Join-Path $anycubicRoot 'resources\report\report.ini')
-```
-
-4. 备份当前 registry，用于 diff：
-
-```powershell
-Copy-Item -Recurse machine_registry output\temp\machine_registry_before_refresh
-```
-
-`output/temp/` 不提交，只用于本地对比。
-
-## 重新生成 registry
-
-### 默认同步入口
-
-如果切片器 profile 已同步到 `%APPDATA%/<Slicer>/system`：
-
-```powershell
-python tools\machine_adapter\sync_local_profiles.py --output machine_registry
-```
-
-只同步某个切片器：
-
-```powershell
-python tools\machine_adapter\sync_local_profiles.py --slicer ElegooSlicer --output machine_registry
-python tools\machine_adapter\sync_local_profiles.py --slicer AnycubicSlicerNext --output machine_registry
-python tools\machine_adapter\sync_local_profiles.py --slicer FlashStudio --output machine_registry
-python tools\machine_adapter\sync_local_profiles.py --slicer QIDIStudio --output machine_registry
-```
-
-Flash Studio 的 `%APPDATA%\Orca-Flashforge\system` 通常只有 profile JSON，
-机器封面位于安装目录的 `resources\profiles\Flashforge\*_cover.png`。生成结果
-缺图时，从该目录补入对应 registry assets；文档和提交内容只保留相对路径，
-不要写入开发机的盘符或安装绝对路径。
-
-Flash Studio 必须以 `Flashforge.json` 的正式 `machine_list` 为导入边界，不能
-仅凭 `Flashforge/machine/` 下存在 JSON 就认定机型或喷嘴已在软件中开放。
-多色能力由正式机器预设中的 `single_extruder_multi_material`、喷嘴数组或
-`printer_extruder_id` 判断。仅导入不大于 `0.4` 的口径；Guider4 同口径
-普通/HF 预设优先普通版。未列入 `machine_list` 的 Creator 5S/5S Pro
-残留文件不得进入 registry。
-
-### 单来源精确导入
-
-当需要手动指定 `application_metadata` 或 `client_version` 时，用 `import_profiles.py`：
-
-```powershell
-python tools\machine_adapter\import_profiles.py `
-  --slicer AnycubicSlicerNext `
-  --source-root "$env:APPDATA\AnycubicSlicerNext\system" `
-  --source-version 1.3.2605.22 `
-  --application-metadata AnycubicSlicerNext-1.4.1.2 `
-  --client-version "1.4.1.2 20260604104233" `
-  --vendor Anycubic `
-  --output output\temp\anycubic_registry_check
-```
-
-Flash Studio 必须同样显式区分 profile 与客户端版本：
-
-```powershell
-python tools\machine_adapter\import_profiles.py `
-  --slicer FlashStudio `
-  --source-root "$env:APPDATA\Orca-Flashforge\system" `
-  --source-version 02.01.01.00 `
-  --application-metadata BambuStudio-2.3.2 `
-  --client-version= `
-  --vendor Flashforge `
-  --output output\temp\flash_studio_registry_check
-```
-
-`FlashStudio` provider 已内置上述 `application_metadata` 与空
-`client_version` 作为默认契约，因此直接省略这两个可选参数时也必须生成
-相同结果；示例显式写出它们，便于升级切片软件时人工核对或临时覆盖。
-
-QIDI Studio 安装包的正式 profile 位于安装目录 `resources\profiles`，并按
-`Q Series.json`、`X 4 Series.json`、`X 5 Series.json` 的 `machine_list`
-取边界。当前只支持已有真实 3MF 案例覆盖的 Q2、Q2C、X-Max 4、X-Plus 5；
-同样只导入口径不大于 `0.4` 的正式预设。Q2/Q2C/X-Max 4 为 `0.2` / `0.4`，
-X-Plus 5 仅 `0.4`。不要把 Q1 Pro、X 3 系列或 X-Plus 4 因目录存在就加入。
-
-```powershell
-python tools\machine_adapter\import_profiles.py `
-  --slicer QIDIStudio `
-  --source-root "<QIDI Studio install>\resources\profiles" `
-  --source-version 02.07.02.60 `
-  --vendor "Q Series" `
-  --vendor "X 4 Series" `
-  --vendor "X 5 Series" `
-  --output output\temp\qidi_registry_check
-```
-
-这个命令会生成单切片器 registry。合并多切片器时推荐使用 `run_import_sources(...)` 的 Python 小脚本，而不是手工拼 JSON。
-
-### 源版本和应用版本
-
-不要把这些字段混用：
-
-| 字段 | 含义 | 示例 |
-|---|---|---|
-| `source_version` | profile 包版本 | `1.3.2605.22` |
-| `application_metadata` | 3MF `Application` 字段 | `AnycubicSlicerNext-1.4.1.2` |
-| `client_version` | `slice_info.config` header 版本 | `1.4.1.2 20260604104233` |
-| `revision` | 原生 profile 源文件 hash | `sha256:...` |
-
-`source_version` 记录 profile snapshot，与项目的 `Application` 和 sidecar client marker
-相互独立。后两者是目标切片器的项目兼容契约，必须用实际保存项目和目标版本切片验证，不能根据产品名或当前安装版本猜测。当前保留的 `1.4.1.2` 契约已由 Anycubic Slicer Next 1.4.1.1 CLI 无额外兼容参数成功切片验证。
-
-Flash Studio Desktop 1.7.11 的版本契约是：profile 包 `02.01.01.00`，
-项目格式与 `Application=BambuStudio-2.3.2`，`X-BBL-Client-Version` 为空。
-桌面版本 `1.7.11` 只用于安装识别，不应写进 3MF。Flash Studio 导出也不应
-写入 `OrcaSlicer` / `OrcaSlicer-Version` 字段。此契约来自 Flash Studio
-实际导出的 Creator 5 Pro 默认 3MF，不能用 profile 内部构建号代替项目版本。
-
-Flash Studio 原生包还包含 `Metadata/plate_1.json` 和 128×128 的
-`Metadata/plate_1_small.png`，且 `slice_info.config` header 带 32 位 UUID。
-手动完成机型、耗材配置并保存的多材料案例还表明：Lumina 的三份
-`Auxiliaries/.thumbnails/*.png` 封面和根关系必须保留，不能因为默认立方体
-样本较精简就删除；project 中的耗材数组应按当前实际调色板收敛，例如
-Creator 5 Pro 的四色项目输出 4 组耗材字段，而不是遗留 8 组通用槽位。
-这些属于包结构；层高、线宽、墙生成器、温度、速度、填充和支撑仍由
-Lumina 工艺覆盖层提供，不能从参考 3MF 的具体切片任务照抄。
-
-QIDI Studio `02.07.02.60` 的原生契约来自 Q2、Q2C、X-Plus 5、X-Max 4
-四份保存项目：`Application=QIDIStudio-02.07.02.60`，项目 `version` 与
-`X-QDT-Client-Version` 同为 `02.07.02.60`，并带
-`QIDIStudio:3mfVersion=1`、`OrcaSlicer=2.1.0.14`。包内保留
-`filament_sequence.json`、`cut_information.xml`、`plate_1.json`，封面关系
-使用 `schemas.qiditech.com`；这些都是格式/路由字段，不得覆盖 Lumina 工艺。
-四份参考项目还统一使用 `skirt_loops=0`、`skirt_distance=2`、
-`skirt_height=1`、`draft_shield=disabled`；导出必须显式保留这些值，不能缺省后
-让 QIDI Studio 回退到本机工艺预设并重新开启裙边。
-
-Anycubic 常见情况是 `source_version` 和应用版本不同，必须分开记录。
-
-`tools/machine_adapter/providers.py` 中的 `default_application_metadata` 与
-`default_client_version` 保存人工验收过的项目格式契约。目前 Anycubic
-Slicer Next、Flash Studio 和 QIDI Studio 都使用这些 provider 默认值。
-下次升级时必须先用真实切片器打开 3MF 验收，再更新默认值和
-`tests/test_machine_registry_bundle_unit.py` 的期望；不要只改 vendor profile 包版本。
-
-## 生成后必须检查
-
-### Registry 完整性
-
-```powershell
-python -m pytest tests/test_machine_registry_bundle_unit.py -q
-```
-
-这会检查：
-
-- `machine_registry/registry.json` 存在。
-- 每个 machine 都有 thumbnail。
-- 每个 thumbnail 路径都存在。
-- 每个 nozzle template 路径都存在。
-- 关键验收 profile 存在。
-- 当前 AC/Elegoo 版本戳没有退回旧值。
-
-### 快速统计
-
-```powershell
-@'
-import json
-from pathlib import Path
-
-data = json.loads(Path("machine_registry/registry.json").read_text(encoding="utf-8"))
-for slicer in data["slicers"]:
-    machines = slicer.get("machines", [])
-    nozzles = sum(len(m.get("nozzles", [])) for m in machines)
-    missing = [m["display_name"] for m in machines if not m.get("thumbnail")]
-    print(slicer["slicer_id"], slicer.get("source_version"), "machines=", len(machines), "nozzles=", nozzles, "missing_thumbnails=", len(missing))
-    if missing:
-        print("  missing:", missing[:10])
-'@ | python -
-```
-
-缺缩略图不是 blocker，但提交 PR 前要说明原因。已知目标是 Bambu/Orca/Snapmaker/Elegoo/Anycubic 当前覆盖机型都应有图。
-
-### 喷嘴命名检查
-
-```powershell
-@'
-import json
-from pathlib import Path
-
-root = Path("machine_registry")
-data = json.loads((root / "registry.json").read_text(encoding="utf-8"))
-for slicer in data["slicers"]:
-    for machine in slicer["machines"]:
-        for nozzle in machine["nozzles"]:
-            template = json.loads((root / nozzle["template"]).read_text(encoding="utf-8-sig"))
-            source_name = str(nozzle["source_profile_name"])
-            settings_id = str(template.get("printer_settings_id", ""))
-            diameter = template.get("nozzle_diameter")
-            if str(nozzle["nozzle_size"]) not in source_name and str(nozzle["nozzle_size"]) not in settings_id:
-                print("CHECK", nozzle["device_profile_id"], source_name, settings_id, diameter)
-'@ | python -
-```
-
-看到 Anycubic Kobra X `0.25 nozzle` 时不要直接判错；这是当前原生 profile 行为。但 UI 是否应显示 `0.25` 要单独决策。
-
-## 3MF 自动回归
-
-后端最小回归：
-
-```powershell
-python -m pytest `
-  tests/test_machine_registry_bundle_unit.py `
-  tests/test_machine_registry_unit.py `
-  tests/test_machine_adapter_import_cli_unit.py `
-  tests/test_machine_adapter_emitter_unit.py `
-  tests/test_machine_adapter_sync_local_profiles_unit.py `
-  tests/test_bambu_3mf_writer_unit.py `
-  tests/test_bambu_3mf_cross_slicer_cover_unit.py `
-  tests/test_bambu_3mf_png_integrity_unit.py `
-  -q
-```
-
-前端设置页回归：
-
-```powershell
-python scripts\run_vitest.py run `
-  src\__tests__\settingsOptionIds.test.ts `
-  src\components\__tests__\SettingsPanel.machineAdapter.test.tsx `
-  --reporter=verbose
-```
-
-更完整的 PR 前回归可追加：
-
-```powershell
-python -m pytest tests/test_settings_api_unit.py tests/test_printer_profile_unit.py tests/test_3mf_template_matrix_unit.py -q
-python scripts\run_vitest.py run src\__tests__\settings-store-hydration.test.ts --reporter=verbose
-```
-
-## 真实 3MF 验收
-
-真实验收必须至少覆盖：
-
-- BambuStudio 打开 H2D `0.2`。
-- BambuStudio 打开 X2D/A2L 代表机型。
-- ElegooSlicer 打开 Elegoo CC2 `0.2`。
-- AnycubicSlicerNext 打开 AC KX `0.25`。
-- Flash Studio Desktop 打开 AD5X `0.25` / `0.4`、Guider 3 Ultra `0.4`、
-  Guider4 `0.25` / `0.4`，并抽查 Creator 5 / Creator 5 Pro / Guider4 Pro。
-- QIDI Studio 打开 Q2、Q2C、X-Max 4 的 `0.2` / `0.4`，以及 X-Plus 5 `0.4`。
-
-生成示例使用 `core.converter.generate_final_model(...)`，输入图片可以用：
-
-```text
-<any-real-acceptance-image.png>
-```
-
-关键参数：
-
-```python
-target_width_mm=60.0
-spacer_thick=0.48
-structure_mode="单面"
-color_mode="4-Color"
-modeling_mode=ModelingMode.HIGH_FIDELITY
-quantize_colors=64
-enable_base_layer_height_modifier=True
-cover_source_path=<source image path>
-```
-
-验收后解包检查：
-
-```python
-import json, zipfile, xml.etree.ElementTree as ET
-from pathlib import Path
-
-path = Path("output/temp/example.3mf")
-with zipfile.ZipFile(path) as zf:
-    project = json.loads(zf.read("Metadata/project_settings.config").decode("utf-8"))
-    slice_root = ET.fromstring(zf.read("Metadata/slice_info.config"))
-    header = {item.attrib["key"]: item.attrib.get("value", "") for item in slice_root.findall("./header/header_item")}
-    entries = set(zf.namelist())
-
-print(project["printer_model"])
-print(project["printer_settings_id"])
-print(project["nozzle_diameter"])
-print(project.get("default_print_profile"))
-print(header)
-print("filament_sequence", "Metadata/filament_sequence.json" in entries)
-print("cut_information", "Metadata/cut_information.xml" in entries)
-print("custom_gcode_per_layer", "Metadata/custom_gcode_per_layer.xml" in entries)
-```
-
-预期 sidecar：
-
-| 切片器 | `filament_sequence.json` | `cut_information.xml` | `custom_gcode_per_layer.xml` |
-|---|---:|---:|---:|
-| BambuStudio | yes | yes | no |
-| OrcaSlicer | no | no | no |
-| SnapmakerOrca | no | no | no |
-| ElegooSlicer | no | no | no |
-| AnycubicSlicerNext | no | no | yes |
-| FlashStudio | no | no | no |
-| QIDIStudio | yes | yes | no |
-
-## 前端验收
-
-设置页必须满足：
-
-- 用户先看机器卡片和缩略图，再选择机器。
-- 喷嘴按钮在卡片内，范围为 `0.2` / `0.25` / `0.4`，并且只展示 registry
-  对当前机型实际提供的口径；所有切片器都不展示大于 `0.4` 的喷嘴。
-  不能把某台机型的口径集合套用到其他机型。
-- 同名机器在不同 slicer 下不会复用旧 `device_profile_id`。
-- H2D、H2D Pro、X2D、A2L、Elegoo CC2、AC KX、Snapmaker U1 的缩略图能加载。
-- 切换 slicer 后，当前机器不兼容时自动切到该 slicer 的第一个兼容机型。
-- 旧本地设置里没有 `deviceProfileId` 时，不应继续绑定默认 H2D profile。
-
-手工检查路径：
-
-```text
-http://localhost:4174/ -> 设置 -> 打印机型号
-```
-
-开发环境不要同时保留多个前端端口。发现 `4174`、`5174` 都开着时，先确认当前浏览器实际连的是哪一个。
-
-## 常见问题
-
-### 打开切片器显示 A1 mini
-
-优先检查：
-
-1. 前端请求体是否传了正确 `printer_id`、`slicer`、`nozzle_size`、`device_profile_id`。
-2. `load_printer_template(...)` 是否走了 registry，而不是 fallback 到默认 `bambu-h2d` 或旧模板。
-3. `project_settings.config` 的 `printer_model` 和 `printer_settings_id`。
-4. `3D/3dmodel.model` 的 `Application`。
-5. `slice_info.config` 的 client header。
-
-### Anycubic 打开失败或卡死
-
-优先检查：
-
-- `Metadata/top_1.png` / `pick_1.png` / plate PNG 是否可解码。
-- 是否存在 `Metadata/custom_gcode_per_layer.xml`。
-- 是否误加了 Bambu-only `filament_sequence.json` / `cut_information.xml`。
-- `Application` 是否是 `AnycubicSlicerNext-...`。
-- `X-ACNext-Client-Version` 是否匹配当前安装版本。
-
-### Elegoo/AC profile 版本显示不一致
-
-区分：
-
-- `source_version`: profile 包版本。
-- `application_metadata`: 3MF Application。
-- `client_version`: slice header。
-
-不要用 `source_version` 直接推断 Application。
-
-### AC KX 0.25 原生喷嘴
-
-当前原生模板是：
-
-```text
-source_profile_name = Anycubic Kobra X 0.25 nozzle
-printer_settings_id = Anycubic Kobra X 0.25 nozzle
-nozzle_diameter = ["0.25"]
-device_profile_id = AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25
-```
-
-维护时必须确认 `registry.json`、模板路径、前端喷嘴卡片、3MF writer 入参、`project_settings.config` 都保留 `0.25`。前端仍会过滤掉 `0.6` / `0.8`，但允许 `0.25`、`0.4` 作为可见选项。
-
-### default_print_profile 仍显示旧喷嘴
-
-如果 `printer_settings_id` 和 `nozzle_diameter` 正确，但 `default_print_profile` 仍显示旧喷嘴，说明 registry machine template 和 Lumina legacy project template 合并时某些工艺字段没有被 registry 覆盖。优先检查：
-
-- `utils/bambu_3mf_writer.py` 中 registry overlay key 列表。
-- `default_print_profile`
-- `print_settings_id`
-- `inherits_group`
-- `default_filament_profile`
-
-这类问题必须用解包测试覆盖，不要只凭切片器 UI 判断。
-
-## PR 前 checklist
-
-- [ ] `materials/` 没有被 stage。
-- [ ] `output/`、`logs/`、临时 3MF/GLB 没有被 stage。
-- [ ] `machine_registry/` 的新增/删除符合本次升级范围。
-- [ ] `registry.json` 中 `source_version`、`application_metadata`、`client_version` 被人工确认。
-- [ ] 每个支持机型 thumbnail 路径存在。
-- [ ] H2D、Elegoo CC2、AC KX 真实 3MF 已打开切片器验收。
-- [ ] 后端最小回归通过。
-- [ ] 前端设置页回归通过。
-- [ ] PR 描述列出已知边界，尤其是 Anycubic KX `0.25` 与 UI `0.2` 的关系。
-
-## 推荐 PR 描述骨架
-
-```markdown
-## Summary
-- Add Machine Adapter V2 generated registry from native slicer machine profiles.
-- Surface registry-driven slicer/machine/nozzle selection with thumbnails.
-- Preserve Lumina 3MF process metadata while applying native machine identity and slicer-specific sidecars.
-
-## Verification
-- python -m pytest tests/test_machine_registry_bundle_unit.py tests/test_machine_registry_unit.py tests/test_machine_adapter_import_cli_unit.py tests/test_machine_adapter_emitter_unit.py tests/test_machine_adapter_sync_local_profiles_unit.py tests/test_bambu_3mf_writer_unit.py tests/test_bambu_3mf_cross_slicer_cover_unit.py tests/test_bambu_3mf_png_integrity_unit.py -q
-- python scripts/run_vitest.py run src/__tests__/settingsOptionIds.test.ts src/components/__tests__/SettingsPanel.machineAdapter.test.tsx --reporter=verbose
-- Manually generated and opened Bambu H2D 0.2 in Bambu Studio.
-- Manually generated and opened Elegoo CC2 0.2 in ElegooSlicer.
-- Manually generated and opened Anycubic Kobra X 0.25 in Anycubic Slicer Next.
-
-## Known Follow-ups
-- Anycubic Kobra X native 0.25 profile is currently represented by the normalized `:0.2` device profile id; UI should eventually display registry-native nozzle labels.
-- Expand full matrix manual acceptance after future slicer updates.
-```
+上例仅示范两个明确来源；刷新其他 target 时也要显式提供其目标版本的安装包。
+生成后核对 source map、profile inheritance、原生 G-code、运动限制、材料身份、
+物理喷头数组、canonical UID 和 target binding。无对应精确来源时应保留为
+unavailable 并报告，不要从别的版本或软件复制默认。
+
+FatCat Python 包名为 `fatcat-metadata`，import 名为 `fatcat_metadata`，版本固定为
+`0.1.0`。Lumina 的打包合同要求 `native_project_source_catalog` 和随包的
+`native_project_sources/source-index.json`。Lumina 只通过公共目录 API 解析 picker
+身份；C++ 消费者可使用 FatCat 的 `native_project_source_catalog` 和
+`compose_builtin_project_settings`，四参 `compose_project_settings` 用于
+显式项目来源。Lumina 的 `load_export_project_settings` 读取内置来源或用户
+保存的项目，导出入口不再接收已经不起作用的 `metadata_consumer_type` 参数。
+
+## 3MF 导出维护检查
+
+- 内置单件导出按精确 slicer/version/machine/nozzle 选择 FatCat 来源，并把用户选
+  的材料及 Lumina 明确工艺值作为请求传入。
+- 用户自定义模板使用现有显式 source 项目路径；未知字段和用户调整必须保留，
+  也不要求该机器存在 FatCat 默认工艺才能使用。
+- 合并/拼图导出把实际输入项目交给 FatCat 显式合成入口。machine/profile ID 相同
+  不表示项目未修改；来源中的温度、流量和未知字段仍是数据来源。
+- U1 兼容分支使用上述 Orca 2.2.4 完整项目，经现有双参数显式项目入口处理；不要
+  将其描述成 Orca 2.4.2 原生工艺配置。
+- Lumina 计算对象和 wipe-tower 布局；FatCat 应用其返回的元数据结果；neroued
+  writer 完成一次最终 3MF 写入。
+
+检查生成包中的 `Metadata/project_settings.config`、
+`Metadata/model_settings.config`、`Metadata/slice_info.config`、
+`3D/3dmodel.model` 及目标 slicer 要求的 sidecar。核对机器/喷嘴身份、材料 ID、
+物理数组形状、用户温度和流量、Lumina 显式工艺值以及对象/part 关系。对于合并包，
+至少选一个带用户改动的来源项目，确认这些改动在输出中仍能读回。
+
+## GUI 验收范围
+
+原生配置入口变更后，需另行用真实目标软件打开代表性单件和合并包。建议覆盖：
+
+- Bambu Studio：A1 mini 单喷头、H2D 双喷头与双喷头变体。
+- OrcaSlicer：一台有精确 process 来源的代表机，以及 U1 2.2.4 兼容路径。
+- Snapmaker Orca、ElegooSlicer、AnycubicSlicerNext、FlashStudio 和 QIDI Studio：
+  各选一台 registry 当前支持的机型。
+- 至少一个自定义 3MF 模板，以及至少一个保留了用户温度/流量修改的合并项目。
+
+这些是验收样本建议，不表示 GUI 验收已完成。确认过程中记录实际软件版本、设备、
+喷嘴、材料和输出包路径；如目标软件重写项目，再从未修改的生成包复查。

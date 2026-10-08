@@ -44,7 +44,7 @@ def test_copy_thumbnail_file_bounds_oversized_raster_assets(tmp_path):
         assert image.size == (1000, 800)
 
 
-def test_run_import_writes_registry_and_templates(tmp_path):
+def test_run_import_writes_registry_and_assets(tmp_path):
     source_root = Path("tests/fixtures/machine_adapter")
     output_root = tmp_path / "machine_registry"
 
@@ -62,10 +62,6 @@ def test_run_import_writes_registry_and_templates(tmp_path):
     machine = registry["slicers"][0]["machines"][0]
     assert machine["thumbnail"] == "slicers/BambuStudio/02.07.01.57/assets/bambu-lab-h2d_cover.png"
     assert (output_root / machine["thumbnail"]).read_bytes() == b"fake-png-bytes-for-machine-adapter-test\n"
-    templates = list((output_root / "slicers").rglob("*.json"))
-    assert templates
-    template = json.loads(templates[0].read_text(encoding="utf-8"))
-    assert template["layer_height"] == "0.08"
 
 
 def test_run_import_keeps_only_native_slicer_bed_model_filename(tmp_path):
@@ -419,7 +415,7 @@ def test_neutral_asset_catalogs_cover_snapmaker_and_anycubic():
     for slicer_id in ("SnapmakerOrca", "AnycubicSlicerNext"):
         specs = native_build_plate_specs(slicer_id)
         assert len(specs) == 6
-        assert all(spec.source_filename.endswith(".png") for spec in specs)
+        assert all(spec.id and spec.display_name and spec.display_name_zh for spec in specs)
 
 
 def test_flash_studio_catalog_uses_neutral_app_owned_assets():
@@ -498,55 +494,6 @@ def test_update_registry_uses_one_lumina_neutral_asset_set(tmp_path):
     assert len(image_sets[0]) == 6
 
 
-def test_update_registry_build_plates_preserves_existing_machine_templates(tmp_path):
-    source_root = tmp_path / "Resources" / "profiles"
-    image_root = source_root.parent / "images"
-    image_root.mkdir(parents=True)
-    (image_root / "bed_pei.png").write_bytes(b"plate-art")
-    registry_root = tmp_path / "registry"
-    template_path = Path("slicers/BambuStudio/v1/metadata_templates/test.json")
-    (registry_root / template_path).parent.mkdir(parents=True)
-    (registry_root / template_path).write_text(
-        json.dumps({"default_bed_type": "Textured PEI Plate"}),
-        encoding="utf-8",
-    )
-    (registry_root / "registry.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "generated_at": "test",
-                "slicers": [
-                    {
-                        "slicer_id": "BambuStudio",
-                        "source_version": "v1",
-                        "machines": [
-                            {
-                                "machine_profile_id": "BambuStudio:test:test",
-                                "nozzles": [{"template": template_path.as_posix()}],
-                            }
-                        ],
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    update_registry_build_plates(
-        registry_root=registry_root,
-        source_roots={"BambuStudio": source_root},
-    )
-
-    registry = json.loads((registry_root / "registry.json").read_text(encoding="utf-8"))
-    assert len(registry["slicers"][0]["build_plates"]) == 5
-    assert registry["slicers"][0]["machines"][0]["default_build_plate_id"] == (
-        "textured-pei-plate"
-    )
-    assert json.loads((registry_root / template_path).read_text(encoding="utf-8")) == {
-        "default_bed_type": "Textured PEI Plate"
-    }
-
-
 def test_update_registry_recomputes_existing_h2d_plate_scope(tmp_path):
     source_root = tmp_path / "Resources" / "profiles"
     machine_dir = source_root / "BBL" / "machine"
@@ -560,44 +507,31 @@ def test_update_registry_recomputes_existing_h2d_plate_scope(tmp_path):
             "default_bed_type": "Textured PEI Plate",
         },
     )
-    image_root = source_root.parent / "images"
-    image_root.mkdir(parents=True)
-    (image_root / "bed_cool.png").write_bytes(b"cool")
-    (image_root / "bed_pei.png").write_bytes(b"textured")
-
-    registry_root = tmp_path / "registry"
-    template_path = Path("slicers/BambuStudio/v1/metadata_templates/h2d.json")
-    (registry_root / template_path).parent.mkdir(parents=True)
-    (registry_root / template_path).write_text(
-        json.dumps({"default_bed_type": "Textured PEI Plate"}),
-        encoding="utf-8",
+    source_profile_name = "Bambu Lab H2D 0.4 nozzle"
+    _write_machine_profile(
+        machine_dir,
+        f"{source_profile_name}.json",
+        {"name": source_profile_name, "instantiation": "true"},
     )
+    registry_root = tmp_path / "registry"
+    registry_root.mkdir()
     (registry_root / "registry.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "generated_at": "test",
-                "slicers": [
-                    {
-                        "slicer_id": "BambuStudio",
-                        "source_version": "v1",
-                        "machines": [
-                            {
-                                "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
-                                "display_name": "Bambu Lab H2D",
-                                "vendor_key": "BBL",
-                                "supported_build_plate_ids": [
-                                    "cool-plate",
-                                    "textured-pei-plate",
-                                ],
-                                "default_build_plate_id": "cool-plate",
-                                "nozzles": [{"template": template_path.as_posix()}],
-                            }
-                        ],
-                    }
-                ],
-            }
-        ),
+        json.dumps({
+            "schema_version": 1,
+            "generated_at": "test",
+            "slicers": [{
+                "slicer_id": "BambuStudio",
+                "source_version": "v1",
+                "machines": [{
+                    "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
+                    "display_name": "Bambu Lab H2D",
+                    "vendor_key": "BBL",
+                    "supported_build_plate_ids": ["cool-plate", "textured-pei-plate"],
+                    "default_build_plate_id": "cool-plate",
+                    "nozzles": [{"source_profile_name": source_profile_name}],
+                }],
+            }],
+        }),
         encoding="utf-8",
     )
 
@@ -609,85 +543,54 @@ def test_update_registry_recomputes_existing_h2d_plate_scope(tmp_path):
     registry = json.loads((registry_root / "registry.json").read_text(encoding="utf-8"))
     machine = registry["slicers"][0]["machines"][0]
     assert machine["supported_build_plate_ids"] == [
-        "engineering-plate",
-        "smooth-pei-plate",
-        "textured-pei-plate",
-        "supertack-plate",
+        "engineering-plate", "smooth-pei-plate", "textured-pei-plate", "supertack-plate",
     ]
     assert machine["default_build_plate_id"] == "textured-pei-plate"
 
 
 def test_update_registry_intersects_snapmaker_nozzle_plate_scopes(tmp_path):
-    snapmaker_root = tmp_path / "Snapmaker" / "Resources" / "profiles"
-    orca_root = tmp_path / "Orca" / "Resources" / "profiles"
-    orca_images = orca_root.parent / "images"
-    orca_images.mkdir(parents=True)
-    for filename in (
-        "bed_cool.png",
-        "bed_engineering.png",
-        "bed_high_templ.png",
-        "bed_pei.png",
-        "bed_pei_cool.png",
-        "bed_cool_supertack.png",
-    ):
-        (orca_images / filename).write_bytes(filename.encode("ascii"))
-
+    source_root = tmp_path / "Snapmaker" / "Resources" / "profiles"
+    source_profiles = [
+        ("Snapmaker U1 (0.4 nozzle)", {"default_bed_type": "Textured PEI Plate"}),
+        ("Snapmaker U1 (0.8 nozzle)", {
+            "default_bed_type": "Textured PEI Plate", "support_multi_bed_types": "0",
+        }),
+    ]
+    for name, settings in source_profiles:
+        _write_machine_profile(
+            source_root / "Snapmaker" / "machine",
+            f"{name}.json",
+            {"name": name, "instantiation": "true", **settings},
+        )
     registry_root = tmp_path / "registry"
-    template_root = registry_root / "slicers/SnapmakerOrca/v1/metadata_templates"
-    template_root.mkdir(parents=True)
-    multi_template = template_root / "u1_0_4.json"
-    single_template = template_root / "u1_0_8.json"
-    multi_template.write_text(
-        json.dumps({"default_bed_type": "Textured PEI Plate"}),
-        encoding="utf-8",
-    )
-    single_template.write_text(
-        json.dumps(
-            {
-                "default_bed_type": "Textured PEI Plate",
-                "support_multi_bed_types": "0",
-            }
-        ),
-        encoding="utf-8",
-    )
+    registry_root.mkdir()
     (registry_root / "registry.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "generated_at": "test",
-                "slicers": [
-                    {
-                        "slicer_id": "SnapmakerOrca",
-                        "source_version": "v1",
-                        "machines": [
-                            {
-                                "machine_profile_id": "SnapmakerOrca:snapmaker:snapmaker-u1",
-                                "display_name": "Snapmaker U1",
-                                "vendor_key": "Snapmaker",
-                                "supported_build_plate_ids": [
-                                    spec.id
-                                    for spec in native_build_plate_specs("SnapmakerOrca")
-                                ],
-                                "default_build_plate_id": "textured-pei-plate",
-                                "nozzles": [
-                                    {"template": multi_template.relative_to(registry_root).as_posix()},
-                                    {"template": single_template.relative_to(registry_root).as_posix()},
-                                ],
-                            }
-                        ],
-                    }
-                ],
-            }
-        ),
+        json.dumps({
+            "schema_version": 1,
+            "generated_at": "test",
+            "slicers": [{
+                "slicer_id": "SnapmakerOrca",
+                "source_version": "v1",
+                "machines": [{
+                    "machine_profile_id": "SnapmakerOrca:snapmaker:snapmaker-u1",
+                    "display_name": "Snapmaker U1",
+                    "vendor_key": "Snapmaker",
+                    "supported_build_plate_ids": [
+                        spec.id for spec in native_build_plate_specs("SnapmakerOrca")
+                    ],
+                    "default_build_plate_id": "textured-pei-plate",
+                    "nozzles": [
+                        {"source_profile_name": name} for name, _ in source_profiles
+                    ],
+                }],
+            }],
+        }),
         encoding="utf-8",
     )
 
     update_registry_build_plates(
         registry_root=registry_root,
-        source_roots={
-            "SnapmakerOrca": snapmaker_root,
-            "OrcaSlicer": orca_root,
-        },
+        source_roots={"SnapmakerOrca": source_root},
     )
 
     registry = json.loads((registry_root / "registry.json").read_text(encoding="utf-8"))
@@ -733,12 +636,6 @@ def test_full_import_applies_kobra_s1_snapshot_plate_exclusion(tmp_path):
             "default_bed_type": "Textured PEI Plate",
         },
     )
-    orca_root = tmp_path / "Orca" / "Resources" / "profiles"
-    orca_images = orca_root.parent / "images"
-    orca_images.mkdir(parents=True)
-    for spec in native_build_plate_specs("AnycubicSlicerNext"):
-        (orca_images / spec.source_filename).write_bytes(spec.id.encode("ascii"))
-
     output_root = tmp_path / "registry"
     run_import(
         slicer_id="AnycubicSlicerNext",
@@ -746,7 +643,6 @@ def test_full_import_applies_kobra_s1_snapshot_plate_exclusion(tmp_path):
         source_version="1.3.2605.22",
         vendor_keys=("Anycubic",),
         output_root=output_root,
-        build_plate_source_roots={"OrcaSlicer": orca_root},
     )
 
     registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))
@@ -789,12 +685,6 @@ def test_full_import_intersects_snapmaker_nozzle_plate_scopes(tmp_path):
             f"Snapmaker U1 ({nozzle} nozzle).json",
             payload,
         )
-    orca_root = tmp_path / "Orca" / "Resources" / "profiles"
-    orca_images = orca_root.parent / "images"
-    orca_images.mkdir(parents=True)
-    for spec in native_build_plate_specs("SnapmakerOrca"):
-        (orca_images / spec.source_filename).write_bytes(spec.id.encode("ascii"))
-
     output_root = tmp_path / "registry"
     run_import(
         slicer_id="SnapmakerOrca",
@@ -802,7 +692,6 @@ def test_full_import_intersects_snapmaker_nozzle_plate_scopes(tmp_path):
         source_version="02.02.49.02",
         vendor_keys=("Snapmaker",),
         output_root=output_root,
-        build_plate_source_roots={"OrcaSlicer": orca_root},
     )
 
     registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))
@@ -1232,65 +1121,6 @@ def test_run_import_sources_merges_multiple_slicers(tmp_path):
     assert [slicer["slicer_id"] for slicer in registry["slicers"]] == ["BambuStudio", "OrcaSlicer"]
 
 
-def test_import_source_can_separate_profile_and_client_versions(tmp_path):
-    source_root = tmp_path / "profiles"
-    machine_dir = source_root / "Anycubic" / "machine"
-    _write_machine_profile(
-        machine_dir,
-        "fdm_machine_common.json",
-        {
-            "type": "machine",
-            "name": "fdm_machine_common",
-            "instantiation": "false",
-            "printable_height": "260",
-            "printable_area": ["0x0", "260x0", "260x260", "0x260"],
-        },
-    )
-    _write_machine_profile(
-        machine_dir,
-        "Anycubic Kobra X 0.4 nozzle.json",
-        {
-            "type": "machine",
-            "name": "Anycubic Kobra X 0.4 nozzle",
-            "inherits": "fdm_machine_common",
-            "instantiation": "true",
-            "printer_model": "Anycubic Kobra X",
-            "printer_variant": "0.4",
-            "nozzle_diameter": ["0.4"],
-        },
-    )
-    output_root = tmp_path / "machine_registry"
-
-    result = run_import_sources(
-        [
-            ImportSource(
-                slicer_id="AnycubicSlicerNext",
-                source_root=source_root,
-                source_version="1.3.2605.22",
-                vendor_keys=("Anycubic",),
-                application_metadata="AnycubicSlicerNext-1.4.1.2",
-                client_version="1.4.1.2 20260604104233",
-            )
-        ],
-        output_root=output_root,
-    )
-
-    assert result.device_count == 1
-    registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))
-    slicer = registry["slicers"][0]
-    assert slicer["source_version"] == "1.3.2605.22"
-    assert slicer["application_metadata"] == "AnycubicSlicerNext-1.4.1.2"
-    assert slicer["client_version"] == "1.4.1.2 20260604104233"
-    template_relative_path = slicer["machines"][0]["nozzles"][0]["template"]
-    assert template_relative_path.startswith(
-        "slicers/AnycubicSlicerNext/1.3.2605.22/"
-    )
-    template = json.loads(
-        (output_root / template_relative_path).read_text(encoding="utf-8")
-    )
-    assert "version" not in template
-
-
 def test_run_import_preserves_native_quarter_mm_nozzle_profiles(tmp_path):
     source_root = tmp_path / "profiles"
     machine_dir = source_root / "Anycubic" / "machine"
@@ -1333,7 +1163,6 @@ def test_run_import_preserves_native_quarter_mm_nozzle_profiles(tmp_path):
     nozzle = registry["slicers"][0]["machines"][0]["nozzles"][0]
     assert nozzle["nozzle_size"] == "0.25"
     assert nozzle["device_profile_id"] == "AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25"
-    assert nozzle["template"].endswith("anycubic-kobra-x_0_25.json")
 
 
 def test_run_import_flash_studio_keeps_current_multicolor_models_and_nozzles(tmp_path):
@@ -1415,15 +1244,11 @@ def test_run_import_flash_studio_keeps_current_multicolor_models_and_nozzles(tmp
         source_version="02.01.01.00",
         vendor_keys=("Flashforge",),
         output_root=output_root,
-        application_metadata="BambuStudio-2.3.2",
-        client_version="",
     )
 
     assert result.device_count == 11
     registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))
     slicer = registry["slicers"][0]
-    assert slicer["application_metadata"] == "BambuStudio-2.3.2"
-    assert slicer["client_version"] == ""
     assert [machine["display_name"] for machine in slicer["machines"]] == [
         "Flashforge AD5X",
         "Flashforge Creator 5",
@@ -1451,66 +1276,6 @@ def test_run_import_flash_studio_keeps_current_multicolor_models_and_nozzles(tmp
         "Flashforge Guider4 0.25 nozzle",
         "Flashforge Guider4 0.4 nozzle",
     ]
-
-
-def test_run_import_flash_studio_defaults_native_project_identity(tmp_path):
-    source_root = tmp_path / "profiles"
-    machine_dir = source_root / "Flashforge" / "machine"
-    _write_machine_profile(
-        machine_dir,
-        "fdm_common.json",
-        {
-            "type": "machine",
-            "name": "fdm_common",
-            "instantiation": "false",
-            "printable_height": "220",
-            "printable_area": ["0x0", "220x0", "220x220", "0x220"],
-        },
-    )
-    profile_name = "Flashforge AD5X 0.4 nozzle"
-    _write_machine_profile(
-        machine_dir,
-        f"{profile_name}.json",
-        {
-            "type": "machine",
-            "name": profile_name,
-            "inherits": "fdm_common",
-            "instantiation": "true",
-            "printer_model": "Flashforge AD5X",
-            "printer_variant": "0.4",
-            "nozzle_diameter": ["0.4"],
-            "single_extruder_multi_material": "1",
-        },
-    )
-    (source_root / "Flashforge.json").write_text(
-        json.dumps(
-            {
-                "version": "02.01.01.00",
-                "machine_list": [
-                    {"name": profile_name, "sub_path": f"machine/{profile_name}.json"}
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    output_root = tmp_path / "machine_registry"
-    result = run_import(
-        slicer_id="FlashStudio",
-        source_root=source_root,
-        source_version="02.01.01.00",
-        vendor_keys=("Flashforge",),
-        output_root=output_root,
-    )
-
-    assert result.device_count == 1
-    registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))
-    slicer = registry["slicers"][0]
-    assert slicer["application_metadata"] == "BambuStudio-2.3.2"
-    assert slicer["client_version"] == ""
-    template_path = slicer["machines"][0]["nozzles"][0]["template"]
-    template = json.loads((output_root / template_path).read_text(encoding="utf-8"))
-    assert template["version"] == "2.3.2"
 
 
 def test_run_import_qidi_studio_uses_sample_models_and_native_nozzles(tmp_path):
@@ -1593,9 +1358,6 @@ def test_run_import_qidi_studio_uses_sample_models_and_native_nozzles(tmp_path):
     assert result.device_count == 7
     registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))
     slicer = registry["slicers"][0]
-    assert slicer["application_metadata"] == "QIDIStudio-02.07.02.60"
-    assert slicer["client_version"] == "02.07.02.60"
-    assert slicer["sidecar_policy"] == "qidi_studio"
     assert {
         machine["display_name"]: [nozzle["nozzle_size"] for nozzle in machine["nozzles"]]
         for machine in slicer["machines"]
@@ -1607,12 +1369,6 @@ def test_run_import_qidi_studio_uses_sample_models_and_native_nozzles(tmp_path):
     }
     q2 = next(machine for machine in slicer["machines"] if machine["display_name"] == "Q2")
     assert q2["machine_profile_id"] == "QIDIStudio:qidi:q2"
-    q2_template_path = q2["nozzles"][0]["template"]
-    template = json.loads((output_root / q2_template_path).read_text(encoding="utf-8"))
-    assert template["version"] == "02.07.02.60"
-    assert template["printer_variant"] == "0.2"
-    assert template["layer_height"] == "0.08"
-    assert template["line_width"] == "0.22"
 
 
 def test_run_import_sources_reuses_cover_assets_from_other_sources(tmp_path):

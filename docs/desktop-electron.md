@@ -12,6 +12,44 @@
 
 桌面开发版不需要先手动跑 `start_all.py`：Electron 主进程就是总指挥，会自己拉起并看管后端和前端子进程。
 
+Python 3.12 及以上的 3MF 导出链路要求 `wheelhouse/3mf` 中存在当前平台的
+`fatcat-metadata` C++ wheel（Python 导入名为 `fatcat_metadata`）和已打补丁的
+`neroued-3mf` wheel。当前公开元数据包版本固定为 `0.1.0`，来源提交、仓库、
+writer 版本和补丁位置统一由 `scripts/fatcat_packaging_contract.py` 维护。
+Fat Cat 来自公开仓库
+[`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata)，固定
+完整提交 `673b1b694dd7c3369f5094fb8ddbf77fdb869d90`。构建脚本把 `--fatcat-root`
+视为该仓库根目录，从根 `pyproject.toml` 构建 wheel；无需进入 `cpp/` 子目录。
+CI 会匿名检出该提交，并在目标平台构建 wheel。
+
+Lumina 在 `reference/neroued-patches/neroued-3mf-v0.4.0-b7.patch` 保存精确的 B7
+补丁。生产 writer 仍固定在上游提交
+`331ac6fa62a719f0dddacf9f005861b187d54f0c`，应用补丁后版本为
+`neroued-3mf==0.4.0+fatcat.b7`。从 Lumina 仓库根目录准备本地源码并构建：
+
+```powershell
+git clone https://github.com/MOVIBALE/fatcat-metadata ..\fatcat-metadata
+git -C ..\fatcat-metadata checkout 673b1b694dd7c3369f5094fb8ddbf77fdb869d90
+git clone https://github.com/neroued/neroued_3mf.git ..\neroued-3mf
+git -C ..\neroued-3mf checkout 331ac6fa62a719f0dddacf9f005861b187d54f0c
+$writerPatch = (Resolve-Path .\reference\neroued-patches\neroued-3mf-v0.4.0-b7.patch).Path
+git -C ..\neroued-3mf apply $writerPatch
+
+python scripts/build_3mf_native_wheels.py `
+  --fatcat-root ..\fatcat-metadata `
+  --neroued-source ..\neroued-3mf `
+  --install
+```
+
+不要把另一台机器生成的 wheel 直接复制进来；wheel 必须与当前 Python、操作系统
+和 CPU 架构匹配。`--install` 会校验 manifest 中的源码提交和 wheel SHA256，
+先卸载旧的 `lumina-3mf-metadata-cpp`，再以 `--no-deps --force-reinstall` 安装
+本次精确 wheel。两个包共用 `fatcat_metadata_data`，不能在新包安装后才卸载旧包。
+同一版本重新构建也需要此安装步骤，不能只依赖普通 `pip install -r`。
+已有当前构建产物时可运行 `python scripts/build_3mf_native_wheels.py --install-only`。
+生成目录仅受控更新原生 wheel，其他文件保留。完成后再执行下面的
+`pip install -r requirements.txt`；原生依赖的构建流程也按此顺序安装。
+
 ## 2. 环境准备（一次性）
 
 按顺序执行以下四步；打包 Windows 安装版时还需要第 5 步。任何一步缺了，客户端都会在启动链路或构建链路的对应环节失败。下面先列 Windows PowerShell 命令：

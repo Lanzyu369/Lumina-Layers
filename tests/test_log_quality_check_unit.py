@@ -28,6 +28,20 @@ def _write_json_lines(path: Path, payloads: list[dict[str, object]]) -> None:
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
+def test_fast_puzzle_worker_includes_export_transform_metadata() -> None:
+    created_paths: list[Path] = []
+    try:
+        result = log_quality_check._build_mock_generate_result(
+            created_paths, worker_name="_submit_puzzle_worker",
+        )
+        assert result["x_mirrored"] is False
+        assert result["mirror_span_mm"] == 60.0
+        assert Path(result["threemf_path"]).is_file()
+    finally:
+        for path in created_paths:
+            path.unlink(missing_ok=True)
+
+
 def _build_report_for_log(path: Path) -> log_quality_check.QualityReport:
     audit_result = audit_files([path], label="unit")
     return log_quality_check.build_quality_report(

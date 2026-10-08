@@ -82,6 +82,56 @@ MACHINE_REGISTRY_ASSET_MEDIA_TYPES: dict[str, str] = {
 }
 
 
+@router.get("/3mf-templates", dependencies=[Depends(require_local_app_origin)])
+def list_custom_3mf_templates() -> dict:
+    """List saved 3MF template metadata. 列出已保存的 3MF 模板信息。"""
+    from core.custom_3mf_templates import list_templates
+
+    return {"templates": list_templates()}
+
+
+@router.post("/3mf-templates", dependencies=[Depends(require_local_app_origin)])
+async def import_custom_3mf_template(
+    file: UploadFile = File(...), name: str = Form(""), slicer: str | None = Form(None)
+) -> dict:
+    """Import printer settings from a 3MF. 从 3MF 导入打印机设置。"""
+    from core.custom_3mf_templates import import_template
+
+    try:
+        metadata = await run_in_threadpool(
+            import_template,
+            await file.read(), name.strip() or Path(file.filename or "Template").stem,
+            **({"slicer_hint": slicer} if slicer else {}),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log.info(
+        "Custom 3MF template imported",
+        extra={"event": "system_3mf_template_import_done", "template_id": metadata["id"]},
+    )
+    return metadata
+
+
+@router.delete(
+    "/3mf-templates/{template_id}", dependencies=[Depends(require_local_app_origin)]
+)
+def delete_custom_3mf_template(template_id: str) -> dict:
+    """Delete a saved 3MF template. 删除已保存的 3MF 模板。"""
+    from core.custom_3mf_templates import delete_template
+
+    try:
+        delete_template(template_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Custom 3MF template was not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log.info(
+        "Custom 3MF template deleted",
+        extra={"event": "system_3mf_template_delete_done", "template_id": template_id},
+    )
+    return {"status": "ok"}
+
+
 def _normalize_host(value: str | None) -> str | None:
     if value is None:
         return None
@@ -346,6 +396,7 @@ def _registry_machines_by_key() -> dict[tuple[str, str], dict[str, object]]:
                         "display_name_zh": plate.display_name_zh,
                         "image_url": (
                             "/api/system/machine-registry/assets/" + plate.image
+                            if plate.image else ""
                         ),
                     }
                     for plate in device.build_plates
@@ -719,12 +770,6 @@ def get_printers() -> PrinterListResponse:
     existing_ids = {profile.id for profile in profiles}
     attached_registry_keys: set[tuple[str, str]] = set()
     for p in profiles:
-        # Build supported slicer list: default template → BambuStudio, plus slicer_templates keys
-        slicers = []
-        # If template_file starts with "bambu_", default slicer is BambuStudio
-        if p.template_file.startswith("bambu_"):
-            slicers.append("BambuStudio")
-        slicers.extend(p.slicer_templates.keys())
         key = (p.display_name.casefold(), p.brand.casefold())
         registry_machine = registry_machines.get(key, {})
         registry_device_profiles = registry_machine.get("profiles", [])
@@ -739,7 +784,10 @@ def get_printers() -> PrinterListResponse:
             for profile in registry_device_profiles
             if isinstance(profile, DeviceProfileInfo)
         ]
-        unique_slicers = _unique_preserve_order([*slicers, *registry_slicers])
+        unique_slicers = _unique_preserve_order(registry_slicers)
+        if config.DEFAULT_SLICER_ID in unique_slicers:
+            unique_slicers.remove(config.DEFAULT_SLICER_ID)
+            unique_slicers.insert(0, config.DEFAULT_SLICER_ID)
         unique_nozzles = _unique_preserve_order([*p.supported_nozzle_sizes, *registry_nozzles])
         attached_registry_keys.add(key)
         printers.append(

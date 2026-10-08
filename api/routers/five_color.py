@@ -35,6 +35,7 @@ from core.five_color_combination import (
     StackLUTLoader,
     rgb_to_hex,
 )
+from core.pipeline.preview_color_utils import build_lut_material_types
 from utils.lut_manager import LUTManager
 
 router = APIRouter(prefix="/api/five-color", tags=["Five-Color"])
@@ -197,6 +198,7 @@ def _load_engine(lut_name: str) -> tuple[ColorQueryEngine, str]:
                 sources=sources,
                 stack_recipe_widths=stack_recipe_widths,
             )
+            engine._lut_metadata = metadata
             # Override base_colors from palette hex_color
             if metadata.palette:
                 engine._palette_names = [e.color for e in metadata.palette]
@@ -443,6 +445,7 @@ def generate_swatch(
         nozzle_size=request.nozzle_size,
         device_profile_id=request.device_profile_id,
         build_plate_id=request.build_plate_id,
+        custom_3mf_template_id=request.custom_3mf_template_id,
     )
     from api.file_bridge import pil_to_png_bytes
     from core.recipe_swatch import RecipeSwatchItem, generate_recipe_swatch
@@ -450,6 +453,20 @@ def generate_swatch(
     engine, _ = _load_engine(request.lut_name)
     base_color_names = engine.get_color_names()
     base_color_hexes = [rgb_to_hex(rgb) for rgb in engine.get_base_colors()]
+    metadata = getattr(engine, "_lut_metadata", None)
+    if metadata is None:
+        _, _, metadata = LUTManager.load_lut_with_metadata(
+            LUTManager.get_lut_path(request.lut_name)
+        )
+    palette_names = (
+        [entry.color for entry in metadata.palette]
+        if metadata.palette else base_color_names
+    )
+    types_by_name = build_lut_material_types(metadata, palette_names)
+    material_types = [
+        types_by_name.get(palette_names[index]) if index < len(palette_names) else None
+        for index in range(len(base_color_names))
+    ]
 
     items: list[RecipeSwatchItem] = []
     expected_length = engine.accepted_selection_lengths()
@@ -477,6 +494,7 @@ def generate_swatch(
                 result_hex=rgb_to_hex(query_result.result_rgb),
                 base_color_names=base_color_names,
                 base_color_hexes=base_color_hexes,
+                material_types=material_types,
             )
         )
 

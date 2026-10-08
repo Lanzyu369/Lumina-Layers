@@ -18,6 +18,12 @@
   wheels use the Ubuntu 24.04 system ABI; an older glibc host needs a source build.
 - Linux cgroup CPU/memory limits and the optional local GEOS dense-buffer
   runtime remain independent of deployment packaging.
+- The Studio repository's Windows desktop build uses `scripts/build_desktop.py`
+  and `lumina_studio.spec`. The official Windows/macOS beta pipeline is maintained
+  in the private Lumina-Distribution repository; its source overlay must use the
+  same FatCat dependency and picker-asset contract before integrating this branch.
+  The former Gradio `main.py` packaging workflow and bundled application
+  3MF template file have been retired; metadata data comes from FatCat.
 
 ## Retired on 2026-10-06
 
@@ -36,6 +42,10 @@ previously installed services, scheduled tasks or user data.
 
 当前支持源码本地运行和 Electron 桌面客户端。桌面页面服务、本地访问限制、
 Linux 资源限额检测、可选 PostgreSQL 后端及本地 GEOS 构建均继续保留。
+本仓库的 Windows 桌面构建使用 `scripts/build_desktop.py` 和 `lumina_studio.spec`；
+官方 Windows/macOS 内测流水线位于私有 Lumina-Distribution 仓库，其覆盖脚本
+需要同步 FatCat 依赖及选择器资源合同后才能集成本分支。旧 Gradio
+启动文件的打包流程及本体内置 3MF 模板文件已移除，元数据配置来自 FatCat。
 Linux 原生组件改为直接在 Ubuntu 24.04 主机上构建；较旧 glibc 系统需要源码构建。
 
 2026-10-06 起移除 Docker 构建、部署、定时自动更新、数据库容器配置、

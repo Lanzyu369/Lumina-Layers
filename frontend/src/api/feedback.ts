@@ -62,6 +62,7 @@ export interface BugReportContextPayload {
   nozzle_size?: string;
   device_profile_id?: string;
   build_plate_id?: string;
+  custom_3mf_template_id?: string | null;
   color_mode: string | null;
   lut_name: string | null;
   lut_names?: string[];

@@ -28,6 +28,12 @@ from core.workshop import (  # noqa: E402
     WorkshopSeedLock,
     verify_workshop_seed as verify_seed_contract,
 )
+from scripts.fatcat_packaging_contract import (  # noqa: E402
+    FATCAT_ADAPTER_MODULE,
+    FATCAT_MODULE,
+    FATCAT_WRITER_VERSION,
+    validate_fatcat_packaging_contract,
+)
 
 FRONTEND_DIR = ROOT / "frontend"
 ELECTRON_DIR = ROOT / "electron"
@@ -121,6 +127,46 @@ def check_glb_v2_dependencies_available() -> bool:
     for module_name, exc in missing:
         print(f"  - {module_name}: {exc}")
     return False
+
+
+def check_3mf_native_dependencies_available() -> None:
+    """Require the exact Fat Cat binding and patched writer for desktop builds.
+
+    桌面打包必须使用精确的 Fat Cat C++ 绑定和下游 writer；缺失时直接失败，
+    不把 B4 目标静默降级到库存 writer。
+    """
+
+    try:
+        fatcat = importlib.import_module(FATCAT_MODULE)
+        importlib.import_module(FATCAT_ADAPTER_MODULE)
+        n3mf = importlib.import_module("neroued_3mf")
+    except Exception as exc:
+        raise RuntimeError(
+            "B4 desktop packaging requires the installed Fat Cat C++ wheel and "
+            f"patched neroued writer: {exc}"
+        ) from exc
+
+    data_root = validate_fatcat_packaging_contract(fatcat, n3mf)
+    builder = n3mf.DocumentBuilder()
+    missing_writer_methods = [
+        name
+        for name in (
+            "plan_production_layout",
+            "set_production_build_uuid",
+            "set_production_assembly_uuid",
+            "set_component_uuid",
+        )
+        if not hasattr(builder, name)
+    ]
+    if missing_writer_methods:
+        raise RuntimeError(
+            "patched neroued writer is missing B4 production APIs: "
+            f"{missing_writer_methods}"
+        )
+    print(
+        "  3MF native dependencies available: "
+        f"Fat Cat data at {data_root}, neroued {FATCAT_WRITER_VERSION}."
+    )
 
 
 def check_workshop_desktop_security_files() -> None:
@@ -285,6 +331,11 @@ def main():
     # ── Step 2: Check backend dependencies ──
     print("\n[2/5] Checking desktop geometry dependencies...")
     try:
+        check_3mf_native_dependencies_available()
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}")
+        return 1
+    try:
         check_core_geometry_dependencies_available()
     except RuntimeError as exc:
         print(f"ERROR: {exc}")
@@ -292,7 +343,10 @@ def main():
     check_glb_v2_dependencies_available()
 
     print("\n[3/5] Building backend (PyInstaller)...")
-    run("pyinstaller lumina_studio.spec", cwd=str(ROOT))
+    run(
+        "pyinstaller lumina_studio.spec",
+        cwd=str(ROOT),
+    )
 
     # ── Step 4: Copy artifacts ──
     print("\n[4/5] Copying artifacts to electron/resources/...")

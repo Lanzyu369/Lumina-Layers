@@ -99,6 +99,7 @@ class UserSettings(BaseModel):
     preserve_upload_filename_for_3mf: StrictBool = False
     printer_model: str = "bambu-h2d"
     slicer_software: str = "BambuStudio"
+    custom_3mf_template_id: str | None = None
     device_profile_id: str = "BambuStudio:bbl:bambu-lab-h2d:0.4"
     build_plate_id: str = ""
     build_plate_selections: dict[str, str] = Field(default_factory=dict)

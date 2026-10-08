@@ -3215,6 +3215,78 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "设备配置",
     en: "Device Profile",
   },
+  "settings.template_title": {
+    zh: "3MF 项目模板",
+    en: "3MF project template",
+  },
+  "settings.template_builtin": {
+    zh: "使用内置配置",
+    en: "Use built-in settings",
+  },
+  "settings.template_summary": {
+    zh: "导入当前切片软件保存的单盘 3MF 项目，沿用其中的耗材和全局工艺设置。模板须与所选打印机、喷嘴和切片软件匹配；不匹配时会报错。",
+    en: "Import a single-plate 3MF saved by the selected slicer to reuse its material and global process settings. The template must match the selected printer, nozzle and slicer; mismatches produce an error.",
+  },
+  "settings.template_hint": {
+    zh: "保留模板的速度、加速度、温度、流量、回抽和冷却设置。模型使用模板耗材槽位，槽位数量按生成流程保留或收紧。Lumina 按模型需要覆盖层高、线宽、墙层、顶底壳层和填充率；擦料塔按下方自动摆放选项处理。原模型、局部参数和修改器不导入。",
+    en: "Keeps the template's speed, acceleration, temperature, flow, retraction and cooling settings. The model uses template material slots; the workflow retains or compacts the slot table. Lumina overrides layer height, line width, walls, shells and infill as required by the model. Tower handling follows the automatic placement option below. Source geometry, local settings and modifiers are not imported.",
+  },
+  "settings.template_excluded": {
+    zh: "支持图像、矢量、材料档案、大幅分块和模型覆面导出。批量、拼图、校准和色块生成请先选择内置配置。",
+    en: "Supports image, vector, material-archive, large-format and model-surface exports. Select built-in settings for batch, puzzle, calibration and swatch generation.",
+  },
+  "settings.template_missing_option": {
+    zh: "所选模板在本机不可用",
+    en: "Selected template unavailable on this device",
+  },
+  "settings.template_missing": {
+    zh: "模板仅保存在本机，分享配方不会携带模板文件。请在本机导入原项目并重新选择，或切回内置配置；生成时不会静默替换模板。",
+    en: "Templates are stored locally; shared recipes do not contain the template file. Import the source project on this device and select it again, or choose built-in settings. Generation will not silently replace the template.",
+  },
+  "settings.template_name": {
+    zh: "模板名称（可选）",
+    en: "Template name (optional)",
+  },
+  "settings.template_file": {
+    zh: "3MF 项目文件",
+    en: "3MF project file",
+  },
+  "settings.template_choose_file": {
+    zh: "选择 3MF 文件",
+    en: "Choose 3MF file",
+  },
+  "settings.template_change_file": {
+    zh: "重新选择文件",
+    en: "Choose another file",
+  },
+  "settings.template_metadata": {
+    zh: "{printer} · {slicer} · {nozzle} mm · {count} 个耗材槽位",
+    en: "{printer} · {slicer} · {nozzle} mm · {count} material slots",
+  },
+  "settings.template_import": {
+    zh: "导入模板",
+    en: "Import template",
+  },
+  "settings.template_delete": {
+    zh: "删除模板",
+    en: "Delete template",
+  },
+  "settings.template_load_error": {
+    zh: "无法加载模板，请重新打开设置重试。",
+    en: "Could not load templates. Reopen Settings to retry.",
+  },
+  "settings.template_file_error": {
+    zh: "请选择 .3mf 项目文件。",
+    en: "Choose a .3mf project file.",
+  },
+  "settings.template_import_error": {
+    zh: "模板导入失败：",
+    en: "Template import failed:",
+  },
+  "settings.template_delete_error": {
+    zh: "模板删除失败，请重试：",
+    en: "Could not delete the template. Retry:",
+  },
   "settings.base_layer_height_modifier": {
     zh: "底板层高修改器",
     en: "Base-plate layer-height modifier",
@@ -3234,6 +3306,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.custom_slicer_path": {
     zh: "手动切片软件路径",
     en: "Manual slicer app path",
+  },
+  "settings.prusa_preview_help": {
+    zh: "Prusa 工程使用 3.0.0-alpha12 预览版格式。多色导出需要 MMU 或足够的打印头；当前内置配置提供原生默认 0.4 mm 喷嘴。",
+    en: "Prusa projects use the 3.0.0-alpha12 preview format. Multicolor exports need an MMU or enough print heads. Bundled profiles use the native default 0.4 mm nozzle.",
   },
   "settings.custom_slicer_path_help": {
     zh: "macOS 可粘贴 .app 路径，例如 /Applications/Bambu Studio.app；保存后会优先用于打开 3MF。",
@@ -5489,8 +5565,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Backing Infill",
   },
   basic_backing_infill_density_hint: {
-    zh: "控制深层背板的填充率。靠近观赏面的保护区域始终保持 100% 实心；浮雕和拼图模式固定为 100%。",
-    en: "Controls infill in the deeper backing. The protected zone next to the viewing surface always stays 100% solid; relief and puzzle modes stay at 100%.",
+    zh: "控制深层背板的填充率，平面拼图也可使用。靠近观赏面的保护区域始终保持 100% 实心；浮雕模式固定为 100%。",
+    en: "Controls infill in the deeper backing, including flat puzzles. The protected zone next to the viewing surface always stays 100% solid; relief mode stays at 100%.",
   },
   basic_structure_mode: {
     zh: "结构模式",

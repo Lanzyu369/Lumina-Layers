@@ -6,11 +6,23 @@ Usage:
     pyinstaller lumina_studio.spec
 """
 
+import importlib
 import json
+import sys
 from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
 
+SPEC_ROOT = Path(SPEC).resolve().parent
+if str(SPEC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SPEC_ROOT))
+
 from PyInstaller.utils.hooks import collect_all, get_module_file_attribute
+
+from scripts.fatcat_packaging_contract import validate_fatcat_packaging_contract
+from scripts.fatcat_packaging_contract import (
+    FATCAT_ADAPTER_MODULE,
+    FATCAT_MODULE,
+)
 
 block_cipher = None
 ROOT = Path.cwd()
@@ -18,6 +30,7 @@ GLB_V2_PACKAGES = ("rasterio", "manifold3d")
 GLB_V2_HIDDENIMPORTS = ("rasterio.features", "manifold3d")
 NEROUED_3MF_PACKAGE = "neroued_3mf"
 NEROUED_3MF_HIDDENIMPORTS = ("neroued_3mf", "neroued_3mf._neroued_3mf")
+FATCAT_METADATA_MODULE = FATCAT_MODULE
 LUMINA_SVG_CORE_PACKAGE = "lumina_svg_core"
 LUMINA_SVG_CORE_EXTENSION = "lumina_svg_core._lumina_svg_core"
 LUMINA_SVG_COMPENSATION_EXTENSION = "lumina_svg_core._lumina_svg_compensation"
@@ -42,20 +55,23 @@ def collect_glb_v2_package(package_name):
 
 
 def collect_machine_registry_runtime_datas(registry_root):
-    """Collect only files required by the packaged machine-registry runtime."""
+    """Collect the registry, thumbnails and plate art used by the device picker."""
 
     registry_root = Path(registry_root).resolve()
     registry_path = registry_root / "registry.json"
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
     relative_paths = {Path("registry.json")}
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
     for slicer in registry["slicers"]:
+        relative_paths.update(Path(plate["image"]) for plate in slicer.get("build_plates", []))
         relative_paths.update(
-            Path(plate["image"]) for plate in slicer.get("build_plates", [])
+            Path(machine["thumbnail"])
+            for machine in slicer.get("machines", [])
+            if machine.get("thumbnail")
         )
-        for machine in slicer["machines"]:
-            relative_paths.update(
-                Path(nozzle["template"]) for nozzle in machine["nozzles"]
-            )
+    for asset_index_path in registry_root.glob("slicers/*/*/picker-assets.json"):
+        asset_index = json.loads(asset_index_path.read_text(encoding="utf-8"))
+        relative_paths.add(asset_index_path.relative_to(registry_root))
+        relative_paths.update(Path(image) for image in asset_index["thumbnails"].values())
 
     datas = []
     for relative_path in sorted(relative_paths, key=lambda path: path.as_posix()):
@@ -73,6 +89,33 @@ def collect_machine_registry_runtime_datas(registry_root):
         destination = Path("machine_registry") / relative_path.parent
         datas.append((str(source_path), destination.as_posix()))
     return datas
+
+
+def collect_fatcat_runtime_package():
+    """Collect the top-level Fat Cat extension and its wheel data files."""
+
+    try:
+        module_path = Path(get_module_file_attribute(FATCAT_METADATA_MODULE)).resolve()
+        fatcat_module = importlib.import_module(FATCAT_METADATA_MODULE)
+        importlib.import_module(FATCAT_ADAPTER_MODULE)
+        writer_module = importlib.import_module(NEROUED_3MF_PACKAGE)
+    except Exception as exc:
+        raise RuntimeError(
+            "Fat Cat C++ metadata binding is required for the desktop B4 route"
+        ) from exc
+
+    data_root = validate_fatcat_packaging_contract(fatcat_module, writer_module)
+
+    datas = []
+    for source_path in sorted(data_root.rglob("*")):
+        if source_path.is_file():
+            relative_path = source_path.relative_to(data_root)
+            destination = Path("fatcat_metadata_data") / relative_path.parent
+            datas.append((str(source_path), destination.as_posix()))
+    return datas, [(str(module_path), ".")], [
+        FATCAT_METADATA_MODULE,
+        FATCAT_ADAPTER_MODULE,
+    ]
 
 
 glb_v2_datas = []
@@ -94,6 +137,12 @@ for glb_v2_package in GLB_V2_PACKAGES:
     neroued_3mf_binaries,
     neroued_3mf_hiddenimports,
 ) = collect_all(NEROUED_3MF_PACKAGE)
+
+(
+    fatcat_metadata_datas,
+    fatcat_metadata_binaries,
+    fatcat_metadata_hiddenimports,
+) = collect_fatcat_runtime_package()
 
 # Native SVG is a required compiled dependency. A missing extension must stop
 # packaging instead of silently producing a legacy-only desktop executable.
@@ -127,26 +176,27 @@ backend_datas = [
     # Includes the app-owned Workshop Registry key set and offline snapshot in
     # assets/workshop-registry/ alongside the existing runtime assets.
     ('assets', 'assets'),
-    # Runtime registry contract only: registry, Lumina plate art, and referenced templates.
+    # Runtime registry contract only: device identities and Lumina plate art.
     *collect_machine_registry_runtime_datas(ROOT / 'machine_registry'),
-    ('printer_profiles', 'printer_profiles'),
-    ('bambu_config_template.json', '.'),
     ('lut-preset', 'lut-preset'),
     # The frozen backend imports the built-in ColorChecker reference registry
     # during app startup; keep its descriptor/reference data beside the module.
     (str(COLORCHECKER_DATA_DIR), 'core/colorchecker/data'),
     *neroued_3mf_datas,
+    *fatcat_metadata_datas,
     *lumina_svg_core_datas,
     *glb_v2_datas,
 ]
 backend_binaries = [
     *neroued_3mf_binaries,
+    *fatcat_metadata_binaries,
     *lumina_svg_core_binaries,
     *glb_v2_binaries,
 ]
 backend_hiddenimports = [
     *NEROUED_3MF_HIDDENIMPORTS,
     *neroued_3mf_hiddenimports,
+    *fatcat_metadata_hiddenimports,
     *LUMINA_SVG_CORE_HIDDENIMPORTS,
     *lumina_svg_core_hiddenimports,
     *GLB_V2_HIDDENIMPORTS,

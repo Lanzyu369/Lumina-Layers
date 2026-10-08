@@ -5,10 +5,10 @@ settings selector. These images are app-owned, contain no slicer or printer
 branding, and are generated deterministically by
 `tools/machine_adapter/build_plates.py`.
 
-The artwork is presentation-only. Plate IDs, translated labels, and 3MF
-project/plate/sidecar values are a version-scoped adapter contract declared in
-`tools/machine_adapter/build_plates.py` and checked against native projects and
-profiles. Per-machine support and defaults are derived from pinned machine and
+The artwork is presentation-only. The registry stores picker IDs, translated
+labels and image provenance. FatCat owns the 3MF project/plate/sidecar values;
+they are not duplicated in the app registry. The import tool uses native plate
+names only to resolve picker support and defaults from pinned machine and
 nozzle profile settings, including the intersection across nozzle variants.
 Anycubic Kobra S1 Engineering Plate is a narrow version-and-machine exclusion
 based on a real slice that produced zero bed temperature. Replacing the artwork
@@ -33,4 +33,4 @@ python -m tools.machine_adapter.update_build_plates \
 When pinned native profiles are also available, pass the existing `--source`
 arguments. The updater then recomputes per-machine support/default values and
 machine/nozzle capability intersections from those profiles while writing the
-same explicit adapter vocabulary and Lumina-owned image set.
+same picker IDs, labels and Lumina-owned image set.

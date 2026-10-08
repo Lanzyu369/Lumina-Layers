@@ -231,6 +231,7 @@ export const useCalibrationStore = create<
         nozzle_size: settings.nozzleSize,
         device_profile_id: settings.deviceProfileId,
         build_plate_id: settings.buildPlateId,
+        custom_3mf_template_id: settings.custom3mfTemplateId,
       });
       if (!isCurrentRequest()) return;
       set({
@@ -290,6 +291,7 @@ export const useCalibrationStore = create<
         nozzle_size: settings.nozzleSize,
         device_profile_id: settings.deviceProfileId,
         build_plate_id: settings.buildPlateId,
+        custom_3mf_template_id: settings.custom3mfTemplateId,
       });
       if (!isCurrentRequest()) return;
       set({
