@@ -36,7 +36,6 @@ export default function LuminaBoxMaterialPanel() {
   const [backingSetupSelection, setBackingSetupSelection] = useState<LuminaBoxBackingMaterial | null>(null);
   const [form, setForm] = useState(initialForm);
   const [creating, setCreating] = useState<"material" | "backing" | null>(initialRequest.current ? null : "material");
-  const [continueOpen, setContinueOpen] = useState(false);
   const [confirmDiscardPending, setConfirmDiscardPending] = useState(false);
   const [referenceError, setReferenceError] = useState(false);
   const [referenceLoading, setReferenceLoading] = useState(true);
@@ -70,8 +69,6 @@ export default function LuminaBoxMaterialPanel() {
     return name && name !== selected ? name
       : [item.material_type, t(`lumina_box_material_color_${selected.toLowerCase()}`)].filter(Boolean).join(lang === "zh" ? "" : " ");
   };
-  const continuations = capture.datasets.filter((item: LuminaBoxMaterialDataset) => item.workflow?.kind !== "backing_material" && item.workflow?.kind !== "backing_reference").flatMap((item: LuminaBoxMaterialDataset) =>
-    savedBackedGradientMaterialSymbols(item).map((selected) => ({ dataset: item, symbol: selected, name: materialLabel(item, selected) })));
   const archiveRequest = initialRequest.current?.archive ? initialRequest.current : navigation.lastCaptureArchive;
   const archiveIdentity = archiveRequest?.datasetId === dataset?.dataset_id && archiveRequest?.materialSymbol === symbol
     ? archiveRequest.archive : undefined;
@@ -107,12 +104,10 @@ export default function LuminaBoxMaterialPanel() {
     setForm(reuseIdentity ? { ...initialForm, name: materialName, brand: archiveIdentity?.brand ?? dataset?.brand ?? "",
       material_type: archiveIdentity?.material_type ?? dataset?.material_type ?? "" } : initialForm);
     setBackingSelection({ W: "", K: "" });
-    setContinueOpen(false);
     setCreating("material");
   };
   const beginBacking = (material: LuminaBoxBackingMaterial | null = null) => {
     setBackingSetupSelection(material);
-    setContinueOpen(false);
     setCreating("backing");
   };
 
@@ -125,7 +120,7 @@ export default function LuminaBoxMaterialPanel() {
       return;
     }
     const loaded = await capture.loadDataset(id, { material_symbol: material.role, backing: material.role === "W" ? "K" : "W", sample_role: "coated" });
-    if (loaded) { setContinueOpen(false); setCreating(null); }
+    if (loaded) setCreating(null);
   };
 
   const createBacking = async (payload: LuminaBoxBackingMaterialRequest) => {
@@ -163,35 +158,21 @@ export default function LuminaBoxMaterialPanel() {
       <section className={`${cardClass} space-y-5 p-5`}>
         <div className="flex flex-wrap items-center justify-between gap-3" data-testid="box-material-toolbar">
           <div className="flex flex-wrap items-center gap-3">
-            <Button label={t("lumina_box_material_new")} variant={formMode === "material" && !continueOpen ? "primary" : "secondary"} disabled={selectionLocked} onClick={() => beginMaterial()} />
-            <Button label={t("lumina_box_material_continue")} variant={continueOpen || !formMode && !backing ? "primary" : "secondary"} disabled={selectionLocked || !continuations.length}
-              onClick={() => setContinueOpen(true)} />
+            <Button label={t("lumina_box_material_new")} variant={formMode === "material" ? "primary" : "secondary"} disabled={selectionLocked} onClick={() => beginMaterial()} />
             <Button label={t("lumina_box_backing_collect")} variant={formMode === "backing" || !formMode && backing ? "primary" : "secondary"}
               disabled={selectionLocked} onClick={() => beginBacking()} />
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-sm text-slate-500 dark:text-slate-400" role="status">{t(selectedConnectionKey)}</span>
-            {capture.serial.status === "disconnected" ? <Button label={t("lumina_box_serial_connect")} size="sm" disabled={!dataset || !!formMode || continueOpen || !getLuminaBoxSerialApi() || locked}
+            {capture.serial.status === "disconnected" ? <Button label={t("lumina_box_serial_connect")} size="sm" disabled={!dataset || !!formMode || !getLuminaBoxSerialApi() || locked}
               onClick={capture.connect} /> : <Button label={t("lumina_box_serial_disconnect")} size="sm" variant="secondary"
               disabled={capture.serial.status === "disconnecting"} onClick={() => void capture.serial.disconnect()} />}
           </div>
         </div>
-        {continueOpen ? <div className={`${wellClass} space-y-2 p-3`} data-testid="box-material-continue-list">
-          <h3 className="px-2 text-sm font-semibold">{t("lumina_box_material_continue_choose")}</h3>
-          {continuations.map(({ dataset: item, symbol: selected, name }) => <button type="button" key={`${item.dataset_id}:${selected}`} disabled={selectionLocked}
-                className="flex min-h-11 w-full flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-blue-500/10 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)]"
-                onClick={() => { void capture.loadDataset(item.dataset_id, { material_symbol: selected, backing: "W", sample_role: "coated" }).then((loaded) => {
-                  if (loaded) { setContinueOpen(false); setCreating(null); }
-                }); }}>
-                <span className="font-medium">{name}</span>
-                <span className="text-xs text-slate-500 dark:text-slate-400">{[item.brand, item.batch,
-                  new Date(item.updated_at).toLocaleString(lang === "zh" ? "zh-CN" : "en-US")].filter(Boolean).join(" · ")}</span>
-          </button>)}
-        </div> : null}
-        {formMode === "backing" && !continueOpen ? <LuminaBoxBackingSetup key={backingSetupSelection?.material_id ?? "new"} materials={backingMaterials}
+        {formMode === "backing" ? <LuminaBoxBackingSetup key={backingSetupSelection?.material_id ?? "new"} materials={backingMaterials}
           initialMaterial={backingSetupSelection} locked={selectionLocked || referenceLoading}
           busy={capture.datasetBusy === "create"} onStart={createBacking} onOpen={(item) => void openBacking(item)} /> : null}
-        {formMode === "material" && !continueOpen ? <form className={`${cardDividerClass} space-y-4 pt-4`} onSubmit={(event) => void create(event)} data-testid="box-material-create-form">
+        {formMode === "material" ? <form className={`${cardDividerClass} space-y-4 pt-4`} onSubmit={(event) => void create(event)} data-testid="box-material-create-form">
           <div className="grid gap-4 sm:grid-cols-2">
             {(["name", "brand", "material_type"] as const).map((field) => <label key={field} className="space-y-1.5 text-sm font-medium">{t(`lumina_box_material_${field}`)}
               <input className={boxMaterialInputClass} required={field === "name"} maxLength={200} value={form[field]} disabled={locked} onChange={(event) => setForm({ ...form, [field]: event.target.value })} />
@@ -232,7 +213,7 @@ export default function LuminaBoxMaterialPanel() {
           </> : <Button size="sm" variant="secondary" label={t("lumina_box_bg_discard")} disabled={capture.savingCount > 0}
             onClick={() => setConfirmDiscardPending(true)} />}</div>
         </StatusBanner> : null}
-        {dataset && !formMode && !continueOpen ? <>
+        {dataset && !formMode ? <>
           <div className={`${cardDividerClass} flex flex-wrap items-end justify-between gap-3 pt-4`}>
             <h3 className="text-base font-semibold">{backing ? dataset.name : materialName}</h3>
             <span className="text-sm tabular-nums text-slate-500 dark:text-slate-400" data-testid="box-material-progress">{t("lumina_box_material_progress").replace("{count}", String(progress.count)).replace("{total}", String(progress.total))}</span>
@@ -257,7 +238,7 @@ export default function LuminaBoxMaterialPanel() {
           </div>
         </> : null}
       </section>
-      {dataset && !formMode && !continueOpen && (fit.run || fit.error) ? <section className={`${cardClass} space-y-4 p-5`} data-testid="box-material-result">
+      {dataset && !formMode && (fit.run || fit.error) ? <section className={`${cardClass} space-y-4 p-5`} data-testid="box-material-result">
         {fit.error ? <StatusBanner tone="error">{fit.error}</StatusBanner> : null}
         {fit.running ? <div className="space-y-2" role="status"><p className="text-sm">{t("lumina_box_material_generating")} · {Math.round((fit.run?.progress ?? 0) * 100)}%</p>
           <progress className="h-2 w-full accent-blue-500" value={fit.run?.progress ?? 0} max={1} /></div> : null}

@@ -101,11 +101,12 @@ describe("Lumina Box material workflow", () => {
     expect(screen.getByLabelText("耗材名称")).toHaveValue("");
     expect(screen.queryByTestId("box-material-measurements")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "连接 Lumina Box" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "重采耗材档案" }));
-    expect(screen.queryByTestId("box-material-create-form")).not.toBeInTheDocument();
-    fireEvent.click(within(screen.getByTestId("box-material-continue-list")).getByRole("button", { name: /PETG Red/ }));
-    await screen.findByTestId("box-material-measurements");
     view.unmount();
+    useLuminaBoxMaterialNavigation.setState({ captureRequest: { datasetId: dataset.dataset_id, materialSymbol: "R" } });
+    const resumed = render(<LuminaBoxMaterialPanel />);
+    await screen.findByTestId("box-material-measurements");
+    expect(screen.queryByTestId("box-material-create-form")).not.toBeInTheDocument();
+    resumed.unmount();
     render(<LuminaBoxMaterialPanel />);
     expect(screen.getByTestId("box-material-create-form")).toBeInTheDocument();
     expect(screen.queryByTestId("box-material-measurements")).not.toBeInTheDocument();
@@ -135,7 +136,7 @@ describe("Lumina Box material workflow", () => {
     localStorage.setItem(BACKED_GRADIENT_DRAFT_KEY, JSON.stringify({ datasetId: dataset.dataset_id,
       target: { material_symbol: "R", backing: "K", sample_role: "coated" }, manualThickness: "0.64",
       manualXYZ: ["0", "102.4", "3.2"], sampleName: "", notes: "" }));
-    render(<LuminaBoxMaterialPanel />);
+    const view = render(<LuminaBoxMaterialPanel />);
     await screen.findByTestId("box-material-measurements");
     expect(screen.getByRole("heading", { name: "PETG Red" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Other archive" })).not.toBeInTheDocument();
@@ -146,8 +147,10 @@ describe("Lumina Box material workflow", () => {
     await waitFor(() => expect(captureApi.saveBackedGradientCapture).toHaveBeenCalledWith("dataset-1",
       expect.objectContaining({ material_symbol: "R", backing: "K", overlay_mm: .64, reflectance_percent_xyz: [0, 102.4, 3.2] })));
     await waitFor(() => expect(JSON.parse(localStorage.getItem(BACKED_GRADIENT_DRAFT_KEY)!).manualXYZ).toEqual(["", "", ""]));
-    fireEvent.click(screen.getByRole("button", { name: "重采耗材档案" }));
-    fireEvent.click(within(screen.getByTestId("box-material-continue-list")).getByRole("button", { name: /Other dataset/ }));
+    view.unmount();
+    useLuminaBoxMaterialNavigation.setState({ captureRequest: { datasetId: requested.dataset_id, materialSymbol: "R",
+      archive: { name: "Other archive", brand: "Other brand", material_type: "PLA", directoryName: "other-archive" } } });
+    render(<LuminaBoxMaterialPanel />);
     await screen.findByRole("heading", { name: "Other archive" });
   });
 
@@ -404,18 +407,15 @@ describe("Lumina Box material workflow", () => {
     expect(screen.getByTestId("box-material-progress")).toHaveTextContent("0 / 8");
   });
 
-  it("offers new material and continue without choosing a saved collection first", async () => {
+  it("offers material creation without a duplicate archive-retake picker", async () => {
     useLuminaBoxMaterialNavigation.setState({ captureRequest: null });
     render(<LuminaBoxMaterialPanel />);
-    await screen.findByRole("button", { name: "重采耗材档案" });
+    await waitFor(() => expect(materialApi.listLuminaBoxBackingMaterials).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "重采耗材档案" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("box-material-continue-list")).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "采集记录" })).not.toBeInTheDocument();
     expect(captureApi.loadBackedGradientDataset).not.toHaveBeenCalled();
     expect(screen.getByLabelText("耗材名称")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "重采耗材档案" }));
-    fireEvent.click(within(screen.getByTestId("box-material-continue-list")).getByRole("button", { name: /PETG Red/ }));
-    await screen.findByTestId("box-material-measurements");
-    expect(captureApi.loadBackedGradientDataset).toHaveBeenCalledWith(dataset.dataset_id);
-    expect(screen.queryByRole("combobox", { name: "颜色" })).not.toBeInTheDocument();
   });
 
   it("requires two explicit independent backing choices and permits cross-brand combinations", async () => {
@@ -597,28 +597,22 @@ describe("Lumina Box material workflow", () => {
     expect(screen.queryByRole("button", { name: "返回耗材信息" })).not.toBeInTheDocument();
   });
 
-  it("opens each actually measured legacy filament without a fixed color selector or placeholder materials", async () => {
+  it("opens the legacy filament requested by the material library without changing other readings", async () => {
     dataset = { ...completeGradientDataset(), name: "KYNIX",
       materials: { R: "R", Y: "Y", B: "B", W: "W", K: "K", C: "C", M: "M", G: "G" } };
+    useLuminaBoxMaterialNavigation.setState({ captureRequest: { datasetId: dataset.dataset_id, materialSymbol: "B" } });
     const originalCaptures = structuredClone(dataset.captures);
     const originalSelections = { ...dataset.selected_capture_ids };
     const otherReference = { ...reference, reference_id: "another-group", source_dataset_id: "different-dataset", white_name: "Other White" };
     vi.mocked(materialApi.listLuminaBoxBackingReferences).mockResolvedValue([otherReference, reference]);
     render(<LuminaBoxMaterialPanel />);
     await screen.findByTestId("box-material-measurements");
-    expect(screen.getByRole("heading", { name: "PETG红色" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "PETG蓝色" })).toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.getByTestId("box-material-bound-backings")).toHaveTextContent("KYNIX PETG White");
     expect(screen.getByTestId("box-material-bound-backings")).not.toHaveTextContent("Other White");
     fireEvent.click(screen.getByRole("button", { name: "连接 Lumina Box" }));
-    fireEvent.click(screen.getByRole("button", { name: "重采耗材档案" }));
-    const choices = within(screen.getByTestId("box-material-continue-list"));
-    expect(choices.getAllByRole("button")).toHaveLength(5);
-    for (const color of ["红色", "黄色", "蓝色", "白色", "黑色"]) expect(choices.getByRole("button", { name: new RegExp(`PETG${color}`) })).toBeInTheDocument();
-    expect(choices.queryByRole("button", { name: /青色|品红|绿色/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "新建耗材档案" })).toBeInTheDocument();
-    fireEvent.click(choices.getByRole("button", { name: /PETG蓝色/ }));
-    await screen.findByRole("heading", { name: "PETG蓝色" });
     expect(screen.getByTestId("box-material-progress")).toHaveTextContent("14 / 14");
     expect(screen.getByTestId("box-material-cell-B:W:0.08")).toHaveTextContent("10.00");
     expect(dataset.captures).toEqual(originalCaptures);
@@ -630,25 +624,6 @@ describe("Lumina Box material workflow", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存读数" }));
     await waitFor(() => expect(captureApi.saveBackedGradientCapture).toHaveBeenCalledWith(dataset.dataset_id,
       expect.objectContaining({ material_symbol: "B", backing: "W", overlay_mm: .08 })));
-  });
-
-  it("lists named filaments across brands without exposing old paired backing workflows", async () => {
-    dataset = { ...gradientDataset(), materials: { R: "Sunset Orange", B: "B" } };
-    const otherMaterial: materialApi.LuminaBoxMaterialDataset = { ...singleMaterial(), dataset_id: "another-brand", name: "Lavender", brand: "Other brand" };
-    const backingDataset: materialApi.LuminaBoxMaterialDataset = { ...gradientDataset("backing-dataset"), name: "Print backings", workflow: { kind: "backing_reference" } };
-    vi.mocked(captureApi.listBackedGradientDatasets).mockImplementation(async () => [dataset, otherMaterial, backingDataset]);
-    vi.mocked(captureApi.loadBackedGradientDataset).mockImplementation(async (id) => id === otherMaterial.dataset_id ? otherMaterial : dataset);
-    render(<LuminaBoxMaterialPanel />);
-    await screen.findByTestId("box-material-measurements");
-    fireEvent.click(screen.getByRole("button", { name: "重采耗材档案" }));
-    const choices = within(screen.getByTestId("box-material-continue-list"));
-    expect(choices.getAllByRole("button")).toHaveLength(2);
-    expect(choices.getByRole("button", { name: /Sunset Orange.*KYNIX/ })).toBeInTheDocument();
-    expect(choices.getByRole("button", { name: /Lavender.*Other brand/ })).toBeInTheDocument();
-    expect(choices.queryByRole("button", { name: /Print backings/ })).not.toBeInTheDocument();
-    fireEvent.click(choices.getByRole("button", { name: /Lavender/ }));
-    await screen.findByRole("heading", { name: "Lavender" });
-    expect(screen.getByTestId("box-material-progress")).toHaveTextContent("14 / 14");
   });
 
   it("has no backup, restore, import, export, or more controls in either capture or material creation", async () => {

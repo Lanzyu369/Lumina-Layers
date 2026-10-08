@@ -10493,8 +10493,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
   lumina_box_material_title: { zh: "Lumina Box 耗材采集", en: "Lumina Box material capture" },
   lumina_box_material_new: { zh: "新建耗材档案", en: "New material profile" },
-  lumina_box_material_continue: { zh: "重采耗材档案", en: "Remeasure material profile" },
-  lumina_box_material_continue_choose: { zh: "选择要重采的耗材档案", en: "Choose a profile to remeasure" },
   lumina_box_material_backing_captures: { zh: "背板采集", en: "Backing measurements" },
   lumina_box_backing_collect: { zh: "采集背板信息", en: "Measure backing materials" },
   lumina_box_backing_saved_materials: { zh: "已有背板资料", en: "Saved backing materials" },
