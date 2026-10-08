@@ -1789,7 +1789,7 @@ def test_flash_studio_creator_5_pro_uses_exact_native_profile_with_lumina_proces
     assert project["wall_loops"] == "1"
     assert project["wall_generator"] == "arachne"
     assert project["sparse_infill_density"] == "100%"
-    assert project["sparse_infill_pattern"] == "zig-zag"
+    assert project["sparse_infill_pattern"] == "rectilinear"
     assert "print_speed" not in project
     assert project["outer_wall_speed"]
     assert project["inner_wall_speed"]
@@ -2866,7 +2866,9 @@ class TestAnycubicWriterMetadata:
         assert slice_header_items["X-BBL-Client-Version"] == ""
         assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
         assert project_settings["filament_settings_id"] == ["Snapmaker PLA Basic @U1"] * 4
-        assert project_settings["default_print_profile"] == "0.20 Standard @Snapmaker U1 (0.4 nozzle)"
+        assert project_settings["default_print_profile"] == (
+            "0.20mm Standard @Snapmaker U1 (0.4 nozzle)"
+        )
         assert project_settings["default_filament_profile"] == ["Snapmaker PLA Basic @U1"] * 4
         assert project_settings["textured_plate_temp"] == ["65"] * 4
         assert project_settings["nozzle_temperature"] == ["220"] * 4

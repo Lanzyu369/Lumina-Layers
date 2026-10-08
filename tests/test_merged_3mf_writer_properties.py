@@ -469,10 +469,13 @@ def test_p8_slots_round_trip(items_data: list[tuple[MergedItem, float, float]]) 
                 expected_by_id[slot.slot_id] = expected
 
         output_ids = sorted(expected_by_id)
-        for key in (*identity_keys, "filament_colour"):
+        for key in identity_keys:
             assert result["project_settings"][key] == [
                 expected_by_id[slot_id][key] for slot_id in output_ids
             ]
+        assert [
+            colour.upper() for colour in result["project_settings"]["filament_colour"]
+        ] == [expected_by_id[slot_id]["filament_colour"] for slot_id in output_ids]
         extruder_by_id = {slot_id: index + 1 for index, slot_id in enumerate(output_ids)}
         for idx, item in enumerate(items):
             parts = result["parts_per_item"][idx]

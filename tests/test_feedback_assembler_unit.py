@@ -13,6 +13,7 @@ import io
 import json
 import logging
 import os
+import struct
 import time
 import zipfile
 from datetime import datetime, timedelta
@@ -221,15 +222,29 @@ def _disable_feedback_upload(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "off")
 
 
-def _project_bytes(marker: bytes, settings: dict[str, Any] | None = None) -> bytes:
+def _project_bytes(
+    marker: bytes,
+    settings: dict[str, Any] | None = None,
+    *,
+    damaged_metadata: bool = False,
+) -> bytes:
     payload = io.BytesIO()
     with zipfile.ZipFile(payload, "w") as package:
+        if damaged_metadata:
+            package.writestr(
+                "Metadata/inspection.json", "{}", compress_type=zipfile.ZIP_DEFLATED,
+            )
         package.writestr("3D/3dmodel.model", marker)
         package.writestr(
             "Metadata/project_settings.config",
             json.dumps(settings or {"layer_height": "0.2"}),
         )
-    return payload.getvalue()
+    content = bytearray(payload.getvalue())
+    if damaged_metadata:
+        name_size, extra_size = struct.unpack_from("<HH", content, 26)
+        # Set the reserved Deflate block type without corrupting later members.
+        content[30 + name_size + extra_size] |= 0x06
+    return bytes(content)
 
 
 def _batch_bytes(marker: bytes) -> bytes:
@@ -1898,9 +1913,9 @@ def test_collect_final_artifact_download_url_copy_failure_is_failed(
         if Path(dst).name == "final.zip":
             raise OSError("disk full")
 
-    monkeypatch.setattr("api.feedback_assembler.shutil.copy2", _fail_final_copy)
-
-    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+    with monkeypatch.context() as copying:
+        copying.setattr("api.feedback_assembler.shutil.copy2", _fail_final_copy)
+        result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
 
     assert result.final_artifact["status"] == "failed"
     assert result.final_artifact["filename"] is None
@@ -1908,6 +1923,39 @@ def test_collect_final_artifact_download_url_copy_failure_is_failed(
     assert result.final_artifact["error_type"] == "OSError"
     assert result.final_artifact["error_message"] == "Final artifact could not be saved."
     assert not (ticket_dir / "final.zip").exists()
+
+    from api.feedback_hosted import build_ticket_bundle
+
+    damaged = _project_bytes(
+        b"GEOMETRY", {"printhost_apikey": "fake-secret", "layer_height": "0.2"},
+        damaged_metadata=True,
+    )
+    batch = io.BytesIO()
+    with zipfile.ZipFile(batch, "w") as archive:
+        archive.writestr("tiles/model.3mf", damaged)
+    for suffix, content in ((".3mf", damaged), (".zip", batch.getvalue())):
+        source = tmp_path / f"damaged{suffix}"
+        source.write_bytes(content)
+        case_registry = _MockFileRegistry({
+            "sess-current": {
+                "damaged-file-id": _make_entry(str(source), source.name, created_at=10.0),
+            },
+        })
+        for route in ("download_url", "session"):
+            case_dir = tmp_path / f"damaged-{suffix[1:]}-{route}"
+            case_dir.mkdir()
+            payload["context"]["active_final_artifact_ref"].update({
+                "artifact_type": suffix[1:],
+                "download_url": "/api/files/damaged-file-id" if route == "download_url" else None,
+            })
+            failed = collect_sync_attachments(case_dir, payload, case_registry, now_beijing())
+            assert failed.final_artifact["status"] == "failed"
+            assert failed.final_artifact["error_type"] == "ValueError"
+            assert source.read_bytes() == content
+            assert not (case_dir / f"final{suffix}").exists()
+            assert not any(path.name.startswith(".project-") for path in case_dir.iterdir())
+            payload["attachments"] = {"final_artifact": failed.final_artifact}
+            assert build_ticket_bundle(case_dir, payload).files == []
 
 
 def test_collect_final_artifact_prefers_download_url_over_stale_session_entry(

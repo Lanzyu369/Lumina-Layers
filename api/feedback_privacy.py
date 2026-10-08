@@ -11,6 +11,7 @@ import shutil
 import tempfile
 from typing import Any
 import zipfile
+import zlib
 
 
 def redact_printer_connections(value: Any) -> Any:
@@ -91,6 +92,8 @@ def copy_feedback_project_artifact(source: Path, destination: Path) -> None:
     Archives without connection fields retain their original bytes. Geometry,
     thumbnails, process settings and material settings are preserved.
     无连接信息的归档保持原始字节；模型、缩略图、工艺和材料配置均保留。
+    Only a fully inspected copy is published at the attachment path.
+    仅在副本完整检查成功后，将其放入正式附件路径。
 
     Args:
         source: Registry-owned project or ZIP. 注册表持有的项目或 ZIP。
@@ -100,8 +103,11 @@ def copy_feedback_project_artifact(source: Path, destination: Path) -> None:
         OSError: If copying or replacing the archive fails. 复制或替换归档失败。
         ValueError: If project metadata cannot be inspected. 无法检查项目元数据。
     """
-    shutil.copy2(source, destination)
-    try:
-        _redact_archive(destination)
-    except (zipfile.BadZipFile, UnicodeDecodeError, RuntimeError) as error:
-        raise ValueError("Project metadata could not be prepared for feedback") from error
+    with tempfile.TemporaryDirectory(dir=destination.parent, prefix=".project-") as staging:
+        prepared = Path(staging) / destination.name
+        shutil.copy2(source, prepared)
+        try:
+            _redact_archive(prepared)
+        except (zipfile.BadZipFile, UnicodeDecodeError, RuntimeError, zlib.error) as error:
+            raise ValueError("Project metadata could not be prepared for feedback") from error
+        os.replace(prepared, destination)

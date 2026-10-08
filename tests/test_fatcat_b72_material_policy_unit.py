@@ -73,15 +73,31 @@ def test_full_slot_native_tail_keeps_its_declared_material_kind(tmp_path):
     assert final["filament_type"] == ["PLA"] * 8 + ["PETG"]
 
 
-@pytest.mark.parametrize("name", ["PETG HF Red", "PETG-CF Black", "PETG Translucent"])
-def test_special_petg_is_not_silently_relabelled_as_basic(tmp_path, name):
+@pytest.mark.parametrize(
+    ("name", "profile_name", "error_pattern"),
+    [
+        (
+            "PETG HF Red", "Bambu PETG HF @BBL X1C 0.2 nozzle",
+            "matches multiple native profiles",
+        ),
+        ("PETG-CF Black", None, "no available native filament profile"),
+        ("PETG Translucent", "Bambu PETG Translucent @BBL X1C 0.2 nozzle", None),
+    ],
+)
+def test_special_petg_is_not_silently_relabelled_as_basic(
+    tmp_path, name, profile_name, error_pattern,
+):
     writer = _writer(tmp_path)
     source, request = _request(writer, [(name, (10, 10, 10))])
-    with pytest.raises(
-        ValueError,
-        match="PETG.*Basic|native material|material settings|no available native filament profile",
-    ):
-        _compose(source, request)
+    if error_pattern is not None:
+        with pytest.raises(ValueError, match=error_pattern):
+            _compose(source, request)
+        if profile_name is None:
+            return
+        request["native_filament_profile_names"] = [profile_name]
+    final = json.loads(_compose(source, request)["project_settings_json"])
+    assert final["filament_settings_id"] == [profile_name]
+    assert final["filament_type"] == ["PETG"]
 
 
 def test_adapter_passes_selections_not_native_parameter_arrays(tmp_path):
@@ -143,7 +159,7 @@ def test_failed_user_template_load_cannot_become_builtin(tmp_path):
 
 def test_mismatched_user_template_cannot_become_builtin(tmp_path, imported_template):
     template_id, _ = imported_template
-    with pytest.raises(RuntimeError, match="nozzle"):
+    with pytest.raises(ValueError, match="nozzle"):
         BambuStudio3MFWriter(
             str(tmp_path / "wrong.3mf"), printer_id="bambu-p1s", slicer="BambuStudio",
             nozzle_size="0.4", device_profile_id="BambuStudio:bbl:bambu-lab-p1s:0.4",
