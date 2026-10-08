@@ -1,9 +1,9 @@
-"""
-Lumina Studio - BambuStudio 3MF Writer
-Enhanced 3MF export with BambuStudio-compatible metadata and configurations.
+"""Native slicer 3MF writer with historical Bambu import compatibility.
 
-Uses neroued-3mf (C++ streaming writer with Production Extension) for 3MF
-packaging, and injects Bambu/Orca vendor metadata via CustomPart.
+FatCat composes native project metadata; Neroued writes geometry and metadata
+in one package. New callers use ``utils.slicer_3mf_writer``.
+FatCat 合成原生项目元数据，Neroued 将几何与元数据单次写包。
+新调用方使用 ``utils.slicer_3mf_writer``。
 """
 
 from __future__ import annotations
@@ -17,16 +17,21 @@ import uuid
 import zipfile
 import json
 import copy
-import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, List, Dict, Mapping, Optional
+from typing import TYPE_CHECKING, Any, List, Dict, Mapping, Optional, cast
 import numpy as np
 from PIL import Image
+from fatcat_metadata_neroued import (
+    apply_root_model_metadata as _apply_root_model_metadata,
+    apply_metadata_components as _apply_metadata_components,
+)
 
 if TYPE_CHECKING:
     import trimesh
+    import neroued_3mf as n3mf
 
 from api.structured_logging import get_logger
+from core.export_materials import resolve_preview_color_for_slot as _resolve_preview_color_for_slot_name
 from core.mesh_export_parts import (
     MeshExportPartRange,
     get_mesh_export_part_ranges,
@@ -40,16 +45,27 @@ from core.backing_infill import (
 from core.wipe_tower_placement import (
     Rect,
     WIPE_TOWER_MANUAL_WARNING_CODE,
-    WipeTowerPlacementRequest,
     WipeTowerPlacementResult,
     solve_wipe_tower_placement,
 )
 from utils.bambu_3mf_cover import (
     CoverPngBundle,
     CoverThumbnailBuilder,
+    build_plate_small_preview,
+)
+from utils.slicer_3mf_support import (
+    DEFAULT_EXPORT_SETTINGS,
+    resolve_export_device as _resolve_export_device,
+    build_wipe_tower_placement_request as _build_wipe_tower_placement_request,
+    build_wipe_tower_placement_metadata_payload as _build_wipe_tower_placement_metadata_payload,
 )
 from utils.fatcat_metadata import (
+    ComponentInputs,
     MetadataTarget,
+    ModelMetadataRequest,
+    PlateSummaryInput,
+    ProjectComposition,
+    ProjectLayout,
     build_builtin_project_settings_request,
     build_model_metadata_request,
     compose_builtin_project_settings,
@@ -78,15 +94,6 @@ _n3mf = None
 _PREVIEW_PLACEHOLDER_PNG_BYTES: Optional[bytes] = None
 _LAYER_HEIGHT_GRID_MM = 0.02
 _MAX_LAYER_HEIGHT_NOZZLE_RATIO = 0.7
-_CREATOR_5_PRINTER_IDS = frozenset(
-    {"flashforge-creator-5", "flashforge-creator-5-pro"}
-)
-_CREATOR_5_TOWER_MIN_FOOTPRINT_WIDTH_MM = 58.5
-_CREATOR_5_TOWER_MIN_DEPTH_MM = 61.0
-_CREATOR_5_MODEL_TOWER_CLEARANCE_MM = 7.5
-_ANYCUBIC_TOWER_MIN_FOOTPRINT_WIDTH_MM = 50.0
-_ANYCUBIC_TOWER_MIN_DEPTH_MM = 57.5
-_ELEGOO_CC2_PREFERRED_TOP_EDGE_CLEARANCE_MM = 32.0
 
 
 def _get_n3mf():
@@ -98,30 +105,9 @@ def _get_n3mf():
     return _n3mf
 
 
-def _apply_root_model_metadata(builder: Any, root_model: dict[str, Any]) -> None:
-    """Forward Fat Cat root metadata through its lazy neroued adapter."""
-
-    from fatcat_metadata_neroued import apply_root_model_metadata
-
-    apply_root_model_metadata(builder, root_model)
-
-
-def _apply_metadata_components(
-    builder: Any,
-    description: Mapping[str, Any],
-    resource_bytes: Mapping[str, bytes],
-) -> None:
-    """Forward Fat Cat parts and relationships through its lazy adapter.
-
-    将 Fat Cat 描述的部件与关系通用登记到 writer；切片器规则不留在此适配层。
-    """
-
-    from fatcat_metadata_neroued import apply_metadata_components
-
-    apply_metadata_components(builder, description, resource_bytes)
-
-
 _VALID_LAYER_CONFIG_FACES = frozenset({"up", "down", "double"})
+
+
 @dataclass(frozen=True)
 class _MeshExportEntry:
     """Internal 3MF mesh export descriptor.
@@ -142,7 +128,7 @@ class _MeshExportEntry:
             壳体范围)
     """
 
-    mesh: object
+    mesh: trimesh.Trimesh
     object_name: str
     material_name: str
     color_rgb: tuple[int, int, int]
@@ -152,7 +138,7 @@ class _MeshExportEntry:
 
 def _expand_mesh_export_entries(
     *,
-    mesh: object,
+    mesh: trimesh.Trimesh,
     object_name: str,
     material_name: str,
     color_rgb: tuple[int, int, int],
@@ -332,77 +318,6 @@ def _queue_n3mf_mesh_object(
     )
     retained_views.append((vertices, faces))
     return int(object_id)
-
-
-def _resolve_machine_registry_root() -> str:
-    """Return the shared absolute machine-registry resource root.
-
-    返回共享的机器注册表绝对资源根目录。
-    """
-
-    from core.machine_registry import resolve_machine_registry_root
-
-    return str(resolve_machine_registry_root())
-
-
-def _validate_registry_device_profile(
-    *,
-    device_profile_id: str,
-    printer_id: str,
-    slicer: str,
-    nozzle_size: str,
-    registry_path: str,
-):
-    """Load and validate a generated registry device profile.
-
-    加载并校验生成的机器注册表设备配置，避免选择的切片器/喷嘴与实际
-    3MF 模板混用。
-    """
-    from core.machine_registry import (
-        MachineRegistrySelectionError,
-        load_machine_registry,
-        validate_device_profile_selection,
-    )
-
-    registry = load_machine_registry(registry_path)
-    try:
-        profile, _ = validate_device_profile_selection(
-            registry,
-            device_profile_id=device_profile_id,
-            printer_id=printer_id,
-            slicer=slicer,
-            nozzle_size=nozzle_size,
-        )
-    except MachineRegistrySelectionError as exc:
-        raise ValueError(str(exc)) from exc
-    return profile
-
-
-def _load_registry_device_profile_if_available(
-    *,
-    device_profile_id: str,
-    printer_id: str,
-    slicer: str,
-    nozzle_size: str,
-):
-    """Return a validated registry device profile when registry data exists.
-
-    存在机器注册表时返回已校验的设备配置；未显式配置环境变量且默认
-    ``machine_registry`` 不存在时返回 ``None``，保持旧模板回退兼容。
-    """
-    registry_root = _resolve_machine_registry_root()
-    registry_path = os.path.join(registry_root, "registry.json")
-    if not os.path.exists(registry_path):
-        if os.environ.get("LUMINA_MACHINE_REGISTRY_DIR"):
-            raise ValueError(f"Machine registry not found: {registry_path}")
-        return None
-    return _validate_registry_device_profile(
-        device_profile_id=device_profile_id,
-        printer_id=printer_id,
-        slicer=slicer,
-        nozzle_size=nozzle_size,
-        registry_path=registry_path,
-    )
 
 
 def _resolve_compatible_base_layer_height_mm(
@@ -797,272 +712,38 @@ def load_export_project_settings(
         raise RuntimeError("Fat Cat returned invalid built-in project settings JSON") from exc
 
 
-def _resolve_export_device(
-    *,
-    printer_id: str,
-    slicer: str,
-    nozzle_size: object,
-    device_profile_id: str | None,
-    build_plate_id: str | None,
-) -> tuple[str, Any, Any]:
-    """Resolve nozzle formatting and validate explicit registry selections."""
-    from config import (
-        format_native_nozzle_size,
-        get_printer_profile,
-        normalize_nozzle_size,
-    )
+@dataclass(frozen=True)
+class _QueuedMeshes:
+    """Queued IDs and the zero-copy arrays retained until the file is written."""
 
-    legacy_nozzle_size = normalize_nozzle_size(nozzle_size) or "0.4"
-    native_nozzle_size = format_native_nozzle_size(nozzle_size) or legacy_nozzle_size
-    configured_nozzle_sizes = get_printer_profile(printer_id).supported_nozzle_sizes
-    resolved_nozzle_size = (
-        native_nozzle_size
-        if device_profile_id or native_nozzle_size in configured_nozzle_sizes
-        else legacy_nozzle_size
-    )
-    device_profile = (
-        _load_registry_device_profile_if_available(
-            device_profile_id=device_profile_id,
-            printer_id=printer_id,
-            slicer=slicer,
-            nozzle_size=resolved_nozzle_size,
-        )
-        if device_profile_id
-        else None
-    )
-    build_plate = None
-    if build_plate_id:
-        if device_profile is None or not device_profile_id:
-            raise ValueError("Build plate selection requires a machine registry device profile")
-        from core.machine_registry import load_machine_registry
-
-        registry_path = os.path.join(
-            _resolve_machine_registry_root(),
-            "registry.json",
-        )
-        try:
-            build_plate = load_machine_registry(
-                registry_path
-            ).resolve_build_plate(device_profile_id, build_plate_id)
-        except KeyError as exc:
-            raise ValueError(str(exc).strip("'")) from exc
-    return resolved_nozzle_size, device_profile, build_plate
+    object_ids: list[int]
+    material_indexes: list[int]
+    retained_mesh_views: list[tuple[np.ndarray, np.ndarray]]
 
 
-def _build_wipe_tower_placement_request(
-    layout: Mapping[str, Any],
-    *,
-    model_bounds: Rect,
-    model_height: float,
-    material_count: int,
-    printer_id: str,
-    slicer: str,
-    nozzle_size: str,
-    process_layout: Mapping[str, Any] | None = None,
-) -> WipeTowerPlacementRequest | None:
-    """Build a placement request from decoded layout and geometry facts."""
+@dataclass(frozen=True)
+class _SingleExportProject:
+    """One composed project and its final geometry placement."""
 
-    process = layout if process_layout is None else process_layout
-    printable_area = tuple(tuple(point) for point in layout["printable_area"])
-    if len(printable_area) < 3:
-        return None
-
-    uses_creator_5_tower_interface = (
-        slicer == "FlashStudio"
-        and printer_id in _CREATOR_5_PRINTER_IDS
-    )
-    uses_anycubic_tower_interface = slicer == "AnycubicSlicerNext"
-    uses_native_tower_envelope = (
-        uses_creator_5_tower_interface or uses_anycubic_tower_interface
-    )
-    uses_rib_wall = layout["uses_rib_wall"]
-    tower_brim = (
-        min(8.0, max(0.0, model_height) / 100.0 * 8.0)
-        if layout["tower_brim_auto"] else layout["tower_brim_width"]
-    )
-    return WipeTowerPlacementRequest(
-        printable_area=printable_area,
-        bed_exclusions=tuple(
-            tuple(tuple(point) for point in polygon)
-            for polygon in layout["bed_exclusions"]
-        ),
-        extruder_printable_areas=tuple(
-            tuple(tuple(point) for point in polygon)
-            for polygon in layout["extruder_printable_areas"]
-        ),
-        model_bounds=model_bounds,
-        model_height=max(0.0, float(model_height)),
-        model_brim=process["model_brim"],
-        material_count=max(1, int(material_count)),
-        layer_height=process["layer_height"],
-        nozzle_diameter=max(0.1, float(nozzle_size)),
-        purge_volume=layout["purge_volume"],
-        tower_x=layout["tower_x"],
-        tower_y=layout["tower_y"],
-        tower_width=layout["tower_width"],
-        tower_rotation=layout["tower_rotation"],
-        tower_brim=0.0 if uses_native_tower_envelope else tower_brim,
-        tower_infill_spacing_ratio=layout["tower_infill_spacing_ratio"],
-        cyclic_toolchanges=bool(layout.get("tower_cyclic_toolchanges", False)),
-        tower_rib_width=(
-            layout["tower_rib_width"]
-            if uses_rib_wall and not uses_native_tower_envelope else 0.0
-        ),
-        tower_extra_rib_length=layout["tower_extra_rib_length"],
-        tower_square_rib_body=(
-            uses_rib_wall and (
-                layout.get("tower_square_rib_body")
-                if layout.get("tower_square_rib_body") is not None
-                else printer_id.startswith("bambu-")
-                and slicer in {"BambuStudio", "OrcaSlicer"}
-            )
-        ),
-        tower_preview_x_guard_enabled=bool(
-            layout.get("tower_preview_x_guard_enabled", False)
-        ),
-        tower_preview_x_guard_margin=max(
-            0.0, float(layout.get("tower_preview_x_guard_margin") or 0.0)
-        ),
-        extruder_count=layout["extruder_count"],
-        filament_change_volume=layout["filament_change_volume"],
-        model_tower_clearance=(
-            _CREATOR_5_MODEL_TOWER_CLEARANCE_MM
-            if uses_creator_5_tower_interface else 8.0
-        ),
-        edge_clearance=0.0 if uses_native_tower_envelope else 2.0,
-        preferred_edge_clearance=4.0,
-        preferred_top_edge_clearance=(
-            _ELEGOO_CC2_PREFERRED_TOP_EDGE_CLEARANCE_MM
-            if printer_id == "elegoo-cc2" else 0.0
-        ),
-        prefer_vertical_strip=printer_id == "bambu-a1-mini",
-        minimum_tower_footprint_width=(
-            _CREATOR_5_TOWER_MIN_FOOTPRINT_WIDTH_MM
-            if uses_creator_5_tower_interface
-            else _ANYCUBIC_TOWER_MIN_FOOTPRINT_WIDTH_MM
-            if uses_anycubic_tower_interface else 0.0
-        ),
-        minimum_tower_depth=(
-            _CREATOR_5_TOWER_MIN_DEPTH_MM
-            if uses_creator_5_tower_interface
-            else _ANYCUBIC_TOWER_MIN_DEPTH_MM
-            if uses_anycubic_tower_interface else 0.0
-        ),
-    )
+    settings: dict[str, Any]
+    composition: ProjectComposition
+    layout: ProjectLayout
+    placement: WipeTowerPlacementResult | None
+    build_translation: tuple[float, float, float]
 
 
-def _build_wipe_tower_placement_metadata_payload(
-    placement: WipeTowerPlacementResult | None,
-    *,
-    enabled: bool,
-    output_path: str,
-    printer_id: str,
-    slicer: str,
-) -> dict[str, Any]:
-    """Describe Lumina's computed placement for Fat Cat to serialize.
-
-    返回 Lumina 已计算的摆放结果，由 Fat Cat 负责最终 JSON 部件序列化。
-    """
-
-    if not enabled:
-        payload: dict[str, Any] = {
-            "schema_version": 1,
-            "enabled": False,
-            "available": False,
-            "adapted": False,
-            "requires_manual_adjustment": False,
-            "warning_code": None,
-            "reason": "disabled_by_user",
-        }
-    elif placement is None:
-        log.warning(
-            "Printable area unavailable for wipe-tower validation",
-            extra={
-                "event": "wipe_tower_manual_adjustment_required",
-                "error_type": "PrintableAreaUnavailable",
-                "error_message": (
-                    "Generated without scaling the model or disabling the wipe tower; "
-                    "manual slicer validation is required."
-                ),
-                "path": output_path,
-                "printer_id": printer_id,
-                "slicer": slicer,
-            },
-        )
-        payload = {
-            "schema_version": 1,
-            "enabled": True,
-            "available": False,
-            "adapted": False,
-            "requires_manual_adjustment": True,
-            "warning_code": WIPE_TOWER_MANUAL_WARNING_CODE,
-            "reason": "printable_area_unavailable",
-        }
-    else:
-        payload = {
-            "schema_version": 1,
-            "enabled": True,
-            "available": True,
-            "adapted": placement.adapted,
-            "requires_manual_adjustment": placement.requires_manual_adjustment,
-            "warning_code": placement.warning_code,
-            "reason": placement.reason,
-            "model_translation_mm": list(placement.model_translation),
-            "model_bounds_mm": [
-                placement.model_bounds.left,
-                placement.model_bounds.bottom,
-                placement.model_bounds.right,
-                placement.model_bounds.top,
-            ],
-            "model_outer_bounds_mm": [
-                placement.model_outer_bounds.left,
-                placement.model_outer_bounds.bottom,
-                placement.model_outer_bounds.right,
-                placement.model_outer_bounds.top,
-            ],
-            "tower": {
-                "x_mm": placement.tower_x,
-                "y_mm": placement.tower_y,
-                "width_mm": placement.tower_width,
-                "estimated_depth_mm": placement.tower_depth,
-                "rotation_deg": placement.tower_rotation,
-                "outer_bounds_mm": [
-                    placement.tower_outer_bounds.left,
-                    placement.tower_outer_bounds.bottom,
-                    placement.tower_outer_bounds.right,
-                    placement.tower_outer_bounds.top,
-                ],
-            },
-        }
-    return payload
-
-
-class BambuStudio3MFWriter:
+class Slicer3MFWriter:
     """Write geometry with FatCat's selected native slicer metadata.
     将几何与 FatCat 提供的目标切片软件原生元数据单次写包。
 
-    The historical class name is retained for caller compatibility. FatCat
+    ``BambuStudio3MFWriter`` remains an alias for caller compatibility. FatCat
     selects native metadata and core/Production layout; Neroued writes the
     archive once. Lumina supplies meshes, materials and placement facts.
-    保留历史类名以兼容调用方；FatCat 选择原生元数据及几何布局，
+    历史类名作为兼容别名保留；FatCat 选择原生元数据及几何布局，
     Neroued 单次写包，Lumina 提供网格、材料选择和摆放事实。
     """
 
-    DEFAULT_SETTINGS = {
-        "layer_height": "0.08",
-        "initial_layer_height": "0.08",
-        "wall_loops": "1",
-        "top_shell_layers": "0",
-        "bottom_shell_layers": "1",
-        "bottom_surface_pattern": "monotonicline",
-        "elefant_foot_compensation": "0",
-        "sparse_infill_density": "100%",
-        "sparse_infill_pattern": "zig-zag",
-        "travel_speed": "150",
-        "enable_support": "0",
-        "brim_width": "5",
-        "brim_type": "auto_brim",
-    }
+    DEFAULT_SETTINGS = DEFAULT_EXPORT_SETTINGS
 
     def __init__(
         self,
@@ -1285,7 +966,7 @@ class BambuStudio3MFWriter:
                 mesh=mesh,
                 object_name=name,
                 material_name=material_name,
-                color_rgb=tuple(int(channel) for channel in color_rgb[:3]),
+                color_rgb=cast(tuple[int, int, int], tuple(int(channel) for channel in color_rgb[:3])),
             )
         )
         self._wipe_tower_placement_cache = None
@@ -1488,7 +1169,7 @@ class BambuStudio3MFWriter:
         )
         _exp_t0 = time.perf_counter()
 
-        n3mf = _get_n3mf()
+        _get_n3mf()
         material_palette, material_indices = self._build_material_palette()
         metadata_target = self._select_metadata_target()
         project_request = self._build_fatcat_project_request(
@@ -1502,6 +1183,42 @@ class BambuStudio3MFWriter:
         else:
             base_project = None
 
+        builder = self._create_document_builder()
+        geometry = self._queue_meshes(builder, material_palette, material_indices)
+        project = self._prepare_export_project(base_project, project_request)
+        assembly_id = self._add_geometry_layout(builder, geometry.object_ids, project)
+        model_request = self._build_export_model_request(
+            metadata_target, assembly_id, geometry, material_palette, project,
+        )
+        fatcat_resource_bytes = self._build_resource_bytes()
+        model_request["resource_roles"] = list(fatcat_resource_bytes)
+        model_metadata = compose_model_metadata(project.settings, model_request)
+        root_model = model_metadata.get("root_model")
+        if not isinstance(root_model, dict):
+            raise RuntimeError(
+                "Fat Cat C++ model composer returned no root model metadata"
+            )
+        _apply_root_model_metadata(builder, root_model)
+        _apply_metadata_components(builder, model_metadata, fatcat_resource_bytes)
+
+        # geometry retains every zero-copy array through the final native write.
+        self._write_document(builder)
+
+        log.debug(
+            "Bambu 3MF export completed",
+            extra={
+                "event": "bambu_3mf_export_completed",
+                "path": self.output_path,
+                "object_count": len(self.objects),
+                "duration_ms": round((time.perf_counter() - _exp_t0) * 1000, 3),
+            },
+        )
+        return self.output_path
+
+    @staticmethod
+    def _create_document_builder() -> n3mf.DocumentBuilder:
+        """Create and validate the installed Production builder."""
+        n3mf = _get_n3mf()
         builder = n3mf.DocumentBuilder()
         builder.set_unit(n3mf.Unit.Millimeter)
         builder.set_language("en-US")
@@ -1527,6 +1244,15 @@ class BambuStudio3MFWriter:
                 + ", ".join(missing_production_methods)
             )
 
+        return builder
+
+    def _queue_meshes(
+        self, builder: n3mf.DocumentBuilder,
+        material_palette: list[tuple[str, tuple[int, int, int]]],
+        material_indices: dict[str, int],
+    ) -> _QueuedMeshes:
+        """Register one shared palette and retain the queued geometry."""
+        n3mf = _get_n3mf()
         materials = [
             n3mf.BaseMaterial(name, n3mf.Color(rgb[0], rgb[1], rgb[2]))
             for name, rgb in material_palette
@@ -1548,6 +1274,12 @@ class BambuStudio3MFWriter:
             object_ids.append(obj_id)
             material_index_by_object.append(material_index)
 
+        return _QueuedMeshes(object_ids, material_index_by_object, retained_mesh_views)
+
+    def _prepare_export_project(
+        self, base_project: Mapping[str, Any] | None, project_request: Mapping[str, Any],
+    ) -> _SingleExportProject:
+        """Compose once and apply the calculated placement to that project."""
         composed_project = (
             compose_project_settings(base_project, project_request)
             if base_project is not None
@@ -1607,7 +1339,19 @@ class BambuStudio3MFWriter:
             placement_was_computed=True,
             project_layout=project_layout,
         )
-        metadata_defaults = composed_project["metadata_defaults"]
+        return _SingleExportProject(
+            final_project, composed_project, project_layout, placement, build_translation,
+        )
+
+    def _add_geometry_layout(
+        self, builder: n3mf.DocumentBuilder, object_ids: list[int],
+        project: _SingleExportProject,
+    ) -> int:
+        """Create the FatCat-selected core or Production assembly."""
+        n3mf = _get_n3mf()
+        metadata_defaults = project.composition["metadata_defaults"]
+        build_item_properties = project.composition["build_item_properties"]
+        build_translation = project.build_translation
         if metadata_defaults.get("geometry_layout") == "core":
             assembly_id = builder.add_component_object(
                 Path(self.output_path).stem,
@@ -1638,12 +1382,21 @@ class BambuStudio3MFWriter:
             if planned_object_ids != tuple(object_ids):
                 raise RuntimeError("Fat Cat writer layout plan does not match queued object IDs")
             assembly_id = int(plan.assembly_id)
+        return assembly_id
+
+    def _build_export_model_request(
+        self, metadata_target: MetadataTarget, assembly_id: int, geometry: _QueuedMeshes,
+        material_palette: list[tuple[str, tuple[int, int, int]]],
+        project: _SingleExportProject,
+    ) -> ModelMetadataRequest:
+        """Describe queued geometry and the product-owned component inputs."""
+        metadata_defaults = project.composition["metadata_defaults"]
         model_request = build_model_metadata_request(
             target=metadata_target,
             assembly_id=assembly_id,
-            object_ids=object_ids,
+            object_ids=geometry.object_ids,
             entries=self.objects,
-            material_index_by_object=material_index_by_object,
+            material_index_by_object=geometry.material_indexes,
             output_path=self.output_path,
             bed_type=metadata_defaults["plate_value"],
         )
@@ -1656,7 +1409,19 @@ class BambuStudio3MFWriter:
                  *(entry.object_name for entry in self.objects)]
             )
             model_request["slice_uuid"] = uuid.uuid5(uuid.NAMESPACE_URL, uuid_seed).hex
-        component_inputs: dict[str, Any] = {
+        model_request["component_inputs"] = self._build_component_inputs(project, material_palette)
+        return model_request
+
+    def _build_component_inputs(
+        self, project: _SingleExportProject,
+        material_palette: list[tuple[str, tuple[int, int, int]]],
+    ) -> ComponentInputs:
+        """Provide placement, plate bounds and source-local layer ranges."""
+        metadata_defaults = project.composition["metadata_defaults"]
+        project_layout = project.layout
+        placement = project.placement
+        build_translation = project.build_translation
+        component_inputs: ComponentInputs = {
             "wipe_tower_placement": (
                 _build_wipe_tower_placement_metadata_payload(
                     placement,
@@ -1704,7 +1469,10 @@ class BambuStudio3MFWriter:
             )
             if layer_ranges is not None:
                 component_inputs["layer_config_ranges"] = layer_ranges
-        model_request["component_inputs"] = component_inputs
+        return component_inputs
+
+    def _build_resource_bytes(self) -> dict[str, bytes]:
+        """Build this scene's cover and preview resources."""
         self._ensure_cover_bundle()
         cover_bundle = self.cover_bundle
         if cover_bundle is None:
@@ -1723,16 +1491,11 @@ class BambuStudio3MFWriter:
             fatcat_resource_bytes["plate_small"] = (
                 self._build_plate_small_bytes(cover_bundle.plate_main)
             )
-        model_request["resource_roles"] = list(fatcat_resource_bytes)
-        model_metadata = compose_model_metadata(final_project, model_request)
-        root_model = model_metadata.get("root_model")
-        if not isinstance(root_model, dict):
-            raise RuntimeError(
-                "Fat Cat C++ model composer returned no root model metadata"
-            )
-        _apply_root_model_metadata(builder, root_model)
-        _apply_metadata_components(builder, model_metadata, fatcat_resource_bytes)
+        return fatcat_resource_bytes
 
+    def _write_document(self, builder: n3mf.DocumentBuilder) -> None:
+        """Write once while preserving geometry precision and topology."""
+        n3mf = _get_n3mf()
         doc = builder.build()
 
         opts = n3mf.WriteOptions()
@@ -1766,17 +1529,6 @@ class BambuStudio3MFWriter:
             )
 
         n3mf.write_to_file(self.output_path, doc, opts)
-
-        log.debug(
-            "Bambu 3MF export completed",
-            extra={
-                "event": "bambu_3mf_export_completed",
-                "path": self.output_path,
-                "object_count": len(self.objects),
-                "duration_ms": round((time.perf_counter() - _exp_t0) * 1000, 3),
-            },
-        )
-        return self.output_path
 
     def _get_wipe_tower_placement(
         self,
@@ -1873,7 +1625,7 @@ class BambuStudio3MFWriter:
             if mesh_bounds.shape == (2, 3):
                 bounds.append(mesh_bounds)
         if not bounds:
-            zeros = np.zeros(3, dtype=np.float64)
+            zeros: np.ndarray = np.zeros(3, dtype=np.float64)
             return zeros, zeros
         stacked = np.stack(bounds, axis=0)
         return stacked[:, 0, :].min(axis=0), stacked[:, 1, :].max(axis=0)
@@ -2048,21 +1800,7 @@ class BambuStudio3MFWriter:
             _PREVIEW_PLACEHOLDER_PNG_BYTES = buffer.getvalue()
         return _PREVIEW_PLACEHOLDER_PNG_BYTES
 
-    @staticmethod
-    def _build_plate_small_bytes(plate_main: bytes) -> bytes:
-        """Build the native 128x128 plate preview.
-
-        构建原生的 128x128 ``plate_1_small.png``。
-        """
-
-        with Image.open(io.BytesIO(plate_main)) as image:
-            resized = image.convert("RGBA").resize(
-                (128, 128),
-                Image.Resampling.LANCZOS,
-            )
-            buffer = io.BytesIO()
-            resized.save(buffer, format="PNG", optimize=True)
-            return buffer.getvalue()
+    _build_plate_small_bytes = staticmethod(build_plate_small_preview)
 
     def _build_plate_summary_input(
         self,
@@ -2070,7 +1808,7 @@ class BambuStudio3MFWriter:
         build_translation: tuple[float, float, float],
         *,
         sidecar_bed_type: str,
-    ) -> dict[str, Any]:
+    ) -> PlateSummaryInput:
         """Provide final geometry and palette values for the native plate part.
 
         向 Fat Cat 提供最终几何边界与调色板，由 Fat Cat 生成盘面部件。
@@ -2130,6 +1868,9 @@ class BambuStudio3MFWriter:
 # Scene export entry and generated placement warnings.
 # ======================================================================
 
+# A single class object keeps imports, subclasses and existing patch points compatible.
+BambuStudio3MFWriter = Slicer3MFWriter
+
 
 def read_wipe_tower_placement_warnings(
     threemf_path: str | os.PathLike[str],
@@ -2156,7 +1897,7 @@ def read_wipe_tower_placement_warnings(
     return read_placement_warnings(payload)
 
 
-def export_scene_with_bambu_metadata(
+def export_scene_with_slicer_metadata(
     scene: trimesh.Scene,
     output_path: str,
     slot_names: List[str],
@@ -2183,8 +1924,8 @@ def export_scene_with_bambu_metadata(
     custom_3mf_template_id: Optional[str] = None,
     material_types: Mapping[str, str | None] | None = None,
 ):
-    """Export a Trimesh scene to BambuStudio/OrcaSlicer-compatible 3MF with metadata.
-    将 Trimesh 场景导出为 BambuStudio/OrcaSlicer 兼容的 3MF 文件（含元数据）。
+    """Export a Trimesh scene as the selected slicer's native 3MF project.
+    将 Trimesh 场景导出为所选切片软件的原生 3MF 工程。
 
     Args:
         scene (trimesh.Scene): Trimesh Scene containing all meshes. (包含所有网格的场景)
@@ -2273,37 +2014,32 @@ def export_scene_with_bambu_metadata(
         },
     )
 
-    writer_kwargs = {
-        "output_path": output_path,
-        "settings": settings,
-        "color_mode": actual_color_mode,
-        "printer_id": printer_id,
-        "slicer": slicer,
-        "nozzle_size": nozzle_size,
-        "watermark": watermark,
-        "cover_source": cover_source,
-        "device_profile_id": device_profile_id,
-        "build_plate_id": build_plate_id,
-        "preserve_template_filament_slots": preserve_template_filament_slots,
-        "custom_3mf_template_id": custom_3mf_template_id,
-        "material_types": material_types,
-        "enable_relief": bool(enable_relief),
-        "enable_base_layer_height_modifier": bool(
-            enable_base_layer_height_modifier
-        ),
-        "enable_wipe_tower_auto_placement": bool(
-            enable_wipe_tower_auto_placement
-        ),
-        "base_height_mm": float(base_height_mm),
-        "color_height_mm": float(color_height_mm),
-        "face_orientation": face_orientation,
-        "backing_infill_density_percent": backing_infill_density_percent,
-    }
-    writer = BambuStudio3MFWriter(**writer_kwargs)
+    writer = BambuStudio3MFWriter(
+        output_path=output_path,
+        settings=settings,
+        color_mode=actual_color_mode,
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
+        watermark=watermark,
+        cover_source=cover_source,
+        device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
+        preserve_template_filament_slots=preserve_template_filament_slots,
+        custom_3mf_template_id=custom_3mf_template_id,
+        material_types=material_types,
+        enable_relief=bool(enable_relief),
+        enable_base_layer_height_modifier=bool(enable_base_layer_height_modifier),
+        enable_wipe_tower_auto_placement=bool(enable_wipe_tower_auto_placement),
+        base_height_mm=float(base_height_mm),
+        color_height_mm=float(color_height_mm),
+        face_orientation=face_orientation,
+        backing_infill_density_percent=backing_infill_density_percent,
+    )
     if resolved_project_slot_names:
         writer._set_project_palette(resolved_project_slot_names, preview_colors)
 
-    name_to_color: dict[str, tuple] = {}
+    name_to_color: dict[str, tuple[int, int, int]] = {}
     project_slot_indices = {name: idx for idx, name in enumerate(resolved_project_slot_names)}
     color_sources: dict[str, int] = {}
     for idx, slot_name in enumerate(slot_names):
@@ -2375,76 +2111,4 @@ def export_scene_with_bambu_metadata(
     return writer.export()
 
 
-def _resolve_preview_color_for_slot_name(
-    slot_name: str,
-    slot_index: int,
-    preview_colors: Dict,
-) -> tuple[tuple[int, int, int], str]:
-    """Resolve a slot color from preview metadata.
-
-    根据预览颜色元数据解析槽位颜色。
-
-    Args:
-        slot_name: User-facing slot/material name.
-            用户可见的槽位或材料名称。
-        slot_index: Compact slot index in the current export order.
-            当前导出顺序中的紧凑槽位索引。
-        preview_colors: Preview color mapping from the pipeline cache.
-            来自流水线缓存的预览颜色映射。
-
-    Returns:
-        tuple[tuple[int, int, int], str]:
-            Resolved RGB color and a short resolution source label.
-            解析得到的 RGB 颜色，以及解析来源标记。
-    """
-
-    if slot_name in preview_colors:
-        return _coerce_preview_rgb(preview_colors[slot_name]), "by name"
-
-    slot_number = _parse_slot_number(slot_name)
-    if slot_number is not None:
-        slot_key = slot_number - 1
-        if slot_key in preview_colors:
-            return _coerce_preview_rgb(preview_colors[slot_key]), "by slot"
-        slot_key_str = str(slot_key)
-        if slot_key_str in preview_colors:
-            return _coerce_preview_rgb(preview_colors[slot_key_str]), "by slot"
-
-    if slot_index in preview_colors:
-        return _coerce_preview_rgb(preview_colors[slot_index]), "by index"
-
-    slot_index_str = str(slot_index)
-    if slot_index_str in preview_colors:
-        return _coerce_preview_rgb(preview_colors[slot_index_str]), "by index"
-
-    return (200, 200, 200), "fallback"
-
-
-def _parse_slot_number(slot_name: str) -> int | None:
-    """Extract a 1-based slot number from a slot label when present.
-
-    从槽位名称中提取 1-based 槽位编号。
-    """
-
-    match = re.match(r"Slot\s+(\d+)\b", slot_name)
-    if match is None:
-        return None
-    return int(match.group(1))
-
-
-def _coerce_preview_rgb(value: object) -> tuple[int, int, int]:
-    """Coerce a preview-color value into an RGB tuple.
-
-    将预览颜色值转换为 RGB 元组。
-    """
-
-    if isinstance(value, np.ndarray):
-        channels = value.tolist()
-    elif isinstance(value, (list, tuple)):
-        channels = list(value)
-    else:
-        raise ValueError(f"Unsupported preview color value: {type(value)!r}")
-
-    if len(channels) < 3:
-        raise ValueError("Preview color value must have at least 3 channels.")
-    return tuple(int(channel) for channel in channels[:3])
+export_scene_with_bambu_metadata = export_scene_with_slicer_metadata

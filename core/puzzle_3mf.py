@@ -13,9 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 import re
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
-import numpy as np
+from core.export_materials import resolve_preview_color_for_slot
+
+if TYPE_CHECKING:
+    from utils.fatcat_metadata import MetadataTarget
 
 
 @dataclass(frozen=True)
@@ -52,7 +55,7 @@ def assemble_puzzle_3mf(
     device_profile_id: str | None,
     build_plate_id: str | None,
     overview_png_bytes: bytes | None,
-    metadata_target: Any,
+    metadata_target: MetadataTarget,
     enable_wipe_tower_auto_placement: bool = True,
 ) -> str:
     """Write puzzle metadata through Fat Cat while retaining Lumina placement.
@@ -92,7 +95,7 @@ def assemble_puzzle_3mf(
     if len(piece_sources) != len(piece_slots):
         raise ValueError("Puzzle piece sources and material slots must have equal length.")
 
-    from utils.merged_bambu_3mf_writer import MergedBambu3MFWriter, MergedItem
+    from utils.slicer_3mf_writer import MergedSlicer3MFWriter, MergedItem
 
     selected_piece_slots = _select_puzzle_palette_slots(
         piece_slots=piece_slots,
@@ -123,7 +126,7 @@ def assemble_puzzle_3mf(
         ]
         for piece_source in piece_sources
     ]
-    MergedBambu3MFWriter().write_puzzle(
+    MergedSlicer3MFWriter().write_puzzle(
         items,
         Path(output_path),
         build_transforms=build_transforms,
@@ -216,25 +219,11 @@ def _resolve_preview_rgb_for_material_name(
     为全局材料名称解析 RGB 颜色。
     """
 
-    normalized_preview = preview_colors or {}
-    if material_name in normalized_preview:
-        return _coerce_rgb_tuple(normalized_preview[material_name])
-
-    slot_number = _slot_number_from_material_name(material_name)
-    if slot_number is not None:
-        slot_key = slot_number - 1
-        if slot_key in normalized_preview:
-            return _coerce_rgb_tuple(normalized_preview[slot_key])
-        slot_key_str = str(slot_key)
-        if slot_key_str in normalized_preview:
-            return _coerce_rgb_tuple(normalized_preview[slot_key_str])
-
-    if material_index in normalized_preview:
-        return _coerce_rgb_tuple(normalized_preview[material_index])
-    material_index_str = str(material_index)
-    if material_index_str in normalized_preview:
-        return _coerce_rgb_tuple(normalized_preview[material_index_str])
-
+    color_rgb, source = resolve_preview_color_for_slot(
+        material_name, material_index, preview_colors or {},
+    )
+    if source != "fallback":
+        return color_rgb
     if re.fullmatch(r"#[0-9A-Fa-f]{6}", fallback_hex):
         return (
             int(fallback_hex[1:3], 16),
@@ -242,37 +231,7 @@ def _resolve_preview_rgb_for_material_name(
             int(fallback_hex[5:7], 16),
         )
 
-    return (200, 200, 200)
-
-
-def _slot_number_from_material_name(material_name: str) -> int | None:
-    """Extract a 1-based slot number from a material label when present.
-
-    从材料标签中提取 1-based 槽位编号。
-    """
-
-    match = re.match(r"Slot\s+(\d+)\b", material_name)
-    if match is None:
-        return None
-    return int(match.group(1))
-
-
-def _coerce_rgb_tuple(value: object) -> tuple[int, int, int]:
-    """Coerce a color-like value into an RGB tuple.
-
-    将颜色值转换为 RGB 元组。
-    """
-
-    if isinstance(value, np.ndarray):
-        channels = value.tolist()
-    elif isinstance(value, (list, tuple)):
-        channels = list(value)
-    else:
-        raise ValueError(f"Unsupported preview color value: {type(value)!r}")
-
-    if len(channels) < 3:
-        raise ValueError("Preview color value must have at least 3 channels.")
-    return tuple(int(channel) for channel in channels[:3])
+    return color_rgb
 
 
 def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:

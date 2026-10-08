@@ -32,7 +32,26 @@ __all__ = [
     "COVER_THUMBNAIL_SPECS",
     "COVER_PLATE_SPECS",
     "clear_cover_thumbnail_cache",
+    "build_plate_small_preview",
 ]
+
+
+def build_plate_small_preview(plate_main: bytes) -> bytes:
+    """Build the native 128x128 plate preview.
+
+    构建原生的 128x128 盘面预览。
+
+    Args:
+        plate_main: Encoded main plate image. 编码后的主盘面图片。
+
+    Returns:
+        Resized RGBA PNG bytes. 缩放后的 RGBA PNG 字节。
+    """
+    with Image.open(io.BytesIO(plate_main)) as image:
+        resized = image.convert("RGBA").resize((128, 128), Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        resized.save(buffer, format="PNG", optimize=True)
+        return buffer.getvalue()
 
 
 # ---------------------------------------------------------------------------

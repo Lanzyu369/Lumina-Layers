@@ -14,9 +14,32 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 import numpy as np
+from utils.fatcat_metadata import (
+    MetadataTarget,
+    MergedModelInput,
+    ModelComposition,
+    ModelMetadataRequest,
+    PlateSummaryObject,
+    ProjectComposition,
+    ProjectLayout,
+    build_merged_model_metadata_request,
+    build_merged_project_settings_request,
+    compose_model_metadata,
+    compose_project_settings,
+    metadata_resource_specs,
+    patch_wipe_tower,
+    read_project_layout,
+)
+from utils.slicer_3mf_support import (
+    DEFAULT_EXPORT_SETTINGS,
+    build_wipe_tower_placement_metadata_payload,
+    build_wipe_tower_placement_request,
+    resolve_export_device,
+)
 
 if TYPE_CHECKING:
     from core.wipe_tower_placement import WipeTowerPlacementResult
+    import neroued_3mf as n3mf
 
 
 class MergedWriteError(Exception):
@@ -175,6 +198,7 @@ __all__ = [
     "MaterialSlot",
     "MergedItem",
     "MergedBambu3MFWriter",
+    "MergedSlicer3MFWriter",
 ]
 
 
@@ -240,7 +264,7 @@ class _SourceAssembly:
     component_uuids: tuple[str, ...]
     base_material_groups: tuple[ET.Element, ...]
     metadata_parts: dict[str, bytes]
-    project_settings: dict[str, Any] | None
+    project_settings: dict[str, Any]
     root_metadata: dict[str, str]
     source_metadata: dict[str, Any]
     source_model_index: int = 1
@@ -307,7 +331,7 @@ def _validate_slots(slots: Sequence[MaterialSlot]) -> None:
 
 
 def _parse_source_assembly(
-    item_idx: int, item: MergedItem, *, metadata_target: Any | None = None,
+    item_idx: int, item: MergedItem, *, metadata_target: MetadataTarget | None = None,
 ) -> _SourceAssembly:
     """Parse one source 3MF and extract its mesh objects + metadata.
 
@@ -723,8 +747,6 @@ def _resolve_merged_wipe_tower_placement(
 
     from core.wipe_tower_placement import Rect, solve_wipe_tower_placement
 
-    from utils.bambu_3mf_writer import _build_wipe_tower_placement_request
-
     if not enable_wipe_tower_auto_placement:
         return None, (0.0, 0.0)
     if build_transforms is None:
@@ -767,7 +789,7 @@ def _resolve_merged_wipe_tower_placement(
             assembly.min_z for assembly in assemblies
         )
         model_translation_locked = False
-    request = _build_wipe_tower_placement_request(
+    request = build_wipe_tower_placement_request(
         layout,
         model_bounds=model_bounds,
         model_height=model_height,
@@ -791,15 +813,64 @@ def _resolve_merged_wipe_tower_placement(
 # ---------------------------------------------------------------------------
 
 
-class MergedBambu3MFWriter:
+@dataclass(frozen=True)
+class _MergedExportProject:
+    """The composed project and final, possibly translated, source placements."""
+
+    settings: dict[str, Any]
+    composition: ProjectComposition
+    layout: ProjectLayout
+    items: Sequence[MergedItem]
+    build_transforms: Sequence[Sequence[float]] | None
+    placement: WipeTowerPlacementResult | None
+    printer_id: str
+    slicer: str
+    source_slot_mappings: dict[str, dict[int, int]]
+
+    @property
+    def core_layout(self) -> bool:
+        return self.composition["metadata_defaults"].get("geometry_layout") == "core"
+
+
+@dataclass(frozen=True)
+class _BaseMaterialMapping:
+    """One source's base-material group and optional palette-index projection."""
+
+    group_ids: dict[str, int]
+    indexes: dict[str, dict[int, int]] | None
+
+    def property_index(self, group_id: str | None, value: str | int) -> int:
+        index = int(value)
+        if self.indexes is None:
+            return index
+        try:
+            if group_id is None:
+                raise KeyError(group_id)
+            return self.indexes[group_id][index]
+        except KeyError as exc:
+            raise MergedWriteError(
+                "Source base material is absent from the selected palette"
+            ) from exc
+
+
+@dataclass(frozen=True)
+class _MergedGeometry:
+    """Queued source assemblies and the matching FatCat model descriptions."""
+
+    models: list[MergedModelInput]
+    summary_objects: list[PlateSummaryObject]
+    assembly_ids: dict[int, int]
+
+
+class MergedSlicer3MFWriter:
     """Merge source geometry and tuning into one native slicer project.
 
     将各源工程的几何和工艺合并为一个目标切片软件原生工程。
 
     FatCat merges metadata, material identities and object settings. This writer
     reuses source meshes/transforms and follows FatCat's core/Production layout
-    policy, then asks Neroued to write one archive. The historical class name and
-    public signature remain compatible with existing callers.
+    policy, then asks Neroued to write one archive. ``MergedBambu3MFWriter`` is
+    an alias of this class; public calls remain compatible.
     FatCat 合并元数据、耗材身份和局部设置；此 writer 复用源网格及变换，
     按 FatCat 的布局规则调用 Neroued 单次写包，保留现有类名和公开签名。
     """
@@ -812,7 +883,7 @@ class MergedBambu3MFWriter:
         plate_width_mm: float,
         plate_depth_mm: float,
         enable_wipe_tower_auto_placement: bool = True,
-        metadata_target: Any | None = None,
+        metadata_target: MetadataTarget | None = None,
         printer_id: str | None = None,
         nozzle_size: str | None = None,
         device_profile_id: str | None = None,
@@ -823,8 +894,11 @@ class MergedBambu3MFWriter:
         Args:
             items: Sequence of MergedItem objects to merge.
             output_path: Destination path for the merged 3MF file.
-            plate_width_mm: Plate X dimension (mm); stored in metadata.
-            plate_depth_mm: Plate Y dimension (mm); stored in metadata.
+            plate_width_mm: Plate X dimension (mm); compatibility input.
+                Native hardware comes from the source project.
+                兼容输入；原生硬件来自源项目。
+            plate_depth_mm: Plate Y dimension (mm); compatibility input.
+                打印板 Y 尺寸（毫米），保留为兼容输入。
             enable_wipe_tower_auto_placement: Whether to solve and apply one
                 wipe-tower layout for the full merged group. (是否为整个合并模型组
                 求解并应用擦料塔自动布局。)
@@ -880,7 +954,7 @@ class MergedBambu3MFWriter:
                 metadata_target = replace(metadata_target, build_plate_uid="")
         try:
             self._write_fatcat_opc(
-                items, assemblies, output_path, plate_width_mm, plate_depth_mm,
+                items, assemblies, output_path,
                 enable_wipe_tower_auto_placement, metadata_target=metadata_target,
                 printer_id=printer_id, nozzle_size=nozzle_size,
                 device_profile_id=device_profile_id, build_plate_id=build_plate_id,
@@ -899,11 +973,11 @@ class MergedBambu3MFWriter:
         *,
         build_transforms: Sequence[Sequence[float]],
         overview_png_bytes: bytes | None,
-        metadata_target: Any,
+        metadata_target: MetadataTarget,
         printer_id: str,
         nozzle_size: str,
-        device_profile_id: str,
-        build_plate_id: str,
+        device_profile_id: str | None,
+        build_plate_id: str | None,
         enable_wipe_tower_auto_placement: bool,
         source_materials: Sequence[Mapping[str, object]] | None = None,
     ) -> None:
@@ -951,8 +1025,6 @@ class MergedBambu3MFWriter:
             items,
             assemblies,
             output_path,
-            0.0,
-            0.0,
             enable_wipe_tower_auto_placement,
             metadata_target=metadata_target,
             printer_id=printer_id,
@@ -974,11 +1046,9 @@ class MergedBambu3MFWriter:
         items: Sequence[MergedItem],
         assemblies: list[_SourceAssembly],
         output_path: Path,
-        plate_width_mm: float,
-        plate_depth_mm: float,
         enable_wipe_tower_auto_placement: bool,
         *,
-        metadata_target: Any,
+        metadata_target: MetadataTarget,
         printer_id: str | None,
         nozzle_size: str | None,
         device_profile_id: str | None,
@@ -987,27 +1057,35 @@ class MergedBambu3MFWriter:
         resource_overrides: Mapping[str, bytes] | None = None,
         source_materials: Sequence[Mapping[str, object]] | None = None,
     ) -> None:
-        import neroued_3mf as n3mf
+        from fatcat_metadata_neroued import apply_metadata_components, apply_root_model_metadata
 
-        from config import normalize_slicer_software_id
-        from utils.bambu_3mf_writer import (
-            BambuStudio3MFWriter,
-            _apply_metadata_components,
-            _apply_root_model_metadata,
-            _build_wipe_tower_placement_metadata_payload,
-            _resolve_export_device,
+        project = self._prepare_export_project(
+            items, assemblies, metadata_target, source_materials,
+            printer_id=printer_id, nozzle_size=nozzle_size,
+            device_profile_id=device_profile_id, build_plate_id=build_plate_id,
+            enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
+            build_transforms=build_transforms,
         )
-        from utils.bambu_3mf_cover import CoverThumbnailBuilder
-        from utils.fatcat_metadata import (
-            build_merged_model_metadata_request,
-            build_merged_project_settings_request,
-            compose_model_metadata,
-            compose_project_settings,
-            metadata_resource_specs,
-            patch_wipe_tower,
-            read_project_layout,
+        builder = self._create_document_builder(core_layout=project.core_layout)
+        geometry = self._queue_merged_geometry(builder, assemblies, project, source_materials)
+        metadata_request = self._build_merged_metadata_request(
+            metadata_target, assemblies, output_path, project, geometry,
+            enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
         )
+        resource_bytes = self._build_resource_bytes(metadata_target, resource_overrides)
+        metadata_request["resource_roles"] = list(resource_bytes)
+        metadata_result = compose_model_metadata(project.settings, metadata_request)
+        apply_root_model_metadata(builder, metadata_result["root_model"])
+        apply_metadata_components(builder, metadata_result, resource_bytes)
+        self._add_build_items(builder, metadata_result, geometry, assemblies, project.core_layout)
+        self._write_document(builder, output_path)
 
+    @staticmethod
+    def _compose_project(
+        items: Sequence[MergedItem], assemblies: Sequence[_SourceAssembly],
+        metadata_target: MetadataTarget, source_materials: Sequence[Mapping[str, object]] | None,
+    ) -> ProjectComposition:
+        """Compose actual source projects and their material selections once."""
         project_request = build_merged_project_settings_request(
             target=metadata_target,
             sources=[
@@ -1021,13 +1099,24 @@ class MergedBambu3MFWriter:
                 "machine_uid": metadata_target.machine_uid,
                 "nozzle_uid": metadata_target.nozzle_uid,
             })
-        project_result = compose_project_settings(
-            assemblies[0].project_settings, project_request
-        )
+        return compose_project_settings(assemblies[0].project_settings, project_request)
+
+    def _prepare_export_project(
+        self, items: Sequence[MergedItem], assemblies: Sequence[_SourceAssembly],
+        metadata_target: MetadataTarget, source_materials: Sequence[Mapping[str, object]] | None,
+        *, printer_id: str | None, nozzle_size: str | None,
+        device_profile_id: str | None, build_plate_id: str | None,
+        enable_wipe_tower_auto_placement: bool,
+        build_transforms: Sequence[Sequence[float]] | None,
+    ) -> _MergedExportProject:
+        """Resolve hardware and apply one layout to the composed source project."""
+        from config import normalize_slicer_software_id
+
+        project_result = self._compose_project(items, assemblies, metadata_target, source_materials)
         final_project = json.loads(project_result["project_settings_json"])
         resolved_slicer = normalize_slicer_software_id(metadata_target.slicer_id)
         layout = read_project_layout(
-            {**BambuStudio3MFWriter.DEFAULT_SETTINGS, **final_project},
+            {**DEFAULT_EXPORT_SETTINGS, **final_project},
             slicer_id=resolved_slicer,
         )
         source_layout = assemblies[0].source_metadata["layout"]
@@ -1038,7 +1127,7 @@ class MergedBambu3MFWriter:
             slicer=resolved_slicer,
             nozzle_size=source_nozzle,
         )
-        resolved_nozzle_size, _, _ = _resolve_export_device(
+        resolved_nozzle_size, _, _ = resolve_export_device(
             printer_id=resolved_printer_id,
             slicer=resolved_slicer,
             nozzle_size=source_nozzle,
@@ -1055,23 +1144,7 @@ class MergedBambu3MFWriter:
             nozzle_size=resolved_nozzle_size,
             build_transforms=build_transforms,
         )
-        if build_transforms is None and group_translation != (0.0, 0.0):
-            items = tuple(
-                replace(
-                    item,
-                    tx_mm=item.tx_mm + group_translation[0],
-                    ty_mm=item.ty_mm + group_translation[1],
-                )
-                for item in items
-            )
-        elif build_transforms is not None and group_translation != (0.0, 0.0):
-            translated_transforms = []
-            for transform in build_transforms:
-                values = [float(value) for value in transform]
-                values[9] += group_translation[0]
-                values[10] += group_translation[1]
-                translated_transforms.append(values)
-            build_transforms = translated_transforms
+        items, build_transforms = self._translate_sources(items, build_transforms, group_translation)
         if placement is not None:
             final_project = patch_wipe_tower(
                 final_project,
@@ -1097,16 +1170,93 @@ class MergedBambu3MFWriter:
             }
             for mapping in project_result["source_slot_mappings"]
         }
+        return _MergedExportProject(
+            final_project, project_result, layout, items, build_transforms, placement,
+            resolved_printer_id, resolved_slicer, source_mappings,
+        )
+
+    @staticmethod
+    def _translate_sources(
+        items: Sequence[MergedItem], build_transforms: Sequence[Sequence[float]] | None,
+        group_translation: tuple[float, float],
+    ) -> tuple[Sequence[MergedItem], Sequence[Sequence[float]] | None]:
+        """Translate either batch minima or explicit puzzle transforms, preserving inputs."""
+        if build_transforms is None and group_translation != (0.0, 0.0):
+            items = tuple(
+                replace(
+                    item,
+                    tx_mm=item.tx_mm + group_translation[0],
+                    ty_mm=item.ty_mm + group_translation[1],
+                )
+                for item in items
+            )
+        elif build_transforms is not None and group_translation != (0.0, 0.0):
+            translated_transforms = []
+            for transform in build_transforms:
+                values = [float(value) for value in transform]
+                values[9] += group_translation[0]
+                values[10] += group_translation[1]
+                translated_transforms.append(values)
+            build_transforms = translated_transforms
+        return items, build_transforms
+
+    @staticmethod
+    def _create_document_builder(*, core_layout: bool) -> n3mf.DocumentBuilder:
+        """Create the geometry builder for the selected layout dialect."""
+        import neroued_3mf as n3mf
+
         builder = n3mf.DocumentBuilder()
         builder.set_unit(n3mf.Unit.Millimeter)
         builder.set_language("en-US")
-        core_layout = project_result["metadata_defaults"].get("geometry_layout") == "core"
         if not core_layout:
             builder.enable_production()
             builder.set_production_build_uuid(str(uuid.uuid4()))
 
-        material_group_ids: list[dict[str, int]] = []
-        material_indexes: list[dict[str, dict[int, int]]] = []
+        return builder
+
+    def _queue_merged_geometry(
+        self, builder: n3mf.DocumentBuilder, assemblies: Sequence[_SourceAssembly],
+        project: _MergedExportProject, source_materials: Sequence[Mapping[str, object]] | None,
+    ) -> _MergedGeometry:
+        """Queue source geometry and keep its IDs paired with model descriptions."""
+        material_mappings = self._queue_material_groups(builder, assemblies, source_materials)
+        metadata_models: list[MergedModelInput] = []
+        summary_objects: list[PlateSummaryObject] = []
+        assembly_ids: dict[int, int] = {}
+        for model_index, (item, assembly) in enumerate(zip(project.items, assemblies), start=1):
+            mesh_ids, face_count = self._queue_source_meshes(
+                builder, item, assembly, material_mappings[model_index - 1], project.core_layout,
+            )
+            source_transform = (
+                project.build_transforms[model_index - 1]
+                if project.build_transforms is not None else None
+            )
+            build_transform = self._source_build_transform(item, assembly, source_transform)
+            group_id = self._add_source_group(
+                builder, item, assembly, mesh_ids, model_index, project.core_layout,
+            )
+            assembly_ids[model_index] = group_id
+            metadata_models.append(self._build_source_model_input(
+                item, assembly, model_index, group_id, mesh_ids, face_count, build_transform,
+                project.source_slot_mappings[str(model_index - 1)],
+                len(project.composition["merged_slots"]),
+            ))
+            summary_objects.append({
+                "model_index": model_index,
+                "name": item.source_filename or f"object_{model_index}",
+                "bbox": _transformed_assembly_bbox(assembly, build_transform),
+            })
+        return _MergedGeometry(metadata_models, summary_objects, assembly_ids)
+
+    @staticmethod
+    def _queue_material_groups(
+        builder: n3mf.DocumentBuilder, assemblies: Sequence[_SourceAssembly],
+        source_materials: Sequence[Mapping[str, object]] | None,
+    ) -> list[_BaseMaterialMapping]:
+        """Map each source base-material group onto the selected output palette."""
+        import neroued_3mf as n3mf
+
+        mappings: list[_BaseMaterialMapping] = []
         global_material_group = None
         palette_index = {}
         if source_materials:
@@ -1139,193 +1289,226 @@ class MergedBambu3MFWriter:
                             for index, material in enumerate(group.findall(_qname_core("base")))
                             if (material.get("name") or "") in palette_index
                         }
-            material_group_ids.append(ids_by_source)
-            material_indexes.append(indexes_by_source)
+            mappings.append(_BaseMaterialMapping(
+                ids_by_source, indexes_by_source if global_material_group is not None else None,
+            ))
 
-        def property_index(
-            model_index: int, group_id: str | None, value: str | int,
-        ) -> int:
-            index = int(value)
-            if global_material_group is None:
-                return index
-            try:
-                return material_indexes[model_index - 1][group_id][index]
-            except KeyError as exc:
-                raise MergedWriteError("Source base material is absent from the selected palette") from exc
+        return mappings
 
-        metadata_models: list[dict[str, Any]] = []
-        summary_objects: list[dict[str, Any]] = []
-        assembly_ids_by_model: dict[int, int] = {}
-        for model_index, (item, assembly) in enumerate(zip(items, assemblies), start=1):
-            mesh_ids: list[int] = []
-            face_count = 0
-            for mesh_index, source_mesh in enumerate(assembly.meshes):
-                vertices, faces = _extract_mesh_arrays(source_mesh.element)
-                face_count += int(faces.shape[0])
-                mesh = n3mf.Mesh.from_arrays(
-                    np.ascontiguousarray(vertices, dtype=np.float64),
-                    np.ascontiguousarray(faces, dtype=np.int64),
-                )
-                source_object = source_mesh.element
-                source_pid = source_object.get("pid")
-                source_pindex = source_object.get("pindex")
-                target_pid = _map_base_material_id(
-                    source_pid, material_group_ids[model_index - 1]
-                )
-                triangle_elements = source_object.findall(
-                    f"{_qname_core('mesh')}/{_qname_core('triangles')}/"
-                    f"{_qname_core('triangle')}"
-                )
-                if any(
-                    any(name in triangle.attrib for name in ("pid", "p1", "p2", "p3"))
-                    for triangle in triangle_elements
-                ):
-                    default_index = int(source_pindex or "0")
-                    mesh.triangle_properties = [
-                        n3mf.TriangleProperty(
-                            _map_base_material_id(
-                                triangle.get("pid") or source_pid,
-                                material_group_ids[model_index - 1],
-                            )
-                            or 0,
-                            property_index(model_index, triangle.get("pid") or source_pid, triangle.get("p1") or default_index),
-                            property_index(model_index, triangle.get("pid") or source_pid, triangle.get("p2") or default_index),
-                            property_index(model_index, triangle.get("pid") or source_pid, triangle.get("p3") or default_index),
+    @staticmethod
+    def _queue_source_meshes(
+        builder: n3mf.DocumentBuilder, item: MergedItem, assembly: _SourceAssembly,
+        material_mapping: _BaseMaterialMapping, core_layout: bool,
+    ) -> tuple[list[int], int]:
+        """Preserve one source's meshes, material properties and component identity."""
+        import neroued_3mf as n3mf
+
+        mesh_ids: list[int] = []
+        face_count = 0
+        for mesh_index, source_mesh in enumerate(assembly.meshes):
+            vertices, faces = _extract_mesh_arrays(source_mesh.element)
+            face_count += int(faces.shape[0])
+            mesh = n3mf.Mesh.from_arrays(
+                np.ascontiguousarray(vertices, dtype=np.float64),
+                np.ascontiguousarray(faces, dtype=np.int64),
+            )
+            source_object = source_mesh.element
+            source_pid = source_object.get("pid")
+            source_pindex = source_object.get("pindex")
+            target_pid = _map_base_material_id(
+                source_pid, material_mapping.group_ids
+            )
+            triangle_elements = source_object.findall(
+                f"{_qname_core('mesh')}/{_qname_core('triangles')}/"
+                f"{_qname_core('triangle')}"
+            )
+            if any(
+                any(name in triangle.attrib for name in ("pid", "p1", "p2", "p3"))
+                for triangle in triangle_elements
+            ):
+                default_index = int(source_pindex or "0")
+                mesh.triangle_properties = [
+                    n3mf.TriangleProperty(
+                        _map_base_material_id(
+                            triangle.get("pid") or source_pid,
+                            material_mapping.group_ids,
                         )
-                        for triangle in triangle_elements
-                    ]
-
-                source_name = source_object.get("name")
-                if not source_name and mesh_index < len(item.slots):
-                    source_name = item.slots[mesh_index].slot_name
-                mesh_id = builder.add_mesh_object(
-                    source_name or f"mesh_{mesh_index}",
-                    mesh,
-                    pid=target_pid,
-                    pindex=property_index(model_index, source_pid, source_pindex) if source_pindex is not None else None,
-                )
-                mesh_ids.append(mesh_id)
-                if source_object.get("partnumber"):
-                    builder.set_part_number(mesh_id, source_object.get("partnumber"))
-                for metadata in source_mesh.metadata:
-                    builder.add_object_metadata(
-                        mesh_id, metadata["name"], metadata["value"], metadata["type"],
-                    )
-                object_uuid = source_object.get(_qname_prod("UUID"))
-                if object_uuid and not core_layout:
-                    builder.set_object_uuid(mesh_id, object_uuid)
-                if not core_layout and mesh_index < len(assembly.component_transforms):
-                    builder.set_component_transform(
-                        mesh_id,
-                        _n3mf_transform(
-                            n3mf,
-                            _parse_transform_matrix(
-                                assembly.component_transforms[mesh_index]
-                            ),
+                        or 0,
+                        material_mapping.property_index(
+                            triangle.get("pid") or source_pid,
+                            triangle.get("p1") or default_index,
+                        ),
+                        material_mapping.property_index(
+                            triangle.get("pid") or source_pid,
+                            triangle.get("p2") or default_index,
+                        ),
+                        material_mapping.property_index(
+                            triangle.get("pid") or source_pid,
+                            triangle.get("p3") or default_index,
                         ),
                     )
-                if not core_layout and mesh_index < len(assembly.component_uuids):
-                    component_uuid = assembly.component_uuids[mesh_index]
-                    builder.set_component_uuid(
-                        mesh_id, component_uuid or str(uuid.uuid4())
-                    )
-            if build_transforms is None:
-                dx = item.tx_mm - assembly.min_x
-                dy = item.ty_mm - assembly.min_y
-                dz = 0.0
-                build_transform = [
-                    1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0,
-                    dx, dy, dz,
+                    for triangle in triangle_elements
                 ]
-            else:
-                build_transform = [
-                    float(value)
-                    for value in build_transforms[model_index - 1]
-                ]
-                dx, dy, dz = build_transform[9:12]
-            group_name = item.source_filename or f"object_{model_index}"
-            if core_layout:
-                group_id = builder.add_component_object(group_name, [
-                    n3mf.Component(mesh_id, _n3mf_transform(
-                        n3mf, _parse_transform_matrix(assembly.component_transforms[index]),
-                    ))
-                    for index, mesh_id in enumerate(mesh_ids)
-                ])
-            else:
-                group_id = builder.add_production_group(
-                    group_name, mesh_ids, assembly.source_assembly_uuid or str(uuid.uuid4()),
-                )
-            assembly_ids_by_model[model_index] = group_id
-            source_id = str(model_index - 1)
-            source_mapping = source_mappings[source_id]
-            output_slot_count = len(project_result["merged_slots"])
-            source_slot_count = assembly.source_metadata["project_filament_count"]
-            source_slot_output_indexes = [
-                source_mapping.get(index, output_slot_count)
-                for index in range(source_slot_count)
-            ]
-            source_model_settings = assembly.metadata_parts[
-                "Metadata/model_settings.config"
-            ].decode("utf-8")
-            model_request: dict[str, Any] = {
-                "model_index": model_index,
-                "assembly_id": group_id,
-                "instance_id": "0",
-                "identify_id": str(model_index),
-                "source_assembly_id": assembly.source_assembly_id,
-                "source_model_index": assembly.source_model_index,
-                "source_model_settings_xml": source_model_settings,
-                "face_count": face_count,
-                "parts": [
-                    {
-                        "part_id": mesh_id,
-                        "source_part_id": source_mesh.original_id,
-                    }
-                    for mesh_id, source_mesh in zip(mesh_ids, assembly.meshes)
-                ],
-                "source_slot_output_indexes": source_slot_output_indexes,
-                "output_slot_count": output_slot_count,
-                "default_slot_output_index": source_mapping.get(0, min(source_mapping.values())),
-                "source_slots": [
-                    {
-                        "slot_id": slot.slot_id,
-                        "slot_name": slot.slot_name,
-                        "preview_color": slot.preview_color,
-                        "material_id": slot.material_id,
-                    }
-                    for slot in item.slots
-                ],
-                "source_root_metadata": assembly.root_metadata,
-                "transform": build_transform,
-                "offset_mm": [dx, dy, dz],
-            }
-            layer_ranges = assembly.metadata_parts.get(
-                "Metadata/layer_config_ranges.xml"
-            )
-            if layer_ranges is not None:
-                model_request["source_layer_config_ranges_xml"] = (
-                    layer_ranges.decode("utf-8")
-                )
-            metadata_models.append(model_request)
-            summary_objects.append({
-                "model_index": model_index,
-                "name": item.source_filename or f"object_{model_index}",
-                "bbox": _transformed_assembly_bbox(assembly, build_transform),
-            })
 
-        placement_payload = _build_wipe_tower_placement_metadata_payload(
-            placement,
+            source_name = source_object.get("name")
+            if not source_name and mesh_index < len(item.slots):
+                source_name = item.slots[mesh_index].slot_name
+            mesh_id = builder.add_mesh_object(
+                source_name or f"mesh_{mesh_index}",
+                mesh,
+                pid=target_pid,
+                pindex=(
+                    material_mapping.property_index(source_pid, source_pindex)
+                    if source_pindex is not None else None
+                ),
+            )
+            mesh_ids.append(mesh_id)
+            if source_object.get("partnumber"):
+                builder.set_part_number(mesh_id, source_object.get("partnumber"))
+            for metadata in source_mesh.metadata:
+                builder.add_object_metadata(
+                    mesh_id, metadata["name"], metadata["value"], metadata["type"],
+                )
+            object_uuid = source_object.get(_qname_prod("UUID"))
+            if object_uuid and not core_layout:
+                builder.set_object_uuid(mesh_id, object_uuid)
+            if not core_layout and mesh_index < len(assembly.component_transforms):
+                builder.set_component_transform(
+                    mesh_id,
+                    _n3mf_transform(
+                        n3mf,
+                        _parse_transform_matrix(
+                            assembly.component_transforms[mesh_index]
+                        ),
+                    ),
+                )
+            if not core_layout and mesh_index < len(assembly.component_uuids):
+                component_uuid = assembly.component_uuids[mesh_index]
+                builder.set_component_uuid(
+                    mesh_id, component_uuid or str(uuid.uuid4())
+                )
+        return mesh_ids, face_count
+
+    @staticmethod
+    def _source_build_transform(
+        item: MergedItem, assembly: _SourceAssembly, source_transform: Sequence[float] | None,
+    ) -> list[float]:
+        """Select the computed batch placement or the explicit puzzle transform."""
+        if source_transform is None:
+            dx = item.tx_mm - assembly.min_x
+            dy = item.ty_mm - assembly.min_y
+            dz = 0.0
+            build_transform = [
+                1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0,
+                dx, dy, dz,
+            ]
+        else:
+            build_transform = [
+                float(value)
+                for value in source_transform
+            ]
+            dx, dy, dz = build_transform[9:12]
+        return build_transform
+
+    @staticmethod
+    def _add_source_group(
+        builder: n3mf.DocumentBuilder, item: MergedItem, assembly: _SourceAssembly,
+        mesh_ids: list[int], model_index: int, core_layout: bool,
+    ) -> int:
+        """Preserve source components in a core assembly or a Production group."""
+        import neroued_3mf as n3mf
+
+        group_name = item.source_filename or f"object_{model_index}"
+        if core_layout:
+            group_id = builder.add_component_object(group_name, [
+                n3mf.Component(mesh_id, _n3mf_transform(
+                    n3mf, _parse_transform_matrix(assembly.component_transforms[index]),
+                ))
+                for index, mesh_id in enumerate(mesh_ids)
+            ])
+        else:
+            group_id = builder.add_production_group(
+                group_name, mesh_ids, assembly.source_assembly_uuid or str(uuid.uuid4()),
+            )
+        return group_id
+
+    @staticmethod
+    def _build_source_model_input(
+        item: MergedItem, assembly: _SourceAssembly, model_index: int, group_id: int,
+        mesh_ids: list[int], face_count: int, build_transform: list[float],
+        source_mapping: dict[int, int], output_slot_count: int,
+    ) -> MergedModelInput:
+        """Describe source identities, slot projection and local Z ranges for FatCat."""
+        dx, dy, dz = build_transform[9:12]
+        source_slot_count = assembly.source_metadata["project_filament_count"]
+        source_slot_output_indexes = [
+            source_mapping.get(index, output_slot_count)
+            for index in range(source_slot_count)
+        ]
+        source_model_settings = assembly.metadata_parts[
+            "Metadata/model_settings.config"
+        ].decode("utf-8")
+        model_request: MergedModelInput = {
+            "model_index": model_index,
+            "assembly_id": group_id,
+            "instance_id": "0",
+            "identify_id": str(model_index),
+            "source_assembly_id": assembly.source_assembly_id,
+            "source_model_index": assembly.source_model_index,
+            "source_model_settings_xml": source_model_settings,
+            "face_count": face_count,
+            "parts": [
+                {
+                    "part_id": mesh_id,
+                    "source_part_id": source_mesh.original_id,
+                }
+                for mesh_id, source_mesh in zip(mesh_ids, assembly.meshes)
+            ],
+            "source_slot_output_indexes": source_slot_output_indexes,
+            "output_slot_count": output_slot_count,
+            "default_slot_output_index": source_mapping.get(0, min(source_mapping.values())),
+            "source_slots": [
+                {
+                    "slot_id": slot.slot_id,
+                    "slot_name": slot.slot_name,
+                    "preview_color": slot.preview_color,
+                    "material_id": slot.material_id,
+                }
+                for slot in item.slots
+            ],
+            "source_root_metadata": assembly.root_metadata,
+            "transform": build_transform,
+            "offset_mm": [dx, dy, dz],
+        }
+        layer_ranges = assembly.metadata_parts.get(
+            "Metadata/layer_config_ranges.xml"
+        )
+        if layer_ranges is not None:
+            model_request["source_layer_config_ranges_xml"] = (
+                layer_ranges.decode("utf-8")
+            )
+        return model_request
+
+    @staticmethod
+    def _build_merged_metadata_request(
+        metadata_target: MetadataTarget, assemblies: Sequence[_SourceAssembly],
+        output_path: Path, project: _MergedExportProject, geometry: _MergedGeometry,
+        *, enable_wipe_tower_auto_placement: bool,
+    ) -> ModelMetadataRequest:
+        """Provide the final assembly and placement facts to the metadata composer."""
+        placement_payload = build_wipe_tower_placement_metadata_payload(
+            project.placement,
             enabled=enable_wipe_tower_auto_placement,
             output_path=str(output_path),
-            printer_id=resolved_printer_id,
-            slicer=resolved_slicer,
+            printer_id=project.printer_id,
+            slicer=project.slicer,
         )
         metadata_request = build_merged_model_metadata_request(
             target=metadata_target,
-            objects=metadata_models,
-            bed_type=project_result["metadata_defaults"]["plate_value"],
+            objects=geometry.models,
+            bed_type=project.composition["metadata_defaults"]["plate_value"],
             wipe_tower_placement=placement_payload,
             source_slice_info_xml=(
                 assemblies[0].metadata_parts["Metadata/slice_info.config"].decode(
@@ -1338,20 +1521,29 @@ class MergedBambu3MFWriter:
         metadata_request["output_options"] = {
             "emit_lumina_merged_slots_json": True,
         }
-        if project_result["metadata_defaults"]["plate_summary"]:
+        if project.composition["metadata_defaults"]["plate_summary"]:
             metadata_request["component_inputs"]["plate_summary"] = {
                 "bbox_all": [
-                    min(obj["bbox"][0] for obj in summary_objects),
-                    min(obj["bbox"][1] for obj in summary_objects),
-                    max(obj["bbox"][2] for obj in summary_objects),
-                    max(obj["bbox"][3] for obj in summary_objects),
+                    min(obj["bbox"][0] for obj in geometry.summary_objects),
+                    min(obj["bbox"][1] for obj in geometry.summary_objects),
+                    max(obj["bbox"][2] for obj in geometry.summary_objects),
+                    max(obj["bbox"][3] for obj in geometry.summary_objects),
                 ],
-                "objects": summary_objects,
-                "filament_colors": [slot["preview_color"] for slot in project_result["merged_slots"]],
-                "layer_height": layout["layer_height"],
-                "nozzle_diameter": layout["nozzle_diameters"][0],
-                "bed_type": project_result["metadata_defaults"]["sidecar_bed_value"],
+                "objects": geometry.summary_objects,
+                "filament_colors": [slot["preview_color"] for slot in project.composition["merged_slots"]],
+                "layer_height": project.layout["layer_height"],
+                "nozzle_diameter": project.layout["nozzle_diameters"][0],
+                "bed_type": project.composition["metadata_defaults"]["sidecar_bed_value"],
             }
+
+        return metadata_request
+
+    @staticmethod
+    def _build_resource_bytes(
+        metadata_target: MetadataTarget, resource_overrides: Mapping[str, bytes] | None,
+    ) -> dict[str, bytes]:
+        """Build previews from the final combined geometry rather than old sources."""
+        from utils.bambu_3mf_cover import CoverThumbnailBuilder, build_plate_small_preview
 
         # Source previews describe their old geometry/layout, even for one input.
         resource_bytes: dict[str, bytes] = {}
@@ -1365,19 +1557,24 @@ class MergedBambu3MFWriter:
                 "thumbnail_small": cover.thumbnail_small,
             })
             if "plate_small" in metadata_resource_specs(metadata_target.slicer_id):
-                resource_bytes["plate_small"] = BambuStudio3MFWriter._build_plate_small_bytes(
+                resource_bytes["plate_small"] = build_plate_small_preview(
                     resource_bytes["plate_main"]
                 )
-        metadata_request["resource_roles"] = list(resource_bytes)
-        metadata_result = compose_model_metadata(final_project, metadata_request)
-        _apply_root_model_metadata(builder, metadata_result["root_model"])
-        _apply_metadata_components(builder, metadata_result, resource_bytes)
+        return resource_bytes
+
+    @staticmethod
+    def _add_build_items(
+        builder: n3mf.DocumentBuilder, metadata_result: ModelComposition,
+        geometry: _MergedGeometry, assemblies: Sequence[_SourceAssembly], core_layout: bool,
+    ) -> None:
+        """Apply FatCat's final build transforms to the queued assemblies."""
+        import neroued_3mf as n3mf
 
         for build_item in metadata_result["build_items"]:
             model_index = build_item["model_index"]
             properties = build_item["properties"]
             builder.add_build_item(
-                assembly_ids_by_model[model_index],
+                geometry.assembly_ids[model_index],
                 _n3mf_transform(
                     n3mf,
                     [float(value) for value in build_item["transform"].split()],
@@ -1391,6 +1588,11 @@ class MergedBambu3MFWriter:
                 auto_drop=properties.get("auto_drop", ""),
             )
 
+    @staticmethod
+    def _write_document(builder: n3mf.DocumentBuilder, output_path: Path) -> None:
+        """Write the assembled document once at the existing precision."""
+        import neroued_3mf as n3mf
+
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         document = builder.build()
@@ -1398,3 +1600,6 @@ class MergedBambu3MFWriter:
         options.vertex_precision = 9
         options.compact_xml = True
         n3mf.write_to_file(str(output_path), document, options)
+
+
+MergedBambu3MFWriter = MergedSlicer3MFWriter

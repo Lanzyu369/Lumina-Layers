@@ -14,9 +14,244 @@ import math
 import os
 import zipfile
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, NotRequired, Protocol, Sequence, TypedDict, cast
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import trimesh
+
+
+class MeshMetadataEntry(Protocol):
+    """The geometry facts consumed by the model request builder.
+
+    模型请求构建器消费的几何事实；不依赖具体 writer 的私有条目类。
+    """
+
+    @property
+    def mesh(self) -> trimesh.Trimesh:
+        """Geometry with readable bounds. / 可读取边界的几何。"""
+        ...
+
+    @property
+    def object_name(self) -> str:
+        """Stable exported object name. / 稳定的导出对象名。"""
+        ...
+
+
+class ProjectLayout(TypedDict):
+    """Numeric facts returned by FatCat's layout reader.
+
+    FatCat 布局读取器返回的数值事实，不包含原生配置的任意扩展字段。
+    """
+
+    printable_area: list[list[float]]
+    bed_exclusions: list[list[list[float]]]
+    extruder_printable_areas: list[list[list[float]]]
+    nozzle_diameters: list[float]
+    layer_height: float
+    initial_layer_height: float | None
+    min_layer_height: float | None
+    max_layer_height: float | None
+    model_brim: float
+    purge_volume: float
+    tower_x: float
+    tower_y: float
+    tower_width: float
+    tower_rotation: float
+    tower_brim_auto: bool
+    tower_brim_width: float
+    tower_infill_spacing_ratio: float
+    uses_rib_wall: bool
+    tower_rib_width: float
+    tower_extra_rib_length: float
+    extruder_count: int
+    filament_change_volume: float
+    printer_settings_id: str
+    bed_type: str | None
+    tower_cyclic_toolchanges: NotRequired[bool]
+    tower_square_rib_body: NotRequired[bool | None]
+    tower_preview_x_guard_enabled: NotRequired[bool]
+    tower_preview_x_guard_margin: NotRequired[float]
+
+
+class MetadataDefaults(TypedDict):
+    """FatCat's fixed decisions used by the geometry writer.
+
+    几何写入器使用的 FatCat 固定策略字段。
+    """
+
+    identify_id: int | str
+    plate_value: str
+    sidecar_bed_value: str
+    plate_summary: bool
+    geometry_layout: NotRequired[str]
+    slice_uuid_seed_prefix: NotRequired[str]
+
+
+class SourceSlotProjection(TypedDict):
+    """Source-to-output slot indexes. / 来源到输出的槽位索引。"""
+
+    source_slot_index: int
+    output_slot_index: int
+
+
+class SourceSlotMapping(TypedDict):
+    """The slot projection for one source. / 一份来源的槽位投影。"""
+
+    source_id: str
+    slots: list[SourceSlotProjection]
+
+
+class MergedSlotDescription(TypedDict):
+    """Logical material identity in a merge. / 合并中的逻辑材料身份。"""
+
+    slot_id: int
+    slot_name: str
+    preview_color: str
+    material_id: str
+
+
+class ProjectComposition(TypedDict):
+    """Fixed composer envelope around an opaque native project.
+
+    原生项目保持开放字典；合成结果外层的固定字段提供类型约束。
+    """
+
+    project_settings_json: str
+    effective_settings: dict[str, Any]
+    metadata_defaults: MetadataDefaults
+    wipe_tower_dialect: dict[str, Any]
+    build_item_properties: dict[str, str]
+    source_slot_mappings: NotRequired[list[SourceSlotMapping]]
+    merged_slots: NotRequired[list[MergedSlotDescription]]
+
+
+class PlateSummaryObject(TypedDict):
+    """One final object footprint. / 一个最终对象的平面边界。"""
+
+    model_index: int
+    name: str
+    bbox: list[float]
+
+
+class PlateSummaryInput(TypedDict):
+    """Caller-owned geometry for a native plate summary. / 原生盘面摘要的几何输入。"""
+
+    bbox_all: list[float]
+    filament_colors: list[str]
+    layer_height: float
+    nozzle_diameter: float
+    bed_type: str
+    name: NotRequired[str]
+    objects: NotRequired[list[PlateSummaryObject]]
+
+
+class ComponentInputs(TypedDict, total=False):
+    """Optional Lumina geometry sidecars. / 可选的 Lumina 几何附属描述。"""
+
+    wipe_tower_placement: dict[str, Any]
+    plate_summary: PlateSummaryInput
+    layer_config_ranges: dict[str, Any]
+
+
+class MergedPartReference(TypedDict):
+    """Paired source and output mesh IDs. / 成对的来源及输出网格 ID。"""
+
+    part_id: int
+    source_part_id: int
+
+
+class ModelPartInput(TypedDict):
+    """Geometry and material identity for one queued mesh. / 一个入队网格的几何与材料身份。"""
+
+    part_id: int
+    name: str
+    material_index: int
+    source_object_id: int
+    source_volume_id: int
+    matrix: str
+    source_offset_x: str
+    source_offset_y: str
+    source_offset_z: str
+
+
+class ModelPlateInput(TypedDict):
+    """One selected plate and its optional display fields. / 所选打印板及可选显示字段。"""
+
+    bed_type: str
+    plater_id: NotRequired[str]
+    plater_name: NotRequired[str]
+    locked: NotRequired[bool]
+
+
+class MergedModelInput(TypedDict):
+    """One source assembly's metadata handoff after geometry is queued.
+
+    几何入队后，一份来源装配传给元数据合成器的固定字段。
+    """
+
+    model_index: int
+    assembly_id: int
+    instance_id: str
+    identify_id: str
+    source_assembly_id: int
+    source_model_index: int
+    source_model_settings_xml: str
+    face_count: int
+    parts: list[MergedPartReference]
+    source_slot_output_indexes: list[int]
+    output_slot_count: int
+    default_slot_output_index: int
+    source_slots: list[MergedSlotDescription]
+    source_root_metadata: dict[str, str]
+    transform: list[float]
+    offset_mm: list[float]
+    source_layer_config_ranges_xml: NotRequired[str]
+
+
+class ModelMetadataRequest(TypedDict):
+    """Fixed model request fields shared by single and merged composition.
+
+    单件与合并模型合成请求共用的固定字段。
+    """
+
+    slicer_id: str
+    application_version: str
+    plate: ModelPlateInput
+    assembly_id: NotRequired[int]
+    instance_id: NotRequired[str]
+    identify_id: NotRequired[int | str]
+    source_file: NotRequired[str]
+    parts: NotRequired[list[ModelPartInput]]
+    objects: NotRequired[list[MergedModelInput]]
+    active_material_count: NotRequired[int]
+    slice_uuid: NotRequired[str]
+    component_inputs: NotRequired[ComponentInputs]
+    resource_roles: NotRequired[list[str]]
+    source_slice_info_xml: NotRequired[str]
+    output_options: NotRequired[dict[str, bool]]
+
+
+class ComposedBuildItem(TypedDict):
+    """FatCat's final build transform and properties. / FatCat 的最终构建变换及属性。"""
+
+    model_index: int
+    transform: str
+    properties: dict[str, str]
+
+
+class ModelComposition(TypedDict):
+    """Composer output; vendor parts remain owned by the SDK adapter.
+
+    合成结果；厂商部件的具体结构继续归 SDK 适配器所有。
+    """
+
+    root_model: dict[str, Any]
+    parts: list[dict[str, Any]]
+    content_types: list[dict[str, str]]
+    relationships: list[dict[str, str]]
+    build_items: NotRequired[list[ComposedBuildItem]]
 
 
 @dataclass(frozen=True)
@@ -75,8 +310,9 @@ def select_user_template_metadata_target(
         machine_uid="",
         nozzle_uid="",
         build_plate_uid=(
-            build_plate_id if str(build_plate_id or "").startswith("prusa-sheet:")
-            else _PLATE_UIDS.get(build_plate_id, "")
+            build_plate_id if build_plate_id is not None
+            and str(build_plate_id).startswith("prusa-sheet:")
+            else _PLATE_UIDS.get(build_plate_id or "", "")
         ),
     )
 
@@ -436,21 +672,21 @@ def build_merged_project_settings_request(
 def build_merged_model_metadata_request(
     *,
     target: MetadataTarget,
-    objects: Sequence[Mapping[str, object]],
+    objects: Sequence[MergedModelInput],
     bed_type: str,
     wipe_tower_placement: Mapping[str, object],
     source_slice_info_xml: str | None = None,
-) -> dict[str, Any]:
+) -> ModelMetadataRequest:
     """Describe final merged objects and caller-computed placement to Fat Cat.
 
     将最终对象及调用方计算的布局位置传给 Fat Cat。
     """
 
-    request = {
+    request: ModelMetadataRequest = {
         "slicer_id": target.slicer_id,
         "application_version": target.application_version,
         "plate": {"bed_type": bed_type},
-        "objects": [dict(model) for model in objects],
+        "objects": [cast(MergedModelInput, dict(model)) for model in objects],
         "component_inputs": {
             "wipe_tower_placement": dict(wipe_tower_placement),
         },
@@ -460,7 +696,7 @@ def build_merged_model_metadata_request(
     return request
 
 
-def _format_number(value: object) -> str:
+def _format_number(value: float) -> str:
     number = float(value)
     if not math.isfinite(number):
         raise ValueError("Fat Cat model metadata requires finite geometry values")
@@ -472,11 +708,11 @@ def build_model_metadata_request(
     target: MetadataTarget,
     assembly_id: int,
     object_ids: Sequence[int],
-    entries: Sequence[object],
+    entries: Sequence[MeshMetadataEntry],
     material_index_by_object: Sequence[int],
     output_path: str | os.PathLike[str],
     bed_type: str,
-) -> dict[str, Any]:
+) -> ModelMetadataRequest:
     """Translate Lumina's queued mesh entries into Fat Cat model metadata input.
 
     将 Lumina 已排队的网格条目转换为 Fat Cat 模型元数据输入；ID 和几何
@@ -485,7 +721,7 @@ def build_model_metadata_request(
 
     if len(object_ids) != len(entries) or len(entries) != len(material_index_by_object):
         raise ValueError("Fat Cat model metadata inputs have inconsistent object lengths")
-    parts: list[dict[str, Any]] = []
+    parts: list[ModelPartInput] = []
     for volume_id, (object_id, entry, material_index) in enumerate(
         zip(object_ids, entries, material_index_by_object)
     ):
@@ -701,14 +937,15 @@ def metadata_resource_specs(slicer_id: str) -> dict[str, dict[str, Any]]:
 
 def read_project_layout(
     project: Mapping[str, object], *, slicer_id: str,
-) -> dict[str, Any]:
+) -> ProjectLayout:
     """Read numeric layout facts through Fat Cat.
 
     通过 Fat Cat 读取数值化布局事实，布局计算仍由调用方完成。
     """
-    return _parse_native_json(_load_fatcat().read_project_layout(
+    raw = _load_fatcat().read_project_layout(
         json.dumps(dict(project), ensure_ascii=False), _template_selection_json(slicer_id),
-    ))
+    )
+    return cast(ProjectLayout, _parse_native_json(raw))
 
 
 def read_placement_warnings(payload: str | None) -> list[str]:
@@ -841,7 +1078,7 @@ def _read_source_metadata_parts(
 def compose_project_settings(
     base_project: Mapping[str, Any],
     request: Mapping[str, Any],
-) -> dict[str, Any]:
+) -> ProjectComposition:
     """Compose project settings through C++.
 
     通过已安装的 C++ 入口合成项目设置。
@@ -855,12 +1092,12 @@ def compose_project_settings(
         dict(request), ensure_ascii=False, separators=(",", ":")
     )
     raw = fatcat.compose_project_settings(project_json, request_json)
-    return _parse_native_json(raw)
+    return cast(ProjectComposition, _parse_native_json(raw))
 
 
 def compose_builtin_project_settings(
     request: Mapping[str, Any],
-) -> dict[str, Any]:
+) -> ProjectComposition:
     """Compose a project from Fat Cat's installed native profile source.
 
     通过 Fat Cat 已安装的原生来源配置合成项目设置。
@@ -871,13 +1108,13 @@ def compose_builtin_project_settings(
         dict(request), ensure_ascii=False, separators=(",", ":")
     )
     raw = fatcat.compose_project_settings(request_json)
-    return _parse_native_json(raw)
+    return cast(ProjectComposition, _parse_native_json(raw))
 
 
 def compose_model_metadata(
     project: Mapping[str, Any] | str,
     request: Mapping[str, Any],
-) -> dict[str, Any]:
+) -> ModelComposition:
     """Compose model/slice XML through C++.
 
     通过已安装的 C++ 入口合成模型和切片元数据。
@@ -893,7 +1130,7 @@ def compose_model_metadata(
         dict(request), ensure_ascii=False, separators=(",", ":")
     )
     raw = fatcat.compose_model_metadata(project_json, request_json)
-    return _parse_native_json(raw)
+    return cast(ModelComposition, _parse_native_json(raw))
 
 
 def patch_wipe_tower(

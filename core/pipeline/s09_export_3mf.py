@@ -15,7 +15,9 @@ import numpy as np
 
 from config import MODELS_DIR, PrinterConfig, get_printer_profile
 from core.naming import generate_model_filename
-from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
+from utils.slicer_3mf_writer import (
+    export_scene_with_slicer_metadata as export_scene_with_bambu_metadata,
+)
 
 _log = get_logger(__name__)
 

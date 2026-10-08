@@ -10,6 +10,50 @@ writer writes the final package once.
 本文说明当前 3MF 导出边界及配置归属。Lumina 提供用户选择的设备和材料事实、几何、
 布局及明确的产品工艺值；FatCat 合成切片器项目元数据，补丁版 `neroued-3mf` 单次写出最终包。
 
+## Code entry points / 代码入口
+
+New callers import from `utils.slicer_3mf_writer`:
+
+```python
+from utils.slicer_3mf_writer import (
+    Slicer3MFWriter,
+    MergedSlicer3MFWriter,
+    export_scene_with_slicer_metadata,
+)
+```
+
+The existing `BambuStudio3MFWriter`, `MergedBambu3MFWriter`, and
+`export_scene_with_bambu_metadata` names remain aliases of these same objects.
+Existing Bambu module imports, call parameters and defaults continue to work.
+The scene pipeline and puzzle assembly use the neutral entry point; the scene
+pipeline keeps its local legacy hook name for existing callers that replace it.
+
+新调用方使用上述通用入口。旧 Bambu 类名、函数名和模块导入继续兼容，指向同一实现，
+调用参数和默认值保持不变。场景流水线与拼图组装已接入通用入口；场景流水线保留原有
+本地调用钩子名称，兼容已有替换调用。
+
+| Responsibility / 职责 | Owner / 位置 |
+| --- | --- |
+| Single export orchestration / 单件导出组织 | `Slicer3MFWriter.export()` |
+| Batch and puzzle orchestration / 批量与拼图组织 | `MergedSlicer3MFWriter` |
+| Fixed composer envelopes and request types / 固定合成结果与请求类型 | `utils/fatcat_metadata.py` |
+| Shared device and placement facts / 共用设备与摆放事实 | `utils/slicer_3mf_support.py` |
+| Product colour lookup / 产品颜色查找 | `core/export_materials.py` |
+| Cover and plate image bytes / 封面与盘面图片字节 | `utils/bambu_3mf_cover.py` |
+| Native parts and relationships / 原生部件与关系 | FatCat's installed `fatcat_metadata_neroued` adapter |
+
+Each export prepares configuration, queues geometry, describes metadata, builds
+resources and writes once. Internal records keep source slot mappings and queued
+IDs explicit; single exports retain their zero-copy arrays through the final write.
+`TypedDict` constrains the fixed SDK envelopes and model inputs, without adding
+a second schema validator or filtering opaque native project settings. Runtime
+validation stays at the existing SDK, source parser and writer boundaries.
+
+导出按配置、几何、元数据、资源、单次写包组织。内部数据结构明确记录源槽位映射和
+入队对象身份，单件导出的零拷贝数组保留到写出结束。固定 SDK 外层字段及模型输入
+使用 `TypedDict` 提供静态约束；原生项目里的未知设置继续完整保留。运行时校验仍由
+已有 SDK、源文件解析器及 writer 边界负责。
+
 ## Ownership
 
 - **FatCat** owns stable native machine/nozzle identities, native source data, material
