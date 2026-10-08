@@ -72,6 +72,8 @@ from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
     DynamicMaterialSolverError,
 )
+from core.material_optical_runtime import MaterialOpticalCompatibilityError
+from core.pipeline._input_validation_common import MaterialArchiveProfileError
 from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 from utils.fatcat_metadata import select_metadata_target
 from utils.merged_bambu_3mf_writer import MaterialSlot as WriterMaterialSlot
@@ -86,6 +88,7 @@ from .common import (
     ROUTER_HANDLED_ERRORS,
     SOURCE_IMAGE_UNAVAILABLE_DETAIL,
     _handle_core_error,
+    _require_material_archive_profile_cache_consistency,
     _require_session,
     _resolve_session_dynamic_material_settings,
     _resolve_material_backing_index,
@@ -97,6 +100,7 @@ from .generate import (
     _capture_generation_snapshot,
     _preview_analysis_params_match,
     _resolve_recipe_overrides,
+    _resolve_session_material_profile_kind,
     _serialize_recipe_override_for_worker,
 )
 
@@ -188,6 +192,7 @@ def _require_puzzle_cache(
             status_code=409,
             detail=PREVIEW_CACHE_INVALID_DETAIL,
         )
+    _require_material_archive_profile_cache_consistency(session_data, cache)
     if not is_preview_cache_artifact_ref(cache):
         return cache
 
@@ -1108,6 +1113,11 @@ async def generate_puzzle(
         )
 
     session_material_source = session_data.get("material_source", "lut")
+    session_material_profile_kind = _resolve_session_material_profile_kind(
+        session_data,
+        generate_params,
+        material_source=str(session_material_source or "lut"),
+    )
     dynamic_material_settings = _resolve_session_dynamic_material_settings(
         session_data=session_data,
         request=generate_params,
@@ -1438,6 +1448,9 @@ async def generate_puzzle(
                 )
         if session_material_source == "material_archive":
             worker_params["material_source"] = "material_archive"
+            worker_params["material_profile_kind"] = (
+                session_material_profile_kind or "stage_a"
+            )
             worker_params["selected_materials"] = selected_materials
             worker_params["material_layer_count"] = session_data.get("material_layer_count")
             worker_params["material_layer_height_mm"] = session_data.get("material_layer_height_mm")
@@ -1530,6 +1543,8 @@ async def generate_puzzle(
             _handle_core_error(exc, "puzzle piece generation")
         except WipeTowerLayoutError as exc:
             raise to_http_exception(exc, "puzzle piece layout") from exc
+        except (MaterialArchiveProfileError, MaterialOpticalCompatibilityError) as exc:
+            _handle_core_error(exc, "puzzle piece generation")
         except ROUTER_HANDLED_ERRORS as exc:
             errors.append(f"{piece.label}: {exc}")
 

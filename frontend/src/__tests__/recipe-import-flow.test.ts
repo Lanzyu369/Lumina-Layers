@@ -376,39 +376,42 @@ describe("recipe/importFlow", () => {
     ).toBe(false);
   });
 
-  it("restores the dynamic material Delta-E00 tolerance", () => {
-    const recipe = makeRecipe();
-    recipe.recipe.converter!.source = {
-      source_version: "material",
-      selected_native_brand_key: "",
-      selected_native_db_names: [],
-      color_layers: null,
-      layer_height_mm: null,
-      model_enable: false,
-      model_only: false,
-      model_threshold: null,
-      model_margin: null,
-      selected_material_dir_names: ["brand/white"],
-      material_layer_count: 7,
-      material_layer_height_mm: 0.08,
-      material_backing_material_dir_name: "brand/white",
-      material_dynamic_layer_count_enabled: true,
-      material_min_layer_count: 5,
-      material_max_layer_count: 7,
-      material_delta_e00_tolerance: 0.8,
-    };
-    const restoreResult: RestoreResult = {
-      state: {},
-      assetFile: new File(["test"], "source.png", { type: "image/png" }),
-      heightmapFile: null,
-      warnings: [],
-      recipe,
-    };
+  it.each(["material", "lumina_box"] as const)(
+    "restores the dynamic %s Delta-E00 tolerance",
+    (sourceVersion) => {
+      const recipe = makeRecipe();
+      recipe.recipe.converter!.source = {
+        source_version: sourceVersion,
+        selected_native_brand_key: "",
+        selected_native_db_names: [],
+        color_layers: null,
+        layer_height_mm: null,
+        model_enable: false,
+        model_only: false,
+        model_threshold: null,
+        model_margin: null,
+        selected_material_dir_names: ["brand/white"],
+        material_layer_count: 7,
+        material_layer_height_mm: 0.08,
+        material_backing_material_dir_name: "brand/white",
+        material_dynamic_layer_count_enabled: true,
+        material_min_layer_count: 5,
+        material_max_layer_count: 7,
+        material_delta_e00_tolerance: 0.8,
+      };
+      const restoreResult: RestoreResult = {
+        state: {},
+        assetFile: new File(["test"], "source.png", { type: "image/png" }),
+        heightmapFile: null,
+        warnings: [],
+        recipe,
+      };
 
-    applyImport(restoreResult);
+      applyImport(restoreResult);
 
-    expect(useSettingsStore.getState().materialDeltaE00Tolerance).toBe(0.8);
-  });
+      expect(useSettingsStore.getState().materialDeltaE00Tolerance).toBe(0.8);
+    },
+  );
 
   it("keeps imported dynamic result evidence after setImageFile invalidation", () => {
     const dynamicRecipe: DynamicMaterialRecipe = {

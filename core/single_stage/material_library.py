@@ -166,11 +166,113 @@ def _material_summary_from_saved_archive(
     }
 
 
+_STAGE_A_PROFILE_KIND = "stage_a"
+_LUMINA_BOX_PROFILE_KIND = "lumina_box"
+_SUPPORTED_MATERIAL_PROFILE_KINDS = frozenset(
+    {_STAGE_A_PROFILE_KIND, _LUMINA_BOX_PROFILE_KIND}
+)
+
+
+def _material_profile_kind_from_archive(archive_payload: dict[str, Any]) -> str:
+    """Resolve profile kind while treating pre-Lumina-Box archives as Stage A."""
+    raw_value = archive_payload.get("profile_kind")
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        return _STAGE_A_PROFILE_KIND
+    normalized = raw_value.strip().lower()
+    return normalized if normalized in _SUPPORTED_MATERIAL_PROFILE_KINDS else _STAGE_A_PROFILE_KIND
+
+
+def _lumina_box_material_library_item_from_archive(
+    target_root: Path,
+    material_dir: Path,
+    archive_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a generic material-library row for a Lumina Box archive.
+
+    The generic library must be able to show a KM archive without trying to
+    resolve the Stage A parameter sidecar that it intentionally does not have.
+    """
+    from core.lumina_box_archive import (
+        LUMINA_BOX_COLOR_BRIDGE_ID,
+        validate_lumina_box_material_archive,
+    )
+
+    if not validate_lumina_box_material_archive(material_dir, archive_payload):
+        raise ValueError("Saved Lumina Box material archive failed integrity validation")
+    archive_path = material_dir / "material.json"
+    relative_directory_name = material_files._relative_directory_name(target_root, material_dir)
+    material_name = str(archive_payload.get("material_name") or material_dir.name)
+    picker_metadata = material_files._picker_metadata_from_archive(
+        archive_payload,
+        material_name=material_name,
+        relative_directory_name=relative_directory_name,
+    )
+    raw_estimated_xyz = archive_payload.get(
+        "estimated_effective_d65_10_xyz_relative"
+    )
+    if not isinstance(raw_estimated_xyz, list):
+        raw_estimated_xyz = []
+    raw_estimated_rgb = archive_payload.get("estimated_rgb")
+    if not isinstance(raw_estimated_rgb, list):
+        raw_estimated_rgb = []
+    try:
+        estimated_xyz = [float(value) for value in raw_estimated_xyz[:3]]
+    except (TypeError, ValueError):
+        estimated_xyz = []
+    try:
+        estimated_rgb = [int(value) for value in raw_estimated_rgb[:3]]
+    except (TypeError, ValueError):
+        estimated_rgb = []
+    usage_payload = material_files._load_usage_payload(material_dir)
+    return {
+        "material_name": material_name,
+        "directory_name": relative_directory_name,
+        "brand": material_files._saved_material_brand_from_archive_payload(
+            archive_payload,
+            relative_directory_name,
+        ),
+        **picker_metadata,
+        "created_at": archive_payload.get("created_at"),
+        "updated_at": archive_payload.get("updated_at")
+        or archive_payload.get("created_at"),
+        "archive_path": str(archive_path),
+        "stage_a_params_path": None,
+        "estimated_rgb": estimated_rgb,
+        "estimated_xyz": estimated_xyz,
+        "layer_height_mm": None,
+        "mean_delta_e": None,
+        "verification_count": 1,
+        "verification_history": [],
+        "usage_total": int(usage_payload.get("total") or 0),
+        "usage_by_color_mode": dict(usage_payload.get("by_color_mode") or {}),
+        "usage_last_used_at": usage_payload.get("last_used_at"),
+        "usage_last_used_color_mode": usage_payload.get("last_used_color_mode"),
+        "profile_kind": _LUMINA_BOX_PROFILE_KIND,
+        "acquisition_source": str(
+            archive_payload.get("acquisition_source") or "lumina_box"
+        ),
+        "optical_model_id": str(
+            archive_payload.get("optical_model") or "km_xyz/v1"
+        ),
+        "measurement_protocol_id": archive_payload.get("measurement_protocol_id"),
+        "capture_dataset_id": archive_payload.get("capture_dataset_id"),
+        "material_symbol": archive_payload.get("material_symbol"),
+        "reference_id": archive_payload.get("reference_id"),
+        "color_bridge_id": LUMINA_BOX_COLOR_BRIDGE_ID,
+    }
+
+
 def _saved_material_library_item_from_archive(
     target_root: Path,
     material_dir: Path,
     archive_payload: dict[str, Any],
 ) -> dict[str, Any]:
+    if _material_profile_kind_from_archive(archive_payload) == _LUMINA_BOX_PROFILE_KIND:
+        return _lumina_box_material_library_item_from_archive(
+            target_root,
+            material_dir,
+            archive_payload,
+        )
     archive_path = material_dir / "material.json"
     try:
         stage_a_path = material_files._resolve_stage_a_params_path(material_dir, archive_payload)

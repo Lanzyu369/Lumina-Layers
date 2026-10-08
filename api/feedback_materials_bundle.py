@@ -22,12 +22,18 @@ Design constraints (`.kiro/specs/reproducible-bug-reports/design.md` §5):
 from __future__ import annotations
 
 import time
+import json
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 from api.structured_logging import get_logger
+from core.lumina_box_archive import (
+    validate_lumina_box_material_archive,
+    lumina_box_archive_filenames,
+)
+from core.errors import CoreValidationError
 
 __all__ = [
     "MaterialsBundleResult",
@@ -37,6 +43,17 @@ __all__ = [
 
 
 log = get_logger(__name__)
+
+
+_LUMINA_BOX_PROFILE_KIND = "lumina_box"
+
+
+def _lumina_box_required_filenames(material_dir: Path) -> frozenset[str]:
+    try:
+        main = json.loads((material_dir / "material.json").read_text(encoding="utf-8"))
+        return frozenset(lumina_box_archive_filenames(str(main.get("optical_model") or "")))
+    except (OSError, ValueError, AttributeError, CoreValidationError):
+        return frozenset()
 
 
 class PackagingTimeoutError(Exception):
@@ -117,6 +134,31 @@ def _resolve_material_dir(
     return candidate
 
 
+def _has_required_lumina_box_files(
+    material_dir: Path,
+    materials_root_resolved: Path,
+) -> bool:
+    """Return whether a Lumina Box archive has its exact safe file set.
+
+    Lumina Box repro bundles deliberately accept only the committed archive
+    identity plus its two required sidecars.  This excludes candidate/runtime
+    caches, temporary files, and any unrelated material-directory contents.
+    """
+
+    required = _lumina_box_required_filenames(material_dir)
+    if not required:
+        return False
+    for filename in required:
+        candidate = material_dir / filename
+        if not candidate.is_file() or candidate.is_symlink():
+            return False
+        try:
+            candidate.resolve().relative_to(materials_root_resolved)
+        except ValueError:
+            return False
+    return validate_lumina_box_material_archive(material_dir)
+
+
 def pack_materials(
     materials_root: Path,
     selected_dirs: list[str],
@@ -124,6 +166,7 @@ def pack_materials(
     timeout_s: int = 0,
     *,
     now_fn=time.monotonic,
+    archive_profile_kind: Literal["stage_a", "lumina_box"] | None = None,
 ) -> MaterialsBundleResult:
     """Pack selected material directories into ``output_zip``.
 
@@ -143,6 +186,11 @@ def pack_materials(
         now_fn: Monotonic clock hook for tests (defaults to
             :func:`time.monotonic`).
             (测试用单调时钟；默认为 :func:`time.monotonic`。)
+        archive_profile_kind: Optional archive discriminator. ``lumina_box``
+            packages only ``material.json`` and its two committed sidecars;
+            Stage A retains the established all-files-except-cache behavior.
+            （可选档案类型；``lumina_box`` 只打包 ``material.json`` 及两个
+            已提交的 sidecar；Stage A 保持既有的“排除缓存后全部文件”行为。）
 
     Returns:
         MaterialsBundleResult: Full diagnostic record of the packing run.
@@ -214,6 +262,27 @@ def pack_materials(
                     },
                 )
             continue
+        if (
+            archive_profile_kind == _LUMINA_BOX_PROFILE_KIND
+            and not _has_required_lumina_box_files(
+                resolved,
+                materials_root_resolved,
+            )
+        ):
+            log.warning(
+                "Lumina Box archive is invalid or incomplete; skipping.",
+                extra={
+                    "event": "feedback_lumina_box_archive_invalid",
+                    "error_type": "LuminaBoxArchiveInvalid",
+                    "error_message": (
+                        "Lumina Box repro bundles require an intact "
+                        "three-file archive identity."
+                    ),
+                    "path": str(resolved),
+                    "dir_name": dir_name,
+                },
+            )
+            continue
         valid_dirs.append((dir_name, resolved))
 
     if not valid_dirs:
@@ -232,6 +301,7 @@ def pack_materials(
         with zipfile.ZipFile(output_zip, "w", zipfile.ZIP_DEFLATED) as zf:
             for dir_name, src_dir in valid_dirs:
                 contributed = False
+                required_box_files = _lumina_box_required_filenames(src_dir) if archive_profile_kind == _LUMINA_BOX_PROFILE_KIND else frozenset()
                 for path in src_dir.rglob("*"):
                     if path.is_dir():
                         continue
@@ -255,6 +325,11 @@ def pack_materials(
                     # Ensure arcname is safe: no absolute path, no .. components.
                     arcname = rel.as_posix()
                     if arcname.startswith("/") or ".." in rel.parts:
+                        continue
+                    if archive_profile_kind == _LUMINA_BOX_PROFILE_KIND and (
+                        path.parent != src_dir
+                        or path.name not in required_box_files
+                    ):
                         continue
                     if timeout_s > 0 and (now_fn() - start) >= timeout_s:
                         raise PackagingTimeoutError(

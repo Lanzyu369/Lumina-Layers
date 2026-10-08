@@ -13,6 +13,7 @@ interface ButtonProps {
   className?: string;
   title?: string;
   icon?: ReactNode;
+  "data-testid"?: string;
 }
 
 export default function Button({
@@ -26,6 +27,7 @@ export default function Button({
   className,
   title,
   icon,
+  "data-testid": dataTestId,
 }: ButtonProps) {
   const isDisabled = disabled || loading;
 
@@ -51,6 +53,7 @@ export default function Button({
       disabled={isDisabled}
       title={title ?? (icon ? label : undefined)}
       aria-label={icon ? label : undefined}
+      data-testid={dataTestId}
       className={cx(
         "relative inline-flex min-w-0 items-center justify-center font-medium transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0",
         sizeClasses,

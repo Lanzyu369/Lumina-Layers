@@ -41,9 +41,16 @@ from core.material_color_solver import (
     MaterialParams,
     forward_batch_model,
     linear_to_srgb_uint8,
+    predict_material_recipes_colorimetry,
     rgb_to_lab,
 )
 from core.material_lut_provider import load_dynamic_candidate_runtime
+from core.material_optical_runtime import (
+    BEER_LAMBERT_MODEL_ID,
+    validate_material_optical_contract,
+)
+from core.km_xyz import KM_XYZ_MODEL_ID
+from core.material_optical_runtime import is_relative_xyz_model
 
 
 MIN_DYNAMIC_LAYER_COUNT = 5
@@ -282,6 +289,7 @@ class DynamicCandidateCatalog:
     minimum_actual_layer_counts: np.ndarray
     max_layer_reachable: np.ndarray
     source_indices: np.ndarray
+    optical_model_id: str = BEER_LAMBERT_MODEL_ID
 
     def __post_init__(self) -> None:
         arrays = (
@@ -300,6 +308,7 @@ class DynamicCandidateCatalog:
             frozen = np.array(value, dtype=dtype, order="C", copy=True)
             frozen.setflags(write=False)
             object.__setattr__(self, name, frozen)
+        object.__setattr__(self, "optical_model_id", str(self.optical_model_id))
 
         row_count = self.score_srgb.shape[0]
         if self.score_srgb.ndim != 2 or self.score_srgb.shape[1] != 3:
@@ -691,6 +700,10 @@ def build_dynamic_candidate_catalog(
     print_recipes_bottom_to_top: np.ndarray,
     actual_layer_counts: np.ndarray,
     max_layer_count: int,
+    *,
+    score_lab: np.ndarray | None = None,
+    optical_model_id: str = BEER_LAMBERT_MODEL_ID,
+    deduplicate_display_srgb: bool = True,
 ) -> DynamicCandidateCatalog:
     """Build a losslessly deduplicated candidate catalog.
 
@@ -760,6 +773,33 @@ def build_dynamic_candidate_catalog(
         maximum=normalized_max,
     )
 
+    normalized_model_id = str(optical_model_id or BEER_LAMBERT_MODEL_ID)
+    if score_lab is None:
+        if normalized_model_id != BEER_LAMBERT_MODEL_ID:
+            raise ValueError("KM dynamic candidates must provide float matching Lab")
+        source_lab = np.asarray(rgb_to_lab(rgb), dtype=np.float64)
+    else:
+        source_lab = np.asarray(score_lab, dtype=np.float64)
+        if source_lab.shape != (rgb.shape[0], 3):
+            raise ValueError("score_lab must have shape (N, 3)")
+        if not np.all(np.isfinite(source_lab)):
+            raise ValueError("score_lab must contain finite values")
+
+    if not deduplicate_display_srgb:
+        source_indices = np.arange(rgb.shape[0], dtype=np.int64)
+        return DynamicCandidateCatalog(
+            score_srgb=rgb,
+            score_lab=source_lab,
+            print_recipes=recipes,
+            minimum_actual_layer_counts=counts,
+            max_layer_reachable=np.asarray(
+                counts == normalized_max,
+                dtype=np.bool_,
+            ),
+            source_indices=source_indices,
+            optical_model_id=normalized_model_id,
+        )
+
     packed = (
         (rgb[:, 0].astype(np.uint32) << 16)
         | (rgb[:, 1].astype(np.uint32) << 8)
@@ -790,11 +830,12 @@ def build_dynamic_candidate_catalog(
     retained_rgb = np.asarray(rgb[source_indices], dtype=np.uint8)
     return DynamicCandidateCatalog(
         score_srgb=retained_rgb,
-        score_lab=np.asarray(rgb_to_lab(retained_rgb), dtype=np.float64),
+        score_lab=np.asarray(source_lab[source_indices], dtype=np.float64),
         print_recipes=np.asarray(recipes[source_indices], dtype=np.int32),
         minimum_actual_layer_counts=np.asarray(minimum_counts, dtype=np.int16),
         max_layer_reachable=np.asarray(max_reachable, dtype=np.bool_),
         source_indices=source_indices,
+        optical_model_id=normalized_model_id,
     )
 
 
@@ -868,6 +909,21 @@ def search_dynamic_catalog_exact(
     )
     if targets.shape[0] == 0:
         target_lab = np.empty((0, 3), dtype=np.float64)
+    elif is_relative_xyz_model(catalog.optical_model_id):
+        # The catalog already carries KM's D65/10° Lab values.  Convert the
+        # requested display sRGB through the same versioned white-point bridge.
+        from core.km_xyz import (
+            km_relative_xyz_to_lab,
+            linear_srgb_to_km_relative_xyz,
+        )
+        from core.material_color_solver import srgb_to_linear
+
+        target_lab = np.asarray(
+            km_relative_xyz_to_lab(
+                linear_srgb_to_km_relative_xyz(srgb_to_linear(targets))
+            ),
+            dtype=np.float64,
+        )
     else:
         target_lab = np.asarray(rgb_to_lab(targets), dtype=np.float64)
 
@@ -1087,21 +1143,23 @@ def _build_dynamic_candidate_catalog_from_runtimes(
     config: DynamicMaterialSolveConfig,
     runtime_loader: MaterialRuntimeLoader,
 ) -> tuple[DynamicCandidateCatalog, int, tuple[int, ...]]:
+    contract = validate_material_optical_contract(materials)
     canonical_to_user = np.asarray(
         canonical_palette_order(materials),
         dtype=np.int32,
     )
     if canonical_to_user.shape != (len(materials),):
         raise ValueError("canonical palette mapping has an invalid shape")
+    layer_counts = tuple(range(config.min_layer_count, config.max_layer_count + 1))
+    all_print_recipes: list[np.ndarray] = []
+    all_score_srgb: list[np.ndarray] = []
+    all_score_lab: list[np.ndarray] = []
+    all_actual_counts: list[np.ndarray] = []
     substrate_linear = (
         np.ones(3, dtype=np.float64)
         if substrate == "white"
         else np.zeros(3, dtype=np.float64)
     )
-    layer_counts = tuple(range(config.min_layer_count, config.max_layer_count + 1))
-    all_print_recipes: list[np.ndarray] = []
-    all_score_srgb: list[np.ndarray] = []
-    all_actual_counts: list[np.ndarray] = []
 
     for layer_count in layer_counts:
         try:
@@ -1131,6 +1189,15 @@ def _build_dynamic_candidate_catalog_from_runtimes(
                 layer_count=layer_count,
                 phase="runtime_load",
             )
+        runtime_model_id = str(
+            runtime.metadata.get("optical_model_id") or BEER_LAMBERT_MODEL_ID
+        )
+        if runtime_model_id != contract.model_id:
+            raise _candidate_failure(
+                "runtime optical model does not match selected materials",
+                layer_count=layer_count,
+                phase="runtime_metadata",
+            )
         canonical_recipes = _runtime_recipes_canonical(
             runtime,
             layer_count=layer_count,
@@ -1148,19 +1215,40 @@ def _build_dynamic_candidate_catalog_from_runtimes(
         else:
             print_recipes = np.asarray(user_recipes, dtype=np.int32)
         try:
-            simulated_linear = forward_batch_model(
-                print_recipes,
-                materials,
-                layer_height_mm,
-                substrate_linear,
-            )
-            if simulated_linear.shape != (print_recipes.shape[0], 3):
-                raise ValueError(
-                    f"simulation returned shape {simulated_linear.shape}"
+            if contract.model_id == BEER_LAMBERT_MODEL_ID:
+                simulated_linear = forward_batch_model(
+                    print_recipes,
+                    materials,
+                    layer_height_mm,
+                    substrate_linear,
                 )
-            if not np.all(np.isfinite(simulated_linear)):
+                if simulated_linear.shape != (print_recipes.shape[0], 3):
+                    raise ValueError(
+                        f"simulation returned shape {simulated_linear.shape}"
+                    )
+                if not np.all(np.isfinite(simulated_linear)):
+                    raise ValueError("simulation returned non-finite colors")
+                simulated_srgb = linear_to_srgb_uint8(simulated_linear)
+                simulated_lab = rgb_to_lab(simulated_srgb)
+            else:
+                prediction = predict_material_recipes_colorimetry(
+                    print_recipes,
+                    materials,
+                    layer_height_mm,
+                    substrate,
+                )
+                simulated_srgb = prediction.display_srgb
+                simulated_lab = prediction.lab
+            if simulated_srgb.shape != (print_recipes.shape[0], 3):
+                raise ValueError(
+                    f"simulation returned shape {simulated_srgb.shape}"
+                )
+            if simulated_lab.shape != (print_recipes.shape[0], 3):
+                raise ValueError(
+                    f"matching simulation returned shape {simulated_lab.shape}"
+                )
+            if not np.all(np.isfinite(simulated_lab)):
                 raise ValueError("simulation returned non-finite colors")
-            simulated_srgb = linear_to_srgb_uint8(simulated_linear)
         except Exception as exc:
             raise _candidate_failure(
                 str(exc),
@@ -1176,18 +1264,23 @@ def _build_dynamic_candidate_catalog_from_runtimes(
             )
         all_print_recipes.append(print_recipes)
         all_score_srgb.append(simulated_srgb)
+        all_score_lab.append(np.asarray(simulated_lab, dtype=np.float64))
         all_actual_counts.append(
             np.full(print_recipes.shape[0], layer_count, dtype=np.int16)
         )
 
     print_recipes = np.concatenate(all_print_recipes, axis=0)
     scored_srgb = np.concatenate(all_score_srgb, axis=0)
+    scored_lab = np.concatenate(all_score_lab, axis=0)
     actual_counts = np.concatenate(all_actual_counts, axis=0)
     catalog = build_dynamic_candidate_catalog(
         scored_srgb,
         print_recipes,
         actual_counts,
         config.max_layer_count,
+        score_lab=scored_lab,
+        optical_model_id=contract.model_id,
+        deduplicate_display_srgb=(contract.model_id == BEER_LAMBERT_MODEL_ID),
     )
     return catalog, int(print_recipes.shape[0]), layer_counts
 
@@ -1317,6 +1410,7 @@ def solve_dynamic_material_colors(
         raise ValueError("materials must be a non-empty list")
     if not all(isinstance(material, MaterialParams) for material in materials):
         raise TypeError("materials must contain MaterialParams values")
+    validate_material_optical_contract(materials)
     if isinstance(backing_material_index, (bool, np.bool_)) or not isinstance(
         backing_material_index,
         (int, np.integer),
@@ -1431,6 +1525,7 @@ def solve_dynamic_material_colors(
                 ),
                 max_layer_reachable=canonical_catalog.max_layer_reachable,
                 source_indices=canonical_catalog.source_indices,
+                optical_model_id=canonical_catalog.optical_model_id,
             )
             return built_catalog, before_count
 

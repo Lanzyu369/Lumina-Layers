@@ -18,6 +18,10 @@ from typing import Any
 import numpy as np
 from scipy.spatial import cKDTree
 
+from core.colorchecker.color_metrics import delta_e_2000
+from core.km_xyz import KM_XYZ_MODEL_ID
+from core.lumina_box_spectral import LUMINA_BOX_SPECTRAL_MODEL_ID
+from core.backed_gradient_smooth import SPECTRAL_SMOOTH_MODEL_ID
 from core.material_cache import (
     _hue_aware_rerank,
     _neighbor_coherence_refine,
@@ -39,13 +43,18 @@ from core.material_color_solver import (
     ColorSuggestion,
     MaterialParams,
     _greedy_lab_spacing_dedup,
-    _compute_material_affines,
-    linear_to_srgb_uint8,
+    predict_material_recipes_colorimetry,
     rgb_to_lab,
+    target_srgb_to_material_lab,
 )
 from core.material_inverse_refinement import (
     MaterialInverseRefinementConfig,
     refine_material_matches,
+)
+from core.material_optical_runtime import (
+    BEER_LAMBERT_MODEL_ID,
+    is_relative_xyz_model,
+    validate_material_optical_contract,
 )
 
 
@@ -58,6 +67,20 @@ DEFAULT_PERSISTED_CANDIDATE_BUDGET = RECOMMENDED_PERSISTED_CANDIDATE_BUDGET
 DEFAULT_CANDIDATE_BUILD_WORKERS = max(1, min(16, os.cpu_count() or 1))
 HYBRID_CANDIDATE_SCHEMA_VERSION = "3.0"
 HYBRID_CANDIDATE_ALGORITHM_VERSION = "hybrid-v2"
+KM_CANDIDATE_SCHEMA_VERSION = "1.0"
+KM_CANDIDATE_ALGORITHM_VERSION = "km-xyz-hybrid-v2"
+SPECTRAL_CANDIDATE_ALGORITHM_VERSION = "box-spectral-hybrid-v1"
+BACKED_GRADIENT_CANDIDATE_ALGORITHM_VERSION = "box-backed-gradient-hybrid-v3"
+
+
+def _model_cache_contract(model_id: str) -> tuple[str, str, str]:
+    if model_id == SPECTRAL_SMOOTH_MODEL_ID:
+        return "1.0", BACKED_GRADIENT_CANDIDATE_ALGORITHM_VERSION, "box_backed_gradient"
+    if model_id == LUMINA_BOX_SPECTRAL_MODEL_ID:
+        return "1.0", SPECTRAL_CANDIDATE_ALGORITHM_VERSION, "box_spectral"
+    if model_id == KM_XYZ_MODEL_ID:
+        return KM_CANDIDATE_SCHEMA_VERSION, KM_CANDIDATE_ALGORITHM_VERSION, "km_xyz"
+    return HYBRID_CANDIDATE_SCHEMA_VERSION, HYBRID_CANDIDATE_ALGORITHM_VERSION, "beer_lambert"
 
 
 def _candidate_pool_multiplier_for_budget(candidate_budget: int) -> int:
@@ -192,6 +215,7 @@ class CandidatePredictionBatch:
     recipes: np.ndarray
     achieved_srgb: np.ndarray
     achieved_lab: np.ndarray
+    achieved_xyz: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -201,6 +225,8 @@ class CandidateSelection:
     achieved_lab: np.ndarray
     pinned_mask: np.ndarray
     worker_count: int
+    achieved_xyz: np.ndarray | None = None
+    exact_recipe_space: bool = False
 
 
 def _recipe_dtype_for_material_count(material_count: int) -> np.dtype:
@@ -219,14 +245,16 @@ def _candidate_cache_meta_path_for(npz_path: Path) -> Path:
     return npz_path.with_name(npz_path.stem + ".meta.json")
 
 
-def _candidate_configuration(config: MaterialCandidateCacheConfig) -> dict[str, Any]:
+def _candidate_configuration(
+    config: MaterialCandidateCacheConfig, optical_model_id: str = BEER_LAMBERT_MODEL_ID,
+) -> dict[str, Any]:
     return {
         "grid_resolution": int(config.lab_grid_resolution),
         "candidate_pool_multiplier": int(config.candidate_pool_multiplier),
         "batch_recipe_count": int(config.batch_recipe_count),
         "seed": int(config.seed),
         "inverse_refinement": {
-            "enabled": bool(config.enable_inverse_refinement),
+            "enabled": bool(config.enable_inverse_refinement and optical_model_id == BEER_LAMBERT_MODEL_ID),
             "max_refine_materials": int(config.max_refine_materials),
             "max_refine_top_suffixes": int(config.max_refine_top_suffixes),
             "max_refine_bottom_prefixes": int(config.max_refine_bottom_prefixes),
@@ -243,16 +271,18 @@ def _candidate_cache_parameters(
     effective_config = config or MaterialCandidateCacheConfig.persisted_for_budget(
         candidate_budget
     )
+    contract = validate_material_optical_contract(materials)
+    schema, algorithm, _namespace = _model_cache_contract(contract.model_id)
     return {
-        "schema_version": HYBRID_CANDIDATE_SCHEMA_VERSION,
-        "algorithm_version": HYBRID_CANDIDATE_ALGORITHM_VERSION,
+        "schema_version": schema,
+        "algorithm_version": algorithm,
         "mode": "candidate_hybrid",
         "canonical_materials": describe_palette(materials),
         "layer_count": int(layer_count),
         "layer_height_mm": float(layer_height_mm),
         "substrate": str(substrate),
         "candidate_budget": int(candidate_budget),
-        **_candidate_configuration(effective_config),
+        **_candidate_configuration(effective_config, contract.model_id),
     }
 
 
@@ -307,22 +337,19 @@ def _predict_candidate_linear(
     substrate: str,
     batch_recipe_count: int,
 ) -> np.ndarray:
-    affines = _compute_material_affines(materials, float(layer_height_mm))
     output = np.empty((recipes.shape[0], 3), dtype=np.float64)
-    substrate_rgb = _substrate_linear(substrate)
 
     start = 0
     while start < recipes.shape[0]:
         end = min(start + int(batch_recipe_count), recipes.shape[0])
         batch = recipes[start:end].astype(np.int64, copy=False)
-        colors = np.repeat(substrate_rgb[None, :], batch.shape[0], axis=0)
-        for layer_index in range(batch.shape[1]):
-            material_indices = batch[:, layer_index]
-            colors = (
-                affines.a[material_indices] * colors
-                + affines.b[material_indices]
-            )
-        output[start:end] = colors
+        prediction = predict_material_recipes_colorimetry(
+            batch,
+            materials,
+            float(layer_height_mm),
+            substrate,
+        )
+        output[start:end] = prediction.linear_srgb
         start = end
 
     return np.clip(output, 0.0, 1.0)
@@ -334,23 +361,23 @@ def _predict_candidate_srgb_lab(
     materials: list[MaterialParams],
     layer_height_mm: float,
     substrate: str,
-) -> tuple[np.ndarray, np.ndarray]:
-    affines = _compute_material_affines(materials, float(layer_height_mm))
-    substrate_rgb = _substrate_linear(substrate)
-    recipe_arr = np.asarray(recipes)
-    colors = np.empty((recipe_arr.shape[0], 3), dtype=np.float64)
-    colors[:] = substrate_rgb
-
-    for layer_index in range(recipe_arr.shape[1]):
-        material_indices = recipe_arr[:, layer_index]
-        colors = (
-            affines.a[material_indices] * colors
-            + affines.b[material_indices]
-        )
-
-    achieved_srgb = linear_to_srgb_uint8(np.clip(colors, 0.0, 1.0))
-    achieved_lab = rgb_to_lab(achieved_srgb).astype(np.float32, copy=False)
-    return achieved_srgb, achieved_lab
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    prediction = predict_material_recipes_colorimetry(
+        np.asarray(recipes),
+        materials,
+        float(layer_height_mm),
+        substrate,
+    )
+    achieved_xyz = (
+        None
+        if prediction.matching_xyz is None
+        else np.asarray(prediction.matching_xyz, dtype=np.float64)
+    )
+    return (
+        np.asarray(prediction.display_srgb, dtype=np.uint8),
+        np.asarray(prediction.lab, dtype=np.float32),
+        achieved_xyz,
+    )
 
 
 def _predict_recipe_batch(
@@ -363,7 +390,7 @@ def _predict_recipe_batch(
 ) -> CandidatePredictionBatch:
     recipe_dtype = np.dtype(recipe_dtype_name)
     recipe_arr = np.asarray(recipes, dtype=recipe_dtype)
-    achieved_srgb, achieved_lab = _predict_candidate_srgb_lab(
+    achieved_srgb, achieved_lab, achieved_xyz = _predict_candidate_srgb_lab(
         recipes=recipe_arr,
         materials=materials,
         layer_height_mm=float(layer_height_mm),
@@ -373,6 +400,7 @@ def _predict_recipe_batch(
         recipes=recipe_arr,
         achieved_srgb=achieved_srgb,
         achieved_lab=achieved_lab,
+        achieved_xyz=achieved_xyz,
     )
 
 
@@ -395,7 +423,7 @@ def _predict_recipe_space_batch(
         count=int(count),
         dtype=recipe_dtype,
     )
-    achieved_srgb, achieved_lab = _predict_candidate_srgb_lab(
+    achieved_srgb, achieved_lab, achieved_xyz = _predict_candidate_srgb_lab(
         recipes=recipes,
         materials=materials,
         layer_height_mm=float(layer_height_mm),
@@ -405,6 +433,7 @@ def _predict_recipe_space_batch(
         recipes=recipes,
         achieved_srgb=achieved_srgb,
         achieved_lab=achieved_lab,
+        achieved_xyz=achieved_xyz,
     )
 
 
@@ -426,7 +455,7 @@ def _predict_low_discrepancy_recipe_batch(
         count=int(count),
         seed=int(seed),
     ).astype(recipe_dtype, copy=False)
-    achieved_srgb, achieved_lab = _predict_candidate_srgb_lab(
+    achieved_srgb, achieved_lab, achieved_xyz = _predict_candidate_srgb_lab(
         recipes=recipes,
         materials=materials,
         layer_height_mm=float(layer_height_mm),
@@ -436,6 +465,7 @@ def _predict_low_discrepancy_recipe_batch(
         recipes=recipes,
         achieved_srgb=achieved_srgb,
         achieved_lab=achieved_lab,
+        achieved_xyz=achieved_xyz,
     )
 
 
@@ -454,6 +484,14 @@ def _anchor_candidate_recipes(
     )
     anchors = _unique_rows_preserve_order(np.vstack([pinned, ramps]))[: int(budget)]
     return anchors.astype(recipe_dtype, copy=False)
+
+
+def _recipe_row_keys(recipes: np.ndarray) -> np.ndarray:
+    """Return exact fixed-width keys for complete bottom-to-top recipes."""
+
+    rows = np.ascontiguousarray(recipes)
+    row_width = rows.dtype.itemsize * rows.shape[1]
+    return rows.view(np.dtype((np.void, row_width))).reshape(-1)
 
 
 def _chunk_counts(total_count: int, chunk_size: int) -> list[int]:
@@ -498,14 +536,12 @@ def _coverage_selected_recipes(
 
     selected = np.asarray(initial.recipes, dtype=np.uint16).copy()
     pinned = np.asarray(initial.pinned_mask, dtype=bool).copy()
-    selected_linear = _predict_candidate_linear(
+    _selected_srgb, selected_lab, _selected_xyz = _predict_candidate_srgb_lab(
         recipes=selected,
         materials=materials,
         layer_height_mm=float(layer_height_mm),
         substrate=substrate,
-        batch_recipe_count=int(config.batch_recipe_count),
     )
-    selected_lab = rgb_to_lab(linear_to_srgb_uint8(selected_linear)).astype(np.float32)
     cell_keys = _lab_cell_keys(selected_lab, int(config.lab_grid_resolution))
     cell_counts: dict[int, int] = {}
     for key in cell_keys:
@@ -543,14 +579,12 @@ def _coverage_selected_recipes(
             count=count,
             seed=int(config.seed) + 10_000 + chunk_index,
         )
-        chunk_linear = _predict_candidate_linear(
+        _chunk_srgb, chunk_lab, _chunk_xyz = _predict_candidate_srgb_lab(
             recipes=chunk,
             materials=materials,
             layer_height_mm=float(layer_height_mm),
             substrate=substrate,
-            batch_recipe_count=int(config.batch_recipe_count),
         )
-        chunk_lab = rgb_to_lab(linear_to_srgb_uint8(chunk_linear)).astype(np.float32)
         chunk_cells = _lab_cell_keys(chunk_lab, int(config.lab_grid_resolution))
         for row, key in zip(chunk, chunk_cells, strict=False):
             key_int = int(key)
@@ -583,6 +617,8 @@ def _streaming_candidate_selection(
     recipe_dtype: np.dtype,
 ) -> CandidateSelection:
     material_count = len(materials)
+    contract = validate_material_optical_contract(materials)
+    retain_xyz = is_relative_xyz_model(contract.model_id)
     requested_budget = int(config.candidate_budget)
     total_count = _safe_total_count(
         material_count=material_count,
@@ -597,6 +633,9 @@ def _streaming_candidate_selection(
         exact_recipes = np.empty((exact_count, int(layer_count)), dtype=recipe_dtype)
         achieved_srgb = np.empty((exact_count, 3), dtype=np.uint8)
         achieved_lab = np.empty((exact_count, 3), dtype=np.float32)
+        achieved_xyz = (
+            np.empty((exact_count, 3), dtype=np.float64) if retain_xyz else None
+        )
         pinned_mask = np.zeros(exact_count, dtype=bool)
         counts = _chunk_counts(exact_count, chunk_size)
         starts: list[int] = []
@@ -647,6 +686,10 @@ def _streaming_candidate_selection(
                     exact_recipes[dest] = batch.recipes
                     achieved_srgb[dest] = batch.achieved_srgb
                     achieved_lab[dest] = batch.achieved_lab
+                    if achieved_xyz is not None:
+                        if batch.achieved_xyz is None:
+                            raise ValueError("KM candidate prediction omitted XYZ values")
+                        achieved_xyz[dest] = batch.achieved_xyz
                     pinned_mask[dest] = np.all(
                         batch.recipes == batch.recipes[:, :1],
                         axis=1,
@@ -659,11 +702,14 @@ def _streaming_candidate_selection(
             achieved_lab=achieved_lab,
             pinned_mask=pinned_mask,
             worker_count=worker_count,
+            achieved_xyz=achieved_xyz,
+            exact_recipe_space=True,
         )
 
     selected = np.empty((budget, int(layer_count)), dtype=recipe_dtype)
     selected_srgb = np.empty((budget, 3), dtype=np.uint8)
     selected_lab = np.empty((budget, 3), dtype=np.float32)
+    selected_xyz = np.empty((budget, 3), dtype=np.float64) if retain_xyz else None
     pinned_mask = np.zeros(budget, dtype=bool)
     cell_keys = np.full(budget, -1, dtype=np.int32)
     cell_counts: dict[int, int] = {}
@@ -709,6 +755,10 @@ def _streaming_candidate_selection(
             selected[dest] = batch.recipes[:take]
             selected_srgb[dest] = batch.achieved_srgb[:take]
             selected_lab[dest] = batch.achieved_lab[:take]
+            if selected_xyz is not None:
+                if batch.achieved_xyz is None:
+                    raise ValueError("KM candidate prediction omitted XYZ values")
+                selected_xyz[dest] = batch.achieved_xyz[:take]
             pinned_mask[dest] = bool(pinned)
             for local_index, key in enumerate(keys[:take]):
                 _record_cell(selected_count + local_index, int(key))
@@ -731,6 +781,10 @@ def _streaming_candidate_selection(
             selected[idx] = batch.recipes[local_index]
             selected_srgb[idx] = batch.achieved_srgb[local_index]
             selected_lab[idx] = batch.achieved_lab[local_index]
+            if selected_xyz is not None:
+                if batch.achieved_xyz is None:
+                    raise ValueError("KM candidate prediction omitted XYZ values")
+                selected_xyz[idx] = batch.achieved_xyz[local_index]
             pinned_mask[idx] = False
             _record_cell(idx, key)
 
@@ -793,13 +847,116 @@ def _streaming_candidate_selection(
                 _consume_batch(future.result(), pinned=False)
                 _submit_next(executor)
 
+    if retain_xyz:
+        # Sobol quantisation can generate the same complete layer recipe more
+        # than once.  Preserve the first occurrence (anchors arrive first),
+        # then fill any resulting holes from a bounded deterministic scan of
+        # recipe ordinals.  The scan never materialises the full M ** N space.
+        recipe_keys = _recipe_row_keys(selected[:selected_count])
+        _unique_keys, first_indices = np.unique(recipe_keys, return_index=True)
+        keep_indices = np.sort(first_indices)
+        unique_count = int(keep_indices.shape[0])
+        existing_keys = np.sort(recipe_keys[keep_indices])
+
+        if unique_count < selected_count:
+            selected[:unique_count] = selected[keep_indices]
+            selected_srgb[:unique_count] = selected_srgb[keep_indices]
+            selected_lab[:unique_count] = selected_lab[keep_indices]
+            if selected_xyz is None:
+                raise ValueError("KM candidate prediction omitted XYZ values")
+            selected_xyz[:unique_count] = selected_xyz[keep_indices]
+            pinned_mask[:unique_count] = pinned_mask[keep_indices]
+            selected_count = unique_count
+
+        scan_start = 0
+        scan_limit = budget
+        while selected_count < budget and scan_start < scan_limit:
+            scan_count = min(chunk_size, scan_limit - scan_start)
+            filler_recipes = _recipe_space_chunk(
+                material_count=material_count,
+                layer_count=int(layer_count),
+                start=scan_start,
+                count=scan_count,
+                dtype=recipe_dtype,
+            )
+            filler_keys = _recipe_row_keys(filler_recipes)
+            positions = np.searchsorted(existing_keys, filler_keys)
+            bounded_positions = np.minimum(positions, existing_keys.shape[0] - 1)
+            already_selected = (
+                (positions < existing_keys.shape[0])
+                & (existing_keys[bounded_positions] == filler_keys)
+            )
+            novel_recipes = filler_recipes[~already_selected]
+            take = min(budget - selected_count, novel_recipes.shape[0])
+            if take > 0:
+                filler_batch = _predict_recipe_batch(
+                    recipes=novel_recipes[:take],
+                    materials=materials,
+                    layer_height_mm=float(layer_height_mm),
+                    substrate=substrate,
+                    recipe_dtype_name=recipe_dtype.name,
+                )
+                dest = slice(selected_count, selected_count + take)
+                selected[dest] = filler_batch.recipes
+                selected_srgb[dest] = filler_batch.achieved_srgb
+                selected_lab[dest] = filler_batch.achieved_lab
+                if selected_xyz is None or filler_batch.achieved_xyz is None:
+                    raise ValueError("KM candidate prediction omitted XYZ values")
+                selected_xyz[dest] = filler_batch.achieved_xyz
+                pinned_mask[dest] = False
+                selected_count += take
+            scan_start += scan_count
+
+        if selected_count != budget:
+            raise RuntimeError(
+                "KM candidate selection could not fill its unique recipe budget"
+            )
+
     return CandidateSelection(
         recipes=selected[:selected_count].copy(),
         achieved_srgb=selected_srgb[:selected_count].copy(),
         achieved_lab=selected_lab[:selected_count].copy(),
         pinned_mask=pinned_mask[:selected_count].copy(),
         worker_count=worker_count,
+        achieved_xyz=(
+            None
+            if selected_xyz is None
+            else selected_xyz[:selected_count].copy()
+        ),
+        exact_recipe_space=False,
     )
+
+
+def _exact_delta_e00_best_indices(
+    target_lab: np.ndarray,
+    candidate_lab: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Find exact CIEDE2000 minima with bounded temporary arrays.
+
+    用有界临时数组在完整候选集中寻找精确 CIEDE2000 最小值。
+    """
+
+    targets = np.asarray(target_lab, dtype=np.float64)
+    candidates = np.asarray(candidate_lab, dtype=np.float64)
+    target_count = targets.shape[0]
+    best_indices = np.full(target_count, -1, dtype=np.int64)
+    best_values = np.full(target_count, np.inf, dtype=np.float64)
+    rows_per_chunk = max(1, min(65_536, 1_048_576 // max(1, target_count)))
+    for start in range(0, candidates.shape[0], rows_per_chunk):
+        end = min(start + rows_per_chunk, candidates.shape[0])
+        distances = np.asarray(
+            delta_e_2000(
+                targets[:, None, :],
+                candidates[None, start:end, :],
+            ),
+            dtype=np.float64,
+        )
+        local_indices = np.argmin(distances, axis=1)
+        local_values = distances[np.arange(target_count), local_indices]
+        improved = local_values < best_values
+        best_values[improved] = local_values[improved]
+        best_indices[improved] = start + local_indices[improved]
+    return best_indices, best_values
 
 
 @dataclass
@@ -821,6 +978,7 @@ class MaterialCandidateRuntime:
     achieved_lab: np.ndarray
     pinned_mask: np.ndarray
     metadata: dict[str, Any]
+    achieved_xyz: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         self._tree: cKDTree | None = None
@@ -863,10 +1021,23 @@ class MaterialCandidateRuntime:
     def valid_cell_count(self) -> int:
         return int(self.candidate_recipes.shape[0])
 
+    @property
+    def optical_model_id(self) -> str:
+        return str(
+            self.metadata.get("optical_model_id") or BEER_LAMBERT_MODEL_ID
+        )
+
+    @property
+    def exact_recipe_space(self) -> bool:
+        return bool(self.metadata.get("exact_recipe_space", False))
+
     def _refinement_config(self) -> MaterialInverseRefinementConfig:
         inverse = self.metadata.get("inverse_refinement") or {}
         return MaterialInverseRefinementConfig(
-            enabled=bool(inverse.get("enabled", False)),
+            enabled=(
+                self.optical_model_id == BEER_LAMBERT_MODEL_ID
+                and bool(inverse.get("enabled", False))
+            ),
             max_refine_materials=int(inverse.get("max_refine_materials", 8)),
             max_refine_top_suffixes=int(
                 inverse.get("max_refine_top_suffixes", 32_768)
@@ -920,6 +1091,53 @@ class MaterialCandidateRuntime:
             raise ValueError("MaterialCandidateRuntime material descriptors mismatch")
         if self.valid_cell_count <= 0:
             raise ValueError("MaterialCandidateRuntime has no candidates")
+
+        contract = validate_material_optical_contract(user_materials)
+        if contract.model_id != self.optical_model_id:
+            raise ValueError("MaterialCandidateRuntime optical model mismatch")
+        if is_relative_xyz_model(contract.model_id):
+            target_lab = target_srgb_to_material_lab(
+                targets,
+                user_materials,
+            ).astype(np.float64, copy=False)
+            if self.exact_recipe_space:
+                best_indices, best_delta = _exact_delta_e00_best_indices(
+                    target_lab,
+                    self.achieved_lab,
+                )
+            else:
+                neighbor_count = min(256, self.valid_cell_count)
+                _distances, indices = self._ensure_tree().query(
+                    target_lab,
+                    k=neighbor_count,
+                )
+                if neighbor_count == 1:
+                    indices = indices[:, None]
+                candidate_lab = self.achieved_lab[indices].astype(
+                    np.float64,
+                    copy=False,
+                )
+                delta = np.asarray(
+                    delta_e_2000(target_lab[:, None, :], candidate_lab),
+                    dtype=np.float64,
+                )
+                best_offsets = np.argmin(delta, axis=1)
+                best_indices = indices[np.arange(targets.shape[0]), best_offsets]
+                best_delta = delta[np.arange(targets.shape[0]), best_offsets]
+
+            canonical_to_user = np.asarray(
+                canonical_palette_order(user_materials),
+                dtype=np.int32,
+            )
+            recipes_canonical = self.candidate_recipes[best_indices].astype(
+                np.int32,
+                copy=True,
+            )
+            return (
+                self.achieved_srgb[best_indices].astype(np.uint8, copy=True),
+                canonical_to_user[recipes_canonical].astype(np.int32, copy=False),
+                np.asarray(best_delta, dtype=np.float64),
+            )
 
         target_lab = rgb_to_lab(targets).astype(np.float64, copy=False)
         neighbor_count = min(64, self.valid_cell_count)
@@ -1032,6 +1250,56 @@ class MaterialCandidateRuntime:
         if self.valid_cell_count <= 0:
             return []
 
+        contract = validate_material_optical_contract(user_materials)
+        if contract.model_id != self.optical_model_id:
+            raise ValueError("MaterialCandidateRuntime optical model mismatch")
+        if is_relative_xyz_model(contract.model_id):
+            target_lab = target_srgb_to_material_lab(
+                target_srgb.reshape(1, 3),
+                user_materials,
+            )[0].astype(np.float64)
+            if self.exact_recipe_space:
+                nearest_idx = np.arange(self.valid_cell_count, dtype=np.int64)
+            else:
+                query_k = min(
+                    max(int(top_k) * 32, 256),
+                    self.valid_cell_count,
+                )
+                _distances, nearest_idx = self._ensure_tree().query(
+                    target_lab,
+                    k=query_k,
+                )
+                nearest_idx = np.atleast_1d(nearest_idx).astype(np.int64)
+            candidate_lab = self.achieved_lab[nearest_idx].astype(np.float64)
+            candidate_delta = np.asarray(
+                delta_e_2000(candidate_lab, target_lab),
+                dtype=np.float64,
+            )
+            order = np.argsort(candidate_delta, kind="stable")
+            sorted_lab = candidate_lab[order]
+            sorted_srgb = self.achieved_srgb[nearest_idx[order]]
+            sorted_delta = candidate_delta[order]
+            sorted_recipes = self.candidate_recipes[nearest_idx[order]]
+            kept_idx = _greedy_lab_spacing_dedup(
+                sorted_lab,
+                min_spacing=min_spacing,
+                limit=int(top_k),
+            )
+            canonical_to_user = np.asarray(
+                canonical_palette_order(user_materials),
+                dtype=np.int32,
+            )
+            return [
+                ColorSuggestion(
+                    matched_rgb=sorted_srgb[i].copy(),
+                    recipe=canonical_to_user[
+                        sorted_recipes[i].astype(np.int64, copy=False)
+                    ].astype(np.int32, copy=True),
+                    delta_e=float(sorted_delta[i]),
+                )
+                for i in kept_idx
+            ]
+
         target_lab = rgb_to_lab(target_srgb.reshape(1, 3))[0].astype(np.float64)
         query_k = min(max(int(top_k) * 8, 64), self.valid_cell_count)
         _distances, nearest_idx = self._ensure_tree().query(target_lab, k=query_k)
@@ -1112,6 +1380,7 @@ def build_material_candidate_runtime(
     """
     if not materials:
         raise ValueError("materials must not be empty")
+    contract = validate_material_optical_contract(materials)
     cfg = config or MaterialCandidateCacheConfig.preview_safe()
     order = canonical_palette_order(materials)
     canonical_materials = [materials[index] for index in order]
@@ -1126,6 +1395,10 @@ def build_material_candidate_runtime(
     )
     metadata = {
         "mode": "candidate_hybrid",
+        "optical_model_id": contract.model_id,
+        "measurement_protocol_id": contract.measurement_protocol_id,
+        "color_bridge_id": contract.color_bridge_id,
+        "coefficient_unit": contract.coefficient_unit,
         "cache_id": uuid.uuid4().hex,
         "layer_count": int(layer_count),
         "layer_height_mm": float(layer_height_mm),
@@ -1135,7 +1408,11 @@ def build_material_candidate_runtime(
         "build_worker_count": int(selection.worker_count),
         "build_mode": "streaming_parallel",
         "recipe_dtype": recipe_dtype.name,
-        **_candidate_configuration(cfg),
+        "exact_recipe_space": bool(selection.exact_recipe_space),
+        "cache_namespace": _model_cache_contract(contract.model_id)[2],
+        "reference_id": contract.reference_id,
+        "archive_revision_ids": [str(material.archive_revision_id or "") for material in canonical_materials],
+        **_candidate_configuration(cfg, contract.model_id),
         "canonical_material_directory_names": [
             str(material.directory_name) for material in canonical_materials
         ],
@@ -1147,6 +1424,7 @@ def build_material_candidate_runtime(
         achieved_lab=selection.achieved_lab,
         pinned_mask=selection.pinned_mask,
         metadata=metadata,
+        achieved_xyz=selection.achieved_xyz,
     )
 
 
@@ -1173,8 +1451,8 @@ def save_material_candidate_runtime(
     metadata = dict(runtime.metadata)
     metadata.update(
         {
-            "schema_version": HYBRID_CANDIDATE_SCHEMA_VERSION,
-            "algorithm_version": HYBRID_CANDIDATE_ALGORITHM_VERSION,
+            "schema_version": _model_cache_contract(runtime.optical_model_id)[0],
+            "algorithm_version": _model_cache_contract(runtime.optical_model_id)[1],
             "candidate_count": int(runtime.valid_cell_count),
             "recipe_dtype": str(recipes_to_save.dtype),
             "built_at": metadata.get("built_at") or time.strftime(
@@ -1202,14 +1480,21 @@ def save_material_candidate_runtime(
     tmp_npz = npz_path.with_name(npz_path.name + tmp_suffix)
     tmp_meta = meta_path.with_name(meta_path.name + tmp_suffix)
     try:
-        with tmp_npz.open("wb") as handle:
-            np.savez_compressed(
-                handle,
-                candidate_recipes=recipes_to_save,
-                achieved_srgb=runtime.achieved_srgb,
-                achieved_lab=runtime.achieved_lab,
-                pinned_mask=runtime.pinned_mask,
+        array_payload: dict[str, np.ndarray] = {
+            "candidate_recipes": recipes_to_save,
+            "achieved_srgb": runtime.achieved_srgb,
+            "achieved_lab": runtime.achieved_lab,
+            "pinned_mask": runtime.pinned_mask,
+        }
+        if is_relative_xyz_model(runtime.optical_model_id):
+            if runtime.achieved_xyz is None:
+                raise ValueError("KM candidate runtime must retain achieved_xyz")
+            array_payload["achieved_xyz"] = np.asarray(
+                runtime.achieved_xyz,
+                dtype=np.float64,
             )
+        with tmp_npz.open("wb") as handle:
+            np.savez_compressed(handle, **array_payload)
         tmp_meta.write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -1236,11 +1521,24 @@ def _validated_candidate_runtime_metadata(
     config: MaterialCandidateCacheConfig | None = None,
 ) -> dict[str, Any] | None:
     try:
+        contract = validate_material_optical_contract(materials)
+        _schema, _algorithm, expected_namespace = _model_cache_contract(contract.model_id)
         expected = _candidate_cache_parameters(
             materials, layer_count, layer_height_mm, substrate, candidate_budget, config
         )
         if any(metadata.get(key) != value for key, value in expected.items()):
             return None
+        if is_relative_xyz_model(contract.model_id):
+            if metadata.get("cache_namespace") != expected_namespace:
+                return None
+            if contract.model_id == LUMINA_BOX_SPECTRAL_MODEL_ID and metadata.get("reference_id") != contract.reference_id:
+                return None
+            if metadata.get("measurement_protocol_id") != contract.measurement_protocol_id:
+                return None
+            if metadata.get("color_bridge_id") != contract.color_bridge_id:
+                return None
+            if metadata.get("coefficient_unit") != contract.coefficient_unit:
+                return None
     except (TypeError, ValueError):
         return None
     return dict(metadata)
@@ -1366,14 +1664,33 @@ def load_material_candidate_runtime(
     )
     if metadata is None:
         return None
+    is_km_cache = is_relative_xyz_model(
+        str(metadata.get("optical_model_id") or BEER_LAMBERT_MODEL_ID)
+    )
     try:
         with np.load(npz_path) as loaded:
             candidate_recipes = loaded["candidate_recipes"]
+            if is_km_cache and (
+                not np.issubdtype(candidate_recipes.dtype, np.integer)
+                or (
+                    candidate_recipes.size > 0
+                    and (
+                        np.min(candidate_recipes) < 0
+                        or np.max(candidate_recipes) >= len(materials)
+                    )
+                )
+            ):
+                return None
             if candidate_recipes.dtype not in (np.uint8, np.uint16):
                 candidate_recipes = candidate_recipes.astype(np.uint16)
             achieved_srgb = loaded["achieved_srgb"].astype(np.uint8)
             achieved_lab = loaded["achieved_lab"].astype(np.float32)
             pinned_mask = loaded["pinned_mask"].astype(bool)
+            achieved_xyz = (
+                loaded["achieved_xyz"].astype(np.float64)
+                if "achieved_xyz" in loaded.files
+                else None
+            )
     except (OSError, ValueError, KeyError):
         return None
     if (
@@ -1382,6 +1699,15 @@ def load_material_candidate_runtime(
         or achieved_srgb.shape != (candidate_recipes.shape[0], 3)
         or achieved_lab.shape != (candidate_recipes.shape[0], 3)
         or pinned_mask.shape != (candidate_recipes.shape[0],)
+        or (
+            is_km_cache
+            and (
+                achieved_xyz is None
+                or achieved_xyz.shape != (candidate_recipes.shape[0], 3)
+                or not np.all(np.isfinite(achieved_xyz))
+                or not np.all(np.isfinite(achieved_lab))
+            )
+        )
     ):
         return None
 
@@ -1392,6 +1718,7 @@ def load_material_candidate_runtime(
         achieved_lab=achieved_lab,
         pinned_mask=pinned_mask,
         metadata=metadata,
+        achieved_xyz=achieved_xyz,
     )
 
 

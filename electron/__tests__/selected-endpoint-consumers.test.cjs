@@ -2,6 +2,25 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const security = require('../workshop-security.cjs');
 const { fetchNativeBedModel } = require('../bed-model-bridge.cjs');
+const { createSerialPortPicker } = require('../serial-port-picker.cjs');
+
+test('Box serial access follows the selected desktop frontend endpoint', () => {
+  let endpoint = 'http://127.0.0.1:8012/';
+  const frame = { url: endpoint, parent: null };
+  const contents = { mainFrame: frame, isDestroyed: () => false, getURL: () => frame.url };
+  const window = { webContents: contents, isDestroyed: () => false };
+  const picker = createSerialPortPicker({
+    getWindow: () => window, dialog: {}, frontendUrl: 'http://127.0.0.1:5174/',
+    packagedIndexUrl: 'file:///app/index.html', getFrontendUrl: () => endpoint,
+  });
+  const event = { sender: contents, senderFrame: frame };
+  assert.equal(picker.isTrustedIpcSender(event), true);
+  assert.equal(picker.allowPermission(contents, endpoint, { isMainFrame: true, requestingUrl: frame.url }), true);
+  endpoint = 'http://127.0.0.1:8013/';
+  assert.equal(picker.isTrustedIpcSender(event), false);
+  frame.url = endpoint;
+  assert.equal(picker.isTrustedIpcSender(event), true);
+});
 
 test('workshop trusts only the selected backend port for host and internal requests', () => {
   security.enableManagedDesktopHost(8012);

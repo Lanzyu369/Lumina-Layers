@@ -256,6 +256,34 @@ describe("native bundle converter flow", () => {
     expect(resolveConverterSourceSelection(useConverterStore.getState()).isReady).toBe(true);
   });
 
+  it("rejects unknown source versions instead of treating them as native", () => {
+    const initialState = useConverterStore.getState();
+    const unknownSourceVersion = "future_source" as never;
+
+    expect(() =>
+      resolveConverterSourceSelection({
+        ...initialState,
+        source_version: unknownSourceVersion,
+      } as never),
+    ).toThrow("Unsupported converter source version: future_source");
+
+    expect(() =>
+      useConverterStore.getState().setSourceVersion(unknownSourceVersion),
+    ).toThrow("Unsupported converter source version: future_source");
+    expect(useConverterStore.getState()).toBe(initialState);
+  });
+
+  it("rejects a valid source transition while the current source version is unknown", () => {
+    const unknownSourceVersion = "future_source" as never;
+    useConverterStore.setState({ source_version: unknownSourceVersion } as never);
+    const initialState = useConverterStore.getState();
+
+    expect(() =>
+      useConverterStore.getState().setSourceVersion("legacy"),
+    ).toThrow("Unsupported converter source version: future_source");
+    expect(useConverterStore.getState()).toBe(initialState);
+  });
+
   it("falls back to brand defaults when persisted native DB names are all invalid", () => {
     useConverterStore.setState({
       source_version: "native",
@@ -1927,6 +1955,103 @@ describe("native bundle converter flow", () => {
     expect(useConverterStore.getState().remapHistory).toEqual([
       { "111111": "111111" },
     ]);
+  });
+
+  it("submitPreview sends Lumina Box material archive fields", async () => {
+    mocks.convertPreview.mockResolvedValueOnce({
+      session_id: "session-lumina-preview",
+      status: "ok",
+      message: "Preview generated",
+      preview_url: "/api/files/lumina-preview",
+      preview_glb_url: null,
+      palette: [],
+      dimensions: { width: 200, height: 160 },
+    });
+
+    useConverterStore.setState({
+      imageFile: new File(["png"], "lumina.png", { type: "image/png" }),
+      source_version: "lumina_box",
+      lut_name: "",
+      selectedMaterialDirNames: ["lumina/red", "lumina/white"],
+      materialLayerCount: 7,
+      materialLayerHeightMm: 0.08,
+      materialBackingMaterialDirName: "lumina/white",
+      target_width_mm: 60,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      quantize_colors: 48,
+      enable_cleanup: true,
+      hue_enable: false,
+    } as never);
+
+    await useConverterStore.getState().submitPreview();
+
+    expect(mocks.convertPreview).toHaveBeenCalledOnce();
+    const [, params] = mocks.convertPreview.mock.calls[0];
+    expect(params).toMatchObject({
+      source_kind: "legacy_single",
+      lut_name: "__material_archive__",
+      material_source: "material_archive",
+      material_profile_kind: "lumina_box",
+      selected_materials: ["lumina/red", "lumina/white"],
+      material_layer_count: 7,
+      material_layer_height_mm: 0.08,
+      material_backing_material_index: 1,
+      color_layers: 7,
+      layer_height_mm: 0.08,
+    });
+  });
+
+  it("submitGenerate sends Lumina Box material archive fields", async () => {
+    mocks.convertGenerate.mockResolvedValueOnce({
+      status: "ok",
+      message: "Model generated",
+      download_url: "/api/files/lumina-model",
+      preview_3d_url: "/api/files/lumina-model.glb",
+    });
+
+    useConverterStore.setState({
+      sessionId: "session-lumina-generate",
+      source_version: "lumina_box",
+      lut_name: "",
+      selectedMaterialDirNames: ["lumina/red", "lumina/white"],
+      materialLayerCount: 7,
+      materialLayerHeightMm: 0.08,
+      materialBackingMaterialDirName: "lumina/white",
+      target_width_mm: 60,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      quantize_colors: 48,
+      enable_cleanup: true,
+      hue_enable: false,
+      spacer_thick: 1.2,
+      structure_mode: StructureMode.DOUBLE_SIDED,
+      separate_backing: false,
+      enable_relief: false,
+      enable_outline: false,
+      enable_cloisonne: false,
+      enable_coating: false,
+    } as never);
+
+    const result = await useConverterStore.getState().submitGenerate();
+
+    expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+    const [, params] = mocks.convertGenerate.mock.calls[0];
+    expect(params).toMatchObject({
+      source_kind: "legacy_single",
+      lut_name: "__material_archive__",
+      material_source: "material_archive",
+      material_profile_kind: "lumina_box",
+      selected_materials: ["lumina/red", "lumina/white"],
+      material_layer_count: 7,
+      material_layer_height_mm: 0.08,
+      material_backing_material_index: 1,
+      color_layers: 7,
+      layer_height_mm: 0.08,
+    });
+    expect(result).toBeNull();
+    expect(useConverterStore.getState().downloadUrl).toBe("/api/files/lumina-model");
+    expect(useConverterStore.getState().modelUrl).toBeNull();
   });
 
   it("keeps an ordinary raster on lightweight preview state until async GLB arrives", async () => {

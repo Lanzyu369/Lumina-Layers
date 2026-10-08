@@ -41,7 +41,10 @@ import type {
   RecipePredictResponse,
   VirtualMaterial,
 } from "../../api/types";
-import { useConverterStore } from "../../stores/converter";
+import {
+  isMaterialArchiveSourceVersion,
+  useConverterStore,
+} from "../../stores/converter";
 import {
   applyRecipePattern,
   buildPaletteHint,
@@ -336,7 +339,7 @@ function inferBaseChannelIdx(
   baseChannelIdx: number,
   sourceVersion: string,
 ): number {
-  if (sourceVersion === "material") {
+  if (isMaterialArchiveSourceVersion(sourceVersion)) {
     const whiteIdx = lutPalette.findIndex(
       (entry) => inferCanonicalPrimaryKey(entry) === "white",
     );
@@ -402,7 +405,7 @@ function buildDisplayPalette(
   // 耗材档案模式下直接按原始顺序显示，不做 8 原色归类，避免名称重复和归类错误。
   // In material-archive mode, show materials in original order without
   // canonical-primary grouping to prevent duplicates and misclassification.
-  if (sourceVersion === "material") {
+  if (isMaterialArchiveSourceVersion(sourceVersion)) {
     return lutPalette.map((entry, lutIdx) => {
       const name = (entry?.color ?? "").trim() || `Channel ${lutIdx + 1}`;
       const hex = normalizeHexValue(entry.hex) ?? "#808080";
@@ -707,7 +710,7 @@ export default function CustomRecipeDialog({
       return stablePalette;
     }
     if (
-      sourceVersion !== "material" ||
+      !isMaterialArchiveSourceVersion(sourceVersion) ||
       stableSelectedMaterialDirNames.length === 0
     ) {
       return stablePalette;
@@ -856,7 +859,7 @@ export default function CustomRecipeDialog({
         // 动态耗材返回的是权威实际层数，不能在编辑器里重新扩成最大打印宽度；
         // 提交后由后端在非观赏面补齐基板耗材。
         const targetLen =
-          sourceVersion === "material" && dynamicMaterialEnabled
+          isMaterialArchiveSourceVersion(sourceVersion) && dynamicMaterialEnabled
             ? firstEntry.recipe.length
             : colorLayers;
         const defaultRecipe = buildDefaultRecipe(
@@ -963,7 +966,7 @@ export default function CustomRecipeDialog({
   // type: material sources always predict via Beer-Lambert; legacy/native LUTs
   // predict only when they carry a predictive runtime.
   const canPredictRecipe =
-    sourceVersion === "material" ||
+    isMaterialArchiveSourceVersion(sourceVersion) ||
     Boolean(selectedLutInfo?.supports_predictive_match);
   const shouldConfirmUpgrade = pendingUpgrade && recipe.length > colorLayers;
 

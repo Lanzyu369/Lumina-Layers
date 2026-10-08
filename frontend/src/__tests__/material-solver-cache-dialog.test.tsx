@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import MaterialSolverCacheDialog from "../components/MaterialSolverCacheDialog";
+import { translations } from "../i18n/translations";
 import {
   fetchMaterialSolverCacheStatus,
   fetchMaterialSolverRuntimeStatus,
@@ -119,6 +120,31 @@ describe("MaterialSolverCacheDialog", () => {
     fireEvent.click(screen.getByTestId("material-solver-cache-dialog-overlay"));
     await waitFor(() => {
       expect(screen.queryByTestId("material-solver-cache-dialog")).toBeNull();
+    });
+  });
+
+  it("uses Box runtime copy and skips the affine status request for Lumina Box", async () => {
+    render(
+      <MaterialSolverCacheDialog
+        materialDirectoryNames={["red", "white"]}
+        layerCount={5}
+        layerHeightMm={0.08}
+        materialProfileKind="lumina_box"
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: (name) => Object.values(translations.basic_material_runtime_open_button).includes(name) }),
+    );
+    expect(
+      await screen.findByTestId("material-solver-cache-dialog"),
+    ).toBeInTheDocument();
+    expect(fetchMaterialSolverCacheStatus).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(fetchMaterialSolverRuntimeStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ materialProfileKind: "lumina_box" }),
+        expect.anything(),
+      );
     });
   });
 });

@@ -15,6 +15,7 @@ from api.routers.feedback import router as feedback_router
 from api.routers.five_color import router as five_color_router
 from api.routers.health import router as health_router
 from api.routers.lut import router as lut_router
+from api.routers.lumina_box import router as lumina_box_router
 from api.routers.lut_registry import router as lut_registry_router
 from api.routers.material_registry import router as material_registry_router
 from api.routers.material_sync import router as material_sync_router
@@ -33,6 +34,7 @@ __all__ = [
     "five_color_router",
     "health_router",
     "lut_router",
+    "lumina_box_router",
     "lut_registry_router",
     "material_registry_router",
     "material_sync_router",

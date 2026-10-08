@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api.schemas.lut import PaletteEntrySchema
@@ -65,6 +67,8 @@ class GradientCardMaterialUpdateRequest(BaseModel):
         None,
         description="Updated optional brand label.",
     )
+    notes: str | None = Field(default=None, max_length=2000)
+    material_type: str | None = Field(default=None, max_length=128)
     estimated_rgb: list[int] | None = Field(
         None,
         description=(
@@ -117,14 +121,14 @@ class MaterialRecipePreviewRequest(BaseModel):
     正向模拟选定耗材按顺序叠层的预测颜色。
 
     Each entry in ``directory_names`` is one print layer (bottom -> top relative
-    to the substrate). The endpoint loads the corresponding Stage A parameters
-    and runs a Beer-Lambert forward pass; no LUT is consulted. The recipe
-    length is intentionally unconstrained beyond a sane upper bound so users
-    can preview any layer count, not just the 5-layer presets the inverse
-    solver requires.
+    to the substrate). The endpoint validates that every archive belongs to
+    ``material_profile_kind`` and dispatches to that profile's forward model;
+    no LUT is consulted. The recipe length is intentionally unconstrained
+    beyond a sane upper bound so users can preview any layer count, not just
+    the 5-layer presets the inverse solver requires.
 
-    每个 ``directory_names`` 元素代表一层打印（从基底向外）。后端会加载对应
-    Stage A 参数，使用 Beer-Lambert 正向模型求解叠层颜色；不依赖任何 LUT。
+    每个 ``directory_names`` 元素代表一层打印（从基底向外）。后端会校验所有
+    档案均属于 ``material_profile_kind``，再分派到对应的正向模型；不依赖任何 LUT。
     层数上限设得宽松，以便用户预览任意层数。
     """
 
@@ -135,6 +139,13 @@ class MaterialRecipePreviewRequest(BaseModel):
         description=(
             "Saved material directory names, in stacking order from substrate "
             "(index 0) to outermost visible layer (index -1)."
+        ),
+    )
+    material_profile_kind: Literal["stage_a", "lumina_box"] = Field(
+        "stage_a",
+        description=(
+            "Optical-profile family shared by every selected material archive. "
+            "Legacy requests default to 'stage_a'."
         ),
     )
     layer_height_mm: float = Field(
@@ -189,6 +200,13 @@ class MaterialRecipeSwatchRequest(BaseModel):
     recipes: list[MaterialRecipeSwatchItemRequest] = Field(
         ..., min_length=1, max_length=100, description="Recipe list."
     )
+    material_profile_kind: Literal["stage_a", "lumina_box"] = Field(
+        "stage_a",
+        description=(
+            "Optical-profile family required for every recipe in this batch. "
+            "A batch must not mix Stage A and Lumina Box archives."
+        ),
+    )
     block_size_mm: float = Field(15.0, ge=5.0, le=50.0, description="Block size (mm).")
     gap_mm: float = Field(2.0, ge=0.5, le=10.0, description="Grid gap (mm).")
     cols: int = Field(0, ge=0, le=20, description="Columns per row; 0 = auto.")
@@ -208,6 +226,10 @@ class MaterialRecipeSwatchResponse(BaseModel):
 
     status: str = Field(..., description="Status.")
     message: str = Field(..., description="Status message.")
+    material_profile_kind: Literal["stage_a", "lumina_box"] = Field(
+        "stage_a",
+        description="Validated optical-profile family used for this swatch batch.",
+    )
     download_url: str = Field(..., description="3MF download URL.")
     preview_url: str | None = Field(None, description="Legend preview URL.")
     recipe_count: int = Field(..., description="Number of generated recipes.")

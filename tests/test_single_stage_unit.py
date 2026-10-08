@@ -102,6 +102,15 @@ def _minimal_solver_stage_a_bytes(
     ).encode("utf-8")
 
 
+def _use_materials_root(monkeypatch: pytest.MonkeyPatch, materials_root: Path) -> None:
+    for module in (
+        "core.material_lut_synthesis",
+        "core.material_lut_provider",
+        "core.pipeline._input_validation_common",
+    ):
+        monkeypatch.setattr(f"{module}.MATERIALS_DIR", str(materials_root))
+
+
 def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     app = create_app()
     store = SessionStore(ttl=1800)
@@ -288,7 +297,7 @@ def test_material_solver_cache_status_rejects_malformed_local_material(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("core.material_lut_synthesis.MATERIALS_DIR", str(materials_root))
+    _use_materials_root(monkeypatch, materials_root)
     client, _, _ = _client_with_state()
 
     response = client.post(
@@ -339,7 +348,7 @@ def test_material_solver_cache_status_redacts_invalid_stage_a_params_path(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("core.material_lut_synthesis.MATERIALS_DIR", str(materials_root))
+    _use_materials_root(monkeypatch, materials_root)
     client, _, _ = _client_with_state()
 
     response = client.post(
@@ -385,7 +394,7 @@ def test_material_solver_cache_status_accepts_relative_stage_a_params_path(
     (material_dir / "stage_A_parameters.json").write_bytes(
         _minimal_solver_stage_a_bytes("PLA Basic"),
     )
-    monkeypatch.setattr("core.material_lut_synthesis.MATERIALS_DIR", str(materials_root))
+    _use_materials_root(monkeypatch, materials_root)
     client, _, _ = _client_with_state()
 
     response = client.post(
@@ -6062,15 +6071,17 @@ def test_generate_material_swatch_cleans_output_when_registry_fails(
     swatch_path.write_bytes(b"3mf")
 
     monkeypatch.setattr(
-        "api.routers.single_stage._load_palette_or_raise",
-        lambda directory_names: [
-            SimpleNamespace(
-                directory_name="pla-basic",
-                name="PLA Basic",
-                estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
-                material_type=None,
-            )
-        ],
+        "api.routers.single_stage.load_and_validate_material_archive_profile",
+        lambda directory_names, *, profile_kind: (
+            profile_kind,
+            [
+                SimpleNamespace(
+                    directory_name="pla-basic",
+                    name="PLA Basic",
+                    estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+                )
+            ],
+        ),
     )
 
     def _fake_generate_material_recipe_swatch(*, recipes, **kwargs):
@@ -6120,15 +6131,17 @@ def test_generate_material_swatch_hides_export_failure_detail(
     )
 
     monkeypatch.setattr(
-        "api.routers.single_stage._load_palette_or_raise",
-        lambda directory_names: [
-            SimpleNamespace(
-                directory_name="pla-basic",
-                name="PLA Basic",
-                estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
-                material_type=None,
-            )
-        ],
+        "api.routers.single_stage.load_and_validate_material_archive_profile",
+        lambda directory_names, *, profile_kind: (
+            profile_kind,
+            [
+                SimpleNamespace(
+                    directory_name="pla-basic",
+                    name="PLA Basic",
+                    estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+                )
+            ],
+        ),
     )
 
     def _fake_generate_material_recipe_swatch(*, recipes, **kwargs):
@@ -6191,15 +6204,17 @@ def test_generate_material_swatch_preserves_download_when_preview_registration_f
     swatch_path.write_bytes(b"3mf")
 
     monkeypatch.setattr(
-        "api.routers.single_stage._load_palette_or_raise",
-        lambda directory_names: [
-            SimpleNamespace(
-                directory_name="pla-basic",
-                name="PLA Basic",
-                estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
-                material_type=None,
-            )
-        ],
+        "api.routers.single_stage.load_and_validate_material_archive_profile",
+        lambda directory_names, *, profile_kind: (
+            profile_kind,
+            [
+                SimpleNamespace(
+                    directory_name="pla-basic",
+                    name="PLA Basic",
+                    estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+                )
+            ],
+        ),
     )
 
     def _fake_generate_material_recipe_swatch(*, recipes, **kwargs):
@@ -6275,15 +6290,17 @@ def test_generate_material_swatch_preserves_download_when_preview_encoding_fails
     swatch_path.write_bytes(b"3mf")
 
     monkeypatch.setattr(
-        "api.routers.single_stage._load_palette_or_raise",
-        lambda directory_names: [
-            SimpleNamespace(
-                directory_name="pla-basic",
-                name="PLA Basic",
-                estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
-                material_type=None,
-            )
-        ],
+        "api.routers.single_stage.load_and_validate_material_archive_profile",
+        lambda directory_names, *, profile_kind: (
+            profile_kind,
+            [
+                SimpleNamespace(
+                    directory_name="pla-basic",
+                    name="PLA Basic",
+                    estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+                )
+            ],
+        ),
     )
 
     def _fake_generate_material_recipe_swatch(*, recipes, **kwargs):

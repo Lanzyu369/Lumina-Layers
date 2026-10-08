@@ -96,6 +96,49 @@ describe("useActionHistoryBootstrap", () => {
     }
   });
 
+  it("captures Lumina Box as a material archive without legacy LUT or color-mode state", () => {
+    const { unmount } = renderHook(() => useActionHistoryBootstrap());
+    try {
+      act(() => {
+        useConverterStore.setState({
+          source_version: "lumina_box",
+          color_mode: "8-Color Max",
+          lut_name: "StaleLegacyLut",
+          selectedMaterialDirNames: ["lb/blue", "lb/white"],
+          materialLayerCount: 8,
+          materialLayerHeightMm: 0.04,
+          materialBackingMaterialDirName: "lb/white",
+          materialDynamicLayerCountEnabled: true,
+          materialMinLayerCount: 5,
+          materialMaxLayerCount: 8,
+        } as never);
+      });
+
+      const entry = useActionHistoryStore
+        .getState()
+        .history.find((item) => item.action_type === "source_version_change");
+      expect(entry?.snapshot).toMatchObject({
+        source_version: "lumina_box",
+        color_mode: null,
+        lut_name: null,
+        selected_material_dir_names: ["lb/blue", "lb/white"],
+        material_layer_count: 8,
+        material_layer_height_mm: 0.04,
+        material_backing_material_dir_name: "lb/white",
+      });
+      expect(entry?.snapshot.advanced_params).toMatchObject({
+        generation: {
+          material_dynamic_layer_count_enabled: true,
+          material_min_layer_count: 5,
+          material_max_layer_count: 8,
+          material_backing_material_dir_name: "lb/white",
+        },
+      });
+    } finally {
+      unmount();
+    }
+  });
+
   it("previewImageUrl going from null to a value produces a preview entry", () => {
     const { unmount } = renderHook(() => useActionHistoryBootstrap());
     try {

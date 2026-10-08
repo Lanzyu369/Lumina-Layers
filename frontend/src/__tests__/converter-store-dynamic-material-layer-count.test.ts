@@ -66,10 +66,16 @@ describe("converter store dynamic material layer count", () => {
     });
   });
 
-  it("treats dynamic matching as active only for material source", () => {
+  it("treats dynamic matching as active for both material archive source families", () => {
     expect(
       isDynamicMaterialActive({
         source_version: "material",
+        materialDynamicLayerCountEnabled: true,
+      }),
+    ).toBe(true);
+    expect(
+      isDynamicMaterialActive({
+        source_version: "lumina_box",
         materialDynamicLayerCountEnabled: true,
       }),
     ).toBe(true);
@@ -216,5 +222,40 @@ describe("converter store dynamic material layer count", () => {
       materialDynamicRecipes: [STALE_DYNAMIC_RECIPE],
       materialLayerBenefitCurve: [STALE_BENEFIT_POINT],
     });
+  });
+
+  it("clears material selection, backing, and preview artifacts when changing archive families", () => {
+    useConverterStore.setState({
+      source_version: "material",
+      selectedMaterialDirNames: ["stage-a/white", "stage-a/blue"],
+      materialBackingMaterialDirName: "stage-a/white",
+      materialSuggestionsError: "stale suggestion",
+    } as never);
+    seedPreviewArtifacts();
+
+    useConverterStore.getState().setSourceVersion("lumina_box");
+
+    expect(useConverterStore.getState()).toMatchObject({
+      source_version: "lumina_box",
+      selectedMaterialDirNames: [],
+      materialBackingMaterialDirName: null,
+      materialSuggestionsError: null,
+    });
+    expectPreviewArtifactsCleared();
+
+    useConverterStore.setState({
+      selectedMaterialDirNames: ["lumina/white"],
+      materialBackingMaterialDirName: "lumina/white",
+    } as never);
+    seedPreviewArtifacts();
+
+    useConverterStore.getState().setSourceVersion("material");
+
+    expect(useConverterStore.getState()).toMatchObject({
+      source_version: "material",
+      selectedMaterialDirNames: [],
+      materialBackingMaterialDirName: null,
+    });
+    expectPreviewArtifactsCleared();
   });
 });

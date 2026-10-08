@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-14",
+    title: {
+      zh: "Lumina Layers — 校准 & 材料更新",
+      en: "Lumina Layers — Calibration & Materials update",
+    },
+    sections: [{
+      category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+      items: [{
+        zh: "新增 Lumina Box 耗材采集：支持任意颜色，可新建或重采耗材档案，用于图像转换。黑、白背板可分别采集、独立保存，并按本批样片的实际用料分别选择；采集进度自动保存。",
+        en: "Added Lumina Box capture for any filament color, with separate options to create or remeasure material profiles for image conversion. Black and white backings can be measured and saved independently, then selected separately to match your actual samples. Progress is saved automatically.",
+      }],
+    }],
+  },
+  {
     version: "2026-10-12",
     title: {
       zh: "Lumina Layers — 10 月更新速览",

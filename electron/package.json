@@ -8,11 +8,15 @@
     "start": "electron .",
     "test": "node --test __tests__/*.test.cjs"
   },
+  "dependencies": {
+    "serialport": "13.0.0"
+  },
   "devDependencies": {
     "electron": "^35.0.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
+      "@serialport/bindings-cpp",
       "electron"
     ]
   }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import MaterialColorPicker from "../components/sections/MaterialColorPicker";
 import { useConverterStore } from "../stores/converter";
 import type { MaterialColorSuggestionsResponse } from "../api/types";
+import { translations } from "../i18n/translations";
 
 const fetchMaterialColorSuggestionsMock = vi.hoisted(() => vi.fn());
 
@@ -144,6 +145,29 @@ describe("MaterialColorPicker", () => {
     ).toBeInTheDocument();
   });
 
+  it("labels the Lumina Box live fallback with the public Box wording", async () => {
+    const target = "#12340C";
+    fetchMaterialColorSuggestionsMock.mockResolvedValueOnce(
+      _stubResponse(target, {
+        source: "km_live",
+        profile_kind: "lumina_box",
+      }),
+    );
+    useConverterStore.setState({ source_version: "lumina_box" });
+
+    render(<MaterialColorPicker />);
+    const hexInput = screen.getByPlaceholderText(/#RRGGBB/i) as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(hexInput, { target: { value: target } });
+      fireEvent.click(
+        screen.getByRole("button", { name: /suggest colors|生成建议/i }),
+      );
+    });
+
+    expect(screen.getByText((text) => Object.values(translations.material_picker_source_km_live).includes(text))).toBeInTheDocument();
+    expect(screen.queryByText(/MITM 实时求解|MITM live solve/i)).not.toBeInTheDocument();
+  });
+
   it("submits on Enter key in the hex input", async () => {
     const target = "#123402";
     fetchMaterialColorSuggestionsMock.mockResolvedValueOnce(_stubResponse(target));
@@ -159,6 +183,47 @@ describe("MaterialColorPicker", () => {
     expect(fetchMaterialColorSuggestionsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         materialDirectoryNames: ["red", "blue", "white"],
+      }),
+      target.toUpperCase(),
+      expect.anything(),
+    );
+  });
+
+  it("ignores button and Enter submissions while suggestions are loading", () => {
+    useConverterStore.setState({ materialSuggestionsLoading: true });
+    render(<MaterialColorPicker />);
+
+    const hexInput = screen.getByPlaceholderText(/#RRGGBB/i) as HTMLInputElement;
+    fireEvent.change(hexInput, { target: { value: "#12340D" } });
+    const submit = screen.getByRole("button", {
+      name: /suggest colors|生成建议/i,
+    });
+    expect(submit).toBeDisabled();
+
+    fireEvent.click(submit);
+    fireEvent.keyDown(hexInput, { key: "Enter" });
+
+    expect(fetchMaterialColorSuggestionsMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the Lumina Box profile kind for measured-material suggestions", async () => {
+    const target = "#12340B";
+    fetchMaterialColorSuggestionsMock.mockResolvedValueOnce(_stubResponse(target));
+    useConverterStore.setState({ source_version: "lumina_box" });
+    render(<MaterialColorPicker />);
+
+    const hexInput = screen.getByPlaceholderText(/#RRGGBB/i) as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(hexInput, { target: { value: target } });
+      fireEvent.click(
+        screen.getByRole("button", { name: /suggest colors|生成建议/i }),
+      );
+    });
+
+    expect(fetchMaterialColorSuggestionsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        materialDirectoryNames: ["red", "blue", "white"],
+        materialProfileKind: "lumina_box",
       }),
       target.toUpperCase(),
       expect.anything(),

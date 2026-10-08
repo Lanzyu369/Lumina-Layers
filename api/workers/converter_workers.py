@@ -471,6 +471,8 @@ def worker_generate_preview(
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
+    material_profile_kind: str = "stage_a",
+    spacer_thick: float = 1.2,
     svg_hole_compensation_enabled: bool = False,
     svg_hole_max_area_mm2: float = 0.5,
     svg_hole_max_width_mm: float = 0.1,
@@ -483,6 +485,7 @@ def worker_generate_preview(
     data to temporary files, and returns a dict of file paths.
 
     Args:
+        spacer_thick: Physical backing thickness in mm.（实体底板厚度，毫米。）
         image_path (str): Path to the input image file. (输入图像文件路径)
         lut_path (str): Path to the LUT calibration file (.npy/.npz). (LUT 校准文件路径)
         target_width_mm (float): Target physical width in mm. (目标物理宽度，毫米)
@@ -560,6 +563,15 @@ def worker_generate_preview(
         },
     )
     try:
+        if material_source == "material_archive":
+            from core.pipeline._input_validation_common import (
+                load_and_validate_material_archive_profile,
+            )
+
+            load_and_validate_material_archive_profile(
+                list(selected_materials or []),
+                profile_kind=material_profile_kind,
+            )
         preview_img, cache_data, status_msg = generate_preview_cached(
             image_path=image_path,
             lut_path=lut_path,
@@ -598,6 +610,8 @@ def worker_generate_preview(
             material_min_layer_count=material_min_layer_count,
             material_max_layer_count=material_max_layer_count,
             material_delta_e00_tolerance=material_delta_e00_tolerance,
+            material_profile_kind=material_profile_kind,
+            spacer_thick=spacer_thick,
             replacement_regions=replacement_regions,
         )
     except (
@@ -1085,6 +1099,7 @@ def worker_batch_convert_item(
     svg_hole_max_width_mm: float = 0.1,
     enable_coating: bool = False,
     coating_height_mm: float = 0.08,
+    material_profile_kind: str = "stage_a",
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
@@ -1179,6 +1194,16 @@ def worker_batch_convert_item(
     from config import ModelingMode, TEMP_DIR
     from core.converter import convert_image_to_3d
 
+    if material_source == "material_archive":
+        from core.pipeline._input_validation_common import (
+            load_and_validate_material_archive_profile,
+        )
+
+        load_and_validate_material_archive_profile(
+            list(selected_materials or []),
+            profile_kind=material_profile_kind,
+        )
+
     core_modeling_mode = ModelingMode(modeling_mode_value)
 
     threemf_path, glb_path, _preview_img, status_msg, _recipe = convert_image_to_3d(
@@ -1234,6 +1259,7 @@ def worker_batch_convert_item(
         material_min_layer_count=material_min_layer_count,
         material_max_layer_count=material_max_layer_count,
         material_delta_e00_tolerance=material_delta_e00_tolerance,
+        material_profile_kind=material_profile_kind,
         enable_coating=enable_coating,
         coating_height_mm=coating_height_mm,
     )
@@ -1428,6 +1454,16 @@ def worker_generate_model(
         )
     export_transform_metadata: dict[str, object] = {}
     try:
+        if str(normalized_params.get("material_source") or "lut") == "material_archive":
+            from core.pipeline._input_validation_common import (
+                load_and_validate_material_archive_profile,
+            )
+
+            normalized_kind, _materials = load_and_validate_material_archive_profile(
+                list(normalized_params.get("selected_materials") or []),
+                profile_kind=normalized_params.get("material_profile_kind"),
+            )
+            normalized_params["material_profile_kind"] = normalized_kind
         result_tuple = generate_final_model(
             image_path=image_path,
             lut_path=lut_path,
@@ -1542,6 +1578,20 @@ def worker_generate_model_surface_overlay(
         raise ValueError(
             "Sparse backing infill is not supported for model surface generation."
         )
+    if str(converter_params.get("material_source") or "lut") == "material_archive":
+        # Do this before parsing footprint/model geometry or re-running the
+        # surface artwork pipeline. Otherwise an invalid Lumina archive is
+        # caught later as a generic ModelSurfaceError and loses its 422
+        # optical-contract response at the API boundary.
+        from core.pipeline._input_validation_common import (
+            load_and_validate_material_archive_profile,
+        )
+
+        normalized_kind, _materials = load_and_validate_material_archive_profile(
+            list(converter_params.get("selected_materials") or []),
+            profile_kind=converter_params.get("material_profile_kind"),
+        )
+        converter_params["material_profile_kind"] = normalized_kind
 
     footprint_payload = normalized_params.get("surface_footprint")
     if not isinstance(footprint_payload, dict):
@@ -1786,6 +1836,7 @@ def worker_generate_large_format_svg_native(
     from config import TEMP_DIR
     from core.pipeline._input_validation_common import (
         _apply_material_archive_branch,
+        load_and_validate_material_archive_profile,
     )
     from core.pipeline.preview_color_utils import build_lut_material_types
     from core.pipeline.vector_branch import (
@@ -1836,6 +1887,14 @@ def worker_generate_large_format_svg_native(
     worker_ctx = dict(params)
     worker_ctx["actual_lut_path"] = lut_path
     if material_source == "material_archive":
+        # P01 validates again when it builds the vector context.  Preflight
+        # here preserves the typed archive/model error across the native SVG
+        # worker boundary instead of turning it into a generic vector error.
+        normalized_kind, _materials = load_and_validate_material_archive_profile(
+            list(worker_ctx.get("selected_materials") or []),
+            profile_kind=worker_ctx.get("material_profile_kind"),
+        )
+        worker_ctx["material_profile_kind"] = normalized_kind
         validation_outcome = _apply_material_archive_branch(
             worker_ctx,
             log=log,

@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 
 from config import MATERIALS_DIR
+from core.errors import CoreValidationError
 
 # Re-export solver symbols so existing imports keep working
 from core.material_color_solver import (  # noqa: F401
@@ -40,6 +41,25 @@ from core.material_color_solver import (  # noqa: F401
     solve_image_colors,
     solve_image_colors_optimal,
 )
+from core.km_xyz import (
+    KM_XYZ_COLOR_BRIDGE_ID,
+    KM_XYZ_MEASUREMENT_PROTOCOL_ID,
+    KM_XYZ_MODEL_ID,
+    km_relative_xyz_to_srgb_uint8,
+    km_stack_reflectance,
+)
+from core.material_optical_runtime import (
+    BEER_LAMBERT_MODEL_ID,
+    KM_COEFFICIENT_UNIT,
+    validate_material_optical_contract,
+)
+from core.lumina_box_spectral import (
+    BoxWhiteReference,
+    LUMINA_BOX_SPECTRAL_MODEL_ID,
+    SpectralMaterialParameters,
+)
+from core.backed_gradient_smooth import SPECTRAL_SMOOTH_MODEL_ID
+from core.backed_gradient_material import BackedGradientComponent, BackedGradientReference
 
 _log = logging.getLogger(__name__)
 
@@ -111,6 +131,57 @@ def _resolve_stage_a_params_path(
     return resolved_path
 
 
+def _resolve_km_params_path(
+    material_dir: Path,
+    archive: dict[str, Any],
+    *,
+    material_label: str,
+) -> Path:
+    """Resolve a KM sidecar without allowing paths outside its archive.
+
+    安全解析 KM 参数文件，禁止路径逃逸耗材档案目录。
+    """
+
+    raw_value = archive.get("km_xyz_parameters_file", "km_xyz_parameters.json")
+    if not isinstance(raw_value, str):
+        raise _material_solver_value_error(
+            material_label,
+            "km_xyz_parameters_file must reference an existing file inside the material directory",
+        )
+    raw_filename = raw_value.strip()
+    normalized = raw_filename.replace("\\", "/")
+    windows_path = PureWindowsPath(raw_filename)
+    path_parts = tuple(part for part in normalized.split("/") if part)
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or windows_path.drive
+        or windows_path.is_absolute()
+        or Path(raw_filename).is_absolute()
+        or not path_parts
+        or any(part in {".", ".."} for part in path_parts)
+    ):
+        raise _material_solver_value_error(
+            material_label,
+            "km_xyz_parameters_file must reference an existing file inside the material directory",
+        )
+    try:
+        material_root = material_dir.resolve(strict=True)
+        resolved_path = material_dir.joinpath(*path_parts).resolve(strict=True)
+        resolved_path.relative_to(material_root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise _material_solver_value_error(
+            material_label,
+            "km_xyz_parameters_file must reference an existing file inside the material directory",
+        ) from exc
+    if not resolved_path.is_file():
+        raise _material_solver_value_error(
+            material_label,
+            "km_xyz_parameters_file must reference an existing file inside the material directory",
+        )
+    return resolved_path
+
+
 def _solver_vector(
     raw_value: Any,
     *,
@@ -118,6 +189,7 @@ def _solver_vector(
     field_path: str,
     bounded_unit: bool = False,
     positive: bool = False,
+    non_negative: bool = False,
 ) -> np.ndarray:
     if not isinstance(raw_value, (list, tuple)):
         raise _material_solver_value_error(
@@ -145,6 +217,11 @@ def _solver_vector(
         raise _material_solver_value_error(
             material_label,
             f"{field_path} must contain positive numbers",
+        )
+    if non_negative and not np.all(vector >= 0.0):
+        raise _material_solver_value_error(
+            material_label,
+            f"{field_path} must contain non-negative numbers",
         )
     return vector
 
@@ -265,7 +342,163 @@ def load_material_params(
     archive = json.loads(archive_path.read_text(encoding="utf-8"))
     material_name = str(archive.get("material_name") or directory_name)
 
-    # Load stage_A_parameters.json for E and k
+    optical_model_id = str(
+        archive.get("optical_model")
+        or archive.get("optical_model_id")
+        or BEER_LAMBERT_MODEL_ID
+    ).strip()
+    if optical_model_id == SPECTRAL_SMOOTH_MODEL_ID:
+        from core.backed_gradient_archive import load_backed_gradient_archive
+
+        try:
+            archive, _measurements, fit = load_backed_gradient_archive(material_dir, archive)
+        except CoreValidationError as exc:
+            raise _material_solver_value_error(directory_name, exc.detail) from exc
+        estimated_rgb = np.asarray(archive["estimated_rgb"], dtype=np.uint8)
+        material = MaterialParams(
+            name=material_name, directory_name=directory_name,
+            E=_srgb_to_linear(estimated_rgb.reshape(1, 3))[0],
+            k=np.zeros(3, dtype=np.float64), C0_white=np.ones(3, dtype=np.float64),
+            estimated_rgb=estimated_rgb, optical_model_id=SPECTRAL_SMOOTH_MODEL_ID,
+            coefficient_unit=KM_COEFFICIENT_UNIT,
+            measurement_protocol_id=archive["measurement_protocol_id"],
+            color_bridge_id=archive["color_bridge_id"],
+            archive_revision_id=archive["archive_consistency"]["revision_id"],
+            backed_gradient_component=BackedGradientComponent.from_dict(fit["component"]),
+            backed_gradient_reference=BackedGradientReference.from_dict(fit["reference"]),
+            is_reference_white=fit["component"]["kind"] == "white",
+        )
+        validate_material_optical_contract([material])
+        return material
+    if optical_model_id == LUMINA_BOX_SPECTRAL_MODEL_ID:
+        from core.lumina_box_spectral_archive import load_spectral_archive
+
+        try:
+            archive, _measurements, fit = load_spectral_archive(material_dir, archive)
+        except CoreValidationError as exc:
+            raise _material_solver_value_error(directory_name, exc.detail) from exc
+        estimated_rgb = np.asarray(archive["estimated_rgb"], dtype=np.uint8)
+        material = MaterialParams(
+            name=material_name, directory_name=directory_name,
+            E=_srgb_to_linear(estimated_rgb.reshape(1, 3))[0],
+            k=np.zeros(3, dtype=np.float64), C0_white=np.ones(3, dtype=np.float64),
+            estimated_rgb=estimated_rgb, optical_model_id=LUMINA_BOX_SPECTRAL_MODEL_ID,
+            coefficient_unit=KM_COEFFICIENT_UNIT,
+            measurement_protocol_id=archive["measurement_protocol_id"],
+            color_bridge_id=archive["color_bridge_id"],
+            archive_revision_id=archive["archive_consistency"]["revision_id"],
+            spectral_parameters=SpectralMaterialParameters.from_dict(fit["parameters"]),
+            spectral_reference=BoxWhiteReference.from_dict(fit["white_reference"]),
+            is_reference_white=fit["is_reference_white"],
+        )
+        validate_material_optical_contract([material])
+        return material
+    if optical_model_id == KM_XYZ_MODEL_ID:
+        params_path = _resolve_km_params_path(
+            material_dir,
+            archive,
+            material_label=directory_name,
+        )
+        try:
+            params_payload = json.loads(params_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _material_solver_value_error(
+                directory_name,
+                "km_xyz_parameters_file must contain valid UTF-8 JSON",
+            ) from exc
+        if not isinstance(params_payload, dict):
+            raise _material_solver_value_error(
+                directory_name,
+                "KM parameter payload must be a JSON object",
+            )
+        if str(params_payload.get("optical_model") or KM_XYZ_MODEL_ID) != KM_XYZ_MODEL_ID:
+            raise _material_solver_value_error(
+                directory_name,
+                "KM parameter optical_model does not match material.json",
+            )
+        coefficients = params_payload.get("parameters")
+        if not isinstance(coefficients, dict):
+            raise _material_solver_value_error(
+                directory_name,
+                "KM parameters must be a JSON object",
+            )
+        coefficient_unit = str(
+            coefficients.get("unit")
+            or params_payload.get("coefficient_unit")
+            or KM_COEFFICIENT_UNIT
+        ).strip()
+        if coefficient_unit != KM_COEFFICIENT_UNIT:
+            raise _material_solver_value_error(
+                directory_name,
+                "KM coefficient unit must be mm^-1",
+            )
+        km_K = _solver_vector(
+            coefficients.get("K"),
+            material_label=directory_name,
+            field_path="parameters.K",
+            non_negative=True,
+        )
+        km_S = _solver_vector(
+            coefficients.get("S"),
+            material_label=directory_name,
+            field_path="parameters.S",
+            non_negative=True,
+        )
+        protocol_id = str(
+            archive.get("measurement_protocol")
+            or archive.get("protocol")
+            or params_payload.get("measurement_protocol_id")
+            or params_payload.get("protocol")
+            or KM_XYZ_MEASUREMENT_PROTOCOL_ID
+        ).strip()
+        color_bridge_id = str(
+            archive.get("color_bridge_id")
+            or params_payload.get("color_bridge_id")
+            or KM_XYZ_COLOR_BRIDGE_ID
+        ).strip()
+        consistency = archive.get("archive_consistency")
+        revision_id = (
+            str(consistency.get("revision_id")).strip()
+            if isinstance(consistency, dict) and consistency.get("revision_id")
+            else str(archive.get("updated_at") or "").strip() or None
+        )
+        estimated_rgb_raw = archive.get("estimated_rgb")
+        if isinstance(estimated_rgb_raw, list) and len(estimated_rgb_raw) >= 3:
+            estimated_rgb = np.asarray(estimated_rgb_raw[:3], dtype=np.uint8)
+        else:
+            estimated_relative_xyz = km_stack_reflectance(
+                km_K.reshape(1, 3),
+                km_S.reshape(1, 3),
+                3.0,
+                np.zeros(3, dtype=np.float64),
+            )
+            estimated_rgb = km_relative_xyz_to_srgb_uint8(estimated_relative_xyz)
+        estimated_linear = _srgb_to_linear(estimated_rgb.reshape(1, 3))[0]
+        material = MaterialParams(
+            name=material_name,
+            directory_name=directory_name,
+            E=estimated_linear,
+            k=np.zeros(3, dtype=np.float64),
+            C0_white=np.ones(3, dtype=np.float64),
+            estimated_rgb=estimated_rgb,
+            optical_model_id=KM_XYZ_MODEL_ID,
+            km_K=km_K,
+            km_S=km_S,
+            coefficient_unit=coefficient_unit,
+            measurement_protocol_id=protocol_id,
+            color_bridge_id=color_bridge_id,
+            archive_revision_id=revision_id,
+        )
+        validate_material_optical_contract([material])
+        return material
+
+    if optical_model_id != BEER_LAMBERT_MODEL_ID:
+        raise _material_solver_value_error(
+            directory_name,
+            f"unsupported optical_model {optical_model_id!r}",
+        )
+
+    # Legacy archives without an optical-model field remain Beer-Lambert.
     stage_a_path = _resolve_stage_a_params_path(
         material_dir,
         archive,
@@ -280,7 +513,6 @@ def load_material_params(
         material_label=directory_name,
     )
 
-    # Estimated sRGB for preview
     material_summary = archive.get("material_summary") or {}
     estimated_rgb_raw = material_summary.get("estimated_rgb")
     if isinstance(estimated_rgb_raw, list) and len(estimated_rgb_raw) >= 3:
@@ -323,6 +555,7 @@ def load_multiple_materials(
     materials = []
     for dir_name in directory_names:
         materials.append(load_material_params(dir_name, materials_dir=materials_dir))
+    validate_material_optical_contract(materials)
     return materials
 
 

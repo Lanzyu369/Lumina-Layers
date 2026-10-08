@@ -457,6 +457,7 @@ def test_preview_worker_forwards_dynamic_settings_to_core(
 ) -> None:
     from api.workers.converter_workers import worker_generate_preview
     from core import converter
+    from core.pipeline import _input_validation_common as archive_validation
 
     captured: dict[str, object] = {}
 
@@ -468,6 +469,11 @@ def test_preview_worker_forwards_dynamic_settings_to_core(
         converter,
         "generate_preview_cached",
         fake_generate_preview_cached,
+    )
+    monkeypatch.setattr(
+        archive_validation,
+        "load_and_validate_material_archive_profile",
+        lambda selected_materials, *, profile_kind: ("stage_a", []),
     )
 
     result = worker_generate_preview(
@@ -494,6 +500,7 @@ def test_preview_worker_forwards_dynamic_settings_to_core(
         assert captured["material_min_layer_count"] == 6
         assert captured["material_max_layer_count"] == 9
         assert captured["material_delta_e00_tolerance"] == pytest.approx(0.4)
+        assert captured["material_profile_kind"] == "stage_a"
     finally:
         for key in (
             "preview_png_path",
@@ -512,6 +519,7 @@ def test_batch_worker_forwards_dynamic_settings_to_core(
 ) -> None:
     from api.workers.converter_workers import worker_batch_convert_item
     from core import converter
+    from core.pipeline import _input_validation_common as archive_validation
 
     captured: dict[str, object] = {}
 
@@ -520,6 +528,11 @@ def test_batch_worker_forwards_dynamic_settings_to_core(
         return None, None, None, "expected test stop", None
 
     monkeypatch.setattr(converter, "convert_image_to_3d", fake_convert_image_to_3d)
+    monkeypatch.setattr(
+        archive_validation,
+        "load_and_validate_material_archive_profile",
+        lambda selected_materials, *, profile_kind: ("stage_a", []),
+    )
 
     result = worker_batch_convert_item(
         "input.png",
@@ -549,3 +562,4 @@ def test_batch_worker_forwards_dynamic_settings_to_core(
     assert captured["material_min_layer_count"] == 6
     assert captured["material_max_layer_count"] == 9
     assert captured["material_delta_e00_tolerance"] == pytest.approx(0.4)
+    assert captured["material_profile_kind"] == "stage_a"

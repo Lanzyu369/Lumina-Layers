@@ -335,6 +335,12 @@ Bug reports are saved locally under `feedback/` and then uploaded to the officia
 
 ## Usage Guide
 
+### Lumina Box manual material guide
+
+The Lumina Box MVP accepts manual measurement results, fits an effective KM
+material archive, and keeps its supported workflow and limits explicit. See
+[Lumina Box User Guide (English + 中文)](docs/lumina-box-user-guide.md).
+
 ### Quick Start
 
 ```bash

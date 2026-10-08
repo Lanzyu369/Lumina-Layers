@@ -120,6 +120,14 @@ def test_real_preview_replace_manual_generate_and_close_download_lifecycle() -> 
                 "core.material_lut_synthesis.MATERIALS_DIR",
                 str(_FIXTURE_MATERIALS),
             ),
+            patch(
+                "core.pipeline._input_validation_common.MATERIALS_DIR",
+                str(_FIXTURE_MATERIALS),
+            ),
+            patch(
+                "core.material_lut_provider.MATERIALS_DIR",
+                str(_FIXTURE_MATERIALS),
+            ),
         ):
             preview_response = client.post(
                 "/api/convert/preview",

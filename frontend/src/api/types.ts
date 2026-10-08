@@ -82,6 +82,7 @@ export type ConvertSourceSelection =
 
 export type ConvertPreviewRequest = ConvertSourceSelection & {
   target_width_mm: number;
+  spacer_thick?: number;
   color_mode: ColorMode;
   modeling_mode: ModelingMode;
   color_layers?: number;
@@ -104,6 +105,8 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   chroma_gate?: number;
   is_dark?: boolean;
   material_source?: "lut" | "material_archive";
+  /** Optical-profile family for material_archive requests. */
+  material_profile_kind?: "stage_a" | "lumina_box";
   selected_materials?: string[];
   material_layer_count?: number;
   material_layer_height_mm?: number;
@@ -874,6 +877,10 @@ export interface StageAFitResponse {
   fit_summary: StageAFitSummary;
 }
 
+export type LuminaBoxXYZ = [number, number, number];
+export type LuminaBoxPercentXYZ = LuminaBoxXYZ;
+export type LuminaBoxColorBridgeId = "d65_10_to_d65_2_diagonal/v1";
+
 export interface GradientCardMaterialSummary {
   sample_count: number;
   per_substrate_sample_count: number;
@@ -1097,6 +1104,22 @@ export interface SavedMaterialLibraryItem {
   sync_revision_id?: string | null;
   sync_channel?: string | null;
   sync_official?: boolean;
+  /** Optical-profile contract returned by the material library. */
+  profile_kind?: "stage_a" | "lumina_box";
+  /** How this archive was acquired, for example gradient_card or lumina_box. */
+  acquisition_source?: string | null;
+  /** Versioned optical model used to predict this material. */
+  optical_model_id?: string | null;
+  /** Original Box collection for continuing measurements. / 可继续采集的 Box 原始记录。 */
+  capture_dataset_id?: string | null;
+  material_symbol?: "R" | "Y" | "B" | "W" | "K" | "C" | "M" | "G" | "material" | null;
+  reference_id?: string | null;
+  /** Fixed measurement protocol used to create this material. */
+  measurement_protocol_id?: string | null;
+  /** Optional Lumina Box color-space bridge; Stage A rows do not carry this field. */
+  color_bridge_id?: LuminaBoxColorBridgeId | null;
+  /** Estimated XYZ under the archive's recorded measurement context. */
+  estimated_xyz?: number[];
 }
 
 export interface GradientCardMaterialLibraryResponse {
@@ -1107,6 +1130,8 @@ export interface GradientCardMaterialLibraryResponse {
 
 export interface MaterialRecipePreviewRequest {
   directory_names: string[];
+  /** Optical-profile family that all recipe materials must share. */
+  material_profile_kind: "stage_a" | "lumina_box";
   layer_height_mm: number;
   substrate: "white" | "black";
 }
@@ -1121,6 +1146,8 @@ export interface MaterialRecipeLayer {
 
 export interface MaterialRecipePreviewResponse {
   status: string;
+  /** Validated profile kind returned by current servers. Optional for older servers. */
+  material_profile_kind?: "stage_a" | "lumina_box";
   layer_count: number;
   layer_height_mm: number;
   substrate: string;
@@ -1326,6 +1353,11 @@ export interface MaterialSolverCacheDeleteResponse {
 /** Metadata for one persisted hybrid material runtime. */
 export interface MaterialSolverRuntimeEntry {
   palette_hash: string;
+  profile_kind?: "stage_a" | "lumina_box";
+  optical_model?: string;
+  protocol_id?: string | null;
+  color_bridge_id?: string | null;
+  archive_revision_ids?: string[];
   material_directory_names: string[];
   layer_count: number;
   layer_height_mm: number;
@@ -1348,6 +1380,11 @@ export interface MaterialSolverRuntimeStatusResponse {
   message: string;
   cached: boolean;
   palette_hash: string;
+  profile_kind?: "stage_a" | "lumina_box";
+  optical_model?: string;
+  protocol_id?: string | null;
+  color_bridge_id?: string | null;
+  archive_revision_ids?: string[];
   layer_count: number;
   layer_height_mm: number;
   substrate: string;
@@ -1368,6 +1405,11 @@ export interface MaterialSolverRuntimeDeleteResponse {
   message: string;
   deleted: boolean;
   palette_hash: string;
+  profile_kind?: "stage_a" | "lumina_box";
+  optical_model?: string;
+  protocol_id?: string | null;
+  color_bridge_id?: string | null;
+  archive_revision_ids?: string[];
   layer_count: number;
   layer_height_mm: number;
   substrate: string;
@@ -1379,6 +1421,11 @@ export interface MaterialSolverRuntimeDetailsResponse {
   status: string;
   message: string;
   palette_hash: string;
+  profile_kind?: "stage_a" | "lumina_box";
+  optical_model?: string;
+  protocol_id?: string | null;
+  color_bridge_id?: string | null;
+  archive_revision_ids?: string[];
   material_directory_names: string[];
   layer_count: number;
   layer_height_mm: number;
@@ -1436,9 +1483,11 @@ export interface MaterialColorSuggestionsResponse {
   message: string;
   /**
    * ``"cache"`` for exact cache, ``"runtime"`` for hybrid runtime,
-   * ``"mitm"`` otherwise.
+   * ``"mitm"`` for Stage A live solving, ``"km_live"`` for the bounded
+   * Lumina Box live fallback.
    */
-  source: "cache" | "runtime" | "mitm";
+  source: "cache" | "runtime" | "mitm" | "km_live";
+  profile_kind?: "stage_a" | "lumina_box";
   palette_hash: string;
   layer_count: number;
   layer_height_mm: number;
@@ -1834,6 +1883,8 @@ export interface BatchConvertParams {
   vendor?: string;
   db_names?: string[];
   material_source?: "lut" | "material_archive";
+  /** Optical-profile family for material_archive requests. */
+  material_profile_kind?: "stage_a" | "lumina_box";
   selected_materials?: string[];
   material_layer_count?: number;
   material_layer_height_mm?: number;
@@ -2008,6 +2059,8 @@ export interface MaterialRecipeSwatchItemRequest {
 
 export interface MaterialRecipeSwatchRequest {
   recipes: MaterialRecipeSwatchItemRequest[];
+  /** Optical-profile family that all recipes in this batch must share. */
+  material_profile_kind: "stage_a" | "lumina_box";
   block_size_mm?: number;
   gap_mm?: number;
   cols?: number;
@@ -2023,6 +2076,8 @@ export interface MaterialRecipeSwatchRequest {
 export interface MaterialRecipeSwatchResponse {
   status: string;
   message: string;
+  /** Validated profile kind returned by current servers. Optional for older servers. */
+  material_profile_kind?: "stage_a" | "lumina_box";
   download_url: string;
   preview_url?: string | null;
   recipe_count: number;

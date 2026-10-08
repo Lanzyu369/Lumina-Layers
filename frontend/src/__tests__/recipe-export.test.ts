@@ -7,7 +7,10 @@ import type { ConverterState } from "../stores/converter/store";
 import { DEFAULT_STATE } from "../stores/converter";
 import type { SettingsState } from "../stores/settingsStore";
 import { DEFAULT_SETTINGS } from "../stores/settingsStore";
-import type { DynamicMaterialRecipe } from "../api/types";
+import type {
+  DynamicMaterialRecipe,
+  MaterialLayerBenefitPoint,
+} from "../api/types";
 import { createBeadRecipeSourceFixture } from "./fixtures/beadRecipeSource";
 
 function makeState(overrides?: Partial<ConverterState>): ConverterState {
@@ -209,41 +212,106 @@ describe("recipe/exportRecipe", () => {
       ]);
     });
 
-    it("exports dynamic material settings and exact recipe metadata", () => {
-      const dynamicRecipe: DynamicMaterialRecipe = {
-        target_srgb: [240, 220, 200],
-        matched_srgb: [238, 218, 198],
-        actual_layer_count: 5,
-        padding_layer_count: 2,
-        actual_recipe_top_to_bottom: [0, 1, 0, 1, 0],
-        print_recipe_top_to_bottom: [0, 1, 0, 1, 0, 1, 1],
-        selected_delta_e00: 0.7,
-        best_range_delta_e00: 0.4,
-        fixed_max_delta_e00: 0.5,
-        delta_e00_sacrifice: 0.3,
-        layer_cap_options: [],
-      };
+    it("exports fixed Lumina Box settings without legacy or native profile state", () => {
       const recipe = exportConverterRecipe(
         makeState({
-          source_version: "material",
-          materialDynamicLayerCountEnabled: true,
-          materialMinLayerCount: 5,
-          materialMaxLayerCount: 7,
-          materialDynamicRecipes: [dynamicRecipe],
+          source_version: "lumina_box",
+          lut_name: "StaleLegacyLut",
+          color_mode: "8-Color Max" as ConverterState["color_mode"],
+          selectedNativeBrandKey: "stale-native-brand",
+          selectedNativeDbNames: ["Stale Native PLA"],
+          color_layers: 8,
+          layer_height_mm: 0.2,
+          model_enable: true,
+          model_only: true,
+          model_threshold: 0.8,
+          model_margin: 4,
+          selectedMaterialDirNames: ["lb/blue", "lb/white"],
+          materialLayerCount: 8,
+          materialLayerHeightMm: 0.04,
+          materialBackingMaterialDirName: "lb/white",
+          materialDynamicLayerCountEnabled: false,
         }),
-        makeSettings({ materialDeltaE00Tolerance: 0.7 }),
-        "fp",
+        makeSettings({ materialDeltaE00Tolerance: 0.65 }),
+        "stale-record-path",
       );
 
-      expect(recipe.source).toMatchObject({
-        material_dynamic_layer_count_enabled: true,
-        material_min_layer_count: 5,
-        material_max_layer_count: 7,
-        material_delta_e00_tolerance: 0.7,
+      expect(recipe.base).toMatchObject({
+        lut: { name: "", color_mode: "" },
+        color_mode: "",
       });
-      expect(recipe.material_dynamic?.recipes[0]).toEqual(dynamicRecipe);
-      expect(recipe.material_dynamic?.recipes[0]).not.toBe(dynamicRecipe);
+      expect(recipe.source).toMatchObject({
+        source_version: "lumina_box",
+        selected_native_brand_key: "",
+        selected_native_db_names: [],
+        color_layers: null,
+        layer_height_mm: null,
+        model_enable: false,
+        model_only: false,
+        model_threshold: null,
+        model_margin: null,
+        selected_material_dir_names: ["lb/blue", "lb/white"],
+        material_layer_count: 8,
+        material_layer_height_mm: 0.04,
+        material_backing_material_dir_name: "lb/white",
+        material_dynamic_layer_count_enabled: false,
+        material_min_layer_count: 5,
+        material_max_layer_count: 10,
+        material_delta_e00_tolerance: 0.65,
+      });
+      expect(recipe.material_dynamic).toBeUndefined();
+      expect(recipe.source?.optical_model_id).toBe("backed_gradient_spectral_four_flux_smooth/v3");
     });
+
+    it.each(["material", "lumina_box"] as const)(
+      "exports dynamic %s archive settings and exact recipe metadata",
+      (sourceVersion) => {
+        const dynamicRecipe: DynamicMaterialRecipe = {
+          target_srgb: [240, 220, 200],
+          matched_srgb: [238, 218, 198],
+          actual_layer_count: 5,
+          padding_layer_count: 2,
+          actual_recipe_top_to_bottom: [0, 1, 0, 1, 0],
+          print_recipe_top_to_bottom: [0, 1, 0, 1, 0, 1, 1],
+          selected_delta_e00: 0.7,
+          best_range_delta_e00: 0.4,
+          fixed_max_delta_e00: 0.5,
+          delta_e00_sacrifice: 0.3,
+          layer_cap_options: [],
+        };
+        const benefitCurve: MaterialLayerBenefitPoint[] = [
+          {
+            max_effective_layer_count: 5,
+            weighted_mean_delta_e00: 0.7,
+            marginal_delta_e00_reduction: 0.2,
+          },
+        ];
+        const recipe = exportConverterRecipe(
+          makeState({
+            source_version: sourceVersion,
+            materialDynamicLayerCountEnabled: true,
+            materialMinLayerCount: 5,
+            materialMaxLayerCount: 7,
+            materialDynamicRecipes: [dynamicRecipe],
+            materialLayerBenefitCurve: benefitCurve,
+          }),
+          makeSettings({ materialDeltaE00Tolerance: 0.7 }),
+          "fp",
+        );
+
+        expect(recipe.source).toMatchObject({
+          source_version: sourceVersion,
+          material_dynamic_layer_count_enabled: true,
+          material_min_layer_count: 5,
+          material_max_layer_count: 7,
+          material_delta_e00_tolerance: 0.7,
+        });
+        expect(recipe.material_dynamic?.recipes[0]).toEqual(dynamicRecipe);
+        expect(recipe.material_dynamic?.recipes[0]).not.toBe(dynamicRecipe);
+        expect(recipe.material_dynamic?.benefit_curve).toEqual(benefitCurve);
+        expect(recipe.material_dynamic?.benefit_curve).not.toBe(benefitCurve);
+      },
+    );
 
     it("exports large format parameters", () => {
       const state = makeState({

@@ -48,7 +48,26 @@ export type SelectionTool = "same-color" | "color-range" | "point" | "brush";
 
 export type SelectionDocument = SelectionDocumentResponse;
 
-export type SourceVersion = "legacy" | "native" | "material";
+export type SourceVersion = "legacy" | "native" | "material" | "lumina_box";
+
+/** Optical-profile families that share the material-archive converter path. */
+export type MaterialArchiveProfileKind = "stage_a" | "lumina_box";
+
+/** Whether a source version uses the material-archive selection and solver UI. */
+export function isMaterialArchiveSourceVersion(
+  sourceVersion: string | null | undefined,
+): sourceVersion is "material" | "lumina_box" {
+  return sourceVersion === "material" || sourceVersion === "lumina_box";
+}
+
+/** Map a converter source to the profile discriminator sent to material APIs. */
+export function getMaterialArchiveProfileKind(
+  sourceVersion: SourceVersion,
+): MaterialArchiveProfileKind | null {
+  if (sourceVersion === "material") return "stage_a";
+  if (sourceVersion === "lumina_box") return "lumina_box";
+  return null;
+}
 
 export interface RegionData {
   regionId: string;

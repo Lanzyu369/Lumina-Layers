@@ -6,6 +6,7 @@ import type {
 } from "../api/feedback";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import {
+  isMaterialArchiveSourceVersion,
   resolveBugReportOriginalImageFile,
   useConverterStore,
 } from "../stores/converter";
@@ -25,7 +26,12 @@ import { useErrorTicketPromptStore } from "../stores/errorTicketPromptStore";
 import { useWidgetStore } from "../stores/widgetStore";
 import { useWorkshopStore } from "../workshop/store";
 import { buildAdvancedParams } from "./advancedParamsBuilder";
+import { LUMINA_BOX_PRODUCTION_MODEL_ID } from "../api/luminaBoxMaterials";
 import { getRecentClientLogs, serializeDiagnosticValue } from "./clientLog";
+import {
+  cloneDynamicMaterialRecipe,
+  cloneMaterialLayerBenefitCurve,
+} from "../recipe/dynamicMaterialMetadata";
 import { resolveVectorPreviewRenderer } from "./vectorPreviewRenderer";
 import { getFeedbackSources, resolveSourceFile } from "./sourceFileOrigins";
 
@@ -196,17 +202,30 @@ export function collectBugReportContext(): BugReportContextPayload {
   const isConverterActive = widget.activeTab === "converter";
   const isWorkshopActive = widget.activeTab === "workshop";
   const sourceVersion = isConverterActive ? converter.source_version ?? null : null;
-  const isMaterialSource = sourceVersion === "material";
+  const isMaterialArchiveSource = isMaterialArchiveSourceVersion(sourceVersion);
   const isNativeSource = sourceVersion === "native";
   const colorMode = isConverterActive
-    ? (isMaterialSource ? null : converter.color_mode || null)
+    ? (isMaterialArchiveSource ? null : converter.color_mode || null)
     : settings.lastColorMode || null;
   const lutName = isConverterActive
-    ? (isMaterialSource ? null : converter.lut_name || null)
+    ? (isMaterialArchiveSource ? null : converter.lut_name || null)
     : settings.lastLutName || null;
   const lutNames =
     isConverterActive && sourceVersion === "legacy"
       ? [...converter.lut_names]
+      : null;
+  const materialDynamic =
+    isMaterialArchiveSource && converter.materialDynamicLayerCountEnabled
+      ? {
+          recipes: converter.materialDynamicRecipes.map(
+            cloneDynamicMaterialRecipe,
+          ),
+          benefit_curve: cloneMaterialLayerBenefitCurve(
+            converter.materialLayerBenefitCurve,
+          ),
+          scope: converter.materialLayerBenefitScope,
+          pixel_count: converter.materialLayerBenefitPixelCount,
+        }
       : null;
   const vectorPreviewRenderer = isConverterActive
     ? resolveVectorPreviewRenderer(
@@ -241,24 +260,34 @@ export function collectBugReportContext(): BugReportContextPayload {
     lut_name: lutName,
     ...(lutNames ? { lut_names: lutNames } : {}),
     source_version: sourceVersion,
-    selected_native_brand_key: isNativeSource ? converter.selectedNativeBrandKey || null : null,
+    ...(sourceVersion === "lumina_box" ? { optical_model_id: LUMINA_BOX_PRODUCTION_MODEL_ID } : {}),
+    selected_native_brand_key: isNativeSource
+      ? converter.selectedNativeBrandKey || null
+      : null,
     selected_native_db_names: isNativeSource ? converter.selectedNativeDbNames : [],
-    selected_material_dir_names: isMaterialSource ? converter.selectedMaterialDirNames : [],
-    material_layer_count: isMaterialSource ? converter.materialLayerCount : null,
-    material_dynamic_layer_count_enabled: isMaterialSource
+    selected_material_dir_names: isMaterialArchiveSource
+      ? converter.selectedMaterialDirNames
+      : [],
+    material_layer_count: isMaterialArchiveSource ? converter.materialLayerCount : null,
+    material_dynamic_layer_count_enabled: isMaterialArchiveSource
       ? converter.materialDynamicLayerCountEnabled
       : null,
-    material_min_layer_count: isMaterialSource
+    material_min_layer_count: isMaterialArchiveSource
       ? converter.materialMinLayerCount
       : null,
-    material_max_layer_count: isMaterialSource
+    material_max_layer_count: isMaterialArchiveSource
       ? converter.materialMaxLayerCount
       : null,
-    material_delta_e00_tolerance: isMaterialSource
+    material_delta_e00_tolerance: isMaterialArchiveSource
       ? settings.materialDeltaE00Tolerance
       : null,
-    material_layer_height_mm: isMaterialSource ? converter.materialLayerHeightMm : null,
-    material_backing_material_dir_name: isMaterialSource ? converter.materialBackingMaterialDirName : null,
+    material_dynamic: materialDynamic,
+    material_layer_height_mm: isMaterialArchiveSource
+      ? converter.materialLayerHeightMm
+      : null,
+    material_backing_material_dir_name: isMaterialArchiveSource
+      ? converter.materialBackingMaterialDirName
+      : null,
     preserve_upload_filename_for_3mf:
       settings.preserveUploadFilenameFor3mf,
     enable_wipe_tower_auto_placement:

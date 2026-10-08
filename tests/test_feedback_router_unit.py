@@ -33,6 +33,14 @@ GENERIC_HTTP_STATUS_DETAIL = (
 )
 
 
+def test_box_model_identity_is_preserved_in_bug_report_context() -> None:
+    from api.routers.feedback import BugReportContext
+    from core.lumina_box_spectral import LUMINA_BOX_SPECTRAL_MODEL_ID
+
+    context = {**_payload()["context"], "source_version": "lumina_box", "optical_model_id": LUMINA_BOX_SPECTRAL_MODEL_ID}
+    assert BugReportContext.model_validate(context).model_dump()["optical_model_id"] == LUMINA_BOX_SPECTRAL_MODEL_ID
+
+
 def _capture_feedback_logger(
     caplog: pytest.LogCaptureFixture,
     level: int,
@@ -94,6 +102,59 @@ def _payload(**overrides: Any) -> dict[str, Any]:
     return payload
 
 
+def _valid_material_dynamic() -> dict[str, Any]:
+    """Return one valid share-card-shaped dynamic solver result."""
+    actual_recipe = [0, 1, 0, 1, 0]
+    print_recipe = [*actual_recipe, 1, 1]
+    layer_cap_options = [
+        {
+            "max_effective_layer_count": cap,
+            "actual_layer_count": 5,
+            "matched_srgb": [20, 30, 40],
+            "actual_recipe_top_to_bottom": list(actual_recipe),
+            "print_recipe_top_to_bottom": list(print_recipe),
+            "delta_e00": 0.3,
+        }
+        for cap in (5, 6, 7)
+    ]
+    return {
+        "recipes": [
+            {
+                "target_srgb": [17, 34, 51],
+                "matched_srgb": [20, 30, 40],
+                "actual_layer_count": 5,
+                "padding_layer_count": 2,
+                "actual_recipe_top_to_bottom": list(actual_recipe),
+                "print_recipe_top_to_bottom": list(print_recipe),
+                "selected_delta_e00": 0.3,
+                "best_range_delta_e00": 0.2,
+                "fixed_max_delta_e00": 0.4,
+                "delta_e00_sacrifice": 0.1,
+                "layer_cap_options": layer_cap_options,
+            }
+        ],
+        "benefit_curve": [
+            {
+                "max_effective_layer_count": 5,
+                "weighted_mean_delta_e00": 0.3,
+                "marginal_delta_e00_reduction": 0.0,
+            },
+            {
+                "max_effective_layer_count": 6,
+                "weighted_mean_delta_e00": 0.25,
+                "marginal_delta_e00_reduction": 0.05,
+            },
+            {
+                "max_effective_layer_count": 7,
+                "weighted_mean_delta_e00": 0.2,
+                "marginal_delta_e00_reduction": 0.05,
+            },
+        ],
+        "scope": "automatic_pixels",
+        "pixel_count": 37,
+    }
+
+
 def _read_ticket_json(feedback_root: Path, ticket_id: str) -> dict[str, Any]:
     """Locate ``feedback/<YYYY-MM>/<ticket_id>/ticket.json`` and decode it."""
     for month_dir in feedback_root.iterdir():
@@ -152,6 +213,143 @@ def test_bug_report_context_preserves_dynamic_material_scalars() -> None:
     assert dumped["material_min_layer_count"] == 5
     assert dumped["material_max_layer_count"] == 9
     assert dumped["material_delta_e00_tolerance"] == pytest.approx(0.4)
+
+
+def test_submit_bug_report_round_trips_dynamic_material_evidence(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    """Enabled Lumina Box reports retain the full validated solver evidence."""
+    dynamic = _valid_material_dynamic()
+    payload = _payload()
+    payload["context"].update(
+        {
+            "source_version": "lumina_box",
+            "color_mode": None,
+            "lut_name": "stale-legacy-lut",
+            "material_dynamic_layer_count_enabled": True,
+            "material_dynamic": dynamic,
+        }
+    )
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    ticket_json = _read_ticket_json(feedback_root, response.json()["ticket_id"])
+    context = ticket_json["context"]
+    assert context["material_dynamic"] == dynamic
+    assert context["lut_name"] is None
+    assert context["color_mode"] is None
+
+
+def test_submit_bug_report_omits_unsubmitted_dynamic_material_for_old_clients(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    """An older payload must not gain a material_dynamic:null ticket field."""
+    response = client.post("/api/feedback/bug-report", json=_payload())
+
+    assert response.status_code == 200
+    ticket_json = _read_ticket_json(feedback_root, response.json()["ticket_id"])
+    assert "material_dynamic" not in ticket_json["context"]
+
+
+@pytest.mark.parametrize(
+    ("source_version", "dynamic_enabled"),
+    [("legacy", True), ("material", False)],
+    ids=["nonarchive", "disabled"],
+)
+def test_submit_bug_report_clears_inapplicable_dynamic_material(
+    client: TestClient,
+    feedback_root: Path,
+    source_version: str,
+    dynamic_enabled: bool,
+) -> None:
+    """Only an enabled material archive may retain dynamic solver evidence."""
+    payload = _payload()
+    payload["context"].update(
+        {
+            "source_version": source_version,
+            "material_dynamic_layer_count_enabled": dynamic_enabled,
+            "material_dynamic": _valid_material_dynamic(),
+        }
+    )
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    ticket_json = _read_ticket_json(feedback_root, response.json()["ticket_id"])
+    assert ticket_json["context"]["material_dynamic"] is None
+
+
+def test_submit_bug_report_rejects_nonfinite_dynamic_material_values(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    """Dynamic evidence rejects NaN instead of persisting non-JSON values."""
+    dynamic = _valid_material_dynamic()
+    dynamic["recipes"][0]["selected_delta_e00"] = float("nan")
+    payload = _payload()
+    payload["context"].update(
+        {
+            "source_version": "material",
+            "material_dynamic_layer_count_enabled": True,
+            "material_dynamic": dynamic,
+        }
+    )
+
+    response = client.post(
+        "/api/feedback/bug-report",
+        content=json.dumps(payload, allow_nan=True),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    assert list(feedback_root.rglob("ticket.json")) == []
+
+
+def test_submit_bug_report_rejects_misaligned_dynamic_material_caps(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    """Benefit-curve caps must match the shared recipe caps exactly."""
+    dynamic = _valid_material_dynamic()
+    dynamic["benefit_curve"][0]["max_effective_layer_count"] = 6
+    payload = _payload()
+    payload["context"].update(
+        {
+            "source_version": "material",
+            "material_dynamic_layer_count_enabled": True,
+            "material_dynamic": dynamic,
+        }
+    )
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 422
+    assert list(feedback_root.rglob("ticket.json")) == []
+
+
+def test_submit_bug_report_rejects_oversized_dynamic_material_payload(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    """The 1 MiB dynamic payload limit rejects rather than truncating data."""
+    dynamic = _valid_material_dynamic()
+    dynamic["scope"] = "测" * 350_000
+    payload = _payload()
+    payload["context"].update(
+        {
+            "source_version": "material",
+            "material_dynamic_layer_count_enabled": True,
+            "material_dynamic": dynamic,
+        }
+    )
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 422
+    assert list(feedback_root.rglob("ticket.json")) == []
 
 
 def test_bug_report_context_preserves_build_plate_selection() -> None:
@@ -1154,6 +1352,59 @@ def test_submit_bug_report_preserves_material_source_context(
     assert ticket_json["context"]["material_layer_height_mm"] == 0.06
     assert ticket_json["context"]["material_backing_material_dir_name"] == "Wujing/white"
     assert ticket_json["server"]["schema_version"] == 3
+
+
+def test_submit_bug_report_accepts_lumina_box_material_archive_context(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    """Lumina Box reports use the same bounded repro context as Stage A."""
+    payload = _payload()
+    payload["context"] = {
+        **payload["context"],
+        "color_mode": None,
+        "lut_name": "stale-legacy-lut",
+        "source_version": "lumina_box",
+        "selected_material_dir_names": ["Lumina/red", "Lumina/white"],
+        "material_layer_count": 9,
+        "material_dynamic_layer_count_enabled": True,
+        "material_min_layer_count": 5,
+        "material_max_layer_count": 9,
+        "material_delta_e00_tolerance": 0.35,
+        "material_layer_height_mm": 0.04,
+        "material_backing_material_dir_name": "Lumina/white",
+        "advanced_params": {"generation": {"auto_dynamic_range": True}},
+        "action_history": [
+            {
+                "timestamp": 1_787_000_000_000,
+                "action_type": "material_param_commit",
+                "snapshot": {
+                    "source_version": "lumina_box",
+                    "advanced_params": {
+                        "generation": {"auto_dynamic_range": True},
+                    },
+                },
+            },
+        ],
+    }
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    ticket_json = _read_ticket_json(feedback_root, response.json()["ticket_id"])
+    context = ticket_json["context"]
+    assert context["source_version"] == "lumina_box"
+    assert context["color_mode"] is None
+    assert context["lut_name"] is None
+    assert context["lut_names"] == []
+    assert context["selected_material_dir_names"] == ["Lumina/red", "Lumina/white"]
+    assert context["material_layer_height_mm"] == 0.04
+    assert context["material_backing_material_dir_name"] == "Lumina/white"
+    assert context["material_dynamic_layer_count_enabled"] is True
+    assert context["material_delta_e00_tolerance"] == pytest.approx(0.35)
+    assert context["advanced_params"]["generation"]["auto_dynamic_range"] is True
+    assert context["action_history"][0]["snapshot"]["source_version"] == "lumina_box"
+    assert ticket_json["attachments"]["lut"]["status"] == "not_applicable"
 
 
 def test_submit_bug_report_preserves_complete_workshop_context(

@@ -996,6 +996,11 @@ def _build_material_archive_lut_info(session_data: dict) -> LutInfoResponseV2:
         slot_names,
         preview_colors,
     )
+    selected_backing = session_data.get("material_backing_material_index")
+    if (session_data.get("material_profile_kind") == "lumina_box"
+            and isinstance(selected_backing, int) and not isinstance(selected_backing, bool)
+            and 0 <= selected_backing < len(selected_materials)):
+        base_channel_idx = selected_backing
 
     palette_schema: list[PaletteEntrySchema] = []
     for idx, dir_name in enumerate(selected_materials):

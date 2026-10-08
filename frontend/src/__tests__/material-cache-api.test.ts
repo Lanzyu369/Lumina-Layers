@@ -23,6 +23,7 @@ const cacheKey: MaterialSolverCacheKey = {
   layerCount: 8,
   layerHeightMm: 0.04,
   substrate: "white",
+  materialProfileKind: "lumina_box",
 };
 
 beforeEach(() => {
@@ -65,6 +66,7 @@ describe("material solver runtime API client", () => {
     expect(fd.get("layer_count")).toBe("8");
     expect(fd.get("layer_height_mm")).toBe("0.04");
     expect(fd.get("substrate")).toBe("white");
+    expect(fd.get("material_profile_kind")).toBe("lumina_box");
     expect(fd.get("candidate_budget")).toBe("8388608");
     expect(config).toMatchObject({ timeout: 0 });
   });

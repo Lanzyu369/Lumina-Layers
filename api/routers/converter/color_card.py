@@ -11,6 +11,7 @@ printer before committing to a full model print.
 from __future__ import annotations
 
 from contextlib import suppress
+import asyncio
 import os
 import time
 import uuid
@@ -36,6 +37,8 @@ from config import (
     TEMP_DIR,
     ModelingMode as CoreModelingMode,
 )
+from core.material_optical_runtime import MaterialOpticalCompatibilityError
+from core.pipeline._input_validation_common import MaterialArchiveProfileError
 from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 
 from .common import (
@@ -45,6 +48,8 @@ from .common import (
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
     PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
     ROUTER_HANDLED_ERRORS,
+    _handle_core_error,
+    _require_material_archive_profile_cache_consistency,
     _resolve_material_backing_index,
     _resolve_session_dynamic_material_settings,
     _require_session,
@@ -84,6 +89,7 @@ def _require_color_card_cache_metadata(session_data: dict) -> dict:
             status_code=409,
             detail=PREVIEW_CACHE_INVALID_DETAIL,
         )
+    _require_material_archive_profile_cache_consistency(session_data, cache)
     if is_preview_cache_artifact_ref(cache):
         return get_preview_cache_metadata(cache)
     return cache
@@ -283,6 +289,9 @@ async def generate_color_card(
     }
     if session_material_source == "material_archive":
         selected_materials = session_data.get("selected_materials") or []
+        params["material_profile_kind"] = str(
+            session_data.get("material_profile_kind") or "stage_a"
+        )
         params["selected_materials"] = selected_materials
         params["material_layer_count"] = session_data.get("material_layer_count")
         params["material_layer_height_mm"] = session_data.get("material_layer_height_mm")
@@ -301,6 +310,13 @@ async def generate_color_card(
             lut_path,
             params,
         )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="Color card 3MF generation timed out.",
+        )
+    except (MaterialArchiveProfileError, MaterialOpticalCompatibilityError) as exc:
+        _handle_core_error(exc, "color-card generation")
     except ROUTER_HANDLED_ERRORS:
         raise HTTPException(
             status_code=500,

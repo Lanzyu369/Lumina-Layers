@@ -176,6 +176,54 @@ def test_dynamic_material_snapshot_and_repro_hint_are_rendered(tmp_path: Path) -
     assert "底板：BrandA" in summary
 
 
+def test_dynamic_material_evidence_is_summarized_without_recipe_expansion(
+    tmp_path: Path,
+) -> None:
+    """Archive tickets keep full evidence in JSON but only a bounded summary here.
+
+    耗材档案工单的 index/summary 只展示数量、cap 范围、scope、像素数；
+    精确配方仍只在 ticket.json 内，避免把大型求解结果展开到人类摘要。
+    """
+    payload = _sample_payload()
+    payload["context"].update(
+        {
+            "source_version": "lumina_box",
+            "material_dynamic_layer_count_enabled": True,
+            "material_dynamic": {
+                "recipes": [
+                    {
+                        "target_srgb": [17, 34, 51],
+                        "actual_recipe_top_to_bottom": [0, 1, 0, 1, 0],
+                        "layer_cap_options": [
+                            {"max_effective_layer_count": 5},
+                            {"max_effective_layer_count": 6},
+                            {"max_effective_layer_count": 7},
+                        ],
+                    }
+                ],
+                "benefit_curve": [
+                    {"max_effective_layer_count": 5},
+                    {"max_effective_layer_count": 6},
+                    {"max_effective_layer_count": 7},
+                ],
+                "scope": "automatic_pixels",
+                "pixel_count": 37,
+            },
+        }
+    )
+
+    markdown = generate_index_markdown("LUM-20260511-001", tmp_path, payload)
+    summary = generate_summary_text("LUM-20260511-001", payload)
+    compact = "recipes=1; caps=5-7; scope=automatic_pixels; pixel_count=37"
+
+    assert f"material_dynamic: {compact}" in markdown
+    assert f"动态结果：{compact}。" in summary
+    assert "actual_recipe_top_to_bottom" not in markdown
+    assert "actual_recipe_top_to_bottom" not in summary
+    assert "target_srgb" not in markdown
+    assert "target_srgb" not in summary
+
+
 def test_fixed_material_summary_preserves_legacy_material_block() -> None:
     payload = _sample_payload()
     payload["context"].update(

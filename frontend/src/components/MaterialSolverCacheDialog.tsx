@@ -14,6 +14,10 @@ interface MaterialSolverCacheDialogProps {
   layerHeightMm: number;
   /** Substrate — currently always ``"white"`` in the converter flow. */
   substrate?: "white" | "black";
+  /** Optical-profile family used for cache identity and solver requests. */
+  materialProfileKind?: "stage_a" | "lumina_box";
+  backingMaterialIndex?: number;
+  backingThicknessMm?: number;
 }
 
 /**
@@ -28,6 +32,9 @@ export default function MaterialSolverCacheDialog({
   layerCount,
   layerHeightMm,
   substrate = "white",
+  materialProfileKind = "stage_a",
+  backingMaterialIndex,
+  backingThicknessMm,
 }: MaterialSolverCacheDialogProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -36,7 +43,11 @@ export default function MaterialSolverCacheDialog({
   return (
     <>
       <Button
-        label={t("basic_material_cache_open_button")}
+        label={t(
+          materialProfileKind === "lumina_box"
+            ? "basic_material_runtime_open_button"
+            : "basic_material_cache_open_button",
+        )}
         variant="secondary"
         onClick={() => setOpen(true)}
         disabled={disabled}
@@ -62,8 +73,19 @@ export default function MaterialSolverCacheDialog({
                 <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
                   <div className="flex flex-col gap-1">
                     <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100">
-                      {t("basic_material_cache_section_title")}
+                      {t(
+                        materialProfileKind === "lumina_box"
+                          ? "basic_material_runtime_section_title"
+                          : "basic_material_cache_section_title",
+                      )}
                     </h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      {t(
+                        materialProfileKind === "lumina_box"
+                          ? "basic_material_runtime_section_description"
+                          : "basic_material_cache_section_description",
+                      )}
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -80,6 +102,9 @@ export default function MaterialSolverCacheDialog({
                     layerCount={layerCount}
                     layerHeightMm={layerHeightMm}
                     substrate={substrate}
+                    materialProfileKind={materialProfileKind}
+                    backingMaterialIndex={backingMaterialIndex}
+                    backingThicknessMm={backingThicknessMm}
                   />
                 </div>
               </div>

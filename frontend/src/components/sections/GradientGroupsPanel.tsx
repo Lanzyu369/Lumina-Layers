@@ -1,5 +1,8 @@
 import { memo, useCallback, useState, type ChangeEvent } from "react";
-import { useConverterStore } from "../../stores/converter";
+import {
+  isMaterialArchiveSourceVersion,
+  useConverterStore,
+} from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useI18n } from "../../i18n/context";
 import {
@@ -253,7 +256,7 @@ export default function GradientGroupsPanel() {
     clearGradientRegionSelection,
   ]);
 
-  if (sourceVersion !== "material") {
+  if (!isMaterialArchiveSourceVersion(sourceVersion)) {
     return null;
   }
 

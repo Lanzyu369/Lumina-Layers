@@ -39,6 +39,10 @@ from api.feedback_config import (
     materials_bundle_timeout_s,
     ticket_attachment_ttl_days,
 )
+from api.feedback_archive_family import (
+    is_material_archive_source,
+    material_archive_profile_kind,
+)
 from api.feedback_mime import guess_mime
 from api.feedback_hosted import submit_ticket_directory
 from api.feedback_index import generate_index_markdown, generate_summary_text
@@ -325,7 +329,12 @@ def _final_artifact_expected(context: dict[str, Any]) -> bool:
 
 
 def _lut_expected(context: dict[str, Any]) -> bool:
-    return len(_lut_names_from_context(context)) > 0
+    source_version = context.get("source_version")
+    return (
+        not is_material_archive_source(source_version)
+        and source_version in {None, "legacy"}
+        and len(_lut_names_from_context(context)) > 0
+    )
 
 
 def _lut_critical_for_finalize(context: dict[str, Any]) -> bool:
@@ -1069,6 +1078,10 @@ def _collect_final_artifact(
 def _collect_lut(ticket_dir: Path, context: dict[str, Any]) -> dict[str, Any]:
     """Build the ``lut`` attachment dict."""
     base = _empty_lut_attachment()
+    if is_material_archive_source(context.get("source_version")):
+        return base
+    if context.get("source_version") == "native":
+        return base
     lut_names = _lut_names_from_context(context)
     if not lut_names:
         return base
@@ -1563,7 +1576,7 @@ async def finalize_ticket_async(
         material_dirs = list(dict.fromkeys([
             *(context.get("source_material_dir_names") or []),
             *((context.get("selected_material_dir_names") or [])
-              if context.get("source_version") == "material" else []),
+              if is_material_archive_source(context.get("source_version")) else []),
         ]))
         if material_dirs:
             try:
@@ -1574,6 +1587,9 @@ async def finalize_ticket_async(
                     material_dirs,
                     ticket_dir / "materials.zip",
                     timeout_s=materials_bundle_timeout_s(),
+                    archive_profile_kind=material_archive_profile_kind(
+                        context.get("source_version")
+                    ),
                 )
                 attachments["materials_bundle"] = {
                     "status": bundle.status,

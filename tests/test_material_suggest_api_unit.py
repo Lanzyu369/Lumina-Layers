@@ -69,6 +69,13 @@ def stub_palette_loader(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "api.routers.single_stage.load_multiple_materials", _loader
     )
+    monkeypatch.setattr(
+        "api.routers.single_stage.load_and_validate_material_archive_profile",
+        lambda directory_names, *, profile_kind: (
+            str(profile_kind or "stage_a"),
+            _loader(directory_names),
+        ),
+    )
 
 
 @pytest.fixture

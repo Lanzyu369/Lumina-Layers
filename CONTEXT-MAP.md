@@ -6,6 +6,7 @@ or unsupported.
 
 | Topic | Read first | Covers |
 | --- | --- | --- |
+| Material profiles and Lumina Box | [`docs/context/materials/CONTEXT.md`](docs/context/materials/CONTEXT.md) | single-filament black/white capture, shared backing calibration, v3 optical runtime, standalone archives, conversion and portable history |
 | Converter edits, commit receipts, preview and generation | [`docs/context/editor/CONTEXT.md`](docs/context/editor/CONTEXT.md) | operation ordering, unknown receipts, publication/rollback, recipe masks, generation snapshots and download lifetime |
 | Native SVG coordinate handoff and print geometry | [`docs/context/vector-geometry/CONTEXT.md`](docs/context/vector-geometry/CONTEXT.md) | exact working coordinates, print-grid partition, caches/spawn, structural geometry and native tiling |
 | Model-surface selection, preview and generation | [`docs/context/model-surface/CONTEXT.md`](docs/context/model-surface/CONTEXT.md) | local U/V coordinates, model pose ownership, selection/restoration camera transitions, native pocket cutting and regression coverage |

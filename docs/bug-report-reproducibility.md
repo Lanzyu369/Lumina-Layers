@@ -56,6 +56,23 @@ When adding or changing converter generation parameters, update bug-report repro
 
 Validate with a real local bug report and confirm `ticket.json` contains the complete state. Browser `File`/`Blob` values are represented by metadata in JSON; original source bytes travel as multipart attachments. Confirm binary hashes after server export and reproduction loading, including after the source session closes.
 
+### Dynamic material evidence
+
+- `material_dynamic` is retained only when `source_version` is `material` or
+  `lumina_box` and `material_dynamic_layer_count_enabled` is `true`. Other
+  source types and disabled dynamic-layer sessions clear this field before the
+  ticket is persisted.
+- `ticket.json` keeps the complete historical evidence: `recipes`,
+  `benefit_curve`, `scope`, and `pixel_count`. `index.md` and `summary.txt`
+  render only a bounded summary (counts, layer-cap range, scope, and pixel
+  count); they must not expand the full recipe payload.
+- This evidence is diagnostic history, not a new recipe input. Bug-report
+  assembly and local reproduction do not automatically rehydrate it into a
+  live recipe or mutate the recipe being reproduced.
+- The value is validated as UTF-8 JSON of at most `1 MiB` before and after
+  typed validation. Oversized or otherwise invalid input returns HTTP `422`;
+  it is rejected without truncation.
+
 ## Creative Workshop Metadata
 
 The compact Workshop summary includes module identity and runtime details.
@@ -70,6 +87,41 @@ tests together when introducing new summary fields.
 - Materials bundling defaults to no timeout (`LUMINA_FEEDBACK_MATERIALS_BUNDLE_TIMEOUT_S=0`). Remove or set old positive overrides to zero to preserve complete material bundles
 - Clients hold no SMTP or server credentials. `api/feedback_hosted.py` uploads `ticket.json` (without the volatile `submission` section), `index.md`, `summary.txt`, and every regular attachment in the ticket directory, including empty files and arbitrary source types
 - There is no client attachment size, count, or whole-upload budget, no priority-based omission, and no fallback that reports success after sending only text. A server refusal leaves the complete local ticket available for retry and marks the submission failed
+
+- Lumina Box physical-white fits retain their fitting objective, known
+  `minimum_total_reflectance_y`, reference identity, modeled white energy, and
+  residuals inside the spectral parameter file. Preserve that file intact in
+  `materials.zip`; an old unconstrained fit must not be relabeled as constrained
+  during ticket assembly or reproduction. The device's assigned 98% calibration
+  scale remains separate from the supplied physical lower bound.
+
+- Stage A (`source_version=material`, `profile_kind=stage_a`) follows the
+  established bundle rule: `materials.zip` includes the selected material
+  directory's files except `_solver_cache/`. The manifest records the excluded
+  cache key; the cache is rebuildable and is not evidence of the saved profile.
+- Lumina Box (`source_version=lumina_box`, `profile_kind=lumina_box`) uses a
+  stricter archive rule. Each selected archive must have the three contract
+  files `material.json`, `lumina_box_backed_gradient_measurements.json`, and
+  `lumina_box_backed_gradient_parameters.json` for the adopted
+  `backed_gradient_spectral_four_flux_smooth/v3` model. The parameter file
+  includes the material component and its complete black/white backing reference.
+  Measurements retain the source capture export, including raw frames and selected
+  readings. Importing a material restores this capture and registers its reusable
+  backing reference. Historical tickets retain the files for their declared
+  `km_xyz/v1` or `box_reference_consistent_feedback/equal_xyz_v1` model;
+  the current converter uses the black/white gradient archives. The bundle includes exactly
+  the three files for the declared model, while
+  candidate/runtime caches, temporary files, and unrelated directory contents
+  are not included. The archive's UTF-8 JSON, shared identity/bridge/model
+  metadata, and SHA-256 sidecar hashes are checked before packing.
+  Converter settings retain `spacer_thick`, `base_spacer_thick`, selected material
+  order, and backing selection; the effective backing thickness is rounded to
+  physical print layers. Share-card imports must restore these same settings.
+- If a selected Lumina Box archive is missing a contract file or fails any
+  integrity check, that archive is skipped rather than attaching a partial or
+  mismatched record. Other valid selections may still be bundled; if none are
+  valid, the materials attachment is `not_applicable` and the ticket manifest
+  records that no valid archive was attached.
 - The upload targets `LUMINA_FEEDBACK_SERVER_URL` (default: the official Lumina Distribution feedback service; `off` keeps reports local). Each attempt solves the server's proof-of-work challenge; retries send an identical document so the server answers `duplicate` instead of creating a second ticket
 - `X-Lumina-Bundle-SHA256` fingerprints the canonical document, including every attachment hash. The receiver can recover an already accepted matching receipt before reserving storage again; different content for the same ticket returns `409`
 - The server contract and operator export live in the private Distribution repository under `feedback-service/`. Deploy its matching complete-bundle intake first. Its attachment/request/hourly-byte limits default to zero (disabled); old positive `FEEDBACK_MAX_BUNDLE_MB`, `FEEDBACK_MAX_ATTACHMENT_MB`, `FEEDBACK_IP_HOURLY_MB`, or `FEEDBACK_GLOBAL_HOURLY_MB` overrides must be removed or set to zero. Proxy limits must also permit complete bundles. Storage exhaustion remains an explicit failed submission

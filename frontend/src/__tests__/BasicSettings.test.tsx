@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import BasicSettings from "../components/sections/BasicSettings";
 import BedSizeSelector from "../components/sections/BedSizeSelector";
 import { useConverterStore } from "../stores/converter";
+import { useWidgetStore } from "../stores/widgetStore";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 import * as converterApi from "../api/converter";
 import * as lutApi from "../api/lut";
@@ -130,6 +131,7 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
 // Reset store to a clean state before each test
 beforeEach(() => {
   vi.clearAllMocks();
+  useWidgetStore.setState({ activeTab: "converter" });
   vi.mocked(converterApi.fetchLutList).mockResolvedValue({
     luts: [
       {
@@ -765,6 +767,41 @@ describe("BasicSettings", () => {
     await waitFor(() => {
       expect(backingDropdown).toHaveTextContent("3. White PLA");
     });
+  });
+
+  it("loads Stage A profiles for the existing material archive source", async () => {
+    useConverterStore.setState({ source_version: "material" });
+
+    render(<BasicSettings />);
+
+    await waitFor(() => {
+      expect(extractorApi.listGradientCardMaterials).toHaveBeenLastCalledWith({
+        profileKind: "stage_a",
+      });
+    });
+  });
+
+  it("loads Lumina Box profiles and routes an empty archive to Lumina Box", async () => {
+    render(<BasicSettings />);
+
+    fireEvent.click(screen.getByRole("radio", { name: "Lumina Box" }));
+
+    await waitFor(() => {
+      expect(useConverterStore.getState().source_version).toBe("lumina_box");
+      expect(extractorApi.listGradientCardMaterials).toHaveBeenLastCalledWith({
+        profileKind: "lumina_box",
+      });
+    });
+
+    expect(
+      await screen.findByTestId("lumina-box-material-empty-guide"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByTestId("lumina-box-material-empty-guide-action"),
+    );
+
+    expect(useWidgetStore.getState().activeTab).toBe("lumina-box");
   });
 
   it("shows fixed material layers by default and swaps to the dynamic range controls", () => {

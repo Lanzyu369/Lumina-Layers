@@ -35,6 +35,8 @@ from core.material_candidate_cache import (
     load_material_candidate_runtime,
 )
 from core.material_color_solver import MaterialParams
+from core.km_xyz import KM_XYZ_MODEL_ID
+from core.material_optical_runtime import is_relative_xyz_model, validate_material_optical_contract
 
 if TYPE_CHECKING:
     from core.material_cache import MaterialSolverCache
@@ -60,7 +62,15 @@ def _material_archive_state(
     states = []
     for directory_name in directory_names:
         material_dir = root / directory_name
-        for filename in ("material.json", "stage_A_parameters.json"):
+        for filename in (
+            "material.json",
+            "stage_A_parameters.json",
+            "lumina_box_measurements.json",
+            "km_xyz_parameters.json",
+            "lumina_box_spectral_parameters.json",
+            "lumina_box_backed_gradient_measurements.json",
+            "lumina_box_backed_gradient_parameters.json",
+        ):
             try:
                 path = material_dir / filename
                 states.append((path.stat().st_mtime_ns, path.read_bytes()))
@@ -159,6 +169,9 @@ def load_solver_cache(
     Returns:
         ``(cache, actual_grid)`` — see the wrapped loader. (见被包装加载器)
     """
+    contract = validate_material_optical_contract(materials)
+    if is_relative_xyz_model(contract.model_id):
+        return None, None
     return _material_cache.load_material_solver_cache_with_fallback(
         materials,
         layer_count,
@@ -204,6 +217,7 @@ def load_solver_runtime(
         tuple: ``(runtime, actual_grid)`` where runtime exposes ``lookup``.
             (运行时与实际诊断分辨率)
     """
+    validate_material_optical_contract(materials)
     cache, actual_grid = load_solver_cache(
         materials,
         layer_count,
@@ -259,6 +273,64 @@ def load_solver_runtime(
     return runtime, runtime.grid_resolution
 
 
+def load_persisted_candidate_runtime_with_fallback(
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str = "white",
+    *,
+    cache_root: str | Path | None = None,
+    candidate_budget: int | None = None,
+) -> "MaterialCandidateRuntime | None":
+    """Load an existing candidate runtime without building one.
+
+    只读加载已持久化的候选运行时；缺失时绝不在交互请求中隐式构建。
+
+    When ``candidate_budget`` is omitted, user-facing persisted tiers are
+    checked from highest to lowest quality. The helper deliberately excludes
+    any build fallback so latency-sensitive API routes can return an
+    actionable cache-missing response instead of allocating a large runtime.
+
+    Args:
+        materials: Validated material palette.（已校验的耗材调色板。）
+        layer_count: Number of recipe layers.（配方层数。）
+        layer_height_mm: Physical thickness of one layer in millimetres.
+            （单层物理厚度，单位毫米。）
+        substrate: Backing substrate identifier.（背衬标识。）
+        cache_root: Optional persisted-cache root.（可选缓存根目录。）
+        candidate_budget: Exact tier to load, or ``None`` to probe supported
+            tiers from highest to lowest.（指定档位；为空时由高到低探测。）
+
+    Returns:
+        Existing validated runtime, or ``None`` when every selected tier is
+        absent or stale.（已有且校验通过的运行时；全部缺失或过期时为空。）
+    """
+
+    validate_material_optical_contract(materials)
+    if candidate_budget is not None:
+        budgets = (int(candidate_budget),)
+    else:
+        budgets = (
+            MAX_PERSISTED_CANDIDATE_BUDGET,
+            DEFAULT_PERSISTED_CANDIDATE_BUDGET,
+            QUALITY_8M_CANDIDATE_BUDGET,
+            LEGACY_PERSISTED_CANDIDATE_BUDGET,
+            PREVIEW_SAFE_CANDIDATE_BUDGET,
+        )
+    for budget in budgets:
+        runtime = load_material_candidate_runtime(
+            materials,
+            int(layer_count),
+            float(layer_height_mm),
+            str(substrate),
+            candidate_budget=int(budget),
+            cache_root=cache_root,
+        )
+        if runtime is not None:
+            return runtime
+    return None
+
+
 def load_dynamic_candidate_runtime(
     materials: list[MaterialParams],
     layer_count: int,
@@ -298,6 +370,7 @@ def load_dynamic_candidate_runtime(
         diagnostic grid resolution. 候选运行时及诊断网格分辨率。
     """
 
+    validate_material_optical_contract(materials)
     config = MaterialCandidateCacheConfig.persisted_for_budget(
         int(candidate_budget)
     )

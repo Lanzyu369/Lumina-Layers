@@ -51,6 +51,16 @@ class CoreProcessingError(CoreError):
         super().__init__(detail=detail, error_type="core_processing_error")
 
 
+class MaterialArchiveConflictError(CoreError):
+    """Raised when a material archive identity already exists.
+
+    按品牌和名称保存耗材档案时发现已存在同一身份的档案。
+    """
+
+    def __init__(self, detail: str):
+        super().__init__(detail=detail, error_type="material_archive_conflict")
+
+
 class NativeSvgInvalidError(CoreValidationError):
     """Report deterministic invalid input from the native SVG boundary.
 

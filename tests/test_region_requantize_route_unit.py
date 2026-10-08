@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -27,6 +28,7 @@ from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
 from core.gradient_group_analyzer import REGION_ID_ENCODING_MULTIPLIER
+from core.pipeline._input_validation_common import MaterialArchiveProfileError
 
 REGION_REQUANTIZE_MATERIALS_UNAVAILABLE_DETAIL = (
     "Region re-quantisation cannot load the selected material archives. "
@@ -40,6 +42,24 @@ REGION_REQUANTIZE_REQUEST_INVALID_DETAIL = (
     "Region re-quantisation could not process the selected region. "
     "Refresh preview and try again."
 )
+
+
+@pytest.fixture(autouse=True)
+def _profile_loader_uses_route_material_stub(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Route regressions patch the material loader, not on-disk archives."""
+
+    from api.routers.converter import replace
+
+    monkeypatch.setattr(
+        replace,
+        "load_and_validate_material_archive_profile",
+        lambda directory_names, *, profile_kind: (
+            str(profile_kind or "stage_a"),
+            replace.load_multiple_materials(directory_names),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -597,3 +617,163 @@ def test_requantize_does_not_lower_existing_cap(patched_dependencies):
         "existing higher glb_max_meshes must be preserved across "
         "subsequent requantize calls"
     )
+
+
+class _FakeKmRuntime:
+    """Idempotent candidate runtime used to verify the explicit KM adapter."""
+
+    def __init__(self) -> None:
+        self.lookup_calls = 0
+
+    def lookup(self, target_srgb, _user_materials):
+        self.lookup_calls += 1
+        colors = np.asarray(target_srgb, dtype=np.uint8).copy()
+        recipes = np.ones((colors.shape[0], 1), dtype=np.int32)
+        delta_e = np.zeros(colors.shape[0], dtype=np.float64)
+        return colors, recipes, delta_e
+
+
+def _seed_lumina_region_session(store: SessionStore, session_id: str) -> None:
+    store.put(session_id, "material_profile_kind", "lumina_box")
+    cache = store.get(session_id)["preview_cache"]
+    h, w = np.asarray(cache["matched_rgb"]).shape[:2]
+    cache["material_matrix"] = np.full((h, w, 1), 7, dtype=np.uint8)
+    store.put(session_id, "preview_cache", cache)
+
+
+def test_lumina_region_uses_candidate_runtime_and_persists_matching_matrix(
+    patched_dependencies,
+):
+    client, session_id, store = patched_dependencies
+    _seed_lumina_region_session(store, session_id)
+    runtime = _FakeKmRuntime()
+    materials = [SimpleNamespace(), SimpleNamespace()]
+    before = np.asarray(store.get(session_id)["preview_cache"]["matched_rgb"]).copy()
+
+    with patch(
+        "api.routers.converter.replace.load_and_validate_material_archive_profile",
+        return_value=("lumina_box", materials),
+    ), patch(
+        "api.routers.converter.replace.load_persisted_candidate_runtime_with_fallback",
+        return_value=runtime,
+    ) as runtime_loader, patch(
+        "api.routers.converter.replace.load_material_solver_cache_with_fallback",
+        side_effect=AssertionError("Lumina Box must not load the affine cache"),
+    ), patch(
+        "api.routers.converter.replace.recompute_gradient_groups_into_session",
+        return_value=[],
+    ), patch(
+        "api.routers.converter.replace.schedule_glb_build",
+        return_value="fake-job-token",
+    ):
+        response = client.post(
+            "/api/convert/region-requantize",
+            json=_region_requantize_payload(session_id),
+        )
+
+    assert response.status_code == 200, response.text
+    runtime_loader.assert_called_once()
+    assert runtime.lookup_calls == 2  # region color lookup + matrix recipe sync
+    stored_cache = store.get(session_id)["preview_cache"]
+    after = np.asarray(stored_cache["matched_rgb"])
+    changed = np.any(after != before, axis=-1)
+    assert np.any(changed)
+    material_matrix = np.asarray(stored_cache["material_matrix"])
+    assert material_matrix.shape[2] == 1
+    assert np.all(material_matrix[changed, 0] == 1)
+
+
+def test_lumina_region_missing_runtime_returns_409_without_mutation(
+    patched_dependencies,
+):
+    client, session_id, store = patched_dependencies
+    _seed_lumina_region_session(store, session_id)
+    before_cache = store.get(session_id)["preview_cache"]
+    before_rgb = np.asarray(before_cache["matched_rgb"]).copy()
+    before_matrix = np.asarray(before_cache["material_matrix"]).copy()
+
+    with patch(
+        "api.routers.converter.replace.load_and_validate_material_archive_profile",
+        return_value=("lumina_box", [SimpleNamespace(), SimpleNamespace()]),
+    ), patch(
+        "api.routers.converter.replace.load_persisted_candidate_runtime_with_fallback",
+        return_value=None,
+    ), patch(
+        "api.routers.converter.replace.schedule_glb_build",
+    ) as schedule:
+        response = client.post(
+            "/api/convert/region-requantize",
+            json=_region_requantize_payload(session_id),
+        )
+
+    assert response.status_code == 409
+    assert "Build the Lumina Box candidate runtime" in response.json()["detail"]
+    schedule.assert_not_called()
+    after_cache = store.get(session_id)["preview_cache"]
+    np.testing.assert_array_equal(after_cache["matched_rgb"], before_rgb)
+    np.testing.assert_array_equal(after_cache["material_matrix"], before_matrix)
+
+
+def test_lumina_region_session_profile_mismatch_returns_422(
+    patched_dependencies,
+):
+    client, session_id, store = patched_dependencies
+    _seed_lumina_region_session(store, session_id)
+    seen_profile: list[str] = []
+
+    def _reject(_names, *, profile_kind):
+        seen_profile.append(str(profile_kind))
+        raise MaterialArchiveProfileError("Selected archive is Stage A")
+
+    with patch(
+        "api.routers.converter.replace.load_and_validate_material_archive_profile",
+        side_effect=_reject,
+    ), patch(
+        "api.routers.converter.replace.load_persisted_candidate_runtime_with_fallback",
+    ) as runtime_loader:
+        response = client.post(
+            "/api/convert/region-requantize",
+            json=_region_requantize_payload(session_id),
+        )
+
+    assert seen_profile == ["lumina_box"]
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "material_profile_kind_mismatch"
+    runtime_loader.assert_not_called()
+
+
+def test_lumina_region_catalog_failure_rolls_back_transaction(
+    patched_dependencies,
+):
+    client, session_id, store = patched_dependencies
+    _seed_lumina_region_session(store, session_id)
+    before_cache = store.get(session_id)["preview_cache"]
+    before_rgb = np.asarray(before_cache["matched_rgb"]).copy()
+    before_matrix = np.asarray(before_cache["material_matrix"]).copy()
+
+    def _fail_sync(_session_data, cache, *_args, **_kwargs):
+        cache["material_matrix"][...] = 9
+        raise ValueError("candidate catalog sync failed")
+
+    with patch(
+        "api.routers.converter.replace.load_and_validate_material_archive_profile",
+        return_value=("lumina_box", [SimpleNamespace(), SimpleNamespace()]),
+    ), patch(
+        "api.routers.converter.replace.load_persisted_candidate_runtime_with_fallback",
+        return_value=_FakeKmRuntime(),
+    ), patch(
+        "api.routers.converter.replace._sync_material_matrix_after_rgb_change",
+        side_effect=_fail_sync,
+    ), patch(
+        "api.routers.converter.replace.schedule_glb_build",
+    ) as schedule:
+        response = client.post(
+            "/api/convert/region-requantize",
+            json=_region_requantize_payload(session_id),
+        )
+
+    assert response.status_code >= 400
+    schedule.assert_not_called()
+    after_cache = store.get(session_id)["preview_cache"]
+    np.testing.assert_array_equal(after_cache["matched_rgb"], before_rgb)
+    np.testing.assert_array_equal(after_cache["material_matrix"], before_matrix)

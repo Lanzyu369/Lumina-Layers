@@ -40,6 +40,7 @@ import GradientCardExtractPanel from "./components/GradientCardExtractPanel";
 import MaterialCloudSyncPanel from "./components/MaterialCloudSyncPanel";
 import MaterialLibraryPanel from "./components/MaterialLibraryPanel";
 import MaterialRecipeQueryPanel from "./components/MaterialRecipeQueryPanel";
+import LuminaBoxWorkspace from "./components/LuminaBoxWorkspace";
 import LutCloudSyncPanel from "./components/LutCloudSyncPanel";
 import LutLibraryPanel from "./components/LutLibraryPanel";
 import LutComparePanel from "./components/LutComparePanel";
@@ -481,6 +482,7 @@ function AppContent() {
         {activeTab === 'gradient-card-generate' && <GradientCardGeneratePanel />}
         {activeTab === 'gradient-card-extract' && <GradientCardExtractPanel />}
         {activeTab === 'material-library' && <MaterialLibraryPanel />}
+        {activeTab === 'lumina-box' && <LuminaBoxWorkspace />}
         {activeTab === 'material-cloud-sync' && <MaterialCloudSyncPanel />}
         {activeTab === 'material-recipe' && <MaterialRecipeQueryPanel />}
 

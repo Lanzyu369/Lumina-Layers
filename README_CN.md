@@ -319,6 +319,11 @@ Lumina Studio 会从 `.env.local` 读取本地环境变量覆盖项，请以 `.e
 
 ## 使用指南
 
+### Lumina Box 手工材料指南
+
+Lumina Box MVP 支持手工录入测量结果、拟合有效 KM 材料档案，并明确说明
+当前支持范围与限制。请查看 [Lumina Box 用户指南（English + 中文）](docs/lumina-box-user-guide.md)。
+
 ### 快速启动
 
 ```bash

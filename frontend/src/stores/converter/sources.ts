@@ -2,6 +2,7 @@ import type { ColorMode, LutSupportedMode, NativeBrandGroup } from "../../api/ty
 import { ColorMode as ColorModeEnum, ModelingMode as ModelingModeEnum } from "../../api/types";
 import { useSettingsStore } from "../settingsStore";
 import type { ConverterState, SourceVersion } from "./types";
+import { getMaterialArchiveProfileKind, isMaterialArchiveSourceVersion } from "./types";
 
 function looksLikeWhiteMaterialLabel(label: string | null | undefined): boolean {
   const text = String(label ?? "").trim().toLowerCase();
@@ -74,7 +75,7 @@ export function isDynamicMaterialActive(
   state: DynamicMaterialActivationState,
 ): boolean {
   return (
-    state.source_version === "material" &&
+    isMaterialArchiveSourceVersion(state.source_version) &&
     state.materialDynamicLayerCountEnabled === true
   );
 }
@@ -82,7 +83,7 @@ export function isDynamicMaterialActive(
 export function resolveMaterialPrintLayerCount(
   state: MaterialPrintLayerCountState,
 ): number {
-  return state.source_version === "material" &&
+  return isMaterialArchiveSourceVersion(state.source_version) &&
     state.materialDynamicLayerCountEnabled === true
     ? (state.materialMaxLayerCount ?? state.materialLayerCount)
     : state.materialLayerCount;
@@ -499,7 +500,7 @@ export function resolveConverterSourceSelection(
     isReady: false,
   };
 
-  if (state.source_version === "material") {
+  if (isMaterialArchiveSourceVersion(state.source_version)) {
     return {
       source_kind: "legacy_single",
       isReady: (state.selectedMaterialDirNames ?? []).length > 0,
@@ -568,8 +569,15 @@ export function buildMaterialSourceParams(
     | "materialDynamicLayerCountEnabled"
     | "materialMinLayerCount"
     | "materialMaxLayerCount"
+    | "spacer_thick"
   >,
 ) {
+  const materialProfileKind = getMaterialArchiveProfileKind(
+    state.source_version,
+  );
+  if (materialProfileKind === null) {
+    throw new Error("Material source parameters require a material archive source");
+  }
   const settingsState = useSettingsStore.getState();
   const materialGridResolution = settingsState.enableSolverCacheGridSelection
     ? settingsState.solverCacheGridResolution
@@ -587,6 +595,8 @@ export function buildMaterialSourceParams(
     source_kind: "legacy_single" as const,
     lut_name: "__material_archive__",
     material_source: "material_archive" as const,
+    material_profile_kind: materialProfileKind,
+    spacer_thick: state.spacer_thick,
     selected_materials: state.selectedMaterialDirNames,
     material_layer_count: printLayerCount,
     material_layer_height_mm: state.materialLayerHeightMm,
@@ -650,7 +660,7 @@ export function normalizeLegacyLutNames(
 }
 
 export function buildConversionSourceParams(state: ConverterState) {
-  return state.source_version === "material"
+  return isMaterialArchiveSourceVersion(state.source_version)
     ? buildMaterialSourceParams(state)
     : state.source_version === "native"
       ? buildNativeSourceParams(resolveConverterSourceSelection(state), state)

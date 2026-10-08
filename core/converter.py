@@ -357,6 +357,7 @@ def convert_image_to_3d(
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
+    material_profile_kind: str = "stage_a",
     svg_hole_compensation_enabled: bool = False,
     svg_hole_max_area_mm2: float = 0.5,
     svg_hole_max_width_mm: float = 0.1,
@@ -409,6 +410,9 @@ def convert_image_to_3d(
             layers. (动态最大有效层数及物理模型层数)
         material_delta_e00_tolerance: Allowed CIEDE2000 loss when preferring a
             shorter recipe. (优先短配方时允许的 CIEDE2000 损失)
+        material_profile_kind: Optical archive contract for material-archive
+            conversion: ``stage_a`` or ``lumina_box``. (耗材档案转换使用的
+            光学契约：``stage_a`` 或 ``lumina_box``)
         quantized_image_path: Optional dynamic preview-analysis asset used
             together with the other authority arrays when puzzle generation
             explicitly reuses a confirmed material matrix.
@@ -538,6 +542,7 @@ def convert_image_to_3d(
         "material_min_layer_count": material_min_layer_count,
         "material_max_layer_count": material_max_layer_count,
         "material_delta_e00_tolerance": material_delta_e00_tolerance,
+        "material_profile_kind": material_profile_kind,
         "svg_hole_compensation_enabled": svg_hole_compensation_enabled,
         "svg_hole_max_area_mm2": svg_hole_max_area_mm2,
         "svg_hole_max_width_mm": svg_hole_max_width_mm,
@@ -587,6 +592,8 @@ def generate_preview_cached(
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
+    material_profile_kind: str = "stage_a",
+    spacer_thick: float = 1.2,
     svg_hole_compensation_enabled: bool = False,
     svg_hole_max_area_mm2: float = 0.5,
     svg_hole_max_width_mm: float = 0.1,
@@ -595,6 +602,7 @@ def generate_preview_cached(
     生成预览图和缓存数据。薄包装函数，委托给 coordinator。
 
     Args:
+        spacer_thick: Physical backing thickness in mm.（实体底板厚度，毫米。）
         svg_hole_compensation_enabled: Fill enclosed source-SVG voids before
             matching, in vector mode. (矢量模式下在配色前补 SVG 二维孔洞)
         svg_hole_max_area_mm2: Maximum filled hole area; zero disables this
@@ -611,6 +619,9 @@ def generate_preview_cached(
             layers. (动态最大有效层数及物理模型层数)
         material_delta_e00_tolerance: Allowed CIEDE2000 loss for shorter
             recipes. (短配方允许的 CIEDE2000 损失)
+        material_profile_kind: Optical archive contract for material-archive
+            preview: ``stage_a`` or ``lumina_box``. (耗材档案预览使用的
+            光学契约：``stage_a`` 或 ``lumina_box``)
         quantized_image_path: Optional dynamic preview-analysis asset
             forwarded with the authority matrix for puzzle reuse.
             (拼图复用时随权威矩阵透传的可选动态预览分析资产)
@@ -653,6 +664,8 @@ def generate_preview_cached(
         "material_min_layer_count": material_min_layer_count,
         "material_max_layer_count": material_max_layer_count,
         "material_delta_e00_tolerance": material_delta_e00_tolerance,
+        "material_profile_kind": material_profile_kind,
+        "spacer_thick": spacer_thick,
         "svg_hole_compensation_enabled": svg_hole_compensation_enabled,
         "svg_hole_max_area_mm2": svg_hole_max_area_mm2,
         "svg_hole_max_width_mm": svg_hole_max_width_mm,
@@ -792,6 +805,7 @@ def generate_final_model(
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
+    material_profile_kind: str = "stage_a",
     svg_hole_compensation_enabled: bool = False,
     svg_hole_max_area_mm2: float = 0.5,
     svg_hole_max_width_mm: float = 0.1,
@@ -842,6 +856,9 @@ def generate_final_model(
             layers. (动态最大有效层数及物理模型层数)
         material_delta_e00_tolerance: Allowed CIEDE2000 loss for shorter
              recipes. (短配方允许的 CIEDE2000 损失)
+        material_profile_kind: Optical archive contract for material-archive
+            generation: ``stage_a`` or ``lumina_box``. (耗材档案生成使用的
+            光学契约：``stage_a`` 或 ``lumina_box``)
         height_identity_rgb_path: Optional ``.npy`` path containing immutable
             per-pixel source RGB identities for relief-height lookup. It is
             keyword-only to preserve all legacy positional argument bindings.
@@ -1011,6 +1028,7 @@ def generate_final_model(
         material_min_layer_count=material_min_layer_count,
         material_max_layer_count=material_max_layer_count,
         material_delta_e00_tolerance=material_delta_e00_tolerance,
+        material_profile_kind=material_profile_kind,
         cover_source_path=cover_source_path,
         export_transform_metadata=export_transform_metadata,
     )

@@ -52,7 +52,12 @@ describe("recipe round-trip properties", () => {
 
   it("export → import round-trip preserves key converter parameters", () => {
     const arbState = fc.record({
-      source_version: fc.constantFrom("legacy", "native", "material" as const),
+      source_version: fc.constantFrom(
+        "legacy" as const,
+        "native" as const,
+        "material" as const,
+        "lumina_box" as const,
+      ),
       lut_name: fc.constantFrom("LUT-A", "LUT-B"),
       selectedNativeBrandKey: fc.constantFrom("", "bambulab_pla", "brand-b"),
       selectedNativeDbNames: fc.array(fc.constantFrom("PLA Basic", "PLA Matte", "PETG HF"), {
@@ -215,18 +220,39 @@ describe("recipe round-trip properties", () => {
           overrides.enable_fridge_magnet,
           overrides.fridge_magnets,
         );
+        const isMaterialArchive =
+          overrides.source_version === "material" ||
+          overrides.source_version === "lumina_box";
 
         // Key parameters must survive round-trip
         expect(restored.source_version).toBe(overrides.source_version);
-        expect(restored.lut_name).toBe(overrides.lut_name);
-        expect(restored.selectedNativeBrandKey).toBe(overrides.selectedNativeBrandKey);
-        expect(restored.selectedNativeDbNames).toEqual(overrides.selectedNativeDbNames);
-        expect(restored.color_layers).toBe(overrides.color_layers);
-        expect(restored.layer_height_mm).toBe(overrides.layer_height_mm);
-        expect(restored.model_enable).toBe(overrides.model_enable);
-        expect(restored.model_only).toBe(overrides.model_only);
-        expect(restored.model_threshold).toBe(overrides.model_threshold);
-        expect(restored.model_margin).toBe(overrides.model_margin);
+        expect(restored.lut_name).toBe(
+          isMaterialArchive ? "" : overrides.lut_name,
+        );
+        expect(restored.selectedNativeBrandKey).toBe(
+          isMaterialArchive ? "" : overrides.selectedNativeBrandKey,
+        );
+        expect(restored.selectedNativeDbNames).toEqual(
+          isMaterialArchive ? [] : overrides.selectedNativeDbNames,
+        );
+        expect(restored.color_layers).toBe(
+          isMaterialArchive ? null : overrides.color_layers,
+        );
+        expect(restored.layer_height_mm).toBe(
+          isMaterialArchive ? null : overrides.layer_height_mm,
+        );
+        expect(restored.model_enable).toBe(
+          isMaterialArchive ? false : overrides.model_enable,
+        );
+        expect(restored.model_only).toBe(
+          isMaterialArchive ? false : overrides.model_only,
+        );
+        expect(restored.model_threshold).toBe(
+          isMaterialArchive ? null : overrides.model_threshold,
+        );
+        expect(restored.model_margin).toBe(
+          isMaterialArchive ? null : overrides.model_margin,
+        );
         expect(restored.selectedMaterialDirNames).toEqual(overrides.selectedMaterialDirNames);
         expect(restored.materialLayerCount).toBe(overrides.materialLayerCount);
         expect(restored.materialLayerHeightMm).toBe(overrides.materialLayerHeightMm);

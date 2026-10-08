@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import pickle
 import time
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import cv2
 import numpy as np
@@ -18,6 +18,7 @@ from api.dynamic_material_settings import normalize_dynamic_material_settings
 from api.file_bridge import ndarray_to_png_bytes, pil_to_png_bytes
 from api.gradient_group_payload import compute_gradient_group_payload
 from api.preview_cache_artifacts import (
+    get_preview_cache_metadata,
     hydrate_preview_cache,
     is_preview_cache_artifact_ref,
 )
@@ -26,6 +27,14 @@ from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from config import PrinterConfig
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
+from core.backed_gradient_smooth import SPECTRAL_SMOOTH_MODEL_ID
+from core.material_cache import describe_palette
+from core.material_optical_runtime import bind_material_print_backing
+from core.pipeline._input_validation_common import (
+    MaterialArchiveProfileError,
+    load_and_validate_material_archive_profile,
+    normalize_material_archive_profile_kind,
+)
 from core.model_surface.validation import (
     MODEL_SURFACE_BOOLEAN_FAILED,
     MODEL_SURFACE_EMPTY_GEOMETRY,
@@ -46,6 +55,10 @@ from .source_validation import (
 
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
+MATERIAL_ARCHIVE_PROFILE_CACHE_INCOMPATIBLE_DETAIL = (
+    "Preview cache material profile is incompatible with the current material "
+    "archive. Re-run preview before generating."
+)
 # Canonical definition lives in api.selection_state (importable by
 # replacement_history without router-layer cycles); imported above and
 # re-exported so converter routers keep a single import site.
@@ -333,6 +346,117 @@ def _validate_material_source(material_source: str) -> str:
     return material_source
 
 
+def _resolve_material_profile_kind(
+    *,
+    material_source: str,
+    material_profile_kind: object | None,
+) -> str | None:
+    """Resolve archive profile type while preserving legacy request semantics.
+
+    ``material_profile_kind`` is meaningful only for the material-archive
+    source. Missing values on that source are the legacy Stage A contract;
+    sending the field with LUT/native sources is rejected instead of silently
+    changing unrelated conversion behaviour.
+    """
+
+    if isinstance(material_profile_kind, FormParameter):
+        material_profile_kind = material_profile_kind.default
+
+    if material_source != "material_archive":
+        if material_profile_kind is not None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "material_profile_kind is only valid when "
+                    "material_source is material_archive."
+                ),
+            )
+        return None
+    try:
+        return normalize_material_archive_profile_kind(material_profile_kind)
+    except MaterialArchiveProfileError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.error_type, "message": str(exc)},
+        ) from exc
+
+
+def _require_material_archive_profile_cache_consistency(
+    session_data: dict[str, Any],
+    cache_or_ref: dict[str, Any],
+) -> str | None:
+    """Validate the session/cache profile and current Box archive identity.
+
+    校验会话与预览的档案类型，并核对新版 Box 耗材版本及底板计算身份。
+    旧缓存缺少类型标记时按 Stage A 处理。
+    """
+
+    material_source = str(session_data.get("material_source") or "lut")
+    if material_source != "material_archive":
+        return None
+    if not isinstance(cache_or_ref, dict):
+        raise HTTPException(
+            status_code=409,
+            detail=MATERIAL_ARCHIVE_PROFILE_CACHE_INCOMPATIBLE_DETAIL,
+        )
+    try:
+        session_kind = normalize_material_archive_profile_kind(
+            session_data.get("material_profile_kind")
+        )
+        metadata = get_preview_cache_metadata(cache_or_ref)
+        raw_cache_kind = metadata.get("material_profile_kind")
+        cache_kind = normalize_material_archive_profile_kind(
+            "stage_a" if raw_cache_kind is None else raw_cache_kind
+        )
+    except (MaterialArchiveProfileError, AttributeError, TypeError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=MATERIAL_ARCHIVE_PROFILE_CACHE_INCOMPATIBLE_DETAIL,
+        ) from exc
+    if cache_kind != session_kind:
+        raise HTTPException(
+            status_code=409,
+            detail=MATERIAL_ARCHIVE_PROFILE_CACHE_INCOMPATIBLE_DETAIL,
+        )
+    if session_kind == "lumina_box":
+        context = metadata.get("material_optical_context")
+        detail = {
+            "code": "lumina_box_preview_stale",
+            "message": "Lumina Box archives or model changed. Re-run preview before generating or editing.",
+        }
+        if not isinstance(context, dict) or context.get("optical_model_id") != SPECTRAL_SMOOTH_MODEL_ID:
+            raise HTTPException(status_code=409, detail=detail)
+        try:
+            selected = session_data.get("selected_materials") or []
+            _, materials = load_and_validate_material_archive_profile(selected, profile_kind="lumina_box")
+            materials = bind_material_print_backing(
+                materials,
+                backing_material_index=_resolve_material_backing_index(selected, session_data.get("material_backing_material_index")),
+                thickness_mm=float(session_data.get("spacer_thick", 1.2)),
+                layer_height_mm=float(session_data.get("material_layer_height_mm") or 0.08),
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=detail) from exc
+        if context.get("canonical_materials") != describe_palette(materials):
+            raise HTTPException(status_code=409, detail=detail)
+    return session_kind
+
+
+def _require_box_raster_layer_height(
+    profile_kind: str | None, layer_height_mm: object, *, native_svg: bool,
+) -> None:
+    if profile_kind != "lumina_box":
+        return
+    if isinstance(layer_height_mm, FormParameter):
+        layer_height_mm = layer_height_mm.default
+    height = 0.08 if layer_height_mm is None else float(layer_height_mm)
+    if not native_svg and (not np.isfinite(height) or abs(height - 0.08) > 1e-9):
+        raise HTTPException(status_code=422, detail={
+            "code": "lumina_box_raster_layer_height_unsupported",
+            "message": "Lumina Box raster conversion requires 0.08 mm layers. Select 0.08 mm or native SVG vector mode.",
+        })
+
+
 def _validate_dynamic_material_settings(
     *,
     material_source: str,
@@ -428,6 +552,27 @@ def _resolve_session_dynamic_material_settings(
         ),
     }
     fields_set = set(getattr(request, "model_fields_set", set()))
+    if material_source == "material_archive" and session_data.get("material_profile_kind") == "lumina_box":
+        _require_box_raster_layer_height(
+            "lumina_box", session_data.get("material_layer_height_mm"),
+            native_svg=native_svg_vector,
+        )
+        selected = session_data.get("selected_materials") or []
+        session_backing = _resolve_material_backing_index(selected, session_data.get("material_backing_material_index"))
+        requested_backing = getattr(request, "material_backing_material_index", None)
+        mismatched_backing = requested_backing is not None and requested_backing != session_backing
+        session_thickness = float(session_data.get("spacer_thick", 1.2))
+        requested_thickness = float(getattr(request, "spacer_thick", session_thickness))
+        if "spacer_thick" not in fields_set and requested_thickness == 1.2:
+            requested_thickness = session_thickness
+            if hasattr(request, "spacer_thick"):
+                request.spacer_thick = session_thickness
+        layer_height = float(session_data.get("material_layer_height_mm") or 0.08)
+        if mismatched_backing or round(requested_thickness / layer_height) != round(session_thickness / layer_height):
+            raise HTTPException(status_code=409, detail={
+                "code": "lumina_box_preview_mismatch",
+                "message": "Lumina Box backing differs from the preview. Re-run preview before generating.",
+            })
     mismatches: list[str] = []
     for field_name in _DYNAMIC_MATERIAL_SETTING_FIELDS:
         if field_name not in fields_set:

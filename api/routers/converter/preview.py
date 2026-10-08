@@ -17,6 +17,7 @@ from typing import Annotated
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.params import Form as FormParameter
 from PIL import Image
 from pydantic import ValidationError
 
@@ -76,6 +77,8 @@ from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
     DynamicMaterialSolverError,
 )
+from core.material_optical_runtime import MaterialOpticalCompatibilityError
+from core.pipeline._input_validation_common import MaterialArchiveProfileError
 from core.vector_large_format import inspect_svg_large_format_support, normalize_large_format_source_basename
 from utils.lut_manager import LUTManager
 
@@ -92,6 +95,8 @@ from .common import (
     _require_preview_cache,
     _require_session,
     _resolve_material_backing_index,
+    _resolve_material_profile_kind,
+    _require_box_raster_layer_height,
     _validate_dynamic_material_settings,
     _validate_unique_dynamic_material_selection,
     _validate_material_source,
@@ -941,6 +946,13 @@ async def convert_preview(
     ),
     is_dark: bool = Form(True, description="深色主题"),
     material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
+    material_profile_kind: str | None = Form(
+        None,
+        description=(
+            "耗材档案光学类型: stage_a | lumina_box；"
+            "仅 material_archive 有效，省略时兼容 stage_a。"
+        ),
+    ),
     selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
     material_layer_count: int | None = Form(None, description="耗材模式叠色层数 (5-10)"),
     material_dynamic_layer_count_enabled: bool = Form(
@@ -974,6 +986,7 @@ async def convert_preview(
     surface_footprint_json: str | None = Form(None, description="JSON surface footprint payload"),
     surface_placement_json: str | None = Form(None, description="JSON surface placement payload"),
     surface_model_transform_json: str | None = Form(None, description="JSON surface model transform payload"),
+    spacer_thick: float = Form(1.2, ge=0.2, le=10.0, description="配色使用的实体底板厚度 (mm)"),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
@@ -1001,7 +1014,17 @@ async def convert_preview(
     worker_gradient_region_id_map_path: str | None = None
     worker_gradient_region_id_map: np.ndarray | None = None
     svg_large_format_policy = None
+    if isinstance(spacer_thick, FormParameter):
+        spacer_thick = spacer_thick.default
     material_source = _validate_material_source(material_source)
+    resolved_material_profile_kind = _resolve_material_profile_kind(
+        material_source=material_source,
+        material_profile_kind=material_profile_kind,
+    )
+    _require_box_raster_layer_height(
+        resolved_material_profile_kind, material_layer_height_mm,
+        native_svg=modeling_mode == "vector" and str(image.filename or "").lower().endswith(".svg"),
+    )
     (
         material_dynamic_layer_count_enabled,
         material_min_layer_count,
@@ -1041,6 +1064,25 @@ async def convert_preview(
         )
         if material_dynamic_layer_count_enabled:
             _validate_unique_dynamic_material_selection(_selected_mats)
+        # New profile-aware callers are rejected before source upload/worker
+        # allocation when an archive kind or KM measurement contract is wrong.
+        # Old requests omit the field and preserve their historical Stage A
+        # worker-only validation path.
+        if material_profile_kind is not None:
+            from core.pipeline._input_validation_common import (
+                load_and_validate_material_archive_profile,
+            )
+
+            try:
+                load_and_validate_material_archive_profile(
+                    _selected_mats,
+                    profile_kind=resolved_material_profile_kind,
+                )
+            except MaterialArchiveProfileError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": exc.error_type, "message": str(exc)},
+                ) from exc
 
     # Material-archive mode: skip LUT resolution entirely
     if material_source == "material_archive":
@@ -1252,13 +1294,22 @@ async def convert_preview(
             material_min_layer_count,
             material_max_layer_count,
             material_delta_e00_tolerance,
+            resolved_material_profile_kind or "stage_a",
+            spacer_thick,
             svg_hole_compensation_enabled,
             svg_hole_max_area_mm2,
             svg_hole_max_width_mm,
         )
         _t_worker = time.perf_counter() - _worker_t0
         worker_completed = True
-    except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Preview generation timed out")
+    except (
+        DynamicMaterialCandidateError,
+        DynamicMaterialSolverError,
+        MaterialArchiveProfileError,
+        MaterialOpticalCompatibilityError,
+    ) as e:
         _handle_core_error(e, "preview generation")
     except BrokenProcessPool as e:
         raise HTTPException(
@@ -1696,6 +1747,13 @@ async def convert_preview(
     store.put(session_id, "model_threshold", model_threshold)
     store.put(session_id, "model_margin", model_margin)
     store.put(session_id, "material_source", material_source)
+    store.put(session_id, "spacer_thick", spacer_thick)
+    if material_source == "material_archive":
+        store.put(
+            session_id,
+            "material_profile_kind",
+            resolved_material_profile_kind or "stage_a",
+        )
     store.put(
         session_id,
         "material_dynamic_layer_count_enabled",

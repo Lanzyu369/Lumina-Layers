@@ -480,6 +480,139 @@ def test_generate_puzzle_inherits_dynamic_settings_and_maps_typed_error() -> Non
     assert captured["material_delta_e00_tolerance"] == 0.4
 
 
+def test_generate_puzzle_forwards_lumina_profile_to_every_worker() -> None:
+    """Every Lumina puzzle piece must use the optical model selected at preview."""
+
+    session_id, preview_cache = _make_session()
+    preview_cache["material_profile_kind"] = "lumina_box"
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(session_id, "material_profile_kind", "lumina_box")
+    _test_store.put(session_id, "selected_materials", ["lumina-base", "lumina-red"])
+    _test_store.put(session_id, "material_layer_count", 5)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    submitted_params: list[dict[str, Any]] = []
+
+    async def _submit_stub(
+        _func: object,
+        _piece_image_path: str,
+        _lut_path: str,
+        worker_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        submitted_params.append(worker_params)
+        fd_piece, piece_path = tempfile.mkstemp(suffix=".3mf")
+        os.close(fd_piece)
+        Path(piece_path).write_bytes(b"piece-3mf")
+        return {
+            "threemf_path": piece_path,
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": float(worker_params["target_width_mm"]),
+        }
+
+    def _assemble_stub(*, output_path: str, **_kwargs: Any) -> str:
+        Path(output_path).write_bytes(b"combined-3mf")
+        return output_path
+
+    _mock_pool.submit = AsyncMock(side_effect=_submit_stub)
+    body = _build_generate_body(session_id)
+    body["params"].update({"rows": 1, "cols": 2, "target_piece_count": 2})
+    body["params"]["params"].update(
+        {
+            "lut_name": "__material_archive__",
+            "material_profile_kind": "lumina_box",
+        }
+    )
+
+    try:
+        with (
+            patch("api.routers.converter.puzzle.assemble_puzzle_3mf", side_effect=_assemble_stub),
+            patch("api.routers.converter.puzzle._require_material_archive_profile_cache_consistency",
+                  return_value="lumina_box"),
+        ):
+            response = client.post("/api/convert/generate-puzzle", json=body)
+    finally:
+        _test_store.close(session_id)
+
+    assert response.status_code == 200, response.text
+    assert len(submitted_params) == 2
+    assert all(params["material_source"] == "material_archive" for params in submitted_params)
+    assert all(
+        params["material_profile_kind"] == "lumina_box"
+        for params in submitted_params
+    )
+
+
+def test_generate_puzzle_rejects_material_profile_request_session_mismatch() -> None:
+    """A puzzle request cannot replace the profile captured by preview."""
+
+    session_id, preview_cache = _make_session()
+    preview_cache["material_profile_kind"] = "lumina_box"
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(session_id, "material_profile_kind", "lumina_box")
+    _mock_pool.submit = AsyncMock()
+    body = _build_generate_body(session_id)
+    body["params"]["params"].update(
+        {
+            "lut_name": "__material_archive__",
+            "material_profile_kind": "stage_a",
+        }
+    )
+
+    try:
+        response = client.post("/api/convert/generate-puzzle", json=body)
+    finally:
+        _test_store.close(session_id)
+
+    assert response.status_code == 422
+    assert "does not match the preview session" in response.json()["detail"]
+    _mock_pool.submit.assert_not_awaited()
+
+
+def test_generate_puzzle_maps_archive_optical_worker_errors_to_422() -> None:
+    """One rejected archive worker must not be folded into a generic 500."""
+
+    from core.material_optical_runtime import MaterialOpticalCompatibilityError
+    from core.pipeline._input_validation_common import MaterialArchiveProfileError
+
+    error_cases = (
+        (
+            MaterialArchiveProfileError("invalid Lumina archive contract"),
+            "material_profile_kind_mismatch",
+        ),
+        (
+            MaterialOpticalCompatibilityError("incompatible Lumina optical model"),
+            "material_optical_compatibility_error",
+        ),
+    )
+    for worker_error, expected_code in error_cases:
+        session_id, preview_cache = _make_session()
+        preview_cache["material_profile_kind"] = "lumina_box"
+        _test_store.put(session_id, "material_source", "material_archive")
+        _test_store.put(session_id, "material_profile_kind", "lumina_box")
+        _test_store.put(session_id, "selected_materials", ["bad-lumina-archive"])
+        _test_store.put(session_id, "material_layer_count", 5)
+        _mock_pool.submit = AsyncMock(side_effect=worker_error)
+        body = _build_generate_body(session_id)
+        body["params"].update({"rows": 1, "cols": 1, "target_piece_count": 1})
+        body["params"]["params"].update(
+            {
+                "lut_name": "__material_archive__",
+                "material_profile_kind": "lumina_box",
+            }
+        )
+
+        try:
+            with patch("api.routers.converter.puzzle._require_material_archive_profile_cache_consistency",
+                       return_value="lumina_box"):
+                response = client.post("/api/convert/generate-puzzle", json=body)
+        finally:
+            _test_store.close(session_id)
+
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == expected_code
+
+
 def test_puzzle_requires_fresh_preview_after_compensation_changes(tmp_path) -> None:
     session_id, cache = _make_session()
     path = tmp_path / "picture.svg"

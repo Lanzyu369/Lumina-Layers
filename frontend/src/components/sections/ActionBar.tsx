@@ -1,6 +1,11 @@
 import { useMemo, useState, useRef, useEffect, useCallback } from "react"
 import { createPortal } from "react-dom"
-import { buildLayerImagesSourceKey, resolveConverterSourceSelection, useConverterStore } from "../../stores/converter"
+import {
+  buildLayerImagesSourceKey,
+  isMaterialArchiveSourceVersion,
+  resolveConverterSourceSelection,
+  useConverterStore,
+} from "../../stores/converter"
 import Button from "../ui/Button"
 import BatchResultSummary from "../ui/BatchResultSummary"
 import CanvasPreviewSurface, { type CanvasPreviewSurfaceReadyPayload } from "../ui/CanvasPreviewSurface"
@@ -190,13 +195,13 @@ export default function ActionBar() {
   const canGenerate = canSubmit && !!sessionId
   const canBatchSubmit = batchFiles.length > 0 && sourceSelection.isReady
   const singleSourceHintKey =
-    sourceVersion === "material"
+    isMaterialArchiveSourceVersion(sourceVersion)
       ? "action_select_material_hint"
       : sourceVersion === "native"
         ? "action_select_native_hint"
         : "action_select_lut_hint"
   const singleCombinedHintKey =
-    sourceVersion === "material"
+    isMaterialArchiveSourceVersion(sourceVersion)
       ? "action_upload_hint_material"
       : sourceVersion === "native"
         ? "action_upload_hint_native"
@@ -209,7 +214,7 @@ export default function ActionBar() {
         ? "action_upload_image_hint"
         : singleCombinedHintKey
   const batchUploadHintKey =
-    sourceVersion === "material"
+    isMaterialArchiveSourceVersion(sourceVersion)
       ? "action_batch_upload_hint_material"
       : sourceVersion === "native"
         ? "action_batch_upload_hint_native"

@@ -1,9 +1,13 @@
 import { useEffect, useRef } from "react";
 import {
   fetchMaterialSolverCacheStatus,
+  fetchMaterialSolverRuntimeStatus,
   type MaterialSolverCacheKey,
 } from "../api/materialCache";
 import {
+  getMaterialArchiveProfileKind,
+  inferDefaultMaterialBackingDirName,
+  isMaterialArchiveSourceVersion,
   resolveConverterSourceSelection,
   type ConverterState,
   useConverterStore,
@@ -22,13 +26,15 @@ type MaterialCacheState = Pick<
   | "selectedMaterialDirNames"
   | "materialLayerCount"
   | "materialLayerHeightMm"
+  | "materialBackingMaterialDirName"
+  | "spacer_thick"
 >;
 
 function resolveMaterialCacheIdentity(
   state: MaterialCacheState,
 ): string | null {
   if (
-    state.source_version !== "material" ||
+    !isMaterialArchiveSourceVersion(state.source_version) ||
     state.selectedMaterialDirNames.length === 0
   ) {
     return null;
@@ -38,6 +44,9 @@ function resolveMaterialCacheIdentity(
     state.materialLayerCount,
     state.materialLayerHeightMm,
     "white",
+    getMaterialArchiveProfileKind(state.source_version),
+    ...(state.source_version === "lumina_box"
+      ? [state.materialBackingMaterialDirName, state.spacer_thick] : []),
   ]);
 }
 
@@ -47,11 +56,19 @@ function resolveMaterialCacheKey(
   if (resolveMaterialCacheIdentity(state) === null) {
     return null;
   }
+  const backingName = state.materialBackingMaterialDirName && state.selectedMaterialDirNames.includes(state.materialBackingMaterialDirName)
+    ? state.materialBackingMaterialDirName : inferDefaultMaterialBackingDirName(state.selectedMaterialDirNames);
   return {
     materialDirectoryNames: state.selectedMaterialDirNames,
     layerCount: state.materialLayerCount,
     layerHeightMm: state.materialLayerHeightMm,
     substrate: "white",
+    materialProfileKind:
+      getMaterialArchiveProfileKind(state.source_version) ?? "stage_a",
+    ...(state.source_version === "lumina_box" ? {
+      backingMaterialIndex: Math.max(0, state.selectedMaterialDirNames.indexOf(backingName ?? "")),
+      backingThicknessMm: state.spacer_thick,
+    } : {}),
   };
 }
 
@@ -102,8 +119,12 @@ export function useAutoPreview(): void {
       state.lut_names,
       state.selectedNativeBrandKey,
       state.selectedNativeDbNames,
-      state.source_version === "material" ? null : state.color_layers,
-      state.source_version === "material" ? null : state.layer_height_mm,
+      isMaterialArchiveSourceVersion(state.source_version)
+        ? null
+        : state.color_layers,
+      isMaterialArchiveSourceVersion(state.source_version)
+        ? null
+        : state.layer_height_mm,
       state.model_enable,
       state.model_only,
       state.model_threshold,
@@ -112,6 +133,7 @@ export function useAutoPreview(): void {
       state.materialLayerCount,
       state.materialLayerHeightMm,
       state.materialBackingMaterialDirName,
+      state.source_version === "lumina_box" ? state.spacer_thick : null,
       state.largeFormatEnabled || state.svg_hole_compensation_enabled
         ? [state.target_width_mm, state.target_height_mm]
         : null,
@@ -193,9 +215,9 @@ export function useAutoPreview(): void {
               : undefined;
             let cacheAvailable = false;
             try {
-              const status = await fetchMaterialSolverCacheStatus(cacheKey, {
-                gridResolution,
-              });
+              const status = cacheKey.materialProfileKind === "lumina_box"
+                ? await fetchMaterialSolverRuntimeStatus(cacheKey)
+                : await fetchMaterialSolverCacheStatus(cacheKey, { gridResolution });
               cacheAvailable = status.cached;
             } catch {
               cacheAvailable = false;

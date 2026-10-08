@@ -1168,6 +1168,10 @@ def test_native_worker_uses_material_archive_vector_semantics_per_tile(
     result = None
     with (
         patch(
+            "core.pipeline._input_validation_common.load_and_validate_material_archive_profile",
+            return_value=("stage_a", []),
+        ) as validate_profile,
+        patch(
             "core.pipeline._input_validation_common._apply_material_archive_branch",
             side_effect=_validate_material_ctx,
         ) as validate_material,
@@ -1192,6 +1196,7 @@ def test_native_worker_uses_material_archive_vector_semantics_per_tile(
 
     try:
         assert result["tile_count"] == 1
+        validate_profile.assert_called_once()
         validate_material.assert_called_once()
         build_processor.assert_called_once()
         assert getattr(processor, "layer_height_mm", None) == pytest.approx(

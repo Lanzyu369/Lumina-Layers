@@ -119,6 +119,87 @@ def test_load_bug_repro_extracts_materials_zip(tmp_path: Path) -> None:
     assert extracted.read_bytes() == b"{}"
 
 
+def test_load_bug_repro_extracts_lumina_box_archive_bundle(tmp_path: Path) -> None:
+    """Lumina Box's strict three-file archive remains replayable locally."""
+    feedback_root = tmp_path / "feedback"
+    repro_root = tmp_path / "repro_sessions"
+    ticket_dir = _write_ticket(feedback_root, "LUM-20260511-012")
+    payload = json.loads((ticket_dir / "ticket.json").read_text(encoding="utf-8"))
+    payload["context"]["source_version"] = "lumina_box"
+    (ticket_dir / "ticket.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    with zipfile.ZipFile(ticket_dir / "materials.zip", "w") as zf:
+        zf.writestr("Lumina/white/material.json", b'{"profile_kind":"lumina_box"}')
+        zf.writestr("Lumina/white/lumina_box_measurements.json", b"{}")
+        zf.writestr("Lumina/white/km_xyz_parameters.json", b"{}")
+
+    result = load_bug_repro(
+        "LUM-20260511-012",
+        feedback_root=feedback_root,
+        repro_root=repro_root,
+    )
+
+    extracted = result.repro_dir / "materials" / "Lumina" / "white"
+    assert (extracted / "material.json").is_file()
+    assert (extracted / "lumina_box_measurements.json").is_file()
+    assert (extracted / "km_xyz_parameters.json").is_file()
+
+
+def test_load_bug_repro_preserves_dynamic_material_ticket_evidence(
+    tmp_path: Path,
+) -> None:
+    """Replay copies dynamic evidence exactly; it does not attempt UI hydration.
+
+    load_bug_repro 只复制并保留动态求解证据，不执行任何前端状态恢复。
+    """
+    feedback_root = tmp_path / "feedback"
+    repro_root = tmp_path / "repro_sessions"
+    ticket_dir = _write_ticket(feedback_root, "LUM-20260511-013")
+    payload = json.loads((ticket_dir / "ticket.json").read_text(encoding="utf-8"))
+    dynamic = {
+        "recipes": [
+            {
+                "target_srgb": [17, 34, 51],
+                "actual_recipe_top_to_bottom": [0, 1, 0, 1, 0],
+                "layer_cap_options": [
+                    {"max_effective_layer_count": 5},
+                    {"max_effective_layer_count": 6},
+                    {"max_effective_layer_count": 7},
+                ],
+            }
+        ],
+        "benefit_curve": [
+            {"max_effective_layer_count": 5},
+            {"max_effective_layer_count": 6},
+            {"max_effective_layer_count": 7},
+        ],
+        "scope": "automatic_pixels",
+        "pixel_count": 37,
+    }
+    payload["context"].update(
+        {
+            "source_version": "lumina_box",
+            "material_dynamic_layer_count_enabled": True,
+            "material_dynamic": dynamic,
+        }
+    )
+    (ticket_dir / "ticket.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    result = load_bug_repro(
+        "LUM-20260511-013",
+        feedback_root=feedback_root,
+        repro_root=repro_root,
+    )
+
+    copied = json.loads(
+        (result.repro_dir / "ticket.json").read_text(encoding="utf-8")
+    )
+    assert copied["context"]["material_dynamic"] == dynamic
+
+
 def test_load_bug_repro_handles_partial_ticket(tmp_path: Path) -> None:
     feedback_root = tmp_path / "feedback"
     repro_root = tmp_path / "repro_sessions"

@@ -13,9 +13,13 @@ import type {
 import { RECIPE_FORMAT, RECIPE_SCHEMA_VERSION } from "./types";
 import { buildAssetEntry } from "./utils";
 import { colorRemapToReplacementRegions } from "../utils/colorUtils";
-import type { ConverterState } from "../stores/converter/store";
+import {
+  isMaterialArchiveSourceVersion,
+  type ConverterState,
+} from "../stores/converter/store";
 import type { SettingsState } from "../stores/settingsStore";
 import type { ColorReplacementItem } from "../api/types";
+import { LUMINA_BOX_PRODUCTION_MODEL_ID } from "../api/luminaBoxMaterials";
 import type { WorkshopRecipeSource } from "../workshop/types";
 import { svgHoleCompensationOptions } from "../constants/svgHoleCompensation";
 import {
@@ -142,21 +146,27 @@ export function exportConverterRecipe(
     normalizedHeightMap[ensureHash(hex)] = height;
   }
   const selectedLegacyLutNames = normalizeLegacyLutNames(state);
-  const isMaterialSource = state.source_version === "material";
+  const isMaterialArchiveSource = isMaterialArchiveSourceVersion(
+    state.source_version,
+  );
   const hasDynamicResult =
     state.materialDynamicRecipes.length > 0 ||
     state.materialLayerBenefitCurve.length > 0;
 
-  const lutRef: LutReference = {
-    name: state.lut_name,
-    color_mode: state.color_mode,
-    ...(lutPath ? { path_hint: lutPath } : {}),
-  };
+  // Material archives are selected through `source`, not through a legacy
+  // LUT/color-mode pair. Do not carry stale legacy state into share cards.
+  const lutRef: LutReference = isMaterialArchiveSource
+    ? { name: "", color_mode: "" }
+    : {
+        name: state.lut_name,
+        color_mode: state.color_mode,
+        ...(lutPath ? { path_hint: lutPath } : {}),
+      };
 
   return {
     base: {
       lut: lutRef,
-      color_mode: state.color_mode,
+      color_mode: isMaterialArchiveSource ? "" : state.color_mode,
       modeling_mode: state.modeling_mode,
       target_width_mm: state.target_width_mm,
       target_height_mm: state.target_height_mm,
@@ -173,22 +183,27 @@ export function exportConverterRecipe(
     },
     source: {
       source_version: state.source_version,
+      ...(state.source_version === "lumina_box" ? { optical_model_id: LUMINA_BOX_PRODUCTION_MODEL_ID } : {}),
       ...(state.source_version === "legacy" && selectedLegacyLutNames.length > 0
         ? { selected_legacy_lut_names: selectedLegacyLutNames }
         : {}),
-      selected_native_brand_key: state.selectedNativeBrandKey,
-      selected_native_db_names: [...state.selectedNativeDbNames],
-      color_layers: state.color_layers,
-      layer_height_mm: state.layer_height_mm,
-      model_enable: state.model_enable,
-      model_only: state.model_only,
-      model_threshold: state.model_threshold,
-      model_margin: state.model_margin,
+      selected_native_brand_key: isMaterialArchiveSource
+        ? ""
+        : state.selectedNativeBrandKey,
+      selected_native_db_names: isMaterialArchiveSource
+        ? []
+        : [...state.selectedNativeDbNames],
+      color_layers: isMaterialArchiveSource ? null : state.color_layers,
+      layer_height_mm: isMaterialArchiveSource ? null : state.layer_height_mm,
+      model_enable: isMaterialArchiveSource ? false : state.model_enable,
+      model_only: isMaterialArchiveSource ? false : state.model_only,
+      model_threshold: isMaterialArchiveSource ? null : state.model_threshold,
+      model_margin: isMaterialArchiveSource ? null : state.model_margin,
       selected_material_dir_names: [...state.selectedMaterialDirNames],
       material_layer_count: state.materialLayerCount,
       material_layer_height_mm: state.materialLayerHeightMm,
       material_backing_material_dir_name: state.materialBackingMaterialDirName,
-      ...(isMaterialSource
+      ...(isMaterialArchiveSource
         ? {
             material_dynamic_layer_count_enabled:
               state.materialDynamicLayerCountEnabled,
@@ -199,7 +214,7 @@ export function exportConverterRecipe(
           }
         : {}),
     },
-    ...(isMaterialSource &&
+    ...(isMaterialArchiveSource &&
     state.materialDynamicLayerCountEnabled &&
     hasDynamicResult
       ? {

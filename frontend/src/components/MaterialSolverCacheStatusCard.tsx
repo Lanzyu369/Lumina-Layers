@@ -14,6 +14,7 @@ import {
   type MaterialSolverCacheKey,
   type MaterialSolverRuntimeCandidateBudget,
 } from "../api/materialCache";
+import { apiErrorToVisibleMessage } from "../api/client";
 import type {
   MaterialSolverCacheDetailsResponse,
   MaterialSolverCacheEntry,
@@ -38,6 +39,10 @@ interface MaterialSolverCacheStatusCardProps {
   layerHeightMm: number;
   /** Substrate — currently always ``"white"`` in the converter flow. */
   substrate?: "white" | "black";
+  /** Optical-profile family used for cache identity and solver requests. */
+  materialProfileKind?: "stage_a" | "lumina_box";
+  backingMaterialIndex?: number;
+  backingThicknessMm?: number;
 }
 
 type Phase = "idle" | "checking" | "cached" | "missing" | "error";
@@ -66,6 +71,18 @@ const INITIAL_RUNTIME_STATE: RuntimeInternalState = {
   errorMessage: null,
 };
 
+function apiResponseStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object" || !("response" in error)) {
+    return null;
+  }
+  const response = (error as { response?: unknown }).response;
+  if (!response || typeof response !== "object" || !("status" in response)) {
+    return null;
+  }
+  const status = (response as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
 /**
  * Status card shown next to the material picker: reports whether an exhaustive
  * solver cache exists for the currently-selected palette + layer parameters,
@@ -79,9 +96,13 @@ export default function MaterialSolverCacheStatusCard({
   layerCount,
   layerHeightMm,
   substrate = "white",
+  materialProfileKind = "stage_a",
+  backingMaterialIndex,
+  backingThicknessMm,
 }: MaterialSolverCacheStatusCardProps) {
   const { t } = useI18n();
   const workspace = useWorkspaceMode();
+  const isLuminaBox = materialProfileKind === "lumina_box";
   const [state, setState] = useState<InternalState>(INITIAL_STATE);
   const [isBuilding, setIsBuilding] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -126,8 +147,19 @@ export default function MaterialSolverCacheStatusCard({
       layerCount,
       layerHeightMm,
       substrate,
+      materialProfileKind,
+      ...(isLuminaBox ? { backingMaterialIndex, backingThicknessMm } : {}),
     }),
-    [materialDirectoryNames, layerCount, layerHeightMm, substrate],
+    [
+      materialDirectoryNames,
+      layerCount,
+      layerHeightMm,
+      substrate,
+      materialProfileKind,
+      isLuminaBox,
+      backingMaterialIndex,
+      backingThicknessMm,
+    ],
   );
 
   // Track whether component is still mounted / whether the current refresh
@@ -136,16 +168,41 @@ export default function MaterialSolverCacheStatusCard({
   const requestIdRef = useRef(0);
   const runtimeRequestIdRef = useRef(0);
 
+  const allowedRuntimeCandidateBudgets = useMemo(
+    () =>
+      isLuminaBox
+        ? MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGETS.filter(
+            (budget) =>
+              budget <= DEFAULT_MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGET,
+          )
+        : MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGETS,
+    [isLuminaBox],
+  );
+
   const runtimeBudgetOptions = useMemo(
     () =>
-      MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGETS.map((budget) => ({
+      allowedRuntimeCandidateBudgets.map((budget) => ({
         value: String(budget),
         label: t(`basic_material_runtime_budget_option_${budget}`),
       })),
-    [t],
+    [allowedRuntimeCandidateBudgets, t],
   );
 
+  useEffect(() => {
+    if (!allowedRuntimeCandidateBudgets.includes(runtimeCandidateBudget)) {
+      setRuntimeCandidateBudget(
+        DEFAULT_MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGET,
+      );
+    }
+  }, [allowedRuntimeCandidateBudgets, runtimeCandidateBudget]);
+
   const refreshStatus = useCallback(async () => {
+    if (isLuminaBox) {
+      requestIdRef.current += 1;
+      setState(INITIAL_STATE);
+      setActionError(null);
+      return;
+    }
     if (materialDirectoryNames.length === 0) {
       setState(INITIAL_STATE);
       setActionError(null);
@@ -175,7 +232,12 @@ export default function MaterialSolverCacheStatusCard({
         errorMessage: tRuntime("basic_material_cache_status_error_detail"),
       });
     }
-  }, [materialDirectoryNames.length, cacheKey, effectiveGridResolution]);
+  }, [
+    isLuminaBox,
+    materialDirectoryNames.length,
+    cacheKey,
+    effectiveGridResolution,
+  ]);
 
   useEffect(() => {
     refreshStatus();
@@ -337,14 +399,15 @@ export default function MaterialSolverCacheStatusCard({
     }
   }, [cacheKey, materialDirectoryNames.length, effectiveGridResolution, t]);
 
-  const handleRuntimeBudgetChange = useCallback((value: string) => {
-    const parsed = Number(value) as MaterialSolverRuntimeCandidateBudget;
-    if (
-      MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGETS.includes(parsed)
-    ) {
-      setRuntimeCandidateBudget(parsed);
-    }
-  }, []);
+  const handleRuntimeBudgetChange = useCallback(
+    (value: string) => {
+      const parsed = Number(value) as MaterialSolverRuntimeCandidateBudget;
+      if (allowedRuntimeCandidateBudgets.includes(parsed)) {
+        setRuntimeCandidateBudget(parsed);
+      }
+    },
+    [allowedRuntimeCandidateBudgets],
+  );
 
   const handleBuildRuntime = useCallback(async () => {
     if (materialDirectoryNames.length === 0) return;
@@ -359,8 +422,20 @@ export default function MaterialSolverCacheStatusCard({
         entry: response.entry,
         errorMessage: null,
       });
-    } catch {
-      setRuntimeActionError(tRuntime("basic_material_runtime_build_failed"));
+    } catch (error) {
+      const status = apiResponseStatus(error);
+      if (status !== null && status >= 400 && status < 500) {
+        setRuntimeActionError(
+          tRuntime("basic_material_runtime_build_error", {
+            message: apiErrorToVisibleMessage(
+              error,
+              tRuntime("basic_material_runtime_build_failed"),
+            ),
+          }),
+        );
+      } else {
+        setRuntimeActionError(tRuntime("basic_material_runtime_build_failed"));
+      }
     } finally {
       setIsRuntimeBuilding(false);
     }
@@ -455,108 +530,131 @@ export default function MaterialSolverCacheStatusCard({
         background: "var(--surface-panel-muted)",
       }}
     >
-      <header className="flex items-start justify-between gap-2">
-        <div className="flex flex-col gap-1 min-w-0">
-          <h4 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800 dark:text-slate-100">
-            <span>{t("basic_material_cache_section_title")}</span>
-            <HelpDot
-              title={t("basic_material_cache_section_title")}
-              description={t("basic_material_cache_section_description")}
-            />
+      {isLuminaBox ? (
+        <div
+          data-testid="material-solver-cache-lumina-box-notice"
+          className="flex flex-col gap-1 rounded-lg border px-3 py-2"
+          style={{
+            borderColor: "var(--surface-outline)",
+            background: "var(--surface-panel)",
+          }}
+        >
+          <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+            {t("basic_material_cache_lumina_box_title")}
           </h4>
+          <p className="text-[11px] leading-snug text-slate-500 dark:text-slate-400">
+            {t("basic_material_cache_lumina_box_not_applicable")}
+          </p>
         </div>
-        <StatusPill tone={statusTone} label={statusText} />
-      </header>
+      ) : (
+        <div
+          data-testid="material-solver-cache-stage-a-section"
+          className="flex flex-col gap-2"
+        >
+          <header className="flex items-start justify-between gap-2">
+            <div className="flex flex-col gap-1 min-w-0">
+              <h4 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800 dark:text-slate-100">
+                <span>{t("basic_material_cache_section_title")}</span>
+                <HelpDot
+                  title={t("basic_material_cache_section_title")}
+                  description={t("basic_material_cache_section_description")}
+                />
+              </h4>
+            </div>
+            <StatusPill tone={statusTone} label={statusText} />
+          </header>
 
-      <p
-        data-testid="material-solver-cache-active-grid"
-        className="text-[11px] leading-snug text-slate-500 dark:text-slate-400"
-      >
-        {tRuntime("basic_material_cache_active_grid_label", {
-          tier: t(
-            `settings.solver_cache_density_option_${activeGridResolution}`,
-          ),
-          grid: activeGridResolution,
-        })}
-      </p>
+          <p
+            data-testid="material-solver-cache-active-grid"
+            className="text-[11px] leading-snug text-slate-500 dark:text-slate-400"
+          >
+            {tRuntime("basic_material_cache_active_grid_label", {
+              tier: t(
+                `settings.solver_cache_density_option_${activeGridResolution}`,
+              ),
+              grid: activeGridResolution,
+            })}
+          </p>
 
-      {state.phase === "error" && state.errorMessage ? (
-        <p className="text-xs text-rose-500">
-          {state.errorMessage}
-        </p>
-      ) : null}
+          {state.phase === "error" && state.errorMessage ? (
+            <p className="text-xs text-rose-500">{state.errorMessage}</p>
+          ) : null}
 
-      {state.phase === "cached" && state.entry ? (
-        <CachedEntryDetails entry={state.entry} />
-      ) : null}
+          {state.phase === "cached" && state.entry ? (
+            <CachedEntryDetails entry={state.entry} />
+          ) : null}
 
-      {state.phase === "missing" && materialDirectoryNames.length > 0 ? (
-        <p className="text-[11px] text-slate-500 dark:text-slate-400">
-          {t("basic_material_cache_fallback_hint")}
-        </p>
-      ) : null}
+          {state.phase === "missing" && materialDirectoryNames.length > 0 ? (
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              {t("basic_material_cache_fallback_hint")}
+            </p>
+          ) : null}
 
-      {isBuilding ? (
-        <p className="text-[11px] text-slate-500 dark:text-slate-400">
-          {tRuntime("basic_material_cache_building_hint", {
-            combinations: combinationsLabel,
-            seconds: secondsEstimate,
-          })}
-        </p>
-      ) : null}
+          {isBuilding ? (
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              {tRuntime("basic_material_cache_building_hint", {
+                combinations: combinationsLabel,
+                seconds: secondsEstimate,
+              })}
+            </p>
+          ) : null}
 
-      {actionError ? (
-        <p className="text-xs text-rose-500">{actionError}</p>
-      ) : null}
+          {actionError ? (
+            <p className="text-xs text-rose-500">{actionError}</p>
+          ) : null}
 
-      <div className="flex flex-wrap items-center gap-2">
-        {state.phase === "cached" ? (
-          <>
-            <Button
-              label={t("basic_material_cache_rebuild_button")}
-              variant="secondary"
-              disabled={materialDirectoryNames.length === 0}
-              loading={isBuilding}
-              onClick={handleBuild}
-              className="px-3 text-xs"
-            />
-            <Button
-              label={t("basic_material_cache_delete_button")}
-              variant="secondary"
-              disabled={materialDirectoryNames.length === 0}
-              loading={isDeleting}
-              onClick={handleDelete}
-              className="px-3 text-xs"
-            />
-            <Button
-              label={t(
-                chartsExpanded
-                  ? "basic_material_cache_charts_hide_button"
-                  : "basic_material_cache_charts_show_button",
-              )}
-              variant="secondary"
-              disabled={materialDirectoryNames.length === 0}
-              loading={chartsLoading}
-              onClick={handleToggleCharts}
-              className="px-3 text-xs"
-              data-testid="material-solver-cache-charts-toggle"
-            />
-          </>
-        ) : (
-          <Button
-            label={
-              isBuilding
-                ? t("basic_material_cache_building_label")
-                : t("basic_material_cache_build_button")
-            }
-            variant="primary"
-            disabled={materialDirectoryNames.length === 0 || isBuilding}
-            loading={isBuilding}
-            onClick={handleBuild}
-            className="px-3 text-xs"
-          />
-        )}
-      </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {state.phase === "cached" ? (
+              <>
+                <Button
+                  label={t("basic_material_cache_rebuild_button")}
+                  variant="secondary"
+                  disabled={materialDirectoryNames.length === 0}
+                  loading={isBuilding}
+                  onClick={handleBuild}
+                  className="px-3 text-xs"
+                />
+                <Button
+                  label={t("basic_material_cache_delete_button")}
+                  variant="secondary"
+                  disabled={materialDirectoryNames.length === 0}
+                  loading={isDeleting}
+                  onClick={handleDelete}
+                  className="px-3 text-xs"
+                />
+                <Button
+                  label={t(
+                    chartsExpanded
+                      ? "basic_material_cache_charts_hide_button"
+                      : "basic_material_cache_charts_show_button",
+                  )}
+                  variant="secondary"
+                  disabled={materialDirectoryNames.length === 0}
+                  loading={chartsLoading}
+                  onClick={handleToggleCharts}
+                  className="px-3 text-xs"
+                  data-testid="material-solver-cache-charts-toggle"
+                />
+              </>
+            ) : (
+              <Button
+                label={
+                  isBuilding
+                    ? t("basic_material_cache_building_label")
+                    : t("basic_material_cache_build_button")
+                }
+                variant="primary"
+                disabled={
+                  materialDirectoryNames.length === 0 || isBuilding
+                }
+                loading={isBuilding}
+                onClick={handleBuild}
+                className="px-3 text-xs"
+              />
+            )}
+          </div>
+        </div>
+      )}
 
       <div
         data-testid="material-solver-runtime-section"
@@ -692,7 +790,7 @@ export default function MaterialSolverCacheStatusCard({
         ) : null}
       </div>
 
-      {chartsExpanded && state.phase === "cached" ? (
+      {!isLuminaBox && chartsExpanded && state.phase === "cached" ? (
         <div
           data-testid="material-solver-cache-charts-region"
           className="mt-3 flex flex-col gap-3"

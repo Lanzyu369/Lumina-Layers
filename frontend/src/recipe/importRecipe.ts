@@ -10,11 +10,14 @@ import type {
   LuminaRecipe,
 } from "./types";
 import { DEFAULT_CONVERTER_RECIPE_PUZZLE, WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES } from "./types";
+import { LUMINA_BOX_PRODUCTION_MODEL_ID } from "../api/luminaBoxMaterials";
 import {
+  DEFAULT_STATE,
   DEFAULT_MODEL_SURFACE_MODEL_ROTATION,
   DEFAULT_MODEL_SURFACE_PLACEMENT,
   MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
   MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
+  isMaterialArchiveSourceVersion,
   type ConverterState,
 } from "../stores/converter/store";
 import type {
@@ -122,6 +125,8 @@ export const RECIPE_IMPORT_WARNING_REGION_RECIPES_NOT_RESTORED =
   "recipe_import_warning_region_recipes_not_restored";
 export const RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED =
   "recipe_import_workshop_degraded";
+export const RECIPE_IMPORT_WARNING_BOX_MODEL_UPDATED =
+  "recipe_import_warning_box_model_updated";
 
 export const RECIPE_IMPORT_NOT_SHARE_CARD_ERROR =
   "PNG file does not contain Lumina recipe metadata";
@@ -432,31 +437,45 @@ export function restoreConverterRecipe(
     heightmapFile = base64ToFile(hm.payload_b64, hm.filename, hm.mime_type);
   }
 
-  // --- LUT matching ---
-  const lutMatch = matchLut(conv.base.lut, localLuts);
-  let lutName = "";
-  if (lutMatch.matched) {
-    lutName = lutMatch.lutName;
-    if (lutMatch.matchType === "name" && conv.base.lut.path_hint) {
-      warnings.push(RECIPE_IMPORT_WARNING_LUT_DEGRADED);
-    }
-  } else {
-    warnings.push(RECIPE_IMPORT_WARNING_LUT_MISSING);
-  }
   const source = conv.source;
+  if (source?.source_version === "lumina_box" && source.optical_model_id !== LUMINA_BOX_PRODUCTION_MODEL_ID) {
+    warnings.push(RECIPE_IMPORT_WARNING_BOX_MODEL_UPDATED);
+  }
+  const isMaterialArchiveSource = isMaterialArchiveSourceVersion(
+    source?.source_version,
+  );
+
+  // --- LUT matching ---
+  // Archive sources are identified by their material-profile discriminator;
+  // their base LUT values are intentionally blank and must not cause a
+  // legacy-LUT warning or overwrite the current archive workflow.
+  let lutName = "";
+  if (!isMaterialArchiveSource) {
+    const lutMatch = matchLut(conv.base.lut, localLuts);
+    if (lutMatch.matched) {
+      lutName = lutMatch.lutName;
+      if (lutMatch.matchType === "name" && conv.base.lut.path_hint) {
+        warnings.push(RECIPE_IMPORT_WARNING_LUT_DEGRADED);
+      }
+    } else {
+      warnings.push(RECIPE_IMPORT_WARNING_LUT_MISSING);
+    }
+  }
   const dynamicBounds = resolveImportedDynamicLayerBounds(source);
   const dynamicMaterialEnabled =
-    source?.source_version === "material" &&
-    source.material_dynamic_layer_count_enabled === true;
+    isMaterialArchiveSource &&
+    source?.material_dynamic_layer_count_enabled === true;
   const importedDynamicMaterial = restoreImportedDynamicMaterialMetadata(
     conv.material_dynamic,
     dynamicMaterialEnabled,
   );
-  const restoredLegacyLutNames = restoreLegacyLutNames(
-    lutName,
-    source?.selected_legacy_lut_names,
-    localLuts,
-  );
+  const restoredLegacyLutNames = isMaterialArchiveSource
+    ? { names: [], missingSecondary: false }
+    : restoreLegacyLutNames(
+        lutName,
+        source?.selected_legacy_lut_names,
+        localLuts,
+      );
   if (restoredLegacyLutNames.missingSecondary) {
     warnings.push(RECIPE_IMPORT_WARNING_SECONDARY_LUT_MISSING);
   }
@@ -606,9 +625,11 @@ export function restoreConverterRecipe(
 
     // Base
     source_version: (source?.source_version ?? "legacy") as ConverterState["source_version"],
-    lut_name: lutName,
+    lut_name: isMaterialArchiveSource ? "" : lutName,
     lut_names: restoredLegacyLutNames.names,
-    color_mode: conv.base.color_mode as ConverterState["color_mode"],
+    color_mode: (isMaterialArchiveSource
+      ? DEFAULT_STATE.color_mode
+      : conv.base.color_mode) as ConverterState["color_mode"],
     modeling_mode: conv.base.modeling_mode as ConverterState["modeling_mode"],
     target_width_mm: conv.base.target_width_mm,
     target_height_mm: conv.base.target_height_mm,
@@ -622,14 +643,30 @@ export function restoreConverterRecipe(
     use_lut_constrained: Boolean(conv.base.use_lut_constrained),
     auto_dynamic_range: Boolean(conv.base.auto_dynamic_range),
     chroma_gate: conv.base.chroma_gate,
-    selectedNativeBrandKey: source?.selected_native_brand_key ?? "",
-    selectedNativeDbNames: [...(source?.selected_native_db_names ?? [])],
-    color_layers: source?.color_layers ?? null,
-    layer_height_mm: source?.layer_height_mm ?? null,
-    model_enable: source?.model_enable ?? false,
-    model_only: source?.model_only ?? false,
-    model_threshold: source?.model_threshold ?? null,
-    model_margin: source?.model_margin ?? null,
+    selectedNativeBrandKey: isMaterialArchiveSource
+      ? ""
+      : (source?.selected_native_brand_key ?? ""),
+    selectedNativeDbNames: isMaterialArchiveSource
+      ? []
+      : [...(source?.selected_native_db_names ?? [])],
+    color_layers: isMaterialArchiveSource
+      ? null
+      : (source?.color_layers ?? null),
+    layer_height_mm: isMaterialArchiveSource
+      ? null
+      : (source?.layer_height_mm ?? null),
+    model_enable: isMaterialArchiveSource
+      ? false
+      : (source?.model_enable ?? false),
+    model_only: isMaterialArchiveSource
+      ? false
+      : (source?.model_only ?? false),
+    model_threshold: isMaterialArchiveSource
+      ? null
+      : (source?.model_threshold ?? null),
+    model_margin: isMaterialArchiveSource
+      ? null
+      : (source?.model_margin ?? null),
     selectedMaterialDirNames: [...(source?.selected_material_dir_names ?? [])],
     materialLayerCount: source?.material_layer_count ?? 5,
     materialLayerHeightMm: source?.material_layer_height_mm ?? 0.08,

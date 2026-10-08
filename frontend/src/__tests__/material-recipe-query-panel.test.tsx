@@ -8,6 +8,7 @@ import {
   listGradientCardMaterials,
   previewMaterialRecipe,
 } from "../api/extractor";
+import { invalidateGeneratedArtifacts } from "../stores/generatedArtifactInvalidation";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 
 vi.mock("../api/extractor", () => ({
@@ -27,7 +28,10 @@ vi.mock("../api/client", async () => {
   };
 });
 
-const buildLibraryResponse = (count: number) => ({
+const buildLibraryResponse = (
+  count: number,
+  profileKind: "stage_a" | "lumina_box" = "stage_a",
+) => ({
   status: "ok",
   message: `Loaded ${count} saved materials`,
   materials: Array.from({ length: count }, (_, idx) => ({
@@ -42,6 +46,8 @@ const buildLibraryResponse = (count: number) => ({
     mean_delta_e: 1.0,
     verification_count: 1,
     verification_history: [],
+    profile_kind: profileKind,
+    optical_model_id: profileKind === "lumina_box" ? "backed_gradient_spectral_four_flux_smooth/v3" : undefined,
   })),
 });
 
@@ -59,10 +65,37 @@ function apiValidationFailure(loc: Array<string | number>, msg: string) {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
+}
+
+async function prepareRecipeForSwatchDownload(): Promise<void> {
+  vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(1));
+  vi.mocked(previewMaterialRecipe).mockResolvedValue({
+    status: "ok",
+    material_profile_kind: "stage_a",
+    layer_count: 1,
+    layer_height_mm: 0.08,
+    substrate: "white",
+    predicted_rgb: [180, 60, 90],
+    predicted_hex: "#B43C5A",
+    layers: [],
+  });
+
+  render(<MaterialRecipeQueryPanel />);
+  await waitFor(() => {
+    expect(screen.getAllByTestId("material-recipe-palette-item")).toHaveLength(1);
+  });
+  fireEvent.click(screen.getByTestId("material-recipe-palette-item"));
+  fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+  await screen.findByRole("button", { name: /添加到队列|Add to queue/ });
+  fireEvent.click(screen.getByRole("button", { name: /添加到队列|Add to queue/ }));
+  fireEvent.click(screen.getByRole("button", { name: /生成验证色块|Generate swatch/ }));
+  await screen.findByRole("button", { name: /下载 3MF|Download 3MF/ });
 }
 
 describe("MaterialRecipeQueryPanel", () => {
@@ -167,11 +200,93 @@ describe("MaterialRecipeQueryPanel", () => {
 
     expect(previewMaterialRecipe).toHaveBeenCalledWith({
       directory_names: ["mat-1", "mat-0"],
+      material_profile_kind: "stage_a",
       layer_height_mm: 0.08,
       substrate: "white",
     });
     expect(screen.getByTestId("material-recipe-result-swatch")).toBeInTheDocument();
     expect(screen.getByTestId("material-recipe-result-layers")).toBeInTheDocument();
+  });
+
+  it("switches profile families, clears the active recipe, and sends Lumina Box requests", async () => {
+    const stageAResponse = {
+      ...buildLibraryResponse(1, "stage_a"),
+      materials: [
+        {
+          ...buildLibraryResponse(1, "stage_a").materials[0],
+          material_name: "Stage A Red",
+          directory_name: "stage-a-red",
+        },
+      ],
+    };
+    const luminaBoxResponse = {
+      ...buildLibraryResponse(1, "lumina_box"),
+      materials: [
+        {
+          ...buildLibraryResponse(1, "lumina_box").materials[0],
+          material_name: "Lumina Blue",
+          directory_name: "lumina-blue",
+        },
+      ],
+    };
+    vi.mocked(listGradientCardMaterials).mockImplementation(async ({ profileKind } = {}) => (
+      profileKind === "lumina_box" ? luminaBoxResponse : stageAResponse
+    ));
+    vi.mocked(previewMaterialRecipe).mockImplementation(async (request) => ({
+      status: "ok",
+      material_profile_kind: request.material_profile_kind,
+      layer_count: request.directory_names.length,
+      layer_height_mm: request.layer_height_mm,
+      substrate: request.substrate,
+      predicted_rgb: [50, 90, 190],
+      predicted_hex: "#325ABE",
+      layers: [],
+    }));
+
+    render(<MaterialRecipeQueryPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Stage A Red" })).toBeInTheDocument();
+      expect(listGradientCardMaterials).toHaveBeenLastCalledWith({ profileKind: "stage_a" });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stage A Red" }));
+    fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+    await waitFor(() => {
+      expect(screen.getByTestId("material-recipe-result-hex")).toHaveTextContent("#325ABE");
+    });
+
+    fireEvent.click(screen.getByTestId("material-recipe-profile-lumina_box"));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Lumina Blue" })).toBeInTheDocument();
+      expect(listGradientCardMaterials).toHaveBeenLastCalledWith({ profileKind: "lumina_box" });
+    });
+    expect(screen.queryByRole("button", { name: "Stage A Red" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("material-recipe-layer-item")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("material-recipe-result-hex")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Lumina Blue" }));
+    fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+    await waitFor(() => {
+      expect(vi.mocked(previewMaterialRecipe).mock.calls.at(-1)?.[0]).toMatchObject({
+        directory_names: ["lumina-blue"],
+        material_profile_kind: "lumina_box",
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /添加到队列|Add to queue/ }));
+    fireEvent.click(screen.getByRole("button", { name: /生成验证色块|Generate swatch/ }));
+    await waitFor(() => {
+      expect(vi.mocked(generateMaterialRecipeSwatch).mock.calls.at(-1)?.[0]).toMatchObject({
+        material_profile_kind: "lumina_box",
+        recipes: [
+          expect.objectContaining({
+            directory_names: ["lumina-blue"],
+            result_hex: "#325ABE",
+          }),
+        ],
+      });
+    });
   });
 
   it("permits more than five layers (no 5-layer hard cap)", async () => {
@@ -486,6 +601,7 @@ describe("MaterialRecipeQueryPanel", () => {
     });
     const callArgs = vi.mocked(generateMaterialRecipeSwatch).mock.calls[0][0];
     expect(callArgs.recipes[0].directory_names).toEqual(["mat-1", "mat-0"]);
+    expect(callArgs.material_profile_kind).toBe("stage_a");
     expect(callArgs.device_profile_id).toBe("BambuStudio:bbl:bambu-lab-h2d:0.2");
   });
 
@@ -772,6 +888,211 @@ describe("MaterialRecipeQueryPanel", () => {
       configurable: true,
       value: originalRevokeObjectURL,
     });
+  });
+
+  it("does not download a stale Stage A swatch blob after switching to Lumina Box", async () => {
+    const pendingDownload = deferred<Blob>();
+    const luminaBoxResponse = {
+      ...buildLibraryResponse(1, "lumina_box"),
+      materials: [
+        {
+          ...buildLibraryResponse(1, "lumina_box").materials[0],
+          material_name: "Lumina Blue",
+          directory_name: "lumina-blue",
+        },
+      ],
+    };
+    vi.mocked(listGradientCardMaterials).mockImplementation(async ({ profileKind } = {}) => (
+      profileKind === "lumina_box" ? luminaBoxResponse : buildLibraryResponse(1)
+    ));
+    vi.mocked(previewMaterialRecipe).mockResolvedValue({
+      status: "ok",
+      material_profile_kind: "stage_a",
+      layer_count: 1,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      predicted_rgb: [180, 60, 90],
+      predicted_hex: "#B43C5A",
+      layers: [],
+    });
+    vi.mocked(downloadResourceBlob).mockReturnValue(pendingDownload.promise);
+    const anchorClickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+
+    try {
+      render(<MaterialRecipeQueryPanel />);
+      await waitFor(() => {
+        expect(screen.getAllByTestId("material-recipe-palette-item")).toHaveLength(1);
+      });
+      fireEvent.click(screen.getByTestId("material-recipe-palette-item"));
+      fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+      await screen.findByRole("button", { name: /添加到队列|Add to queue/ });
+      fireEvent.click(screen.getByRole("button", { name: /添加到队列|Add to queue/ }));
+      fireEvent.click(screen.getByRole("button", { name: /生成验证色块|Generate swatch/ }));
+      const downloadButton = await screen.findByRole("button", {
+        name: /下载 3MF|Download 3MF/,
+      });
+      fireEvent.click(downloadButton);
+      await waitFor(() => {
+        expect(downloadResourceBlob).toHaveBeenCalledWith("/api/files/material-swatch");
+      });
+
+      fireEvent.click(screen.getByTestId("material-recipe-profile-lumina_box"));
+      await screen.findByRole("button", { name: "Lumina Blue" });
+
+      await act(async () => {
+        pendingDownload.resolve(new Blob(["3mf"], { type: "model/3mf" }));
+        await Promise.resolve();
+      });
+
+      expect(anchorClickSpy).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("button", { name: /下载 3MF|Download 3MF/ }),
+      ).not.toBeInTheDocument();
+    } finally {
+      anchorClickSpy.mockRestore();
+    }
+  });
+
+  it("drops a resolved stale swatch blob after global artifact invalidation and allows a fresh download", async () => {
+    const pendingDownload = deferred<Blob>();
+    vi.mocked(downloadResourceBlob)
+      .mockReturnValueOnce(pendingDownload.promise)
+      .mockResolvedValueOnce(new Blob(["current"], { type: "model/3mf" }));
+    const anchorClickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:current-material-swatch"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
+
+    try {
+      await prepareRecipeForSwatchDownload();
+      fireEvent.click(screen.getByRole("button", { name: /下载 3MF|Download 3MF/ }));
+      await waitFor(() => {
+        expect(downloadResourceBlob).toHaveBeenCalledTimes(1);
+      });
+
+      act(() => {
+        invalidateGeneratedArtifacts();
+      });
+      expect(
+        screen.queryByRole("button", { name: /下载 3MF|Download 3MF/ }),
+      ).not.toBeInTheDocument();
+
+      await act(async () => {
+        pendingDownload.resolve(new Blob(["stale"], { type: "model/3mf" }));
+        await Promise.resolve();
+      });
+
+      expect(anchorClickSpy).not.toHaveBeenCalled();
+      expect(screen.queryByText(/Swatch download failed|色块下载失败/)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: /生成验证色块|Generate swatch/ }));
+      const freshDownloadButton = await screen.findByRole("button", {
+        name: /下载 3MF|Download 3MF/,
+      });
+      expect(freshDownloadButton).toBeEnabled();
+      fireEvent.click(freshDownloadButton);
+
+      await waitFor(() => {
+        expect(downloadResourceBlob).toHaveBeenCalledTimes(2);
+        expect(anchorClickSpy).toHaveBeenCalledOnce();
+      });
+    } finally {
+      anchorClickSpy.mockRestore();
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: originalCreateObjectURL,
+      });
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        value: originalRevokeObjectURL,
+      });
+    }
+  });
+
+  it("drops a rejected stale swatch blob after global artifact invalidation and allows a fresh download", async () => {
+    const pendingDownload = deferred<Blob>();
+    vi.mocked(downloadResourceBlob)
+      .mockReturnValueOnce(pendingDownload.promise)
+      .mockResolvedValueOnce(new Blob(["current"], { type: "model/3mf" }));
+    const anchorClickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:current-material-swatch"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
+
+    try {
+      await prepareRecipeForSwatchDownload();
+      fireEvent.click(screen.getByRole("button", { name: /下载 3MF|Download 3MF/ }));
+      await waitFor(() => {
+        expect(downloadResourceBlob).toHaveBeenCalledTimes(1);
+      });
+
+      act(() => {
+        invalidateGeneratedArtifacts();
+      });
+      expect(
+        screen.queryByRole("button", { name: /下载 3MF|Download 3MF/ }),
+      ).not.toBeInTheDocument();
+
+      const staleError = Object.assign(
+        new Error("Request failed with status code 422"),
+        {
+          response: {
+            status: 422,
+            data: { detail: "stale swatch download failure" },
+            headers: {},
+          },
+        },
+      );
+      await act(async () => {
+        pendingDownload.reject(staleError);
+        await Promise.resolve();
+      });
+
+      expect(anchorClickSpy).not.toHaveBeenCalled();
+      expect(screen.queryByText("stale swatch download failure")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: /生成验证色块|Generate swatch/ }));
+      const freshDownloadButton = await screen.findByRole("button", {
+        name: /下载 3MF|Download 3MF/,
+      });
+      expect(freshDownloadButton).toBeEnabled();
+      fireEvent.click(freshDownloadButton);
+
+      await waitFor(() => {
+        expect(downloadResourceBlob).toHaveBeenCalledTimes(2);
+        expect(anchorClickSpy).toHaveBeenCalledOnce();
+      });
+    } finally {
+      anchorClickSpy.mockRestore();
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: originalCreateObjectURL,
+      });
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        value: originalRevokeObjectURL,
+      });
+    }
   });
 
   it("disables reverse button when fewer than two layers are present", async () => {

@@ -228,6 +228,35 @@ describe("submitBatch API 调用和状态管理", () => {
     });
   });
 
+  it("submitBatch sends Lumina Box material archive fields", async () => {
+    const files = [new File(["a"], "img1.png", { type: "image/png" })];
+    useConverterStore.setState({
+      batchFiles: files,
+      source_version: "lumina_box",
+      selectedMaterialDirNames: ["lumina/red", "lumina/white"],
+      materialLayerCount: 7,
+      materialLayerHeightMm: 0.08,
+      materialBackingMaterialDirName: "lumina/white",
+    });
+    mockedConvertBatch.mockResolvedValueOnce(mockBatchResponse);
+
+    await useConverterStore.getState().submitBatch();
+
+    const [, calledParams] = mockedConvertBatch.mock.calls[0];
+    expect(calledParams).toMatchObject({
+      source_kind: "legacy_single",
+      lut_name: "__material_archive__",
+      material_source: "material_archive",
+      material_profile_kind: "lumina_box",
+      selected_materials: ["lumina/red", "lumina/white"],
+      material_layer_count: 7,
+      material_layer_height_mm: 0.08,
+      material_backing_material_index: 1,
+      color_layers: 7,
+      layer_height_mm: 0.08,
+    });
+  });
+
   it("submitBatch 会保留耗材档案的分离底板选择", async () => {
     const files = [new File(["a"], "img1.png", { type: "image/png" })];
     useConverterStore.setState({

@@ -5,11 +5,15 @@ import {
   ACCEPT_IMAGE_FORMATS,
   MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
   MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
+  getMaterialArchiveProfileKind,
   inferDefaultMaterialBackingDirName,
+  isMaterialArchiveSourceVersion,
   isValidImageType,
   hasOnlySvgInputs,
   resolveConverterSourceSelection,
+  type SourceVersion,
 } from "../../stores/converter";
+import { useWidgetStore } from "../../stores/widgetStore";
 import {
   ColorMode,
   ModelingMode,
@@ -18,6 +22,7 @@ import {
 import { apiErrorToVisibleMessage } from "../../api/client";
 import type { SavedMaterialLibraryItem } from "../../api/types";
 import { listGradientCardMaterials } from "../../api/extractor";
+import { LUMINA_BOX_PRODUCTION_MODEL_ID } from "../../api/luminaBoxMaterials";
 import { reconcileDirectoryNames } from "../../utils/materialDirectoryMigration";
 import UnifiedUploader from "../ui/UnifiedUploader";
 import Checkbox from "../ui/Checkbox";
@@ -234,6 +239,7 @@ function ColorModeDots({ mode }: { mode: string }) {
 
 export default function BasicSettings() {
   const { t } = useI18n();
+  const setActiveTab = useWidgetStore((s) => s.setActiveTab);
   const workspace = useWorkspaceMode();
 
   const structureModeOptions = Object.values(StructureMode).map((v) => ({
@@ -398,6 +404,10 @@ export default function BasicSettings() {
     fetchLegacyCatalog: s.fetchLegacyCatalog,
   })));
 
+  const isMaterialArchiveSource = isMaterialArchiveSourceVersion(source_version);
+  const isLuminaBoxSource = source_version === "lumina_box";
+  const materialProfileKind = getMaterialArchiveProfileKind(source_version);
+
   const sourceSelection = useMemo(
     () =>
       resolveConverterSourceSelection({
@@ -541,6 +551,7 @@ export default function BasicSettings() {
     { label: t("basic_source_version_legacy"), value: "legacy" },
     { label: t("basic_source_version_native"), value: "native" },
     { label: t("basic_source_version_material"), value: "material" },
+    { label: t("basic_source_version_lumina_box"), value: "lumina_box" },
   ];
 
   const clearLegacyCatalogRetry = useCallback(() => {
@@ -783,20 +794,24 @@ export default function BasicSettings() {
     setMaterialLibraryLoadAttempt((attempt) => attempt + 1);
   }, []);
   useEffect(() => {
-    if (source_version !== "material") {
+    if (!isMaterialArchiveSource) {
       clearWorkshopMaterialCatalog();
       setMaterialLibraryLoaded(false);
       setMaterialLibraryLoadError(false);
       return;
     }
     let cancelled = false;
+    clearWorkshopMaterialCatalog();
+    setMaterialLibrary([]);
     setMaterialLibraryLoading(true);
     setMaterialLibraryLoaded(false);
     setMaterialLibraryLoadError(false);
-    listGradientCardMaterials()
+    listGradientCardMaterials({
+      profileKind: materialProfileKind ?? "stage_a",
+    })
       .then((res) => {
         if (cancelled) return;
-        const materials = res.materials ?? [];
+        const materials = (res.materials ?? []).filter((item) => materialProfileKind !== "lumina_box" || item.optical_model_id === LUMINA_BOX_PRODUCTION_MODEL_ID);
         updateWorkshopMaterialCatalog(materials);
         setMaterialLibrary(materials);
         setMaterialLibraryLoaded(true);
@@ -813,10 +828,15 @@ export default function BasicSettings() {
         if (!cancelled) setMaterialLibraryLoading(false);
       });
     return () => { cancelled = true; };
-  }, [materialLibraryLoadAttempt, source_version]);
+  }, [
+    isMaterialArchiveSource,
+    materialLibraryLoadAttempt,
+    materialProfileKind,
+    source_version,
+  ]);
 
   useEffect(() => {
-    if (source_version !== "material" || !materialLibraryLoaded) return;
+    if (!isMaterialArchiveSource || !materialLibraryLoaded) return;
     const { names: reconciled, changed } = reconcileDirectoryNames(
       selectedMaterialDirNames,
       materialLibrary,
@@ -840,10 +860,13 @@ export default function BasicSettings() {
     selectedMaterialDirNames,
     setMaterialBackingMaterialDirName,
     setSelectedMaterialDirNames,
-    source_version,
+    isMaterialArchiveSource,
   ]);
 
   const [materialPickerOpen, setMaterialPickerOpen] = useState(false);
+  useEffect(() => {
+    setMaterialPickerOpen(false);
+  }, [source_version]);
   const handleMaterialPickerConfirm = useCallback(
     (next: string[]) => {
       setSelectedMaterialDirNames(next);
@@ -921,7 +944,7 @@ export default function BasicSettings() {
     { label: "0.04 mm", value: "0.04" },
     { label: "0.08 mm", value: "0.08" },
     { label: "0.10 mm", value: "0.1" },
-  ];
+  ].filter((option) => materialProfileKind !== "lumina_box" || modeling_mode === "vector" || option.value === "0.08");
   const nativeBrandOptions = nativeBrandGroups
     .map((group) => ({
       label: group.display_name,
@@ -1166,14 +1189,16 @@ export default function BasicSettings() {
           wikiPath={WIKI_DOCS.sourceType}
           value={source_version}
           options={sourceVersionOptions}
-          onChange={(value) => setSourceVersion(value as "legacy" | "native" | "material")}
+          onChange={(value) => setSourceVersion(value as SourceVersion)}
         />
       </div>
 
-      {source_version === "material" ? (
+      {isMaterialArchiveSource ? (
         <div className="-mt-1 flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
           <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
-            {t("basic_material_select_label")}
+            {isLuminaBoxSource
+              ? t("basic_lumina_box_select_label")
+              : t("basic_material_select_label")}
           </div>
 
           <button
@@ -1220,6 +1245,28 @@ export default function BasicSettings() {
             onCancel={() => setMaterialPickerOpen(false)}
             onRetry={retryMaterialLibraryLoad}
           />
+
+          {isLuminaBoxSource &&
+          materialLibraryLoaded &&
+          !materialLibraryLoading &&
+          materialLibrary.length === 0 ? (
+            <StatusBanner
+              tone="info"
+              data-testid="lumina-box-material-empty-guide"
+              action={
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("lumina-box")}
+                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-700"
+                  data-testid="lumina-box-material-empty-guide-action"
+                >
+                  {t("basic_lumina_box_empty_action")}
+                </button>
+              }
+            >
+              {t("basic_lumina_box_empty")}
+            </StatusBanner>
+          ) : null}
 
           <Checkbox
             label={t("basic_material_dynamic_layer_count_label")}
@@ -1293,6 +1340,9 @@ export default function BasicSettings() {
               materialDirectoryNames={selectedMaterialDirNames}
               layerCount={materialLayerCount}
               layerHeightMm={materialLayerHeightMm}
+              materialProfileKind={materialProfileKind ?? "stage_a"}
+              backingMaterialIndex={Math.max(0, selectedMaterialDirNames.indexOf(resolvedMaterialBackingDirName))}
+              backingThicknessMm={spacer_thick}
             />
           )}
         </div>

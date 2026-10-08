@@ -81,7 +81,11 @@ from config import LUTMetadata, OUTPUT_DIR, PaletteEntry
 from core.color_merger import ColorMerger
 from core.color_replacement import ColorReplacementManager
 from core.gradient_group_analyzer import REGION_ID_ENCODING_MULTIPLIER
-from core.gradient_region_requantize import requantize_gradient_regions
+from core.gradient_region_requantize import (
+    MaterialCandidateRuntimeCatalog,
+    MaterialColorCatalog,
+    requantize_gradient_regions,
+)
 from core.converter import (
     extract_color_palette,
     generate_segmented_glb,
@@ -94,6 +98,10 @@ from core.material_lut_synthesis import (
     solve_image_colors_optimal,
 )
 from core.material_color_solver import predict_material_recipe_srgb
+from core.material_lut_provider import (
+    load_persisted_candidate_runtime_with_fallback,
+)
+from core.material_optical_runtime import MaterialOpticalCompatibilityError, bind_material_print_backing
 from core.material_dynamic_replacement import (
     rebuild_dynamic_material_after_replacement,
 )
@@ -101,6 +109,11 @@ from core.pipeline.material_dynamic_layers import (
     recompute_dynamic_material_benefit_curve,
     solve_dynamic_material_targets,
 )
+from core.pipeline._input_validation_common import (
+    MaterialArchiveProfileError,
+    load_and_validate_material_archive_profile,
+)
+from core.pipeline.processing_ops.lut_loader import load_lut
 from core.predictive_lut import predict_recipe_color
 from core.recipe_order import (
     convert_recipe_between_orders,
@@ -198,6 +211,11 @@ REGION_REQUANTIZE_SOURCE_IMAGE_UNAVAILABLE_DETAIL = (
 REGION_REQUANTIZE_REQUEST_INVALID_DETAIL = (
     "Region re-quantisation could not process the selected region. "
     "Refresh preview and try again."
+)
+LUMINA_BOX_RUNTIME_UNAVAILABLE_DETAIL = (
+    "Lumina Box candidate runtime is unavailable or stale for this palette, "
+    "layer count, layer height, or backing. Build the Lumina Box candidate runtime "
+    "in Material Solver Runtime, then try region re-quantisation again."
 )
 REGION_REQUANTIZE_CACHE_CONFLICT_DETAIL = (
     "Preview cache changed while region re-quantisation was running. "
@@ -508,6 +526,21 @@ def _preview_cache_transaction_with_history(
             transaction.__exit__(None, None, None)
 
 
+def _load_session_materials(session_data: dict) -> list:
+    selected = session_data.get("selected_materials") or []
+    if session_data.get("material_profile_kind") != "lumina_box":
+        return load_multiple_materials(selected)
+    _, materials = load_and_validate_material_archive_profile(selected, profile_kind="lumina_box")
+    return bind_material_print_backing(
+        materials,
+        backing_material_index=_resolve_material_backing_index(
+            selected, session_data.get("material_backing_material_index"),
+        ),
+        thickness_mm=float(session_data.get("spacer_thick", 1.2)),
+        layer_height_mm=float(session_data.get("material_layer_height_mm") or 0.08),
+    )
+
+
 def _recalc_matched_rgb_for_padded_pixels(
     *,
     updated_rgb,
@@ -520,7 +553,7 @@ def _recalc_matched_rgb_for_padded_pixels(
     import numpy as np
     selected_materials = session_data.get('selected_materials') or []
     try:
-        materials = load_multiple_materials(selected_materials)
+        materials = _load_session_materials(session_data)
     except Exception:
         return
     recipes = material_matrix[non_override_mask, :]
@@ -1115,6 +1148,9 @@ def _sync_material_archive_matrix_for_diff(
     cache: dict,
     diff_mask: np.ndarray,
     updated_rgb: np.ndarray,
+    *,
+    material_color_catalog: MaterialColorCatalog | None = None,
+    preloaded_materials: list | None = None,
 ) -> None:
     material_matrix = cache.get("material_matrix")
     if material_matrix is None:
@@ -1135,7 +1171,11 @@ def _sync_material_archive_matrix_for_diff(
         return
 
     try:
-        materials = load_multiple_materials(selected_materials)
+        materials = (
+            preloaded_materials
+            if preloaded_materials is not None
+            else _load_session_materials(session_data)
+        )
     except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
         if dynamic_enabled:
             from core.material_dynamic_solver import DynamicMaterialCandidateError
@@ -1250,24 +1290,33 @@ def _sync_material_archive_matrix_for_diff(
         },
     )
     try:
-        solver_cache, _actual_grid = load_material_solver_cache_with_fallback(
-            materials=materials,
-            layer_count=layer_count,
-            layer_height_mm=layer_height_mm,
-            substrate=substrate,
-            grid_resolution=grid_resolution,
-        )
-        _solve_path = "cache" if solver_cache is not None else "mitm"
-        if solver_cache is not None:
+        if material_color_catalog is not None:
+            solver_cache = material_color_catalog
+            _actual_grid = None
+            _solve_path = "candidate_runtime"
             resolved_rgb, recipes, _delta_e = solver_cache.lookup(target_rgbs, materials)
         else:
-            resolved_rgb, recipes, _delta_e = solve_image_colors_optimal(
-                target_rgbs,
-                materials,
+            solver_cache, _actual_grid = load_material_solver_cache_with_fallback(
+                materials=materials,
                 layer_count=layer_count,
                 layer_height_mm=layer_height_mm,
                 substrate=substrate,
+                grid_resolution=grid_resolution,
             )
+            _solve_path = "cache" if solver_cache is not None else "mitm"
+            if solver_cache is not None:
+                resolved_rgb, recipes, _delta_e = solver_cache.lookup(
+                    target_rgbs,
+                    materials,
+                )
+            else:
+                resolved_rgb, recipes, _delta_e = solve_image_colors_optimal(
+                    target_rgbs,
+                    materials,
+                    layer_count=layer_count,
+                    layer_height_mm=layer_height_mm,
+                    substrate=substrate,
+                )
         log.debug(
             "material-archive matrix sync: solved",
             extra={
@@ -1287,6 +1336,13 @@ def _sync_material_archive_matrix_for_diff(
                 "error_message": str(exc),
             },
         )
+        if material_color_catalog is not None:
+            # Region re-quantisation already changed ``matched_rgb`` in the
+            # surrounding transaction. A KM catalog failure must therefore
+            # abort and roll back instead of committing a mismatched material
+            # matrix. Legacy replacement flows retain their best-effort
+            # behavior when no explicit catalog was supplied.
+            raise
         return
 
     if recipes.shape[1] > 1:
@@ -1322,6 +1378,9 @@ def _sync_material_matrix_after_rgb_change(
     cache: dict,
     previous_rgb: np.ndarray,
     updated_rgb: np.ndarray,
+    *,
+    material_color_catalog: MaterialColorCatalog | None = None,
+    preloaded_materials: list | None = None,
 ) -> None:
     material_matrix = cache.get("material_matrix")
     mask_solid = cache.get("mask_solid")
@@ -1336,7 +1395,14 @@ def _sync_material_matrix_after_rgb_change(
         return
 
     if str(session_data.get("material_source") or "lut") == "material_archive":
-        _sync_material_archive_matrix_for_diff(session_data, cache, diff_mask, updated_rgb)
+        _sync_material_archive_matrix_for_diff(
+            session_data,
+            cache,
+            diff_mask,
+            updated_rgb,
+            material_color_catalog=material_color_catalog,
+            preloaded_materials=preloaded_materials,
+        )
     else:
         _sync_lut_material_matrix_for_diff(session_data, cache, diff_mask, updated_rgb)
     cache["color_palette"] = extract_color_palette(cache)
@@ -3470,7 +3536,8 @@ def region_requantize(
                 detail=GRADIENT_REGION_METADATA_STALE_DETAIL,
             )
 
-        # Materials list → MaterialParams → solver cache.
+        # The session profile is authoritative: validate every selected archive
+        # against it before touching either solver family.
         selected_materials = session_data.get("selected_materials") or []
         if not isinstance(selected_materials, list) or not selected_materials:
             raise HTTPException(
@@ -3478,7 +3545,30 @@ def region_requantize(
                 detail="Session has no selected materials for material-archive mode.",
             )
         try:
-            materials = load_multiple_materials(list(selected_materials))
+            material_profile_kind, materials = (
+                load_and_validate_material_archive_profile(
+                    list(selected_materials),
+                    profile_kind=session_data.get("material_profile_kind"),
+                )
+            )
+        except MaterialArchiveProfileError as exc:
+            if isinstance(exc.__cause__, OSError):
+                _raise_region_requantize_error(
+                    exc,
+                    status_code=409,
+                    detail=REGION_REQUANTIZE_MATERIALS_UNAVAILABLE_DETAIL,
+                    session_id=request.session_id,
+                    stage="load_materials",
+                )
+            raise HTTPException(
+                status_code=422,
+                detail={"code": exc.error_type, "message": str(exc)},
+            ) from exc
+        except MaterialOpticalCompatibilityError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": exc.error_type, "message": str(exc)},
+            ) from exc
         except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
             _raise_region_requantize_error(
                 exc,
@@ -3504,22 +3594,41 @@ def region_requantize(
             or session_data.get("material_substrate")
             or "white"
         )
-        grid_resolution = int(
-            session_data.get("material_grid_resolution")
-            or DEFAULT_GRID_RESOLUTION
-        )
-        solver_cache, _grid = load_material_solver_cache_with_fallback(
-            materials=materials,
-            layer_count=layer_count,
-            layer_height_mm=layer_height_mm,
-            substrate=substrate,
-            grid_resolution=grid_resolution,
-        )
-        if solver_cache is None:
-            raise HTTPException(
-                status_code=409,
-                detail=MATERIAL_SOLVER_CACHE_UNAVAILABLE_DETAIL,
+        material_color_catalog: MaterialColorCatalog
+        if material_profile_kind == "lumina_box":
+            materials = _load_session_materials(session_data)
+            candidate_runtime = load_persisted_candidate_runtime_with_fallback(
+                materials,
+                layer_count,
+                layer_height_mm,
+                substrate,
             )
+            if candidate_runtime is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=LUMINA_BOX_RUNTIME_UNAVAILABLE_DETAIL,
+                )
+            material_color_catalog = MaterialCandidateRuntimeCatalog(
+                candidate_runtime
+            )
+        else:
+            grid_resolution = int(
+                session_data.get("material_grid_resolution")
+                or DEFAULT_GRID_RESOLUTION
+            )
+            solver_cache, _grid = load_material_solver_cache_with_fallback(
+                materials=materials,
+                layer_count=layer_count,
+                layer_height_mm=layer_height_mm,
+                substrate=substrate,
+                grid_resolution=grid_resolution,
+            )
+            if solver_cache is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=MATERIAL_SOLVER_CACHE_UNAVAILABLE_DETAIL,
+                )
+            material_color_catalog = solver_cache
 
         # Load the ORIGINAL source image and resize to preview resolution so
         # the region_mask indexes the right pixels. The preview pipeline
@@ -3629,7 +3738,7 @@ def region_requantize(
                 region_id_map=working_region_id_arr,
                 targets=target_pairs,
                 materials=materials,
-                material_solver_cache=solver_cache,
+                material_solver_cache=material_color_catalog,
                 local_quantize_colors=request.local_quantize_colors,
             )
         except (ValueError, TypeError) as exc:
@@ -3650,6 +3759,8 @@ def region_requantize(
             cache,
             np.asarray(matched_rgb),
             new_matched_rgb,
+            material_color_catalog=material_color_catalog,
+            preloaded_materials=materials,
         )
         _sync_ms = (_time.perf_counter() - _t_sync) * 1000
 
@@ -4669,7 +4780,7 @@ def predict_recipe(
             # 替代之前仅返回最顶层颜色的简单兜底。
             selected_materials = session_data.get("selected_materials") or []
             try:
-                materials = load_multiple_materials(selected_materials)
+                materials = _load_session_materials(session_data)
                 prediction_recipe = list(request.recipe)
                 prediction_recipe_order = request.layer_order
                 if bool(
@@ -5443,7 +5554,7 @@ def apply_recipe_override(
                 if is_material_archive:
                     selected_materials = session_data.get("selected_materials") or []
                     try:
-                        materials = load_multiple_materials(selected_materials)
+                        materials = _load_session_materials(session_data)
                         prediction_recipe = (
                             dynamic_manual_recipe["print_recipe_top_to_bottom"]
                             if dynamic_manual_recipe is not None

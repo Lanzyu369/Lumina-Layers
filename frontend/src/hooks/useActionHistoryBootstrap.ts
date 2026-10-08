@@ -34,7 +34,10 @@
 
 import { useEffect } from "react";
 
-import { useConverterStore } from "../stores/converter";
+import {
+  isMaterialArchiveSourceVersion,
+  useConverterStore,
+} from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useWidgetStore } from "../stores/widgetStore";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
@@ -53,19 +56,20 @@ function readSnapshot(): WorkflowSnapshot {
   const widget = useWidgetStore.getState();
   const settings = useSettingsStore.getState();
   const isConverterActive = widget.activeTab === "converter";
-  const isMaterial =
-    isConverterActive && converter.source_version === "material";
+  const isMaterialArchive =
+    isConverterActive &&
+    isMaterialArchiveSourceVersion(converter.source_version);
   const isNative =
     isConverterActive && converter.source_version === "native";
 
   return {
     color_mode: isConverterActive
-      ? isMaterial
+      ? isMaterialArchive
         ? null
         : (converter.color_mode ?? null)
       : (settings.lastColorMode ?? null),
     lut_name: isConverterActive
-      ? isMaterial
+      ? isMaterialArchive
         ? null
         : (converter.lut_name || null)
       : (settings.lastLutName ?? null),
@@ -75,16 +79,16 @@ function readSnapshot(): WorkflowSnapshot {
     selected_native_db_names: isNative
       ? [...(converter.selectedNativeDbNames ?? [])]
       : [],
-    selected_material_dir_names: isMaterial
+    selected_material_dir_names: isMaterialArchive
       ? [...(converter.selectedMaterialDirNames ?? [])]
       : [],
-    material_layer_count: isMaterial
+    material_layer_count: isMaterialArchive
       ? (converter.materialLayerCount ?? null)
       : null,
-    material_layer_height_mm: isMaterial
+    material_layer_height_mm: isMaterialArchive
       ? (converter.materialLayerHeightMm ?? null)
       : null,
-    material_backing_material_dir_name: isMaterial
+    material_backing_material_dir_name: isMaterialArchive
       ? (converter.materialBackingMaterialDirName ?? null)
       : null,
     active_tab: widget.activeTab ?? "unknown",

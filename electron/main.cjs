@@ -7,6 +7,7 @@ const {
   net: electronNet,
   protocol,
   session,
+  utilityProcess,
   shell,
   webFrameMain,
 } = require("electron");
@@ -15,6 +16,10 @@ const http = require("http");
 const nodeNet = require("net");
 const fs = require("fs");
 const path = require("path");
+const { pathToFileURL } = require("url");
+const { createSerialPortPicker } = require("./serial-port-picker.cjs");
+const { createConnectionDiagnosticsSaver } = require("./connection-diagnostics.cjs");
+const { createNativeSerialBridge } = require("./native-serial.cjs");
 const { saveGeneratedFile } = require("./generated-file-save.cjs");
 const {
   createGeneratedFileDirectoryState,
@@ -318,10 +323,12 @@ function findPython() {
   // Windows: venv 下的可执行文件叫 python.exe;mac/linux 在 bin/python。
   const candidates = IS_WIN
     ? [
+        path.join(ROOT_DIR, ".venv312", "Scripts", "python.exe"),
         path.join(ROOT_DIR, "venv", "Scripts", "python.exe"),
         path.join(ROOT_DIR, ".venv", "Scripts", "python.exe"),
       ]
     : [
+        path.join(ROOT_DIR, ".venv312", "bin", "python"),
         path.join(ROOT_DIR, ".venv", "bin", "python"),
         path.join(ROOT_DIR, "venv", "bin", "python"),
         path.join(ROOT_DIR, ".venv", "bin", "python3"),
@@ -388,6 +395,20 @@ let win = null;
 const generatedFileDirectory = createGeneratedFileDirectoryState();
 let splashWin = null;
 let isQuitting = false;
+const serialPortPicker = createSerialPortPicker({
+  getWindow: () => win,
+  dialog,
+  frontendUrl: FRONTEND_URL,
+  getFrontendUrl: () => trustedMainFrameUrl ?? FRONTEND_URL,
+  packagedIndexUrl: pathToFileURL(path.join(process.resourcesPath, "app", "dist", "index.html")).href,
+});
+const nativeSerial = createNativeSerialBridge({
+  isTrustedIpcSender: (event) => serialPortPicker.isTrustedIpcSender(event),
+  pickPort: (event, ports, signal) => serialPortPicker.pickNativePort(event, ports, signal),
+  spawnWorker: () => utilityProcess.fork(path.join(__dirname, "serial-worker.cjs"), [], {
+    stdio: "ignore", serviceName: "Lumina Box Serial",
+  }),
+});
 let quitConfirmationPending = false;
 let trustedMainFrameUrl = null;
 
@@ -481,6 +502,7 @@ async function handleWorkshopProtocol(request) {
 
 function installWorkshopSessionSecurity() {
   protocol.handle("lumina-workshop", handleWorkshopProtocol);
+  serialPortPicker.install(session.defaultSession);
 
   session.defaultSession.webRequest.onBeforeRequest(
     { urls: ["<all_urls>"] },
@@ -503,7 +525,11 @@ function installWorkshopSessionSecurity() {
   );
 
   session.defaultSession.setPermissionRequestHandler(
-    (webContents, _permission, callback, details) => {
+    (webContents, permission, callback, details) => {
+      if (permission === "serial") {
+        callback(serialPortPicker.allowPermission(webContents, details?.securityOrigin ?? details?.requestingUrl, details));
+        return;
+      }
       callback(
         isAllowedWorkshopPermission({
           frameUrl:
@@ -519,14 +545,16 @@ function installWorkshopSessionSecurity() {
     },
   );
   session.defaultSession.setPermissionCheckHandler(
-    (webContents, _permission, requestingOrigin, details) =>
-      isAllowedWorkshopPermission({
-        frameUrl:
-          details?.requestingUrl ??
-          webContents?.getURL() ??
-          null,
-        requestingOrigin,
-      }),
+    (webContents, permission, requestingOrigin, details) =>
+      permission === "serial"
+        ? serialPortPicker.allowPermission(webContents, requestingOrigin, details)
+        : isAllowedWorkshopPermission({
+          frameUrl:
+            details?.requestingUrl ??
+            webContents?.getURL() ??
+            null,
+          requestingOrigin,
+        }),
   );
 }
 
@@ -719,9 +747,13 @@ function createWindow() {
 //  IPC handlers
 // ═══════════════════════════════════════════════════════════
 
-ipcMain.on("set-language", (_event, lang) => {
+nativeSerial.install(ipcMain);
+
+ipcMain.on("set-language", (event, lang, serialLabels) => {
+  if (!serialPortPicker.isTrustedIpcSender(event)) return;
   if (lang === "zh" || lang === "en") {
     currentLang = lang;
+    serialPortPicker.setLabels(event, serialLabels);
     logSys(`Language set to ${lang}`);
   }
 });
@@ -729,6 +761,12 @@ ipcMain.on("set-language", (_event, lang) => {
 ipcMain.handle("get-app-version", () => {
   return app.getVersion();
 });
+
+ipcMain.handle("save-connection-diagnostics", createConnectionDiagnosticsSaver({
+  getWindow: () => win,
+  dialog,
+  isTrustedIpcSender: (event) => serialPortPicker.isTrustedIpcSender(event),
+}));
 
 ipcMain.handle("open-wiki", async (event, url) => {
   const senderFrame = event.senderFrame ?? null;
@@ -843,6 +881,7 @@ app.on("before-quit", (event) => {
 });
 
 app.on("will-quit", () => {
+  void nativeSerial.dispose();
   killAllChildren();
 });
 

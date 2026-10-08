@@ -25,16 +25,31 @@ from core.material_cache import (
     _find_cache_record, _legacy_material_enumeration_key, describe_material,
     default_cache_directory,
 )
-from core.material_candidate_cache import HYBRID_CANDIDATE_ALGORITHM_VERSION
+from core.material_candidate_cache import (
+    HYBRID_CANDIDATE_ALGORITHM_VERSION,
+    KM_CANDIDATE_ALGORITHM_VERSION,
+    SPECTRAL_CANDIDATE_ALGORITHM_VERSION,
+)
 from core.material_color_solver import MaterialParams, rgb_to_lab
 from core.material_dynamic_solver import (
     DynamicCandidateCatalog,
     DynamicMaterialCandidateError,
 )
+from core.material_optical_runtime import (
+    BEER_LAMBERT_MODEL_ID,
+    is_relative_xyz_model,
+    validate_material_optical_contract,
+)
+from core.km_xyz import KM_XYZ_MODEL_ID
+from core.lumina_box_spectral import LUMINA_BOX_SPECTRAL_MODEL_ID
+from core.backed_gradient_smooth import SPECTRAL_SMOOTH_MODEL_ID
+from core.material_candidate_cache import BACKED_GRADIENT_CANDIDATE_ALGORITHM_VERSION
 
 
 DYNAMIC_CATALOG_SCHEMA_VERSION = 2
 DYNAMIC_CATALOG_ALGORITHM_VERSION = "dynamic-ciede2000-v2"
+KM_DYNAMIC_CATALOG_ALGORITHM_VERSION = "dynamic-km-ciede2000-v1"
+SPECTRAL_DYNAMIC_CATALOG_ALGORITHM_VERSION = "dynamic-box-spectral-ciede2000-v1"
 _DYNAMIC_CACHE_SUBDIRECTORY = "dynamic-catalogs"
 _CACHE_LOCK_TIMEOUT_SECONDS = 30.0
 _PAYLOAD_FIELDS = {
@@ -91,6 +106,9 @@ class DynamicCatalogCacheKey:
     min_layer_count: int
     max_layer_count: int
     candidate_budget: int
+    optical_model_id: str = BEER_LAMBERT_MODEL_ID
+    measurement_protocol_id: str | None = None
+    color_bridge_id: str | None = None
 
     def as_metadata(self) -> dict[str, object]:
         """Return a stable JSON-compatible key mapping.
@@ -98,7 +116,12 @@ class DynamicCatalogCacheKey:
         返回稳定且可 JSON 序列化的键映射。
         """
 
-        return asdict(self)
+        metadata = asdict(self)
+        if self.optical_model_id == BEER_LAMBERT_MODEL_ID:
+            metadata.pop("optical_model_id", None)
+            metadata.pop("measurement_protocol_id", None)
+            metadata.pop("color_bridge_id", None)
+        return metadata
 
 
 @dataclass(frozen=True)
@@ -242,6 +265,7 @@ def build_dynamic_catalog_cache_key(
     """
 
     _validate_materials(materials)
+    contract = validate_material_optical_contract(materials)
     for name, value in (
         ("backing_material_index", backing_material_index),
         ("min_layer_count", min_layer_count),
@@ -275,10 +299,24 @@ def build_dynamic_catalog_cache_key(
     normalized_version = str(algorithm_version).strip()
     if not normalized_version:
         raise ValueError("algorithm_version must not be empty")
+    if (
+        is_relative_xyz_model(contract.model_id)
+        and normalized_version == DYNAMIC_CATALOG_ALGORITHM_VERSION
+    ):
+        normalized_version = (
+            "dynamic-box-backed-gradient-ciede2000-v3" if contract.model_id == SPECTRAL_SMOOTH_MODEL_ID
+            else SPECTRAL_DYNAMIC_CATALOG_ALGORITHM_VERSION
+            if contract.model_id == LUMINA_BOX_SPECTRAL_MODEL_ID else KM_DYNAMIC_CATALOG_ALGORITHM_VERSION
+        )
 
     return DynamicCatalogCacheKey(
         algorithm_version=normalized_version,
-        candidate_source_version=HYBRID_CANDIDATE_ALGORITHM_VERSION,
+        candidate_source_version=(
+            BACKED_GRADIENT_CANDIDATE_ALGORITHM_VERSION if contract.model_id == SPECTRAL_SMOOTH_MODEL_ID
+            else SPECTRAL_CANDIDATE_ALGORITHM_VERSION if contract.model_id == LUMINA_BOX_SPECTRAL_MODEL_ID
+            else KM_CANDIDATE_ALGORITHM_VERSION if contract.model_id == KM_XYZ_MODEL_ID
+            else HYBRID_CANDIDATE_ALGORITHM_VERSION
+        ),
         palette_descriptor=_serialized_palette(materials),
         backing_material_descriptor=_serialized_material(
             materials[backing_index]
@@ -289,6 +327,9 @@ def build_dynamic_catalog_cache_key(
         min_layer_count=minimum,
         max_layer_count=maximum,
         candidate_budget=budget,
+        optical_model_id=contract.model_id,
+        measurement_protocol_id=contract.measurement_protocol_id,
+        color_bridge_id=contract.color_bridge_id,
     )
 
 
@@ -461,6 +502,8 @@ def _prepare_catalog_payload(
         raise TypeError("catalog must be a DynamicCandidateCatalog")
     if key.palette_descriptor != _serialized_palette(materials):
         raise ValueError("cache key does not match the material palette")
+    if catalog.optical_model_id != key.optical_model_id:
+        raise ValueError("catalog optical model does not match the cache key")
     before_count = int(candidate_count_before_dedup)
     after_count = int(catalog.score_srgb.shape[0])
     if before_count < after_count:
@@ -660,11 +703,12 @@ def _validated_loaded_catalog(
         _corruption("dynamic catalog vector field shape is invalid")
     if not np.all(np.isfinite(score_lab)):
         _corruption("dynamic catalog score_lab contains non-finite values")
-    if np.unique(score_srgb, axis=0).shape[0] != row_count:
-        _corruption("dynamic catalog score_srgb rows are not unique")
-    expected_lab = np.asarray(rgb_to_lab(score_srgb), dtype=np.float64)
-    if not np.array_equal(score_lab, expected_lab):
-        _corruption("dynamic catalog score_lab violates the scoring contract")
+    if key.optical_model_id == BEER_LAMBERT_MODEL_ID:
+        if np.unique(score_srgb, axis=0).shape[0] != row_count:
+            _corruption("dynamic catalog score_srgb rows are not unique")
+        expected_lab = np.asarray(rgb_to_lab(score_srgb), dtype=np.float64)
+        if not np.array_equal(score_lab, expected_lab):
+            _corruption("dynamic catalog score_lab violates the scoring contract")
     if np.any(canonical_recipes < 0) or np.any(
         canonical_recipes >= len(materials)
     ):
@@ -715,6 +759,7 @@ def _validated_loaded_catalog(
         minimum_actual_layer_counts=minimum_counts,
         max_layer_reachable=max_reachable,
         source_indices=source_indices,
+        optical_model_id=key.optical_model_id,
     )
     return CachedDynamicCandidateCatalog(
         catalog=catalog,

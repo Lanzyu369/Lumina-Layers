@@ -24,7 +24,12 @@ import { DEFAULT_STATE } from "../stores/converter";
 import { DEFAULT_SETTINGS } from "../stores/settingsStore";
 import type { SettingsState } from "../stores/settingsStore";
 import type { ConverterState } from "../stores/converter/store";
-import type { LutInfo, ColorReplacementItem } from "../api/types";
+import type {
+  LutInfo,
+  ColorReplacementItem,
+  DynamicMaterialRecipe,
+  MaterialLayerBenefitPoint,
+} from "../api/types";
 import { ColorMode } from "../api/types";
 import type { LuminaRecipe, RecipeCover } from "../recipe/types";
 import { translations } from "../i18n/translations";
@@ -393,6 +398,112 @@ describe("recipe integration", () => {
       expect(restored.enable_coating).toBe(true);
       expect(restored.coating_height_mm).toBe(0.15);
       expect(warnings).toHaveLength(0);
+    });
+
+    it("preserves a dynamic Lumina Box archive through PNG sharing without legacy LUT state", async () => {
+      const dynamicRecipe: DynamicMaterialRecipe = {
+        target_srgb: [240, 220, 200],
+        matched_srgb: [238, 218, 198],
+        actual_layer_count: 5,
+        padding_layer_count: 3,
+        actual_recipe_top_to_bottom: [0, 1, 0, 1, 0],
+        print_recipe_top_to_bottom: [0, 1, 0, 1, 0, 1, 1, 1],
+        selected_delta_e00: 0.7,
+        best_range_delta_e00: 0.4,
+        fixed_max_delta_e00: 0.5,
+        delta_e00_sacrifice: 0.3,
+        layer_cap_options: ([5, 6, 7, 8] as const).map((cap) => ({
+          max_effective_layer_count: cap,
+          actual_layer_count: 5,
+          matched_srgb: [238, 218, 198],
+          actual_recipe_top_to_bottom: [0, 1, 0, 1, 0],
+          print_recipe_top_to_bottom: [0, 1, 0, 1, 0, 1, 1, 1],
+          delta_e00: 0.7,
+        })),
+      };
+      const benefitCurve: MaterialLayerBenefitPoint[] = (
+        [5, 6, 7, 8] as const
+      ).map(
+        (cap) => ({
+          max_effective_layer_count: cap,
+          weighted_mean_delta_e00: 0.7,
+          marginal_delta_e00_reduction: 0.2,
+        }),
+      );
+      const { recipe } = await buildTestRecipe(
+        {
+          source_version: "lumina_box",
+          lut_name: "SixColorLUT",
+          color_mode: ColorMode.SIX_COLOR,
+          selectedNativeBrandKey: "stale-native-brand",
+          selectedNativeDbNames: ["Stale Native PLA"],
+          color_layers: 8,
+          layer_height_mm: 0.2,
+          selectedMaterialDirNames: ["lb/blue", "lb/white"],
+          materialLayerCount: 8,
+          materialLayerHeightMm: 0.04,
+          materialBackingMaterialDirName: "lb/white",
+          materialDynamicLayerCountEnabled: true,
+          materialMinLayerCount: 5,
+          materialMaxLayerCount: 8,
+          materialDynamicRecipes: [dynamicRecipe],
+          materialLayerBenefitCurve: benefitCurve,
+          materialLayerBenefitScope: "automatic_pixels",
+          materialLayerBenefitPixelCount: 37,
+        },
+        undefined,
+        { materialDeltaE00Tolerance: 0.65 },
+      );
+
+      expect(recipe.recipe.converter?.base).toMatchObject({
+        lut: { name: "", color_mode: "" },
+        color_mode: "",
+      });
+      expect(recipe.recipe.converter?.source).toMatchObject({
+        source_version: "lumina_box",
+        selected_native_brand_key: "",
+        selected_native_db_names: [],
+        color_layers: null,
+        layer_height_mm: null,
+        selected_material_dir_names: ["lb/blue", "lb/white"],
+        material_layer_count: 8,
+        material_layer_height_mm: 0.04,
+        material_backing_material_dir_name: "lb/white",
+        material_dynamic_layer_count_enabled: true,
+        material_min_layer_count: 5,
+        material_max_layer_count: 8,
+        material_delta_e00_tolerance: 0.65,
+      });
+
+      const embedded = await embedRecipeInPng(
+        createMinimalPng(),
+        recipe,
+      );
+      const parsed = await parseRecipeFile(
+        new File([embedded], "lumina-box-share.png", { type: "image/png" }),
+      );
+      const { state: restored, warnings } = restoreConverterRecipe(
+        parsed.recipe,
+        LOCAL_LUTS,
+      );
+
+      expect(restored).toMatchObject({
+        source_version: "lumina_box",
+        lut_name: "",
+        lut_names: [],
+        selectedMaterialDirNames: ["lb/blue", "lb/white"],
+        materialLayerCount: 8,
+        materialLayerHeightMm: 0.04,
+        materialBackingMaterialDirName: "lb/white",
+        materialDynamicLayerCountEnabled: true,
+        materialMinLayerCount: 5,
+        materialMaxLayerCount: 8,
+        materialDynamicRecipes: [dynamicRecipe],
+        materialLayerBenefitCurve: benefitCurve,
+        materialLayerBenefitScope: "automatic_pixels",
+        materialLayerBenefitPixelCount: 37,
+      });
+      expect(warnings).not.toContain(RECIPE_IMPORT_WARNING_LUT_MISSING);
     });
   });
 

@@ -21,17 +21,28 @@ so raster and preview diagnostics remain searchable by their workflow.
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import Any
 
-from config import ModelingMode
-from core.material_cache import ALLOWED_GRID_RESOLUTIONS, DEFAULT_GRID_RESOLUTION
+from config import MATERIALS_DIR, ModelingMode, PrinterConfig
+from core.material_cache import ALLOWED_GRID_RESOLUTIONS, DEFAULT_GRID_RESOLUTION, describe_palette
 from core.material_lut_provider import load_materials
 from core.material_lut_synthesis import (
     build_material_preview_colors,
     build_material_slot_names,
     infer_material_archive_base_channel_idx,
 )
+from core.lumina_box_archive import validate_lumina_box_material_archive
+from core.material_optical_runtime import (
+    BEER_LAMBERT_MODEL_ID,
+    MaterialOpticalCompatibilityError,
+    bind_material_print_backing,
+    validate_material_optical_contract,
+)
+from core.backed_gradient_smooth import SPECTRAL_SMOOTH_MODEL_ID
+from core.single_stage import resolve_saved_material_dir
 
 
 __all__ = [
@@ -39,6 +50,9 @@ __all__ = [
     "_clamp_quantize_colors",
     "_resolve_lut_path_or_error",
     "_apply_material_archive_branch",
+    "MaterialArchiveProfileError",
+    "load_and_validate_material_archive_profile",
+    "normalize_material_archive_profile_kind",
     "_validate_vector_svg_input",
 ]
 
@@ -49,6 +63,158 @@ VECTOR_NATIVE_REQUIRES_SVG_DETAIL = (
     "• Upload an SVG file, or\n"
     "• Switch to 'High-Fidelity' or 'Pixel Art' mode"
 )
+
+_MATERIAL_ARCHIVE_PROFILE_KINDS = frozenset({"stage_a", "lumina_box"})
+_PROFILE_KIND_OPTICAL_MODELS = {
+    "stage_a": BEER_LAMBERT_MODEL_ID,
+    "lumina_box": SPECTRAL_SMOOTH_MODEL_ID,
+}
+
+
+class MaterialArchiveProfileError(ValueError):
+    """Raised when a selected archive conflicts with its requested profile kind.
+
+    在用户选择的耗材档案与请求的档案类型不一致时抛出。
+    """
+
+    error_type = "material_profile_kind_mismatch"
+
+
+def normalize_material_archive_profile_kind(value: object | None) -> str:
+    """Return the canonical archive kind, defaulting legacy requests to Stage A.
+
+    规范化耗材档案光学类型；旧请求缺失该字段时保持 Stage A 语义。
+
+    ``material_profile_kind`` was introduced after existing material-archive
+    requests. Missing values therefore retain the legacy Stage A semantics,
+    while callers that opt into Lumina Box must send ``"lumina_box"``.
+    """
+
+    if value is None:
+        return "stage_a"
+    normalized = str(value).strip().lower()
+    if normalized in _MATERIAL_ARCHIVE_PROFILE_KINDS:
+        return normalized
+    accepted = ", ".join(sorted(_MATERIAL_ARCHIVE_PROFILE_KINDS))
+    raise MaterialArchiveProfileError(
+        "material_profile_kind must be one of: " + accepted + "."
+    )
+
+
+def _archive_profile_kind_from_payload(
+    archive_payload: dict[str, Any],
+    *,
+    directory_name: str,
+) -> str:
+    """Read the archive-declared profile kind with legacy Stage A fallback."""
+
+    raw_value = archive_payload.get("profile_kind")
+    if raw_value is None or not str(raw_value).strip():
+        return "stage_a"
+    normalized = str(raw_value).strip().lower()
+    if normalized not in _MATERIAL_ARCHIVE_PROFILE_KINDS:
+        accepted = ", ".join(sorted(_MATERIAL_ARCHIVE_PROFILE_KINDS))
+        raise MaterialArchiveProfileError(
+            f"Selected material '{directory_name}' has unsupported profile_kind "
+            f"{normalized!r}; expected one of: {accepted}."
+        )
+    return normalized
+
+
+def _validate_material_params_profile_kind(
+    materials: list[Any],
+    *,
+    profile_kind: str,
+) -> None:
+    """Validate optical model/protocol data against one requested archive kind."""
+
+    try:
+        contract = validate_material_optical_contract(materials)
+    except MaterialOpticalCompatibilityError as exc:
+        raise MaterialArchiveProfileError(
+            "Selected materials have incompatible optical model or measurement "
+            f"protocol: {exc}"
+        ) from exc
+
+    expected_model_id = _PROFILE_KIND_OPTICAL_MODELS[profile_kind]
+    if contract.model_id != expected_model_id:
+        raise MaterialArchiveProfileError(
+            f"material_profile_kind={profile_kind!r} requires {expected_model_id}, "
+            f"but the selected materials use {contract.model_id}. "
+            "Upgrade legacy Lumina Box archives from their original measurements before conversion."
+        )
+
+
+def load_and_validate_material_archive_profile(
+    selected_materials: list[str],
+    *,
+    profile_kind: object | None,
+) -> tuple[str, list[Any]]:
+    """Load one archive palette and verify its profile and optical contract.
+
+    读取一组耗材档案，并校验其档案类型、光学模型和 Lumina Box 测量契约。
+
+    This is intentionally shared by API workers and the staged pipeline. It
+    blocks a Stage A/Lumina Box mix before cache construction or geometry work
+    begins, and validates that every Lumina Box item shares the spectral model
+    and calibration-white reference required by the optical runtime.
+    """
+
+    normalized_kind = normalize_material_archive_profile_kind(profile_kind)
+    if not selected_materials:
+        raise MaterialArchiveProfileError(
+            "material_archive mode requires at least one selected material."
+        )
+
+    materials_root = Path(MATERIALS_DIR)
+    for directory_name in selected_materials:
+        if not isinstance(directory_name, str) or not directory_name.strip():
+            raise MaterialArchiveProfileError(
+                "selected_materials must contain non-empty archive directory names."
+            )
+        try:
+            material_dir = resolve_saved_material_dir(materials_root, directory_name)
+            material_path = material_dir / "material.json"
+            archive_payload = json.loads(material_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise MaterialArchiveProfileError(
+                f"Selected material archive '{directory_name}' cannot be read."
+            ) from exc
+        if not isinstance(archive_payload, dict):
+            raise MaterialArchiveProfileError(
+                f"Selected material archive '{directory_name}' is not a JSON object."
+            )
+        declared_kind = _archive_profile_kind_from_payload(
+            archive_payload,
+            directory_name=directory_name,
+        )
+        if declared_kind != normalized_kind:
+            raise MaterialArchiveProfileError(
+                f"Selected material '{directory_name}' is {declared_kind!r}, but "
+                f"material_profile_kind is {normalized_kind!r}."
+            )
+        if normalized_kind == "lumina_box" and not validate_lumina_box_material_archive(
+            material_dir,
+            archive_payload,
+        ):
+            # The generic material loader intentionally supports legacy
+            # archives and may fill absent optical metadata with historical
+            # defaults. Lumina Box is a three-file protocol, so conversion
+            # must require its persisted bridge and consistency metadata
+            # before that compatibility path runs.
+            raise MaterialArchiveProfileError(
+                f"Selected Lumina Box material '{directory_name}' failed "
+                "archive bridge/integrity validation."
+            )
+
+    try:
+        materials = load_materials(selected_materials)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        raise MaterialArchiveProfileError(
+            "Selected material archives could not be loaded for optical matching."
+        ) from exc
+    _validate_material_params_profile_kind(materials, profile_kind=normalized_kind)
+    return normalized_kind, materials
 
 
 def _validate_vector_svg_input(
@@ -182,8 +348,11 @@ def _apply_material_archive_branch(
         return "error"
 
     try:
-        materials = load_materials(selected_materials)
-    except (FileNotFoundError, ValueError) as exc:
+        profile_kind, materials = load_and_validate_material_archive_profile(
+            list(selected_materials),
+            profile_kind=ctx.get("material_profile_kind"),
+        )
+    except (FileNotFoundError, OSError, ValueError, TypeError) as exc:
         ctx["error"] = f"[ERROR] Failed to load materials: {exc}"
         return "error"
 
@@ -194,6 +363,11 @@ def _apply_material_archive_branch(
         slot_names,
         preview_colors,
     )
+    if profile_kind == "lumina_box":
+        base_channel_idx = next((
+            index for index, material in enumerate(materials)
+            if material.backed_gradient_component.kind == "white"
+        ), base_channel_idx)
     color_conf = {
         "name": "Material",
         "slots": slot_names,
@@ -210,6 +384,34 @@ def _apply_material_archive_branch(
     )
     material_layer_height = float(ctx.get("material_layer_height_mm") or default_layer_height_mm)
 
+    if profile_kind == "lumina_box":
+        if not ctx.get("is_svg_vector") and abs(material_layer_height - PrinterConfig.LAYER_HEIGHT) > 1e-9:
+            ctx["error"] = (
+                "Lumina Box raster conversion currently requires 0.08 mm layers. "
+                "Choose 0.08 mm, or use native SVG vector mode for another layer height."
+            )
+            return "error"
+        backing_index = ctx.get("material_backing_material_index")
+        if backing_index is None:
+            backing_index = base_channel_idx
+        try:
+            materials = bind_material_print_backing(
+                materials,
+                backing_material_index=backing_index,
+                thickness_mm=float(ctx.get("spacer_thick", 1.2)),
+                layer_height_mm=material_layer_height,
+            )
+            ctx["material_optical_context"] = {
+                "optical_model_id": SPECTRAL_SMOOTH_MODEL_ID,
+                "reference_id": materials[0].backed_gradient_reference.reference_id,
+                "canonical_materials": describe_palette(materials),
+                "backing_material_index": int(backing_index),
+                "backing_thickness_mm": materials[0].backed_gradient_backing_thickness_mm,
+            }
+        except (TypeError, ValueError) as exc:
+            ctx["error"] = f"Invalid Lumina Box backing: {exc}"
+            return "error"
+
     ctx["actual_lut_path"] = "__material_archive__"
     ctx["color_conf"] = color_conf
     ctx["slot_names"] = slot_names
@@ -223,6 +425,7 @@ def _apply_material_archive_branch(
     ctx["material_base_channel_idx"] = base_channel_idx
     ctx["_material_params"] = materials
     ctx["material_source"] = "material_archive"
+    ctx["material_profile_kind"] = profile_kind
 
     # Normalise the opt-in exhaustive-cache grid_resolution onto the ctx.
     # 将选入式穷举缓存网格分辨率规整进 ctx：None 或未知值回落到默认；

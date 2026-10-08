@@ -462,7 +462,7 @@ export default function MaterialPickerDialog({
                   })}
                 </span>
               )}
-              {profile.verification_count != null && (
+              {profile.profile_kind !== "lumina_box" && profile.verification_count != null && (
                 <span>
                   {formatMessage(
                     t("basic_material_picker_verification_count"),
@@ -576,10 +576,12 @@ export default function MaterialPickerDialog({
                       value: profile.mean_delta_e.toFixed(1),
                     })
                   : null,
-                formatMessage(
-                  t("basic_material_picker_verification_count"),
-                  { count: profile.verification_count ?? 0 },
-                ),
+                profile.profile_kind !== "lumina_box"
+                  ? formatMessage(
+                      t("basic_material_picker_verification_count"),
+                      { count: profile.verification_count ?? 0 },
+                    )
+                  : null,
                 formatLayerHeightMm(profile.layer_height_mm),
               ].filter((value): value is string => Boolean(value));
               return (

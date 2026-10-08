@@ -177,6 +177,23 @@ describe("MaterialPickerDialog", () => {
     expect(onConfirm).toHaveBeenCalledWith(["jayo/yellow-pla"]);
   });
 
+  it("omits verification counts only for Box profiles in single and grouped cards", () => {
+    renderPicker({ materials: [
+      makeMaterial({ material_name: "Box Red", directory_name: "box-red", profile_kind: "lumina_box" }),
+      ...["first", "second"].map((name) => makeMaterial({ material_name: "Box Blue", directory_name: `box-blue-${name}`,
+        profile_kind: "lumina_box", material_product_id: "box-blue", contributor_name: name })),
+      makeMaterial({ material_name: "Photo Yellow", directory_name: "photo-yellow", profile_kind: "stage_a", verification_count: 3 }),
+      makeMaterial({ material_name: "Cloud White", directory_name: "cloud-white", sync_material_id: "cloud-white", verification_count: 6 }),
+    ] });
+    fireEvent.click(screen.getByRole("button", { name: "展开 Box Blue 的档案" }));
+    for (const name of ["Box Red", "Box Blue"]) {
+      const card = screen.getByText(name).closest('[data-testid="material-picker-product-card"]')!;
+      expect(within(card as HTMLElement).queryByText(/验证 \d+ 次/)).not.toBeInTheDocument();
+    }
+    expect(screen.getByText("验证 3 次")).toBeInTheDocument();
+    expect(screen.getByText("验证 6 次")).toBeInTheDocument();
+  });
+
   it("toggles and commits a single material from the lower card details", () => {
     const onConfirm = vi.fn();
     renderPicker({

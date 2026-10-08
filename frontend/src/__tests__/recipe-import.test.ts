@@ -61,9 +61,12 @@ const BENEFIT_CURVE: MaterialLayerBenefitPoint[] = ([5, 6, 7] as const).map(
   }),
 );
 
-function enableDynamicMaterial(recipe: LuminaRecipe): void {
+function enableDynamicMaterial(
+  recipe: LuminaRecipe,
+  sourceVersion: "material" | "lumina_box" = "material",
+): void {
   recipe.recipe.converter!.source = {
-    source_version: "material",
+    source_version: sourceVersion,
     selected_native_brand_key: "",
     selected_native_db_names: [],
     color_layers: null,
@@ -372,26 +375,82 @@ describe("recipe/importRecipe", () => {
       expect(state.materialBackingMaterialDirName).toBe("brand/white");
     });
 
-    it("restores dynamic material bounds and keeps absent result metadata empty", () => {
+    it("restores fixed Lumina Box settings without legacy or native source pollution", () => {
       const recipe = createTestRecipe();
-      recipe.recipe.converter!.base.hue_enable = true;
-      enableDynamicMaterial(recipe);
+      recipe.recipe.converter!.source = {
+        source_version: "lumina_box",
+        selected_native_brand_key: "stale-native-brand",
+        selected_native_db_names: ["Stale Native PLA"],
+        color_layers: 8,
+        layer_height_mm: 0.2,
+        model_enable: true,
+        model_only: true,
+        model_threshold: 0.8,
+        model_margin: 4,
+        selected_material_dir_names: ["lb/blue", "lb/white"],
+        material_layer_count: 8,
+        material_layer_height_mm: 0.04,
+        material_backing_material_dir_name: "lb/white",
+        material_dynamic_layer_count_enabled: false,
+        material_min_layer_count: 5,
+        material_max_layer_count: 10,
+        material_delta_e00_tolerance: 0.65,
+      };
 
-      const { state } = restoreConverterRecipe(
+      const { state, warnings } = restoreConverterRecipe(
         recipe,
         LOCAL_LUTS,
       );
 
       expect(state).toMatchObject({
-        source_version: "material",
-        materialDynamicLayerCountEnabled: true,
+        source_version: "lumina_box",
+        lut_name: "",
+        lut_names: [],
+        color_mode: DEFAULT_STATE.color_mode,
+        selectedNativeBrandKey: "",
+        selectedNativeDbNames: [],
+        color_layers: null,
+        layer_height_mm: null,
+        model_enable: false,
+        model_only: false,
+        model_threshold: null,
+        model_margin: null,
+        selectedMaterialDirNames: ["lb/blue", "lb/white"],
+        materialLayerCount: 8,
+        materialLayerHeightMm: 0.04,
+        materialBackingMaterialDirName: "lb/white",
+        materialDynamicLayerCountEnabled: false,
         materialMinLayerCount: 5,
-        materialMaxLayerCount: 7,
-        hue_enable: false,
-        materialDynamicRecipes: [],
-        materialLayerBenefitCurve: [],
+        materialMaxLayerCount: 10,
       });
+      expect(warnings).not.toContain(RECIPE_IMPORT_WARNING_LUT_MISSING);
+      expect(warnings).toContain("recipe_import_warning_box_model_updated");
+      expect(warnings).not.toContain(RECIPE_IMPORT_WARNING_LUT_DEGRADED);
     });
+
+    it.each(["material", "lumina_box"] as const)(
+      "restores dynamic %s bounds and keeps absent result metadata empty",
+      (sourceVersion) => {
+        const recipe = createTestRecipe();
+        recipe.recipe.converter!.base.hue_enable = true;
+        enableDynamicMaterial(recipe, sourceVersion);
+
+        const { state } = restoreConverterRecipe(
+          recipe,
+          LOCAL_LUTS,
+        );
+
+        expect(state).toMatchObject({
+          source_version: sourceVersion,
+          materialDynamicLayerCountEnabled: true,
+          materialMinLayerCount: 5,
+          materialMaxLayerCount: 7,
+          hue_enable: false,
+          materialDynamicRecipes: [],
+          materialLayerBenefitCurve: [],
+        });
+      },
+    );
 
     it("deep-clones valid imported dynamic result metadata", () => {
       const recipe = createTestRecipe();
@@ -460,44 +519,51 @@ describe("recipe/importRecipe", () => {
       expect(inapplicableState.materialLayerBenefitCurve).toEqual([]);
     });
 
-    it("preserves dynamic result metadata across export-import-export", () => {
-      const state = {
-        ...DEFAULT_STATE,
-        source_version: "material",
-        selectedMaterialDirNames: ["brand/red", "brand/white"],
-        materialBackingMaterialDirName: "brand/white",
-        materialDynamicLayerCountEnabled: true,
-        materialMinLayerCount: 5,
-        materialMaxLayerCount: 7,
-        materialDynamicRecipes: [DYNAMIC_RECIPE],
-        materialLayerBenefitCurve: BENEFIT_CURVE,
-        materialLayerBenefitScope: "automatic_pixels",
-        materialLayerBenefitPixelCount: 37,
-      } as ConverterState;
-      const firstExport = exportConverterRecipe(
-        state,
-        { ...DEFAULT_SETTINGS, materialDeltaE00Tolerance: 0.7 },
-        "fp123",
-      );
-      const recipe = createTestRecipe();
-      recipe.recipe.converter = firstExport;
-      const restored = restoreConverterRecipe(
-        recipe,
-        LOCAL_LUTS,
-      );
-      const secondExport = exportConverterRecipe(
-        { ...state, ...restored.state } as ConverterState,
-        { ...DEFAULT_SETTINGS, materialDeltaE00Tolerance: 0.7 },
-        "fp123",
-      );
+    it.each(["material", "lumina_box"] as const)(
+      "preserves dynamic %s result metadata across export-import-export",
+      (sourceVersion) => {
+        const state = {
+          ...DEFAULT_STATE,
+          source_version: sourceVersion,
+          selectedMaterialDirNames: ["brand/red", "brand/white"],
+          materialBackingMaterialDirName: "brand/white",
+          materialDynamicLayerCountEnabled: true,
+          materialMinLayerCount: 5,
+          materialMaxLayerCount: 7,
+          materialDynamicRecipes: [DYNAMIC_RECIPE],
+          materialLayerBenefitCurve: BENEFIT_CURVE,
+          materialLayerBenefitScope: "automatic_pixels",
+          materialLayerBenefitPixelCount: 37,
+        } as ConverterState;
+        const firstExport = exportConverterRecipe(
+          state,
+          { ...DEFAULT_SETTINGS, materialDeltaE00Tolerance: 0.7 },
+          "fp123",
+        );
+        const recipe = createTestRecipe();
+        recipe.recipe.converter = firstExport;
+        const restored = restoreConverterRecipe(
+          recipe,
+          LOCAL_LUTS,
+        );
+        const secondExport = exportConverterRecipe(
+          { ...state, ...restored.state } as ConverterState,
+          { ...DEFAULT_SETTINGS, materialDeltaE00Tolerance: 0.7 },
+          "fp123",
+        );
 
-      expect(secondExport.material_dynamic).toEqual(
-        firstExport.material_dynamic,
-      );
-      expect(secondExport.material_dynamic).not.toBe(
-        firstExport.material_dynamic,
-      );
-    });
+        expect(secondExport.material_dynamic).toEqual(
+          firstExport.material_dynamic,
+        );
+        expect(secondExport.material_dynamic).not.toBe(
+          firstExport.material_dynamic,
+        );
+        expect(secondExport.source?.source_version).toBe(sourceVersion);
+        expect(secondExport.source?.optical_model_id).toBe(firstExport.source?.optical_model_id);
+        expect(secondExport.geometry.spacer_thick).toBe(firstExport.geometry.spacer_thick);
+        expect(secondExport.source?.material_backing_material_dir_name).toBe(firstExport.source?.material_backing_material_dir_name);
+      },
+    );
 
     it("normalizes puzzle-specific mutually exclusive settings from imported recipes", () => {
       const recipe = createTestRecipe();

@@ -9,7 +9,7 @@ import GradientGroupsPanel from "./GradientGroupsPanel";
  * Material-archive color picker.
  * 材料档案模式下的颜色拾取器。
  *
- * Replaces the LUT swatch grid when ``source_version === "material"``: the
+ * Replaces the LUT swatch grid for either material-archive source family: the
  * LUT palette does not exist in material-archive mode, so we let the user
  * pick any target color (native ``<input type="color">`` + hex entry), send
  * it to ``/api/extractor/material-solver-cache/suggest-colors``, and render
@@ -265,7 +265,9 @@ export default function MaterialColorPicker() {
                     ? t("material_picker_source_cache")
                     : suggestions.source === "runtime"
                       ? t("material_picker_source_runtime")
-                    : t("material_picker_source_mitm")}
+                      : suggestions.source === "km_live"
+                        ? t("material_picker_source_km_live")
+                        : t("material_picker_source_mitm")}
                 </span>
               </p>
             )}
@@ -340,9 +342,9 @@ const TargetColorInputRow = memo(function TargetColorInputRow({
   const normalizedTarget = useMemo(() => _normalizeHex(draftTarget), [draftTarget]);
 
   const handleSubmit = useCallback(() => {
-    if (!normalizedTarget) return;
+    if (loading || !normalizedTarget) return;
     onSubmit(normalizedTarget);
-  }, [normalizedTarget, onSubmit]);
+  }, [loading, normalizedTarget, onSubmit]);
 
   const handleSubmitOnEnter = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {

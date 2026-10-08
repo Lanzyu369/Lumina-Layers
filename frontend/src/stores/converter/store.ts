@@ -142,10 +142,14 @@ import type {
 export { CONVERTER_ERROR_KEYS } from "./generationActions";
 export { buildLayerImagesSourceKey } from "./previewArtifacts";
 export {
+  getMaterialArchiveProfileKind,
+  isMaterialArchiveSourceVersion,
+} from "./types";
+export {
   clampValue,getMaterialArchiveReliefMinimumExtraHeight,getMaterialArchiveReliefMinimumTotalHeight,inferDefaultMaterialBackingDirName,isDynamicMaterialActive,MATERIAL_DYNAMIC_LAYER_COUNT_MAX,MATERIAL_DYNAMIC_LAYER_COUNT_MIN,resolveConverterSourceSelection,
 } from "./sources";
 export type {
-  ContentCommitStatus,ConverterActions,ConverterState,ModelSurfaceModelRotation,ModelSurfacePlacement,ModelSurfacePlacementMode,PendingReplacement,RegionData,SelectionDocument,SelectionMode,SelectionTool,SourceVersion,WorkshopConverterImageInput,
+  ContentCommitStatus,ConverterActions,ConverterState,MaterialArchiveProfileKind,ModelSurfaceModelRotation,ModelSurfacePlacement,ModelSurfacePlacementMode,PendingReplacement,RegionData,SelectionDocument,SelectionMode,SelectionTool,SourceVersion,WorkshopConverterImageInput,
 } from "./types";
 
 type LuminaWindow = Window & {
@@ -227,13 +231,18 @@ function _materialSuggestCacheKey(params: {
   layerCount: number;
   layerHeightMm: number;
   substrate: string;
+  materialProfileKind: MaterialArchiveProfileKind;
+  backingMaterialIndex?: number;
+  backingThicknessMm?: number;
   gridResolution?: number;
   targetHex: string;
 }): string {
   const dirs = params.directoryNames.join(",");
   const hex = params.targetHex.replace(/^#/, "").toLowerCase();
   const gridResolution = params.gridResolution ?? "default";
-  return `${dirs}|${params.layerCount}|${params.layerHeightMm}|${params.substrate}|${gridResolution}|${hex}`;
+  const backing = params.materialProfileKind === "lumina_box"
+    ? `${params.backingMaterialIndex}:${params.backingThicknessMm}` : "";
+  return `${params.materialProfileKind}|${dirs}|${params.layerCount}|${params.layerHeightMm}|${params.substrate}|${gridResolution}|${hex}|${backing}`;
 }
 
 export const RAW_EXTENSIONS_CONVERTER = new Set([
@@ -1492,6 +1501,12 @@ function buildPreviewSessionResetState(
     selectedColors: new Set<string>(),
     regionData: null,
     selectedRegions: [],
+    gradientGroups: null,
+    gradientGroupsLoading: false,
+    gradientGroupsError: null,
+    gradientGroupsSessionId: null,
+    gradientSelection: null,
+    selectedGradientRegions: [],
     selectionBlinkEnabled: false,
     selectionTool: "point",
     selectionDocument: null,
@@ -2724,11 +2739,36 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set(updates);
     },
 
-    setSourceVersion: (version: SourceVersion) =>
+    setSourceVersion: (version: SourceVersion) => {
+      assertKnownSourceVersion(version);
+      const previousSourceVersion = _get().source_version;
+      assertKnownSourceVersion(previousSourceVersion);
+      if (version === previousSourceVersion) {
+        return;
+      }
+
+      const resetMaterialArchiveSelection =
+        isMaterialArchiveSourceVersion(previousSourceVersion) ||
+        isMaterialArchiveSourceVersion(version);
+      if (resetMaterialArchiveSelection) {
+        persistSelectedMaterialDirNames([]);
+        persistMaterialBackingMaterialDirName(null);
+      }
+      _cancelPreviewWork();
+      const materialSuggestionReset = _cancelMaterialSuggestionWork();
+
       set((state) => {
         if (version === state.source_version) {
           return {};
         }
+
+        const materialArchiveReset = resetMaterialArchiveSelection
+          ? {
+              selectedMaterialDirNames: [],
+              materialBackingMaterialDirName: null,
+              ...materialSuggestionReset,
+            }
+          : {};
 
         if (version === "legacy") {
           return {
@@ -2741,13 +2781,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             model_only: false,
             model_threshold: null,
             model_margin: null,
+            ...materialArchiveReset,
             ...buildPreviewSessionResetState(state, true),
           };
         }
 
-        if (version === "material") {
+        if (isMaterialArchiveSourceVersion(version)) {
           return {
-            source_version: "material",
+            source_version: version,
             hue_enable: state.materialDynamicLayerCountEnabled
               ? false
               : state.hue_enable,
@@ -2755,6 +2796,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             model_only: false,
             model_threshold: null,
             model_margin: null,
+            ...materialArchiveReset,
             ...buildPreviewSessionResetState(state, true),
           };
         }
@@ -2776,9 +2818,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_layers: preferredMode?.color_layers ?? null,
           layer_height_mm: preferredMode?.layer_height_mm ?? null,
           ...buildNativeModelState(selectedBrand, state),
+          ...materialArchiveReset,
           ...buildPreviewSessionResetState(state, true),
         };
-      }),
+      });
+    },
 
     setSelectedMaterialDirNames: (names: string[]) => {
       const state = _get();
@@ -2923,9 +2967,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
     setMaterialBackingMaterialDirName: (name: string | null) => {
       persistMaterialBackingMaterialDirName(name);
-      if (isDynamicMaterialActive(_get())) {
+      if (isDynamicMaterialActive(_get()) || _get().source_version === "lumina_box") {
         set({
           materialBackingMaterialDirName: name,
+          ..._cancelMaterialSuggestionWork(),
           ...buildPreviewSessionResetState(_get(), true),
         });
         return;
@@ -3090,6 +3135,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
         return {
           ...fridgeState,
+          ...(state.source_version === "lumina_box" && fridgeState.spacer_thick !== state.spacer_thick
+            ? { ..._cancelMaterialSuggestionWork(), ...buildPreviewSessionResetState(state, true) } : {}),
           heightmap_max_height: state.enable_relief
             ? clampValue(
                 state.heightmap_max_height,
@@ -6369,10 +6416,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       // Caller (MaterialColorPicker) ensures this, but we double-check.
       // 调用方应保证处于材料档案模式且已选耗材，这里再校验一次。
       const state = _get();
-      if (state.source_version !== "material") {
+      if (!isMaterialArchiveSourceVersion(state.source_version)) {
         set({
           materialSuggestionsError:
-            "fetchMaterialSuggestions requires source_version='material'",
+            "fetchMaterialSuggestions requires a material-archive source",
         });
         return;
       }
@@ -6414,8 +6461,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         layerCount: suggestionLayerCount,
         layerHeightMm: state.materialLayerHeightMm,
         substrate: "white",
+        materialProfileKind:
+          getMaterialArchiveProfileKind(state.source_version) ?? "stage_a",
         gridResolution: gridResolutionOverride,
         targetHex: cleaned,
+        backingMaterialIndex: buildMaterialSourceParams(state).material_backing_material_index,
+        backingThicknessMm: state.spacer_thick,
       });
       const cached = _materialSuggestCache.get(cacheKey);
       if (cached) {
@@ -6446,6 +6497,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             layerCount: suggestionLayerCount,
             layerHeightMm: state.materialLayerHeightMm,
             substrate: "white",
+            materialProfileKind: getMaterialArchiveProfileKind(
+              state.source_version,
+            ) ?? "stage_a",
+            ...(state.source_version === "lumina_box" ? {
+              backingMaterialIndex: buildMaterialSourceParams(state).material_backing_material_index,
+              backingThicknessMm: state.spacer_thick,
+            } : {}),
           },
           cleaned,
           { signal, gridResolution: gridResolutionOverride },
@@ -6459,6 +6517,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           signal.aborted ||
           requestToken !== _materialSuggestRequestToken ||
           currentGridResolution !== gridResolutionOverride
+          || (state.source_version === "lumina_box" && (
+            _get().spacer_thick !== state.spacer_thick ||
+            _get().materialBackingMaterialDirName !== state.materialBackingMaterialDirName
+          ))
         ) {
           return;
         }
@@ -6799,8 +6861,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     invalidatePreviewForAutoRefresh: () => {
       _cancelPreviewWork();
+      const materialSuggestionReset = _get().source_version === "lumina_box"
+        ? _cancelMaterialSuggestionWork() : {};
 
       set((current) => ({
+        ...materialSuggestionReset,
         sessionId: null,
         isLoading: false,
         previewImageUrl: null,
@@ -6843,7 +6908,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (!sourceSelection.isReady) {
         set({
           error:
-            state.source_version === "material"
+            isMaterialArchiveSourceVersion(state.source_version)
               ? "请先选择耗材"
               : state.source_version === "native"
                 ? "请先选择品牌和数据库"

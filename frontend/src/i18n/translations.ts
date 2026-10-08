@@ -2532,6 +2532,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "耗材库",
     en: "Material Library",
   },
+  "tab.luminaBox": {
+    zh: "Lumina Box",
+    en: "Lumina Box",
+  },
   "tab.materialCloudSync": {
     zh: "云端耗材库",
     en: "Cloud Material Library",
@@ -4846,8 +4850,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Source Type",
   },
   basic_source_version_hint: {
-    zh: "选择配色数据从哪里来：\n• 传统 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 反推LUT：由品牌耗材数据推算出来，不需要自己打印色卡。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。",
-    en: "Choose where the color data comes from:\n• Legacy LUT: data measured from actually printed color charts — most reliable.\n• Inferred LUT: computed from brand filament data, no printed chart needed.\n• Material Archive: freely combine materials you created in Material Extraction.",
+    zh: "选择配色数据从哪里来：\n• 传统 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 反推LUT：由品牌耗材数据推算出来，不需要自己打印色卡。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。\n• Lumina Box：使用 Lumina Box 仪器采集并建档的耗材。",
+    en: "Choose where the color data comes from:\n• Legacy LUT: data measured from actually printed color charts — most reliable.\n• Inferred LUT: computed from brand filament data, no printed chart needed.\n• Material Archive: freely combine materials you created in Material Extraction.\n• Lumina Box: materials measured and profiled with the Lumina Box instrument.",
   },
   basic_source_version_legacy: {
     zh: "传统 LUT",
@@ -4861,6 +4865,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "\u8017\u6750\u6863\u6848",
     en: "Material Archive",
   },
+  basic_source_version_lumina_box: {
+    zh: "Lumina Box",
+    en: "Lumina Box",
+  },
   basic_material_select_label: {
     zh: "\u9009\u62e9\u8017\u6750",
     en: "Select Materials",
@@ -4872,6 +4880,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_material_empty: {
     zh: "\u65e0\u53ef\u7528\u8017\u6750\uff0c\u8bf7\u5148\u5728\u300c\u8017\u6750\u63d0\u53d6\u300d\u4e2d\u521b\u5efa",
     en: "No materials available. Create one in Material Extraction first.",
+  },
+  basic_lumina_box_select_label: {
+    zh: "选择 Lumina Box 耗材",
+    en: "Select Lumina Box Materials",
+  },
+  basic_lumina_box_empty: {
+    zh: "暂无 Lumina Box 耗材档案。请先使用 Lumina Box 建立耗材档案。",
+    en: "No Lumina Box material profiles are available yet. Create one with Lumina Box first.",
+  },
+  basic_lumina_box_empty_action: {
+    zh: "前往 Lumina Box",
+    en: "Open Lumina Box",
   },
   basic_material_selected_count: {
     zh: "\u5df2\u9009\u8017\u6750",
@@ -5121,6 +5141,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "为当前耗材组合构建 Lab 网格配方库，后续出图直接查表。",
     en: "Build a Lab-grid recipe library for this palette so future conversions are served from cache.",
   },
+  basic_material_cache_lumina_box_title: {
+    zh: "Lumina Box 使用智能配方缓存",
+    en: "Lumina Box uses the smart recipe cache",
+  },
+  basic_material_cache_lumina_box_not_applicable: {
+    zh: "在下方构建智能配方缓存，可加速 Lumina Box 配色和区域重新配色。更换耗材、底板或层高后，需要使用对应设置的缓存。",
+    en: "Build the smart recipe cache below to speed up Lumina Box colour matching and region recolouring. Changing filaments, backing, or layer height requires a cache for those settings.",
+  },
   basic_material_cache_active_grid_label: {
     zh: "当前穷举数量：{tier}（{grid}³）。可在设置里切换。",
     en: "Current density: {tier} ({grid}³). Change in Settings.",
@@ -5248,6 +5276,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_material_runtime_section_title: {
     zh: "智能配方缓存",
     en: "Smart Recipe Cache",
+  },
+  basic_material_runtime_open_button: {
+    zh: "Lumina Box 智能配方缓存…",
+    en: "Lumina Box smart recipe cache…",
   },
   basic_material_runtime_section_description: {
     zh: "为大耗材组合预生成覆盖广的配方，加速颜色匹配。",
@@ -6471,6 +6503,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   material_picker_source_mitm: {
     zh: "MITM 实时求解（构建持久化缓存可显著加速）",
     en: "MITM live solve (build a persisted cache to accelerate)",
+  },
+  material_picker_source_km_live: {
+    zh: "Lumina Box 正在计算配方（构建智能配方缓存可加速）",
+    en: "Lumina Box is calculating recipes (build the smart recipe cache to speed this up)",
   },
   material_picker_result_count: {
     zh: "共 {count} 个可达色建议",
@@ -8605,6 +8641,171 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "每个颜色都会生成一个可打印的 3MF 任务",
     en: "One printable 3MF job is generated per color",
   },
+  // ==================== Lumina Box profile ====================
+  lumina_box_title: {
+    zh: "Lumina Box",
+    en: "Lumina Box",
+  },
+  lumina_box_serial_title: {
+    zh: "Lumina Box 有线采集",
+    en: "Lumina Box wired capture",
+  },
+  lumina_box_serial_picker_title: {
+    zh: "选择 Lumina Box 串口",
+    en: "Select the Lumina Box serial port",
+  },
+  lumina_box_serial_picker_message: {
+    zh: "点击仪器对应的串口。设备名称列在下方；取消不会连接任何设备。",
+    en: "Choose the instrument's port. Device names are listed below. Cancel leaves all devices disconnected.",
+  },
+  lumina_box_serial_picker_empty: {
+    zh: "没有可用串口。请接上 USB 数据线，设备出现后会自动更新；也可以取消后重试。",
+    en: "No serial ports are available. Connect the USB data cable; the list updates when a device appears. You can also cancel and retry.",
+  },
+  lumina_box_serial_picker_next: {
+    zh: "更多串口",
+    en: "More ports",
+  },
+  lumina_box_serial_picker_previous: {
+    zh: "上一页串口",
+    en: "Previous ports",
+  },
+  lumina_box_serial_hint: {
+    zh: "支持已更新的 Lumina Studio 桌面版，以及通过 localhost / HTTPS 打开的桌面 Chrome、Edge 浏览器。用 USB 数据线连接仪器，点击连接并选择串口，然后在仪器上选厚度并测量。自动模式填写同一厚度的 R/T 六个数值，单独反射或透射模式只更新对应三个数值；重复测量会替换该厚度的对应读数。请先填写耗材信息：修改品牌、名称或材料类型，以及离开页面，都会断开连接，防止新读数写入另一份耗材。连接失败时请关闭占用串口的监视器后重试。",
+    en: "Supported in the updated Lumina Studio desktop app and desktop Chrome / Edge on localhost or HTTPS. Connect a USB data cable, click Connect and select the serial port, then choose thickness and measure on the instrument. Auto mode fills all six R/T values; reflection or transmission mode updates only its three values. A new measurement replaces the corresponding readings at that thickness. Enter material information first: changing brand, name or type, or leaving this page, disconnects capture to prevent readings entering another material. Close any serial monitor using the port before retrying a failed connection.",
+  },
+  lumina_box_serial_connect: {
+    zh: "连接 Lumina Box",
+    en: "Connect Lumina Box",
+  },
+  lumina_box_serial_disconnect: {
+    zh: "断开连接",
+    en: "Disconnect",
+  },
+  lumina_box_serial_disconnected: {
+    zh: "未连接；连接后在仪器上选厚度并测量，即可自动填表。",
+    en: "Disconnected. Connect, then select thickness and measure on the instrument to fill the table.",
+  },
+  lumina_box_serial_connecting: {
+    zh: "请选择仪器串口，正在连接…",
+    en: "Select the instrument serial port. Connecting…",
+  },
+  lumina_box_serial_connected: {
+    zh: "设备通信正常，测量结果支持确认和自动补发。",
+    en: "Device communication verified. Measurements are acknowledged and retried automatically.",
+  },
+  lumina_box_serial_handshaking: {
+    zh: "串口已打开，正在确认设备通信…",
+    en: "Port open. Verifying device communication…",
+  },
+  lumina_box_serial_legacy_connected: {
+    zh: "单向采集已打开；请连接后重新测量。此固件无法确认收取或自动补发。",
+    en: "One-way capture is open. Measure again after connecting; this firmware cannot acknowledge or retry delivery.",
+  },
+  lumina_box_serial_recovering: {
+    zh: "设备通信中断，正在释放连接；已有数据保留。",
+    en: "Device communication interrupted. Releasing the connection; captured data is retained.",
+  },
+  lumina_box_serial_pending: {
+    zh: "仪器待确认 {count} 条",
+    en: "{count} readings awaiting acknowledgement",
+  },
+  lumina_box_serial_replay: {
+    zh: "补收未确认数据",
+    en: "Retry pending readings",
+  },
+  lumina_box_serial_diagnostics: {
+    zh: "导出连接诊断",
+    en: "Export connection diagnostics",
+  },
+  lumina_box_serial_diagnostics_view: {
+    zh: "查看连接诊断",
+    en: "Show connection diagnostics",
+  },
+  lumina_box_serial_diagnostics_copy_hint: {
+    zh: "点击下面的内容即可全选复制；请保留故障发生时的这份记录。",
+    en: "Click the text below to select and copy it. Keep this snapshot from the time of the failure.",
+  },
+  lumina_box_serial_diagnostics_saved: {
+    zh: "连接诊断文件已保存。",
+    en: "Connection diagnostics saved.",
+  },
+  lumina_box_serial_diagnostics_failed: {
+    zh: "无法保存诊断文件，请复制下方完整内容。",
+    en: "The diagnostics file could not be saved. Copy the complete text below.",
+  },
+  lumina_box_serial_diagnostics_restart: {
+    zh: "请退出并重新打开桌面版后再导出；当前仍可复制下方完整内容。",
+    en: "Restart the desktop app to export diagnostics. You can copy the complete text below now.",
+  },
+  lumina_box_serial_operation_timeout: {
+    zh: "串口操作超时，已有读数保留。请断开并重新连接；若仍无法释放，请重插 USB 后重试。",
+    en: "The serial operation timed out; captured readings are retained. Disconnect and reconnect. If the port remains blocked, reconnect the USB cable.",
+  },
+  lumina_box_serial_storage_unavailable: {
+    zh: "读数已显示，但本地保存失败，暂未向仪器确认。请先保存原始数据，检查浏览器存储权限后再补收。",
+    en: "Readings are displayed, but local storage failed and the instrument has not been acknowledged. Save original data, check browser storage permission, then retry pending readings.",
+  },
+  lumina_box_serial_delivery_overflow: {
+    zh: "仪器未确认缓存已满，部分旧读数已丢失。请核对厚度行并补测缺失的数据。",
+    en: "The instrument's pending buffer overflowed and some older readings were lost. Check the thickness rows and remeasure missing data.",
+  },
+  lumina_box_serial_wrong_device: {
+    zh: "连接的仪器与本批次不同，已停止接收。请连接原仪器，或清空读数开始新批次。",
+    en: "This is a different instrument; capture was stopped. Connect the original instrument or clear readings to start a new batch.",
+  },
+  lumina_box_serial_disconnecting: {
+    zh: "正在断开连接…",
+    en: "Disconnecting…",
+  },
+  lumina_box_serial_received: {
+    zh: "已填入 {count} 次，最近厚度 {thickness} mm",
+    en: "{count} measurements filled; latest thickness {thickness} mm",
+  },
+  lumina_box_serial_unsupported: {
+    zh: "当前版本或页面不支持有线采集。请使用已更新的 Lumina Studio 桌面版，或通过 localhost / HTTPS 打开的桌面 Chrome、Edge 浏览器；仍可手动录入。",
+    en: "Wired capture is unavailable in this version or page. Use the updated Lumina Studio desktop app, or desktop Chrome / Edge on localhost or HTTPS. Manual entry remains available.",
+  },
+  lumina_box_serial_connection_failed: {
+    zh: "无法连接仪器。请检查 USB 数据线、串口权限，并关闭占用该串口的其他程序后重试。",
+    en: "Could not connect. Check the USB data cable and serial permission, and close other applications using the port before retrying.",
+  },
+  lumina_box_serial_connection_lost: {
+    zh: "仪器连接已断开，已填入的数据仍保留。请检查 USB 数据线并重新连接。",
+    en: "The instrument disconnected. Captured values are retained. Check the USB data cable and reconnect.",
+  },
+  lumina_box_serial_invalid_measurement: {
+    zh: "已忽略无效或不兼容的测量数据，表格未被该数据修改。请确认仪器固件支持有线采集，并重新测量。",
+    en: "Invalid or incompatible measurement data was ignored without modifying the table. Check that the firmware supports wired capture and measure again.",
+  },
+  lumina_box_serial_thickness_missing: {
+    zh: "测量厚度在表格中不存在，未填入数据。请恢复对应厚度行或在仪器上选择表中厚度，再重新测量。",
+    en: "The measured thickness is missing from the table. Restore its row or select a listed thickness on the instrument, then measure again.",
+  },
+  lumina_box_serial_thickness_ambiguous: {
+    zh: "表格中有重复的测量厚度，未填入数据。请保留唯一的对应厚度行，再重新测量。",
+    en: "The table has duplicate rows for this thickness. Keep one matching row, then measure again.",
+  },
+  lumina_box_serial_material_changed: {
+    zh: "耗材信息已改变，采集已断开，已有读数保留。请确认表格属于当前耗材后再连接。",
+    en: "Material information changed, so capture was disconnected. Existing readings are retained. Check that the table belongs to this material before reconnecting.",
+  },
+  lumina_box_material_info_title: {
+    zh: "耗材信息",
+    en: "Material information",
+  },
+  lumina_box_material_info_desc: {
+    zh: "这些字段用于在耗材库中识别这份 Lumina Box 档案。",
+    en: "These fields identify this Lumina Box profile in the material library.",
+  },
+  lumina_box_material_type_label: {
+    zh: "材料类型",
+    en: "Material type",
+  },
+  recipe_import_warning_box_model_updated: {
+    zh: "这份分享卡使用较早的 Lumina Box 计算。设置已恢复，请使用已升级的耗材档案重新预览和核对颜色。",
+    en: "This share card used an earlier Lumina Box model. Settings were restored; use upgraded filament archives to refresh the preview and check the colours.",
+  },
   mat_gradient_generate_title: {
     zh: "生成梯度卡",
     en: "Generate Gradient Card",
@@ -9159,8 +9360,24 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Material Library",
   },
   mat_gradient_library_desc: {
-    zh: "浏览已保存的 Stage A 耗材档案，并支持多选导出 ZIP 或批量导入 ZIP。",
-    en: "Browse saved Stage A material archives, export selected ZIP bundles, or import ZIP bundles in bulk.",
+    zh: "管理已保存的耗材，或导入、导出耗材档案。",
+    en: "Manage saved materials, or import and export material profiles.",
+  },
+  mat_gradient_library_profile_kind_label: {
+    zh: "采集方式",
+    en: "Capture method",
+  },
+  mat_gradient_library_profile_kind_stage_a: {
+    zh: "照片采集",
+    en: "Photo capture",
+  },
+  mat_gradient_library_profile_kind_lumina_box: {
+    zh: "Lumina Box",
+    en: "Lumina Box",
+  },
+  mat_gradient_library_profile_incompatible: {
+    zh: "请选择同一种采集方式的耗材。",
+    en: "Select materials collected using the same capture method.",
   },
   mat_gradient_library_select_all_btn: {
     zh: "全选耗材",
@@ -9750,6 +9967,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "还没有已保存的耗材档案。先在「梯度卡提取」里保存一个耗材。",
     en: "No saved material archives yet. Save one from Gradient Card Extract first.",
   },
+  mat_gradient_library_empty_stage_a: {
+    zh: "还没有已保存的耗材档案。先在「梯度卡提取」里保存一个耗材。",
+    en: "No saved material archives yet. Save one from Gradient Card Extract first.",
+  },
+  mat_gradient_library_empty_lumina_box: {
+    zh: "还没有已保存的 Lumina Box 耗材档案。先完成 Lumina Box 测量并保存耗材。",
+    en: "No saved Lumina Box material archives yet. Complete a Lumina Box measurement and save the material first.",
+  },
   mat_gradient_library_updated_at_label: {
     zh: "最近更新",
     en: "Last Updated",
@@ -10067,8 +10292,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Material Recipe Query",
   },
   material_recipe_desc: {
-    zh: "从耗材库中按观赏面朝基底的顺序选择多层耗材，使用 Beer-Lambert 正向模型直接预测叠层颜色，不依赖任何 LUT。层数不受 5 层限制。",
-    en: "Pick materials from the library from the viewing face toward the substrate; the Beer-Lambert forward model predicts the stacked color directly, without any LUT. Layer count is not capped at 5.",
+    zh: "选择耗材，按观赏面到底板的顺序组合颜色层，查看叠色效果。",
+    en: "Choose materials and arrange their layers from the viewing face to the backing to preview the combined color.",
+  },
+  material_recipe_profile_incompatible: {
+    zh: "请选择同一种采集方式的耗材。",
+    en: "Select materials collected using the same capture method.",
   },
   material_recipe_layers_heading: {
     zh: "配方层（观赏面 → 基底）",
@@ -10262,6 +10491,123 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "色块图例",
     en: "Swatch legend",
   },
+  lumina_box_material_title: { zh: "Lumina Box 耗材采集", en: "Lumina Box material capture" },
+  lumina_box_material_new: { zh: "新建耗材档案", en: "New material profile" },
+  lumina_box_material_continue: { zh: "重采耗材档案", en: "Remeasure material profile" },
+  lumina_box_material_continue_choose: { zh: "选择要重采的耗材档案", en: "Choose a profile to remeasure" },
+  lumina_box_material_backing_captures: { zh: "背板采集", en: "Backing measurements" },
+  lumina_box_backing_collect: { zh: "采集背板信息", en: "Measure backing materials" },
+  lumina_box_backing_saved_materials: { zh: "已有背板资料", en: "Saved backing materials" },
+  lumina_box_backing_new: { zh: "添加背板耗材", en: "Add backing material" },
+  lumina_box_backing_role: { zh: "背板用途", en: "Backing use" },
+  lumina_box_backing_white: { zh: "白色背板", en: "White backing" },
+  lumina_box_backing_black: { zh: "黑色背板", en: "Black backing" },
+  lumina_box_backing_select: { zh: "请选择实际使用的耗材", en: "Choose the material actually used" },
+  lumina_box_backing_status_draft: { zh: "待采集", en: "Not measured" },
+  lumina_box_backing_status_measured: { zh: "已采集", en: "Measured" },
+  lumina_box_backing_status_ready: { zh: "可用于建模", en: "Ready to use" },
+  lumina_box_backing_white_samples: { zh: "本次采集白色耗材的七档黑底样片，以及 3 mm 纯白片。", en: "Measure the seven white layers on black backing and the 3 mm solid white sample." },
+  lumina_box_backing_black_samples: { zh: "本次采集黑色耗材的七档白底样片，以及 3 mm 纯黑片。", en: "Measure the seven black layers on white backing and the 3 mm solid black sample." },
+  lumina_box_backing_sample_base: { zh: "这些样片使用的底材", en: "Backing used for these samples" },
+  lumina_box_backing_sample_base_name: { zh: "样片底材名称", en: "Sample backing material name" },
+  lumina_box_backing_other: { zh: "使用新的底材", en: "Use a new backing material" },
+  lumina_box_backing_missing: { zh: "缺少可用背板时，请先到“采集背板信息”分别添加。", en: "Add any missing backing materials under Measure backing materials." },
+  lumina_box_backing_saved: { zh: "背板资料已保存。", en: "Backing material saved." },
+  lumina_box_backing_awaiting: { zh: "背板资料已保存；完成“{name}”的测量后即可用于建模。", en: "Backing material saved. Complete measurements for “{name}” to use it for modeling." },
+  lumina_box_backing_continue_other: { zh: "继续采集另一种背板", en: "Measure the other backing material" },
+  lumina_box_material_select: { zh: "重采", en: "Remeasure" },
+  lumina_box_material_connection_failed: { zh: "连接失败，请检查 USB 连接后重试。", en: "Connection failed. Check the USB connection and retry." },
+  lumina_box_material_name: { zh: "耗材名称", en: "Material name" },
+  lumina_box_material_brand: { zh: "品牌", en: "Brand" },
+  lumina_box_material_material_type: { zh: "材质", en: "Material type" },
+  lumina_box_material_color_r: { zh: "红色", en: "Red" },
+  lumina_box_material_color_y: { zh: "黄色", en: "Yellow" },
+  lumina_box_material_color_b: { zh: "蓝色", en: "Blue" },
+  lumina_box_material_color_w: { zh: "白色", en: "White" },
+  lumina_box_material_color_k: { zh: "黑色", en: "Black" },
+  lumina_box_material_color_c: { zh: "青色", en: "Cyan" },
+  lumina_box_material_color_m: { zh: "品红", en: "Magenta" },
+  lumina_box_material_color_g: { zh: "绿色", en: "Green" },
+  lumina_box_material_backing_pair: { zh: "本批样片的背板", en: "Backings used for these samples" },
+  lumina_box_material_bound_backing_unavailable: { zh: "未找到本批样片的背板资料，暂时无法生成耗材档案。", en: "The backing measurements for these samples are unavailable, so their material profile cannot be generated yet." },
+  lumina_box_material_change_backing: { zh: "换背板并开始新采集", en: "Change backings and start a new measurement" },
+  lumina_box_material_back_to_material: { zh: "返回耗材信息", en: "Back to material details" },
+  lumina_box_material_start_capture: { zh: "开始采集", en: "Start measuring" },
+  lumina_box_material_cancel: { zh: "取消", en: "Cancel" },
+  lumina_box_material_loading: { zh: "正在读取…", en: "Loading…" },
+  lumina_box_material_connected: { zh: "已连接", en: "Connected" },
+  lumina_box_material_connecting: { zh: "正在连接…", en: "Connecting…" },
+  lumina_box_material_disconnected: { zh: "未连接", en: "Disconnected" },
+  lumina_box_material_white_backing: { zh: "白底", en: "White backing" },
+  lumina_box_material_black_backing: { zh: "黑底", en: "Black backing" },
+  lumina_box_material_bare_white: { zh: "3.00 mm 纯白参考片", en: "3.00 mm solid white reference" },
+  lumina_box_material_bare_black: { zh: "3.00 mm 纯黑参考片", en: "3.00 mm solid black reference" },
+  lumina_box_material_white_on_black: { zh: "白色耗材 · 黑底", en: "White material · black backing" },
+  lumina_box_material_black_on_white: { zh: "黑色耗材 · 白底", en: "Black material · white backing" },
+  lumina_box_material_unmeasured: { zh: "待测量", en: "Not measured" },
+  lumina_box_material_thickness: { zh: "颜色厚度", en: "Color thickness" },
+  lumina_box_material_current_sample: { zh: "当前样片", en: "Current sample" },
+  lumina_box_material_manual_entry: { zh: "手动输入", en: "Enter manually" },
+  lumina_box_material_close_entry: { zh: "收起输入", en: "Close entry" },
+  lumina_box_material_cancel_entry: { zh: "取消输入", en: "Cancel entry" },
+  lumina_box_material_save_reading: { zh: "保存读数", en: "Save reading" },
+  lumina_box_material_saved_reading: { zh: "已保存读数", en: "Saved reading" },
+  lumina_box_material_reading_history: { zh: "测量历史", en: "Measurement history" },
+  lumina_box_material_selected: { zh: "已选用", en: "Selected" },
+  lumina_box_material_progress: { zh: "已采集 {count} / {total}", en: "Measured {count} / {total}" },
+  lumina_box_material_total_thickness: { zh: "样片总厚 3.00 mm · 测量贴热床的一面", en: "3.00 mm total thickness · measure the bed-facing side" },
+  lumina_box_material_generate: { zh: "生成耗材档案", en: "Create material profile" },
+  lumina_box_material_regenerate: { zh: "重新生成", en: "Generate again" },
+  lumina_box_material_generating: { zh: "正在生成…", en: "Creating profile…" },
+  lumina_box_material_save_backing: { zh: "保存背板资料", en: "Save backing measurements" },
+  lumina_box_material_ready: { zh: "耗材档案已生成", en: "Material profile created" },
+  lumina_box_material_save_archive: { zh: "保存到耗材库", en: "Save to material library" },
+  lumina_box_material_saved: { zh: "已保存到耗材库", en: "Saved to material library" },
+  lumina_box_material_view_library: { zh: "查看耗材库", en: "View material library" },
+  lumina_box_material_use_conversion: { zh: "用于图像转换", en: "Use for image conversion" },
+  lumina_box_material_remeasure: { zh: "重新采集", en: "Measure again" },
+  lumina_box_material_updated: { zh: "读数已更新，请重新生成耗材档案。", en: "Measurements changed. Create the material profile again." },
+  lumina_box_material_retry: { zh: "重试", en: "Retry" },
+  lumina_box_material_load_failed: { zh: "读取失败，请重试。", en: "Could not load the data. Please retry." },
+  lumina_box_material_fit_failed: { zh: "耗材档案生成失败，已采集的数据仍保留，请重试。", en: "Could not create the material profile. Your measurements are saved; please retry." },
+  lumina_box_material_save_failed: { zh: "耗材档案保存失败，请重试。", en: "Could not save the material profile. Please retry." },
+  lumina_box_material_update_confirm: { zh: "耗材库中已有同名档案，是否用这次测量更新？", en: "A material profile with this name already exists. Update it with these measurements?" },
+  lumina_box_material_pending_save: { zh: "读数尚未保存成功，请重试。", en: "The reading has not been saved yet. Please retry." },
+  lumina_box_material_storage_failed: { zh: "无法保存采集进度，请检查本机存储空间后重试。", en: "Cannot save measurement progress. Check available storage and retry." },
+  lumina_box_bg_import: { zh: "导入采集记录", en: "Import measurements" },
+  lumina_box_bg_pending_title: { zh: "有读数尚未保存", en: "Some readings are not saved" },
+  lumina_box_bg_pending_description: { zh: "请重试保存，或放弃这些读数后再换样片。已保存的读数会保留。", en: "Retry saving, or discard these readings before changing samples. Saved readings are kept." },
+  lumina_box_bg_discard: { zh: "放弃待读数…", en: "Discard pending readings…" },
+  lumina_box_bg_discard_confirm: { zh: "放弃尚未保存的读数？已保存的记录会保留。", en: "Discard the unsaved readings? Saved measurements will be kept." },
+  lumina_box_bg_discard_confirm_button: { zh: "确认放弃待读数", en: "Confirm discard" },
+  lumina_box_bg_cancel: { zh: "取消", en: "Cancel" },
+  lumina_box_bg_fit_failed: { zh: "色卡生成失败。已采集的读数仍然保留，请重试。", en: "Could not generate the chart. Your measurements are kept; please retry." },
+  lumina_box_bg_finish_pending: { zh: "请先保存或放弃待保存的读数，再换样片。", en: "Save or discard pending readings before changing samples." },
+  lumina_box_bg_target_not_armed: { zh: "请先选择样片，再重新连接 BOX。", en: "Select a sample, then reconnect the BOX." },
+  lumina_box_bg_reflection_required: { zh: "请在 BOX 上选择反射（Reflect）或自动（Auto）测量。", en: "Choose Reflect or Auto measurement on the BOX." },
+  lumina_box_bg_thickness_mismatch: { zh: "设备厚度不在七档计划中，请使用 0.08、0.16、0.24、0.32、0.64、1.28 或 2.00 mm。", en: "Device thickness does not match this schedule. Use 0.08, 0.16, 0.24, 0.32, 0.64, 1.28 or 2.00 mm." },
+  lumina_box_bg_manual_invalid: { zh: "请填写有效的非负 XYZ 百分数并选择厚度。", en: "Enter valid nonnegative XYZ percentages and choose a thickness." },
+  lumina_box_bg_load_failed: { zh: "无法读取采集记录，请刷新重试。", en: "Could not load measurements. Refresh to retry." },
+  lumina_box_bg_save_failed: { zh: "读数尚未保存，已保留待保存内容，请重试。", en: "The reading was not saved. It is kept for retrying." },
+  lumina_box_bg_create_failed: { zh: "无法新建采集记录，请检查名称后重试。", en: "Could not create the collection. Check its name and retry." },
+  lumina_box_bg_import_too_large: { zh: "导入文件超过 10 MiB，请选择完整采集记录的备份文件。", en: "The file exceeds 10 MiB. Choose a backup of the complete collection." },
+  lumina_box_bg_import_invalid: { zh: "请选择本页导出的采集记录 JSON 文件。", en: "Choose measurement JSON exported from this page." },
+  lumina_box_bg_import_failed: { zh: "导入失败，请确认选择的是本页导出的采集记录文件。", en: "Import failed. Check that the file contains measurements exported from this page." },
+  lumina_box_bg_export_failed: { zh: "导出失败，请重试。", en: "Export failed. Please retry." },
+  lumina_box_bg_select_failed: { zh: "未能选用这条读数，请重试。", en: "Could not select this reading. Please retry." },
+  lumina_box_bg_delete_failed: { zh: "未能删除这条记录，请重试。", en: "Could not delete this reading. Please retry." },
+  lumina_box_bg_manual_unsaved: { zh: "手工读数尚未保存。请先保存或清空输入，再换样片或生成色卡。", en: "Manual readings are not saved. Save or clear them before changing samples or generating the chart." },
+  lumina_box_bg_error_missing_references: { zh: "请先采集 3.00 mm 纯白和纯黑参考片。", en: "Measure the 3.00 mm solid white and black references first." },
+  lumina_box_bg_error_backing_calibration_mismatch: { zh: "这两份背板资料的测量基准不同。请在“采集背板信息”中，用其中一种作底材重测另一种。", en: "These backings were measured against different calibrations. In Backing measurements, remeasure one using the other as its base." },
+  lumina_box_bg_error_missing_samples: { zh: "还有样片未测量。补齐待测格后再生成色卡。", en: "Some samples are not measured. Complete missing cells before generating the chart." },
+  lumina_box_bg_error_invalid_references: { zh: "白、黑参考读数不符合计算要求。请确认参考片、测量面和所选读数。", en: "The white and black references cannot be used for this calculation. Check reference samples, measured face and selected readings." },
+  lumina_box_bg_error_calculation_interrupted: { zh: "计算已中断，读数仍保留。请重新生成色卡。", en: "Calculation was interrupted. Your measurements are kept; generate the chart again." },
+  lumina_box_bg_error_calculation_timeout: { zh: "计算超时，读数仍保留。请重试生成色卡。", en: "Calculation timed out. Your measurements are kept; please retry." },
+  lumina_box_bg_error_calculation_busy: { zh: "已有色卡正在生成，请等待当前计算完成。", en: "A chart is already being generated. Wait for the current calculation to finish." },
+  lumina_box_bg_error_record_missing: { zh: "这条记录已不可用，请刷新后重新选择。", en: "This record is no longer available. Refresh and select another record." },
+  lumina_box_bg_error_record_conflict: { zh: "这条读数与已有记录冲突，请刷新记录后重试。", en: "This reading conflicts with an existing record. Refresh the collection, then retry." },
+  lumina_box_bg_error_invalid_input: { zh: "读数或文件内容不符合要求，请检查后重试。", en: "Readings or file contents are invalid. Check them and retry." },
+  lumina_box_bg_error_local_only: { zh: "采集记录只能在本机使用。请打开本机的 Lumina Studio 后重试。", en: "Measurements can only be used locally. Open Lumina Studio on this computer and retry." },
   // ==================== Beginner Tutorial ====================
   tutorial_welcome_title: {
     zh: "欢迎使用 Lumina Studio",

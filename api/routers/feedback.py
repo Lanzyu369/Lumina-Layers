@@ -17,10 +17,11 @@ from typing import Any, AsyncIterator, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from starlette.datastructures import FormData, UploadFile
 from starlette.formparsers import MultiPartException
 
+from api.feedback_archive_family import is_material_archive_source
 from api.dependencies import get_file_registry, get_session_store
 from api.feedback_assembler import (
     collect_direct_original_upload,
@@ -34,6 +35,11 @@ from api.feedback_sources import collect_backend_diagnostics, collect_source_upl
 from api.feedback_files import FeedbackMultipartParser
 from api.feedback_time import format_received_cst, now_beijing
 from api.local_origin_guard import require_local_app_origin
+from api.schemas.dynamic_material import (
+    DynamicBenefitScope,
+    DynamicMaterialRecipeResponse,
+    MaterialLayerBenefitPointResponse,
+)
 from api.structured_logging import get_logger
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
@@ -41,6 +47,8 @@ log = get_logger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+_MATERIAL_DYNAMIC_MAX_TOTAL_BYTES = 1_048_576
 
 
 class BugReportSessionIds(BaseModel):
@@ -115,6 +123,93 @@ class BugReportWorkshopContext(BaseModel):
     error_code: str | None = Field(default=None)
 
 
+class BugReportMaterialDynamic(BaseModel):
+    """Bound dynamic-material solver evidence captured for reproduction.
+
+    The wire shape intentionally mirrors ``ConverterRecipeMaterialDynamic``:
+    it records the selected exact recipes, benefit curve, coverage scope, and
+    effective pixel count as historical evidence only.  It does not hydrate or
+    alter a persisted converter recipe.
+
+    Bug 报告中的动态耗材求解证据，字段形状与
+    ``ConverterRecipeMaterialDynamic`` 保持一致：仅保存已选精确配方、收益
+    曲线、覆盖范围和有效像素数，作为历史复现证据；不恢复或修改持久化配方。
+    """
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    recipes: list[DynamicMaterialRecipeResponse] = Field(
+        default_factory=list,
+        max_length=256,
+    )
+    benefit_curve: list[MaterialLayerBenefitPointResponse] = Field(
+        default_factory=list,
+    )
+    scope: DynamicBenefitScope | None = None
+    pixel_count: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_oversized_raw_payload(cls, value: Any) -> Any:
+        """Reject a >1 MiB dynamic payload before nested-model work.
+
+        先拒绝超过 1 MiB 的动态结果，避免对超大嵌套数据做解析或截断。
+        """
+
+        try:
+            encoded = json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            # Let the typed nested models produce the precise shape or
+            # non-finite-number validation error below.
+            return value
+        if len(encoded) > _MATERIAL_DYNAMIC_MAX_TOTAL_BYTES:
+            raise ValueError("material_dynamic exceeds the 1 MiB JSON limit")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_dynamic_evidence(self) -> "BugReportMaterialDynamic":
+        """Validate shared caps, coverage metadata, and post-coercion size.
+
+        校验共享层数上限、覆盖元数据及类型转换后的总大小。
+        """
+
+        if (self.scope is None) != (self.pixel_count is None):
+            raise ValueError("scope and pixel_count must be supplied together")
+        if not self.recipes and not self.benefit_curve:
+            return self
+        if not self.recipes or not self.benefit_curve:
+            raise ValueError("recipes and benefit_curve must be supplied together")
+
+        expected_caps = [
+            option.max_effective_layer_count
+            for option in self.recipes[0].layer_cap_options
+        ]
+        if any(
+            [option.max_effective_layer_count for option in recipe.layer_cap_options]
+            != expected_caps
+            for recipe in self.recipes
+        ):
+            raise ValueError("all dynamic recipes must expose the same layer caps")
+        curve_caps = [point.max_effective_layer_count for point in self.benefit_curve]
+        if curve_caps != expected_caps:
+            raise ValueError("benefit curve caps must match recipe layer caps")
+
+        encoded = json.dumps(
+            self.model_dump(mode="json"),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        if len(encoded) > _MATERIAL_DYNAMIC_MAX_TOTAL_BYTES:
+            raise ValueError("material_dynamic exceeds the 1 MiB JSON limit")
+        return self
+
+
 class BugReportContext(BaseModel):
     """Client runtime context attached to a bug report.
 
@@ -133,19 +228,20 @@ class BugReportContext(BaseModel):
     theme: Literal["light", "dark"]
     active_tab: str = Field()
     active_session_ids: BugReportSessionIds
-    printer_id: str | None = Field(default=None)
-    slicer: str | None = Field(default=None)
+    printer_id: str | None = Field(default=None, max_length=128)
+    slicer: str | None = Field(default=None, max_length=128)
     custom_3mf_template_id: str | None = Field(default=None)
-    nozzle_size: str | None = Field(default=None)
-    device_profile_id: str | None = Field(default=None)
-    build_plate_id: str | None = Field(default=None)
-    color_mode: str | None = Field(default=None)
-    lut_name: str | None = Field(default=None)
-    lut_names: list[str] = Field(default_factory=list)
-    source_version: Literal["legacy", "native", "material"] | None = None
-    selected_native_brand_key: str | None = Field(default=None)
-    selected_native_db_names: list[str] = Field(default_factory=list)
-    selected_material_dir_names: list[str] = Field(default_factory=list)
+    nozzle_size: str | None = Field(default=None, max_length=16)
+    device_profile_id: str | None = Field(default=None, max_length=256)
+    build_plate_id: str | None = Field(default=None, max_length=128)
+    color_mode: str | None = Field(default=None, max_length=64)
+    lut_name: str | None = Field(default=None, max_length=256)
+    lut_names: list[str] = Field(default_factory=list, max_length=32)
+    source_version: Literal["legacy", "native", "material", "lumina_box"] | None = None
+    optical_model_id: str | None = Field(default=None, max_length=128)
+    selected_native_brand_key: str | None = Field(default=None, max_length=128)
+    selected_native_db_names: list[str] = Field(default_factory=list, max_length=128)
+    selected_material_dir_names: list[str] = Field(default_factory=list, max_length=128)
     material_layer_count: int | None = Field(default=None, ge=0, le=1000)
     material_dynamic_layer_count_enabled: bool | None = None
     material_min_layer_count: int | None = Field(default=None, ge=5, le=10)
@@ -155,6 +251,7 @@ class BugReportContext(BaseModel):
         ge=0.0,
         le=5.0,
     )
+    material_dynamic: BugReportMaterialDynamic | None = None
     material_layer_height_mm: float | None = Field(default=None, ge=0.0, le=10.0)
     material_backing_material_dir_name: str | None = Field(default=None)
     preserve_upload_filename_for_3mf: bool | None = None
@@ -173,6 +270,23 @@ class BugReportContext(BaseModel):
     workshop: BugReportWorkshopContext | None = None
 
     advanced_params: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _clear_inapplicable_material_dynamic(self) -> "BugReportContext":
+        """Keep solver evidence only for an enabled material-archive report.
+
+        仅在耗材档案且动态层数已启用时保留求解证据；其它工作流明确清空。
+        """
+
+        if (
+            self.material_dynamic is not None
+            and (
+                not is_material_archive_source(self.source_version)
+                or self.material_dynamic_layer_count_enabled is not True
+            )
+        ):
+            self.material_dynamic = None
+        return self
 
     @field_validator("lut_names", mode="before")
     @classmethod
@@ -239,6 +353,7 @@ _DYNAMIC_MATERIAL_CONTEXT_FIELDS = {
     "material_min_layer_count",
     "material_max_layer_count",
     "material_delta_e00_tolerance",
+    "material_dynamic",
 }
 
 
@@ -767,6 +882,12 @@ async def submit_bug_report(
     request_dump = _dump_bug_report_request(request)
     attachment_context_dump = deepcopy(request_dump.get("context") or {})
     context_dump = deepcopy(attachment_context_dump)
+    # A material-archive source carries no LUT; drop the stale legacy selection so
+    # the persisted context matches the emitted ``lut: not_applicable`` attachment.
+    if is_material_archive_source(context_dump.get("source_version")):
+        context_dump["color_mode"] = None
+        context_dump["lut_name"] = None
+        context_dump["lut_names"] = []
     if context_dump.get("custom_3mf_template_id"):
         context_dump["custom_3mf_template_snapshot"] = _capture_custom_3mf_template(
             context_dump["custom_3mf_template_id"]

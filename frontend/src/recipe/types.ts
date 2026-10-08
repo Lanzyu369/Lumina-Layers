@@ -212,8 +212,22 @@ export interface ConverterRecipeFridgeMagnet {
   fridge_magnets: FridgeMagnetItem[];
 }
 
+/**
+ * Converter source discriminator serialized with a recipe. `material` and
+ * `lumina_box` are separate optical-profile families even though both use
+ * the material-archive conversion path.
+ */
+export type ConverterRecipeSourceVersion =
+  | "legacy"
+  | "native"
+  | "material"
+  | "lumina_box";
+
 export interface ConverterRecipeSource {
-  source_version: "legacy" | "native" | "material" | string;
+  /** Keep unknown values readable for forward-compatible recipe imports. */
+  source_version: ConverterRecipeSourceVersion | string;
+  /** Saved Box model identity; omitted by older recipes. */
+  optical_model_id?: string;
   selected_legacy_lut_names?: string[];
   selected_native_brand_key: string;
   selected_native_db_names: string[];

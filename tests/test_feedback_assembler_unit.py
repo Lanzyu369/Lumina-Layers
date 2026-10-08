@@ -30,6 +30,12 @@ from api.feedback_assembler import (
     run_startup_cleanup,
 )
 from api.feedback_time import BEIJING_TZ, now_beijing
+from core.lumina_box_archive import save_lumina_box_material_archive
+from core.km_xyz import (
+    KM_XYZ_FIT_OBJECTIVE_ID,
+    KM_XYZ_MEASUREMENT_PROTOCOL_ID,
+    KM_XYZ_MEASUREMENT_REFLECTION_BOUNDARY_ID,
+)
 from utils.lut_manager import LUTManager
 
 
@@ -63,6 +69,105 @@ class _MockFileRegistry:
         if not path or not Path(path).is_file():
             return None
         return path, filename
+
+
+def _paired_archive_payloads() -> tuple[dict[str, object], dict[str, object]]:
+    samples = [
+        {
+            "thickness_mm": thickness_mm,
+            "transmittance_percent_xyz": transmittance,
+            "reflectance_percent_xyz": reflectance,
+        }
+        for thickness_mm, transmittance, reflectance in (
+            (0.08, [83.0, 79.0, 75.0], [22.0, 28.0, 34.0]),
+            (0.16, [67.0, 61.0, 56.0], [25.0, 31.0, 37.0]),
+            (0.32, [42.0, 35.0, 30.0], [30.0, 36.0, 42.0]),
+        )
+    ]
+    predictions = [
+        {
+            "thickness_mm": sample["thickness_mm"],
+            "transmittance": {
+                "measured_percent_xyz": sample["transmittance_percent_xyz"],
+                "predicted_percent_xyz": sample["transmittance_percent_xyz"],
+                "residual_percentage_points_xyz": [0.0, 0.0, 0.0],
+            },
+            "reflectance": {
+                "measured_percent_xyz": sample["reflectance_percent_xyz"],
+                "predicted_percent_xyz": sample["reflectance_percent_xyz"],
+                "residual_percentage_points_xyz": [0.0, 0.0, 0.0],
+            },
+        }
+        for sample in samples
+    ]
+    return (
+        {
+            "protocol_id": KM_XYZ_MEASUREMENT_PROTOCOL_ID,
+            "value_scale": "percent_0_100",
+            "measurement_backing_percent_xyz": [19.8, 19.7, 24.7],
+            "samples": samples,
+        },
+        {
+            "parameters": {"K": [0.5, 0.6, 0.7], "S": [1.0, 1.1, 1.2], "unit": "mm^-1"},
+            "sample_predictions": predictions,
+            "residual_summary": {
+                "transmittance_channel_rmse_percentage_points_xyz": [0.0, 0.0, 0.0],
+                "reflectance_channel_rmse_percentage_points_xyz": [0.0, 0.0, 0.0],
+                "channel_rmse_percentage_points_xyz": [0.0, 0.0, 0.0],
+                "transmittance_rmse_percentage_points": 0.0,
+                "reflectance_rmse_percentage_points": 0.0,
+                "overall_rmse_percentage_points": 0.0,
+                "max_abs_residual_percentage_points": 0.0,
+                "max_abs_location": {
+                    "thickness_mm": 0.08,
+                    "modality": "transmittance",
+                    "channel": "X",
+                    "signed_residual_percentage_points": 0.0,
+                },
+            },
+            "diagnostics": {
+                "success": True,
+                "message": "fixture converged",
+                "nfev": 1,
+                "start_count": 24,
+                "robust_objective": 0.0,
+                "jacobian_condition": 1.0,
+                "measurement_thickness_offset_mm": 0.0,
+                "objective_id": KM_XYZ_FIT_OBJECTIVE_ID,
+                "objective_config": {"pair_weighting": "equal"},
+                "channels": [
+                    {
+                        "channel": channel,
+                        "transmittance_rmse": 0.0,
+                        "reflectance_rmse": 0.0,
+                        "warnings": [],
+                    }
+                    for channel in ("X", "Y", "Z")
+                ],
+                "warnings": [],
+            },
+            "measurement_backing_base_percent_xyz": [19.8, 19.7, 24.7],
+            "measurement_backing_scale": 1.0,
+            "measurement_thickness_offset_mm": 0.0,
+            "measurement_backing_effective_percent_xyz": [19.8, 19.7, 24.7],
+            "measurement_reflection_boundary_id": (
+                KM_XYZ_MEASUREMENT_REFLECTION_BOUNDARY_ID
+            ),
+            "fit_quality": {
+                "savable": True,
+                "reasons": [],
+                "thresholds": {
+                    "modality_rmse_percentage_points": 10.0,
+                    "overall_rmse_percentage_points": 10.0,
+                    "max_abs_residual_percentage_points": 20.0,
+                },
+            },
+            "estimated_effective_d65_10_xyz_relative": [0.3, 0.36, 0.42],
+            "estimated_reflectance_thickness_mm": 0.32,
+            "estimated_rgb": [64, 108, 145],
+            "warnings": [],
+        },
+    )
 
 
 class _MockSessionStore:
@@ -642,6 +747,96 @@ def test_finalize_ticket_async_leaves_unreferenced_attachments_done(
     assert finalized["assembly_status"] == "done"
 
 
+def test_finalize_ticket_async_packages_lumina_box_archives_without_lut(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lumina Box uses the material-archive repro path with a strict bundle."""
+    _disable_feedback_upload(monkeypatch)
+    repo_root = tmp_path / "repo"
+    measurement_payload, fit_payload = _paired_archive_payloads()
+    saved = save_lumina_box_material_archive(
+        material_name="white",
+        brand="Lumina",
+        material_type="PLA",
+        notes=None,
+        measurement_payload=measurement_payload,
+        fit_payload=fit_payload,
+        materials_dir=str(repo_root / "materials"),
+    )
+    archive_dir = Path(saved.archive_path).parent
+    (archive_dir / "_candidate_cache").mkdir()
+    (archive_dir / "_candidate_cache" / "candidate.json").write_text(
+        "candidate", encoding="utf-8"
+    )
+    (archive_dir / "runtime-cache.json").write_text("runtime", encoding="utf-8")
+    (archive_dir / "secret.txt").write_text("secret", encoding="utf-8")
+    monkeypatch.setattr("api.feedback_assembler.REPO_ROOT", repo_root)
+
+    ticket_dir = tmp_path / "LUM-20260820-001"
+    ticket_dir.mkdir()
+    ticket_json = ticket_dir / "ticket.json"
+    payload = {
+        "schema_version": 3,
+        "ticket_id": "LUM-20260820-001",
+        "received_at_cst": now_beijing().isoformat(),
+        "assembly_status": "in_progress",
+        "context": {
+            "active_tab": "converter",
+            "source_version": "lumina_box",
+            "color_mode": None,
+            "lut_name": "stale-legacy-lut",
+            "selected_material_dir_names": ["Lumina/white"],
+            "material_layer_count": 9,
+            "material_dynamic_layer_count_enabled": True,
+            "material_min_layer_count": 5,
+            "material_max_layer_count": 9,
+            "material_delta_e00_tolerance": 0.35,
+            "material_layer_height_mm": 0.04,
+            "material_backing_material_dir_name": "Lumina/white",
+            "advanced_params": {
+                "generation": {"auto_dynamic_range": True},
+            },
+            "action_history": [
+                {
+                    "timestamp": 1_787_000_000_000,
+                    "action_type": "material_param_commit",
+                    "snapshot": {"source_version": "lumina_box"},
+                },
+            ],
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+        },
+        "attachments": {
+            "original_image": {"status": "not_applicable", "filename": None},
+            "final_artifact": {"status": "not_applicable", "filename": None},
+            "lut": {"status": "not_applicable", "filename": None},
+        },
+    }
+    ticket_json.write_text(json.dumps(payload), encoding="utf-8")
+
+    asyncio.run(finalize_ticket_async(ticket_dir, _MockFileRegistry({})))
+
+    finalized = json.loads(ticket_json.read_text(encoding="utf-8"))
+    assert finalized["assembly_status"] == "done"
+    assert finalized["attachments"]["lut"]["status"] == "not_applicable"
+    assert finalized["attachments"]["materials_bundle"]["status"] == "attached"
+    assert finalized["attachments"]["materials_bundle"]["entry_count"] == 3
+    with zipfile.ZipFile(ticket_dir / "materials.zip") as archive:
+        assert set(archive.namelist()) == {
+            "Lumina/white/material.json",
+            "Lumina/white/lumina_box_measurements.json",
+            "Lumina/white/km_xyz_parameters.json",
+        }
+
+    index = (ticket_dir / "index.md").read_text(encoding="utf-8")
+    summary = (ticket_dir / "summary.txt").read_text(encoding="utf-8")
+    assert "- lut_name: not_applicable" in index
+    assert "耗材档案动态层数" in index
+    assert "LUT not_applicable" in summary
+    assert "选中耗材：Lumina/white" in summary
+
+
 def test_finalize_ticket_async_accepts_preset_lut_reference(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1192,8 +1387,10 @@ def test_collect_original_image_stale_registry_falls_back_to_session_path(
     assert (ticket_dir / "original.png").read_bytes() == b"SESSION"
 
 
-def test_collect_sync_attachments_lut_is_noop_for_material_mode(
+@pytest.mark.parametrize("source_version", ["material", "lumina_box"])
+def test_collect_sync_attachments_lut_is_noop_for_material_archive_modes(
     tmp_path: Path,
+    source_version: str,
 ) -> None:
     registry = _MockFileRegistry({})
     ticket_dir = tmp_path / "LUM-20260511-001"
@@ -1203,7 +1400,7 @@ def test_collect_sync_attachments_lut_is_noop_for_material_mode(
         "context": {
             "active_original_image_ref": None,
             "active_final_artifact_ref": None,
-            "source_version": "material",
+            "source_version": source_version,
             "lut_name": "AnythingCustom",
         },
     }

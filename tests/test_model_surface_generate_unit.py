@@ -367,6 +367,49 @@ def test_generate_maps_model_surface_known_error_to_422(
     }
 
 
+def test_generate_maps_model_surface_archive_profile_error_to_422(
+    tmp_path: Path,
+    generate_state,
+) -> None:
+    """Archive optical failures from the surface worker retain their 422 contract."""
+
+    from core.pipeline._input_validation_common import MaterialArchiveProfileError
+
+    store, _registry, pool = generate_state
+    session_id = _seed_model_surface_generate_session(tmp_path, store)
+    session_data = store.get(session_id)
+    assert session_data is not None
+    preview_cache = dict(session_data["preview_cache"])
+    preview_cache.update(
+        {
+            "material_profile_kind": "lumina_box",
+            "matched_rgb": np.zeros((10, 20, 3), dtype=np.uint8),
+            "mask_solid": np.ones((10, 20), dtype=bool),
+            "material_matrix": np.zeros((10, 20, 5), dtype=np.int32),
+        }
+    )
+    store.put(session_id, "preview_cache", preview_cache)
+    store.put(session_id, "material_source", "material_archive")
+    store.put(session_id, "material_profile_kind", "lumina_box")
+    store.put(session_id, "selected_materials", ["invalid-lumina-archive"])
+    store.put(session_id, "material_layer_count", 5)
+    store.put(session_id, "material_layer_height_mm", 0.08)
+    store.put(session_id, "material_backing_material_index", 0)
+    pool.submit_timed = AsyncMock(
+        side_effect=MaterialArchiveProfileError("invalid Lumina archive contract")
+    )
+
+    with patch("api.routers.converter.generate._require_material_archive_profile_cache_consistency",
+               return_value="lumina_box"):
+        response = _post_model_surface_generate(session_id)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "material_profile_kind_mismatch",
+        "message": "invalid Lumina archive contract",
+    }
+
+
 def test_generate_maps_model_surface_unknown_error_to_generic_500(
     tmp_path: Path,
     generate_state,
@@ -497,6 +540,10 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
 
     with (
         patch(
+            "core.pipeline._input_validation_common.load_and_validate_material_archive_profile",
+            return_value=("stage_a", []),
+        ) as validate_profile,
+        patch(
             "core.model_surface.pipeline.build_surface_overlay_scene",
             side_effect=fake_build_surface_overlay_scene,
         ),
@@ -561,6 +608,7 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
         )
 
     assert Path(result["threemf_path"]).exists()
+    validate_profile.assert_called_once()
     assert result["glb_path"] is None
     assert result["status_msg"] == "Surface overlay model generated"
     assert captured["scene"] is scene
@@ -575,6 +623,51 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
     assert captured["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.4"
     Path(result["threemf_path"]).unlink(missing_ok=True)
     assert not list(tmp_path.glob("*.glb"))
+
+
+def test_worker_model_surface_preflights_archive_before_geometry(tmp_path: Path) -> None:
+    """Bad archive contracts fail before footprint parsing or surface recomputation."""
+
+    from api.workers.converter_workers import worker_generate_model_surface_overlay
+    from core.pipeline._input_validation_common import MaterialArchiveProfileError
+
+    def _reject_profile(
+        _selected_materials: list[str],
+        *,
+        profile_kind: str | None = None,
+    ) -> tuple[str, list[object]]:
+        assert profile_kind == "lumina_box"
+        raise MaterialArchiveProfileError("invalid Lumina archive contract")
+
+    with (
+        patch(
+            "core.pipeline._input_validation_common.load_and_validate_material_archive_profile",
+            side_effect=_reject_profile,
+        ),
+        patch(
+            "core.model_surface.pipeline.build_surface_overlay_scene",
+            side_effect=AssertionError("surface geometry must not run"),
+        ) as build_surface,
+    ):
+        with pytest.raises(
+            MaterialArchiveProfileError,
+            match="invalid Lumina archive contract",
+        ):
+            worker_generate_model_surface_overlay(
+                str(tmp_path / "surface-art.png"),
+                str(tmp_path / "lut.npy"),
+                {
+                    "surface_footprint": "must not be parsed before preflight",
+                    "converter_params": {
+                        "material_source": "material_archive",
+                        "material_profile_kind": "lumina_box",
+                        "selected_materials": ["invalid-lumina-archive"],
+                        "backing_infill_density_percent": 100,
+                    },
+                },
+            )
+
+    build_surface.assert_not_called()
 
 
 def test_worker_does_not_export_print_scene_as_surface_preview_glb(tmp_path):

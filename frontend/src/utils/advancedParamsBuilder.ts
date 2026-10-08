@@ -1,4 +1,7 @@
-import type { ConverterState } from "../stores/converter/store";
+import {
+  isMaterialArchiveSourceVersion,
+  type ConverterState,
+} from "../stores/converter/store";
 import type {
   AdvancedParams,
   AdvancedParamsColorReplacement,
@@ -113,7 +116,9 @@ function buildGeneration(
   state: ConverterState,
   options: BuildAdvancedParamsOptions,
 ): AdvancedParamsGeneration {
-  const isMaterialSource = state.source_version === "material";
+  const isMaterialArchiveSource = isMaterialArchiveSourceVersion(
+    state.source_version,
+  );
   const wipeTowerWarningCodes = [...state.generateWarnings];
   return {
     structure_mode: state.structure_mode,
@@ -139,17 +144,17 @@ function buildGeneration(
     auto_dynamic_range: state.auto_dynamic_range,
     separate_backing: state.separate_backing,
     material_dynamic_layer_count_enabled:
-      isMaterialSource && state.materialDynamicLayerCountEnabled,
-    material_min_layer_count: isMaterialSource
+      isMaterialArchiveSource && state.materialDynamicLayerCountEnabled,
+    material_min_layer_count: isMaterialArchiveSource
       ? state.materialMinLayerCount
       : null,
-    material_max_layer_count: isMaterialSource
+    material_max_layer_count: isMaterialArchiveSource
       ? state.materialMaxLayerCount
       : null,
-    material_backing_material_dir_name: isMaterialSource
+    material_backing_material_dir_name: isMaterialArchiveSource
       ? state.materialBackingMaterialDirName
       : null,
-    material_delta_e00_tolerance: isMaterialSource
+    material_delta_e00_tolerance: isMaterialArchiveSource
       ? typeof options.materialDeltaE00Tolerance === "number"
         ? options.materialDeltaE00Tolerance
         : MATERIAL_DELTA_E00_TOLERANCE_DEFAULT

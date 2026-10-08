@@ -346,6 +346,7 @@ class ConvertPreviewRequest(LutSourceSelection, SvgHoleCompensationOptions):
     model_only: bool = Field(False, description="仅使用模型匹配，跳过 DB 匹配")
     model_threshold: float | None = Field(None, description="模型回退阈值；空值或负数表示使用运行时默认值")
     model_margin: float | None = Field(None, description="模型回退边距；空值或负数表示使用运行时默认值")
+    spacer_thick: float = Field(1.2, ge=0.2, le=MAX_BACKING_THICKNESS_MM, description="配色使用的实体底板厚度 (mm)")
     quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节（仅高保真模式生效）")
     enable_cleanup: bool = Field(True, description="孤立像素清理")
     enable_outline: bool = Field(False, description="启用描边")
@@ -362,6 +363,13 @@ class ConvertPreviewRequest(LutSourceSelection, SvgHoleCompensationOptions):
         None,
         ge=0,
         description="耗材档案模式底板耗材索引（基于 selected_materials 的 0-based 索引）",
+    )
+    material_profile_kind: Literal["stage_a", "lumina_box"] = Field(
+        "stage_a",
+        description=(
+            "耗材档案光学类型；仅 material_archive 来源可用。"
+            "省略时沿用旧版 stage_a。"
+        ),
     )
     material_dynamic_layer_count_enabled: bool = Field(
         False,
@@ -559,6 +567,13 @@ class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
         None,
         ge=0,
         description="耗材档案模式底板耗材索引（基于 selected_materials 的 0-based 索引）",
+    )
+    material_profile_kind: Literal["stage_a", "lumina_box"] = Field(
+        "stage_a",
+        description=(
+            "耗材档案光学类型；仅 material_archive 来源可用。"
+            "省略时沿用旧版 stage_a。"
+        ),
     )
     material_dynamic_layer_count_enabled: bool = Field(
         False,

@@ -62,6 +62,12 @@ from core.material_color_solver import (
     linear_to_srgb_uint8,
     rgb_to_lab,
 )
+from core.material_optical_runtime import (
+    BEER_LAMBERT_MODEL_ID,
+    material_optical_model_id,
+)
+from core.lumina_box_spectral import LUMINA_BOX_SPECTRAL_MODEL_ID
+from core.backed_gradient_smooth import SPECTRAL_SMOOTH_MODEL_ID
 from core.task_parallelism import task_parallelism_worker_scope
 
 _log = get_logger(__name__)
@@ -191,15 +197,69 @@ def describe_material(mat: MaterialParams) -> dict[str, Any]:
         dict[str, Any]: JSON-compatible effective descriptor.
             可 JSON 序列化的有效参数描述。
     """
-    return {
-        "directory_name": str(mat.directory_name),
-        "name": str(mat.name),
-        "E": [round(float(v), _PARAMETER_DECIMALS) for v in mat.E.tolist()],
-        "k": [round(float(v), _PARAMETER_DECIMALS) for v in mat.k.tolist()],
-        "C0_white": [
-            round(float(v), _PARAMETER_DECIMALS) for v in mat.C0_white.tolist()
-        ],
-    }
+    model_id = material_optical_model_id(mat)
+    if model_id == BEER_LAMBERT_MODEL_ID:
+        payload = {
+            "E": [round(float(v), _PARAMETER_DECIMALS) for v in mat.E.tolist()],
+            "k": [round(float(v), _PARAMETER_DECIMALS) for v in mat.k.tolist()],
+            "C0_white": [
+                round(float(v), _PARAMETER_DECIMALS)
+                for v in mat.C0_white.tolist()
+            ],
+        }
+    elif model_id == SPECTRAL_SMOOTH_MODEL_ID:
+        if mat.backed_gradient_component is None or mat.backed_gradient_reference is None:
+            raise ValueError("Box black/white gradient parameters are incomplete")
+        payload = {
+            "model_id": model_id,
+            "component": mat.backed_gradient_component.to_dict(),
+            "reference": {key: value for key, value in mat.backed_gradient_reference.to_dict().items() if key != "source"},
+            "backing_component": (
+                mat.backed_gradient_backing_component.to_dict()
+                if mat.backed_gradient_backing_component is not None else None
+            ),
+            "backing_thickness_mm": float(mat.backed_gradient_backing_thickness_mm),
+            "measurement_protocol_id": mat.measurement_protocol_id,
+            "color_bridge_id": mat.color_bridge_id,
+            "archive_revision_id": mat.archive_revision_id,
+            "directory_name": mat.directory_name,
+        }
+    elif model_id == LUMINA_BOX_SPECTRAL_MODEL_ID:
+        if mat.spectral_parameters is None or mat.spectral_reference is None:
+            raise ValueError("Cannot fingerprint incomplete Box spectral parameters")
+        payload = {
+            "model_id": model_id,
+            "parameters": mat.spectral_parameters.to_dict(),
+            "reference_id": mat.spectral_reference.reference_id,
+            "backing_parameters": (
+                mat.spectral_backing_parameters.to_dict()
+                if mat.spectral_backing_parameters is not None else None
+            ),
+            "backing_thickness_mm": float(mat.spectral_backing_thickness_mm),
+            "is_reference_white": bool(mat.is_reference_white),
+            "measurement_protocol_id": str(mat.measurement_protocol_id or ""),
+            "color_bridge_id": str(mat.color_bridge_id or ""),
+            "archive_revision_id": str(mat.archive_revision_id or ""),
+            "directory_name": str(mat.directory_name),
+        }
+    else:
+        payload = {
+            "model_id": model_id,
+            "K": [
+                round(float(v), _PARAMETER_DECIMALS)
+                for v in np.asarray(mat.km_K, dtype=np.float64).tolist()
+            ],
+            "S": [
+                round(float(v), _PARAMETER_DECIMALS)
+                for v in np.asarray(mat.km_S, dtype=np.float64).tolist()
+            ],
+            "coefficient_unit": str(mat.coefficient_unit or ""),
+            "measurement_protocol_id": str(mat.measurement_protocol_id or ""),
+            "color_bridge_id": str(mat.color_bridge_id or ""),
+            "archive_revision_id": str(mat.archive_revision_id or ""),
+            "directory_name": str(mat.directory_name),
+        }
+    return {**payload, "directory_name": str(mat.directory_name), "name": str(mat.name)}
 
 
 def describe_palette(materials: list[MaterialParams]) -> list[dict[str, Any]]:
@@ -228,9 +288,12 @@ def _legacy_material_enumeration_key(mat: MaterialParams) -> str:
     order. It is never a cache identity, filename, or equality check.
     """
     descriptor = describe_material(mat)
-    optical_parameters = {
-        field: descriptor[field] for field in ("E", "k", "C0_white")
-    }
+    if material_optical_model_id(mat) == BEER_LAMBERT_MODEL_ID:
+        optical_parameters = {
+            field: descriptor[field] for field in ("E", "k", "C0_white")
+        }
+    else:
+        optical_parameters = {key: value for key, value in descriptor.items() if key != "name"}
     serialized = json.dumps(optical_parameters, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 

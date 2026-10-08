@@ -1,5 +1,5 @@
 ﻿import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import MaterialLibraryPanel from "../components/MaterialLibraryPanel";
 import {
@@ -11,6 +11,7 @@ import {
 } from "../api/extractor";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
+import { useLuminaBoxMaterialNavigation } from "../stores/luminaBoxMaterialNavigation";
 
 vi.mock("../api/extractor", () => ({
   colorcheckerConfirm: vi.fn(),
@@ -23,6 +24,14 @@ vi.mock("../api/extractor", () => ({
   updateGradientCardMaterial: vi.fn(),
 }));
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe("MaterialLibraryPanel", () => {
   const expandAllMaterialLibraryGroups = () => {
     for (const toggle of screen.getAllByTestId("material-library-brand-group-toggle")) {
@@ -34,6 +43,7 @@ describe("MaterialLibraryPanel", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useLuminaBoxMaterialNavigation.setState({ libraryProfileKind: "stage_a", captureRequest: null, lastCaptureArchive: null });
     useWidgetStore.setState({ activeTab: "material-library" });
     useSingleStageStore.setState({
       materialName: "",
@@ -100,6 +110,26 @@ describe("MaterialLibraryPanel", () => {
     expect(screen.getAllByTestId("material-library-item")).toHaveLength(1);
     expect(screen.getByTestId("material-library-official-badge")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
+  });
+
+  it("manages current Box archives and resumes their original material collection", async () => {
+    const item = { material_name: "Box Red", directory_name: "box-red", brand: "PETG", estimated_rgb: [180, 20, 30],
+      material_file_url: "/api/files/box-red", profile_kind: "lumina_box" as const, optical_model_id: "backed_gradient_spectral_four_flux_smooth/v3",
+      capture_dataset_id: "collection-1", material_symbol: "R" as const, reference_id: "reference-1" };
+    useLuminaBoxMaterialNavigation.setState({ libraryProfileKind: "lumina_box" });
+    vi.mocked(listGradientCardMaterials).mockResolvedValue({ status: "ok", message: "Loaded", materials: [item,
+      { ...item, material_name: "Old experiment", directory_name: "old", optical_model_id: "box_reference_consistent_feedback/equal_xyz_v1" }] });
+    render(<MaterialLibraryPanel />);
+    await screen.findByTestId("material-library-brand-group");
+    expandAllMaterialLibraryGroups();
+    await screen.findByText("Box Red");
+    expect(screen.queryByText("Old experiment")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新采集" }));
+    expect(useWidgetStore.getState().activeTab).toBe("lumina-box");
+    expect(useLuminaBoxMaterialNavigation.getState().captureRequest).toEqual({ datasetId: "collection-1", materialSymbol: "R",
+      archive: { name: "Box Red", brand: "PETG", material_type: "", directoryName: "box-red" } });
+    fireEvent.click(screen.getByRole("button", { name: /编辑信息|edit/i }));
+    expect(screen.queryByTestId("material-library-edit-color-picker")).not.toBeInTheDocument();
   });
 
   it("groups saved materials by brand and prefixes names with brand tags", async () => {
@@ -729,6 +759,313 @@ describe("MaterialLibraryPanel", () => {
       expect(exportGradientCardMaterials).toHaveBeenCalledWith(["pla-basic"]);
     });
     expect(screen.getByTestId("material-library-success")).toBeInTheDocument();
+  });
+
+  it("filters Lumina Box materials, clears Stage A selections, and exports one profile family", async () => {
+    const stageAItem = {
+      material_name: "Stage A Red",
+      directory_name: "stage-a-red",
+      created_at: "2026-04-16T10:00:00Z",
+      updated_at: "2026-04-16T11:00:00Z",
+      material_file_url: "/api/files/stage-a-material-json",
+      stage_a_params_url: "/api/files/stage-a-params",
+      estimated_rgb: [180, 50, 50] as [number, number, number],
+      layer_height_mm: 0.04,
+      mean_delta_e: 1.23,
+      verification_count: 3,
+      profile_kind: "stage_a" as const,
+    };
+    const luminaBoxItem = {
+      material_name: "Lumina Blue",
+      directory_name: "lumina-blue",
+      created_at: "2026-04-16T10:00:00Z",
+      updated_at: "2026-04-16T11:00:00Z",
+      material_file_url: "/api/files/lumina-material-json",
+      stage_a_params_url: null,
+      estimated_rgb: [50, 90, 190] as [number, number, number],
+      layer_height_mm: 0.04,
+      mean_delta_e: null,
+      verification_count: 0,
+      profile_kind: "lumina_box" as const,
+      optical_model_id: "backed_gradient_spectral_four_flux_smooth/v3",
+    };
+    vi.mocked(listGradientCardMaterials).mockImplementation(async ({ profileKind } = {}) => ({
+      status: "ok",
+      message: "Loaded saved materials",
+      // Deliberately include a stale Stage A row in the Lumina response: the
+      // panel must never expose a client-side mixed selection.
+      materials: profileKind === "lumina_box"
+        ? [luminaBoxItem, stageAItem]
+        : [stageAItem],
+    }));
+    vi.mocked(exportGradientCardMaterials).mockResolvedValue({
+      status: "ok",
+      message: "Exported Lumina Box materials",
+      download_url: "/api/files/lumina-export",
+      filename: "lumina-box-materials-v3.zip",
+      exported_count: 1,
+      exported_directory_names: ["lumina-blue"],
+    });
+    const anchorClickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+
+    try {
+      render(<MaterialLibraryPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("material-library-brand-group")).toBeInTheDocument();
+        expect(listGradientCardMaterials).toHaveBeenLastCalledWith({ profileKind: "stage_a" });
+      });
+      expandAllMaterialLibraryGroups();
+      await screen.findByText("Stage A Red");
+      fireEvent.click(screen.getByTestId("material-library-select-stage-a-red"));
+      expect(
+        screen.getByTestId("material-library-select-stage-a-red"),
+      ).toBeChecked();
+
+      fireEvent.click(screen.getByTestId("material-library-profile-lumina_box"));
+
+      await waitFor(() => {
+        expect(listGradientCardMaterials).toHaveBeenLastCalledWith({ profileKind: "lumina_box" });
+        expect(screen.queryByText("Stage A Red")).not.toBeInTheDocument();
+      });
+      expandAllMaterialLibraryGroups();
+      await screen.findByText("Lumina Blue");
+      expect(screen.queryByText("Stage A Red")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("material-library-select-lumina-blue"));
+      fireEvent.click(screen.getByRole("button", { name: /导出所选耗材|export selected/i }));
+
+      await waitFor(() => {
+        expect(exportGradientCardMaterials).toHaveBeenCalledWith(["lumina-blue"]);
+      });
+    } finally {
+      anchorClickSpy.mockRestore();
+    }
+  });
+
+  it("refreshes and selects imported Lumina Box archives in the active family", async () => {
+    const luminaBoxItem = {
+      material_name: "Lumina Green",
+      directory_name: "lumina-green",
+      created_at: "2026-04-16T10:00:00Z",
+      updated_at: "2026-04-16T11:00:00Z",
+      material_file_url: "/api/files/lumina-green-material-json",
+      stage_a_params_url: null,
+      estimated_rgb: [50, 180, 90] as [number, number, number],
+      layer_height_mm: 0.04,
+      mean_delta_e: null,
+      verification_count: 0,
+      profile_kind: "lumina_box" as const,
+      optical_model_id: "backed_gradient_spectral_four_flux_smooth/v3",
+    };
+    let imported = false;
+    vi.mocked(listGradientCardMaterials).mockImplementation(async ({ profileKind } = {}) => ({
+      status: "ok",
+      message: imported ? "Loaded 1 saved material" : "Loaded 0 saved materials",
+      materials: profileKind === "lumina_box" && imported ? [luminaBoxItem] : [],
+    }));
+    vi.mocked(importGradientCardMaterials).mockImplementation(async () => {
+      imported = true;
+      return {
+        status: "ok",
+        message: "Imported 1 saved material",
+        imported_count: 1,
+        imported_materials: [
+          {
+            material_name: "Lumina Green",
+            directory_name: "lumina-green",
+            brand: null,
+            verification_count: 0,
+            created_at: "2026-04-16T10:00:00Z",
+            updated_at: "2026-04-16T11:00:00Z",
+          },
+        ],
+      };
+    });
+
+    render(<MaterialLibraryPanel />);
+    fireEvent.click(screen.getByTestId("material-library-profile-lumina_box"));
+
+    await waitFor(() => {
+      expect(listGradientCardMaterials).toHaveBeenLastCalledWith({ profileKind: "lumina_box" });
+    });
+    const importInput = screen.getByTestId("material-library-import-input");
+    const luminaBundle = new File(
+      ["lumina-box-v3"],
+      "lumina-box-materials-v3.zip",
+      { type: "application/zip" },
+    );
+    fireEvent.change(importInput, { target: { files: [luminaBundle] } });
+
+    await waitFor(() => {
+      expect(importGradientCardMaterials).toHaveBeenCalledWith([luminaBundle]);
+      expect(listGradientCardMaterials).toHaveBeenLastCalledWith({ profileKind: "lumina_box" });
+    });
+    await screen.findByTestId("material-library-brand-group");
+    expandAllMaterialLibraryGroups();
+    await screen.findByText("Lumina Green");
+    expect(
+      screen.getByTestId("material-library-select-lumina-green"),
+    ).toBeChecked();
+  });
+
+  it("keeps the Lumina Box list current when a pending Stage A import resolves", async () => {
+    const pendingImport = deferred<
+      Awaited<ReturnType<typeof importGradientCardMaterials>>
+    >();
+    const luminaBoxItem = {
+      material_name: "Lumina Blue",
+      directory_name: "lumina-blue",
+      created_at: "2026-04-16T10:00:00Z",
+      updated_at: "2026-04-16T11:00:00Z",
+      material_file_url: "/api/files/lumina-blue-material-json",
+      stage_a_params_url: null,
+      estimated_rgb: [50, 90, 190] as [number, number, number],
+      layer_height_mm: 0.04,
+      mean_delta_e: null,
+      verification_count: 0,
+      profile_kind: "lumina_box" as const,
+      optical_model_id: "backed_gradient_spectral_four_flux_smooth/v3",
+    };
+    vi.mocked(listGradientCardMaterials).mockImplementation(async ({ profileKind } = {}) => ({
+      status: "ok",
+      message: "Loaded saved materials",
+      materials: profileKind === "lumina_box" ? [luminaBoxItem] : [],
+    }));
+    vi.mocked(importGradientCardMaterials).mockReturnValue(pendingImport.promise);
+
+    render(<MaterialLibraryPanel />);
+    await waitFor(() => {
+      expect(listGradientCardMaterials).toHaveBeenLastCalledWith({ profileKind: "stage_a" });
+    });
+
+    const importInput = screen.getByTestId("material-library-import-input");
+    const stageABundle = new File(["stage-a"], "stage-a-materials.zip", {
+      type: "application/zip",
+    });
+    fireEvent.change(importInput, { target: { files: [stageABundle] } });
+    await waitFor(() => {
+      expect(importGradientCardMaterials).toHaveBeenCalledWith([stageABundle]);
+    });
+
+    fireEvent.click(screen.getByTestId("material-library-profile-lumina_box"));
+    await screen.findByTestId("material-library-brand-group");
+    expandAllMaterialLibraryGroups();
+    await screen.findByText("Lumina Blue");
+
+    await act(async () => {
+      pendingImport.resolve({
+        status: "ok",
+        message: "Imported Stage A material",
+        imported_count: 1,
+        imported_materials: [
+          {
+            material_name: "Stage A Red",
+            directory_name: "stage-a-red",
+            brand: null,
+            verification_count: 1,
+            created_at: "2026-04-16T10:00:00Z",
+            updated_at: "2026-04-16T11:00:00Z",
+          },
+        ],
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(listGradientCardMaterials).toHaveBeenLastCalledWith({ profileKind: "lumina_box" });
+      expect(screen.getByText("Lumina Blue")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Stage A Red")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("material-library-select-stage-a-red")).not.toBeInTheDocument();
+    expect(screen.getByTestId("material-library-select-lumina-blue")).not.toBeChecked();
+    expect(screen.queryByTestId("material-library-success")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("material-library-error")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /导入.*ZIP|Import.*ZIP/i }),
+    ).toBeEnabled();
+  });
+
+  it("does not download a stale Stage A export after switching to Lumina Box", async () => {
+    const pendingExport = deferred<
+      Awaited<ReturnType<typeof exportGradientCardMaterials>>
+    >();
+    const stageAItem = {
+      material_name: "Stage A Red",
+      directory_name: "stage-a-red",
+      created_at: "2026-04-16T10:00:00Z",
+      updated_at: "2026-04-16T11:00:00Z",
+      material_file_url: "/api/files/stage-a-red-material-json",
+      stage_a_params_url: "/api/files/stage-a-red-params",
+      estimated_rgb: [180, 50, 50] as [number, number, number],
+      layer_height_mm: 0.04,
+      mean_delta_e: 1.23,
+      verification_count: 1,
+      profile_kind: "stage_a" as const,
+    };
+    const luminaBoxItem = {
+      material_name: "Lumina Green",
+      directory_name: "lumina-green",
+      created_at: "2026-04-16T10:00:00Z",
+      updated_at: "2026-04-16T11:00:00Z",
+      material_file_url: "/api/files/lumina-green-material-json",
+      stage_a_params_url: null,
+      estimated_rgb: [50, 180, 90] as [number, number, number],
+      layer_height_mm: 0.04,
+      mean_delta_e: null,
+      verification_count: 0,
+      profile_kind: "lumina_box" as const,
+      optical_model_id: "backed_gradient_spectral_four_flux_smooth/v3",
+    };
+    vi.mocked(listGradientCardMaterials).mockImplementation(async ({ profileKind } = {}) => ({
+      status: "ok",
+      message: "Loaded saved materials",
+      materials: profileKind === "lumina_box" ? [luminaBoxItem] : [stageAItem],
+    }));
+    vi.mocked(exportGradientCardMaterials).mockReturnValue(pendingExport.promise);
+    const anchorClickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+
+    try {
+      render(<MaterialLibraryPanel />);
+      await screen.findByTestId("material-library-brand-group");
+      expandAllMaterialLibraryGroups();
+      await screen.findByText("Stage A Red");
+      fireEvent.click(screen.getByTestId("material-library-select-stage-a-red"));
+      fireEvent.click(screen.getByRole("button", { name: /导出所选耗材|export selected/i }));
+      await waitFor(() => {
+        expect(exportGradientCardMaterials).toHaveBeenCalledWith(["stage-a-red"]);
+      });
+
+      fireEvent.click(screen.getByTestId("material-library-profile-lumina_box"));
+      await screen.findByTestId("material-library-brand-group");
+      expandAllMaterialLibraryGroups();
+      await screen.findByText("Lumina Green");
+
+      await act(async () => {
+        pendingExport.resolve({
+          status: "ok",
+          message: "Exported Stage A material",
+          download_url: "/api/files/stage-a-export",
+          filename: "stage-a-materials.zip",
+          exported_count: 1,
+          exported_directory_names: ["stage-a-red"],
+        });
+        await Promise.resolve();
+      });
+
+      expect(anchorClickSpy).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("material-library-success")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("material-library-error")).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /导入.*ZIP|Import.*ZIP/i }),
+      ).toBeEnabled();
+    } finally {
+      anchorClickSpy.mockRestore();
+    }
   });
 
   it("shows readable material export failures instead of raw HTTP status text", async () => {

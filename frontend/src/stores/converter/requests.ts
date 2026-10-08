@@ -13,6 +13,7 @@ import {
   resolveRecipeAwareLayerCount,
 } from "./sources";
 import type { ConverterState } from "./types";
+import { isMaterialArchiveSourceVersion } from "./types";
 
 type SourceParams = NonNullable<ReturnType<typeof buildConversionSourceParams>>;
 
@@ -25,13 +26,13 @@ function buildConversionInputParams(
   return {
     ...sourceParams,
     color_layers:
-      state.source_version === "material"
+      isMaterialArchiveSourceVersion(state.source_version)
         ? resolveMaterialPrintLayerCount(state)
         : sourceParams.source_kind === "native_bundle"
           ? (sourceParams.color_layers ?? undefined)
           : (state.color_layers ?? undefined),
     layer_height_mm:
-      state.source_version === "material"
+      isMaterialArchiveSourceVersion(state.source_version)
         ? state.materialLayerHeightMm
         : sourceParams.source_kind === "native_bundle"
           ? (sourceParams.layer_height_mm ?? undefined)

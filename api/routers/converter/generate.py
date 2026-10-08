@@ -113,6 +113,8 @@ from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
     DynamicMaterialSolverError,
 )
+from core.material_optical_runtime import MaterialOpticalCompatibilityError
+from core.pipeline._input_validation_common import MaterialArchiveProfileError
 from core.single_stage import record_material_usage
 from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 from utils.lut_manager import LUTManager
@@ -243,9 +245,12 @@ from .common import (
     _ensure_material_matrix_signed_capacity,
     _public_pipeline_validation_detail,
     public_model_surface_error_detail,
+    _require_material_archive_profile_cache_consistency,
     _require_session,
     _resolve_session_dynamic_material_settings,
+    _require_box_raster_layer_height,
     _resolve_material_backing_index,
+    _resolve_material_profile_kind,
     _handle_core_error,
     _validate_dynamic_material_settings,
     _validate_unique_dynamic_material_selection,
@@ -515,6 +520,7 @@ def _require_preview_cache_for_generate(
             status_code=409,
             detail=PREVIEW_CACHE_INVALID_DETAIL,
         )
+    _require_material_archive_profile_cache_consistency(session_data, cache)
     if is_preview_cache_artifact_ref(cache):
         return get_preview_cache_metadata(cache), cache
     return cache, None
@@ -1059,6 +1065,7 @@ def _preview_analysis_params_match(
     request: ConvertGenerateRequest,
     core_modeling_mode: CoreModelingMode,
     session_material_source: str,
+    session_material_profile_kind: str | None = None,
     target_width_mm: float | None,
     preview_color_layers: object = _MISSING,
     preview_layer_height_mm: object = _MISSING,
@@ -1084,7 +1091,7 @@ def _preview_analysis_params_match(
         kind="float",
     )
 
-    checks = (
+    checks: tuple[tuple[str, object, str], ...] = (
         ("color_mode", request.color_mode, "enum"),
         ("modeling_mode", core_modeling_mode, "enum"),
         ("color_layers", color_layers_expected, color_layers_kind),
@@ -1102,6 +1109,17 @@ def _preview_analysis_params_match(
         ("svg_pixels_per_mm", request.svg_pixels_per_mm, "float"),
         ("material_source", str(session_material_source or "lut"), "raw"),
     )
+    if str(session_material_source or "lut") == "material_archive":
+        # The cache's colour analysis is tied to its optical model family.
+        # Keep legacy sessions valid by treating an absent session key as
+        # Stage A, exactly as the request/worker boundary does.
+        checks += (
+            (
+                "material_profile_kind",
+                session_material_profile_kind or "stage_a",
+                "raw",
+            ),
+        )
     # Hole selection is physical-size dependent: unlike ordinary pixel edits,
     # compensated regions cannot be reprojected to a new size without reanalysis.
     compensation_active = bool(
@@ -1117,7 +1135,12 @@ def _preview_analysis_params_match(
         return False, "param_mismatch:target_width_mm"
     for key, expected, kind in checks:
         if kind == "raw":
-            if cache.get(key, _MISSING) != expected:
+            actual = cache.get(key, _MISSING)
+            # Preview caches serialized before Lumina Box existed have no
+            # profile marker. Their material-archive semantics are Stage A.
+            if key == "material_profile_kind" and actual is _MISSING:
+                actual = "stage_a"
+            if actual != expected:
                 return False, f"param_mismatch:{key}"
             continue
         if not _preview_analysis_param_matches(
@@ -1145,6 +1168,7 @@ def _require_large_format_cached_analysis_semantics(
     request: LargeFormatConvertGenerateRequest,
     total_width_mm: float,
     session_material_source: str,
+    session_material_profile_kind: str | None = None,
     preview_color_layers: object = _MISSING,
     preview_layer_height_mm: object = _MISSING,
 ) -> None:
@@ -1155,6 +1179,7 @@ def _require_large_format_cached_analysis_semantics(
         request=request,
         core_modeling_mode=CoreModelingMode(request.modeling_mode.value),
         session_material_source=session_material_source,
+        session_material_profile_kind=session_material_profile_kind,
         target_width_mm=total_width_mm,
         preview_color_layers=preview_color_layers,
         preview_layer_height_mm=preview_layer_height_mm,
@@ -1172,6 +1197,7 @@ def _require_standard_cached_analysis_semantics(
     request: ConvertGenerateRequest,
     core_modeling_mode: CoreModelingMode,
     session_material_source: str,
+    session_material_profile_kind: str | None = None,
     preview_color_layers: object = _MISSING,
     preview_layer_height_mm: object = _MISSING,
     analysis_target_width_mm: float | None = None,
@@ -1186,6 +1212,7 @@ def _require_standard_cached_analysis_semantics(
         request=request,
         core_modeling_mode=core_modeling_mode,
         session_material_source=session_material_source,
+        session_material_profile_kind=session_material_profile_kind,
         target_width_mm=(
             request.target_width_mm
             if analysis_target_width_mm is None else analysis_target_width_mm
@@ -1208,6 +1235,7 @@ def _can_reuse_preview_analysis(
     request: ConvertGenerateRequest,
     core_modeling_mode: CoreModelingMode,
     session_material_source: str,
+    session_material_profile_kind: str | None = None,
     replacement_regions: list[dict] | None,
     recipe_overrides: list[dict] | None,
     free_color_set: set[str] | list[str] | None,
@@ -1253,6 +1281,7 @@ def _can_reuse_preview_analysis(
         request=request,
         core_modeling_mode=core_modeling_mode,
         session_material_source=session_material_source,
+        session_material_profile_kind=session_material_profile_kind,
         target_width_mm=request.target_width_mm,
         preview_color_layers=preview_color_layers,
         preview_layer_height_mm=preview_layer_height_mm,
@@ -1894,6 +1923,59 @@ def _resolve_session_material_backing_index(
     return _resolve_material_backing_index(selected_materials, requested_index)
 
 
+def _resolve_session_material_profile_kind(
+    session_data: dict,
+    request: ConvertGenerateRequest,
+    *,
+    material_source: str,
+) -> str | None:
+    """Return the immutable preview-session material archive kind.
+
+    Generation reuses the preview's material matrix. A caller may state the
+    kind for validation, but cannot change it after preview because doing so
+    would reinterpret the same material indices with another optical model.
+    """
+
+    if material_source != "material_archive":
+        # ``ConvertGenerateRequest.model_dump()`` includes schema defaults.
+        # Accept that generated ``stage_a`` marker as a legacy no-op for
+        # non-archive sessions, otherwise existing callers which merely
+        # round-trip a request object would start receiving 422.  Lumina Box
+        # remains archive-only and is still rejected below.
+        if (
+            "material_profile_kind" in request.model_fields_set
+            and request.material_profile_kind != "stage_a"
+        ):
+            _resolve_material_profile_kind(
+                material_source=material_source,
+                material_profile_kind=request.material_profile_kind,
+            )
+        return None
+
+    session_kind = _resolve_material_profile_kind(
+        material_source=material_source,
+        material_profile_kind=session_data.get("material_profile_kind"),
+    )
+    if (
+        "material_profile_kind" not in request.model_fields_set
+        or request.material_profile_kind is None
+    ):
+        return session_kind
+    requested_kind = _resolve_material_profile_kind(
+        material_source=material_source,
+        material_profile_kind=request.material_profile_kind,
+    )
+    if requested_kind != session_kind:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "material_profile_kind does not match the preview session; "
+                "re-run preview with the requested material archives."
+            ),
+        )
+    return session_kind
+
+
 def _resolve_recipe_overrides(
     session_data: dict,
     request: ConvertGenerateRequest,
@@ -2332,6 +2414,11 @@ async def convert_generate(
     image_path: str | None = session_data.get("image_path")
     lut_path: str | None = session_data.get("lut_path")
     session_material_source = session_data.get("material_source", "lut")
+    session_material_profile_kind = _resolve_session_material_profile_kind(
+        session_data,
+        request,
+        material_source=str(session_material_source or "lut"),
+    )
     if not image_path or not os.path.exists(image_path):
         raise HTTPException(status_code=409, detail=SOURCE_IMAGE_UNAVAILABLE_DETAIL)
     _validate_svg_hole_compensation(
@@ -2536,6 +2623,7 @@ async def convert_generate(
         request=request,
         core_modeling_mode=core_modeling_mode,
         session_material_source=session_material_source,
+        session_material_profile_kind=session_material_profile_kind,
         replacement_regions=replacement_regions,
         recipe_overrides=recipe_overrides,
         free_color_set=free_color_set,
@@ -2584,6 +2672,7 @@ async def convert_generate(
             request=request,
             core_modeling_mode=core_modeling_mode,
             session_material_source=str(session_material_source or "lut"),
+            session_material_profile_kind=session_material_profile_kind,
             analysis_target_width_mm=generation_analysis_target_width_mm,
             preview_color_layers=session_data.get("color_layers", _MISSING),
             preview_layer_height_mm=session_data.get(
@@ -2861,6 +2950,7 @@ async def convert_generate(
         "preview_glb_path": preview_glb_path,
         "vector_parse_clip_cache_path": vector_parse_clip_cache_path,
         "material_source": session_material_source,
+        "material_profile_kind": session_material_profile_kind,
         "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
         "material_min_layer_count": dynamic_material_settings[1],
         "material_max_layer_count": dynamic_material_settings[2],
@@ -2936,7 +3026,12 @@ async def convert_generate(
                 detail=MODEL_GENERATION_FAILED_DETAIL,
             ) from exc
         raise HTTPException(status_code=422, detail=detail) from exc
-    except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as exc:
+    except (
+        DynamicMaterialCandidateError,
+        DynamicMaterialSolverError,
+        MaterialArchiveProfileError,
+        MaterialOpticalCompatibilityError,
+    ) as exc:
         _handle_core_error(exc, "3MF generation")
     except CachedPreviewAnalysisError as exc:
         raise HTTPException(
@@ -3305,6 +3400,10 @@ def _resolve_large_format_shared_params(
     }
     if str(session_data.get("material_source") or "lut") == "material_archive":
         params["material_source"] = "material_archive"
+        params["material_profile_kind"] = _resolve_material_profile_kind(
+            material_source="material_archive",
+            material_profile_kind=session_data.get("material_profile_kind"),
+        )
         params["selected_materials"] = session_data.get("selected_materials") or []
         params["material_layer_count"] = session_data.get("material_layer_count")
         params["material_layer_height_mm"] = session_data.get("material_layer_height_mm")
@@ -3456,7 +3555,12 @@ async def _generate_large_format_svg_native(
             status_code=409,
             detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
         ) from e
-    except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
+    except (
+        DynamicMaterialCandidateError,
+        DynamicMaterialSolverError,
+        MaterialArchiveProfileError,
+        MaterialOpticalCompatibilityError,
+    ) as e:
         _handle_core_error(e, "large-format SVG generation")
     except BrokenProcessPool as e:
         _log_large_format_failure(
@@ -4132,7 +4236,15 @@ async def _generate_large_format_raster(
                     status_code=503,
                     detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
                 ) from e
-            except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
+            except MemoryError:
+                _discard_pending_awaitables(futures, future_index + 1)
+                raise
+            except (
+                DynamicMaterialCandidateError,
+                DynamicMaterialSolverError,
+                MaterialArchiveProfileError,
+                MaterialOpticalCompatibilityError,
+            ) as e:
                 _discard_pending_awaitables(futures, future_index + 1)
                 _handle_core_error(e, "large-format tile generation")
             except WipeTowerLayoutError as exc:
@@ -4245,6 +4357,11 @@ async def convert_generate_large_format(
     image_path: str | None = session_data.get("image_path")
     lut_path: str | None = session_data.get("lut_path")
     session_material_source = session_data.get("material_source", "lut")
+    session_material_profile_kind = _resolve_session_material_profile_kind(
+        session_data,
+        request,
+        material_source=str(session_material_source or "lut"),
+    )
     if not image_path or not os.path.exists(image_path):
         raise HTTPException(status_code=409, detail=SOURCE_IMAGE_UNAVAILABLE_DETAIL)
     if session_material_source == "material_archive":
@@ -4342,6 +4459,7 @@ async def convert_generate_large_format(
             request=request,
             total_width_mm=total_w_mm,
             session_material_source=str(session_material_source or "lut"),
+            session_material_profile_kind=session_material_profile_kind,
             preview_color_layers=session_data.get("color_layers"),
             preview_layer_height_mm=session_data.get("layer_height_mm"),
         )
@@ -4864,6 +4982,13 @@ async def convert_batch(
     vendor: str | None = Form(None, description="原生厂商"),
     db_names: list[str] | str | None = Form(None, description="原生 DB 名称列表"),
     material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
+    material_profile_kind: str | None = Form(
+        None,
+        description=(
+            "耗材档案光学类型: stage_a | lumina_box；"
+            "仅 material_archive 有效，省略时兼容 stage_a。"
+        ),
+    ),
     selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
     material_layer_count: int | None = Form(None, ge=1, le=20, description="耗材模式叠色层数"),
     material_dynamic_layer_count_enabled: bool = Form(
@@ -4984,6 +5109,14 @@ async def convert_batch(
     # 解析颜色来源；批量模式应与单图预览/生成一致支持传统 LUT、反推 LUT
     # 和耗材档案。
     material_source = _validate_material_source(material_source)
+    resolved_material_profile_kind = _resolve_material_profile_kind(
+        material_source=material_source,
+        material_profile_kind=material_profile_kind,
+    )
+    _require_box_raster_layer_height(
+        resolved_material_profile_kind, material_layer_height_mm,
+        native_svg=modeling_mode == "vector" and all(str(item.filename or "").lower().endswith(".svg") for item in images),
+    )
     image_count = len(images)
     selected_material_names: list[str] = []
     resolved_material_backing_index = 0
@@ -4999,6 +5132,21 @@ async def convert_batch(
             selected_material_names,
             material_backing_material_index,
         )
+        if material_profile_kind is not None:
+            from core.pipeline._input_validation_common import (
+                load_and_validate_material_archive_profile,
+            )
+
+            try:
+                load_and_validate_material_archive_profile(
+                    selected_material_names,
+                    profile_kind=resolved_material_profile_kind,
+                )
+            except MaterialArchiveProfileError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": exc.error_type, "message": str(exc)},
+                ) from exc
         lut_path = "__material_archive__"
         resolved_lut_name = "__material_archive__"
         resolved_source_kind = "legacy_single"
@@ -5220,6 +5368,7 @@ async def convert_batch(
         svg_hole_max_width_mm,
         enable_coating,
         coating_height_mm,
+        resolved_material_profile_kind or "stage_a",
     )
     batch_size = max(1, int(pool.max_workers))
     workers_completed = False
@@ -5260,9 +5409,15 @@ async def convert_batch(
                         results.append(BatchItemResult(
                             filename=filename, status="failed", error=BATCH_ITEM_FAILED_DETAIL,
                         ))
+                except asyncio.TimeoutError:
+                    results.append(BatchItemResult(
+                        filename=filename, status="failed", error="Batch item conversion timed out",
+                    ))
                 except (
                     BrokenProcessPool, DynamicMaterialCandidateError,
                     DynamicMaterialSolverError, WipeTowerLayoutError,
+                    MaterialArchiveProfileError, MaterialOpticalCompatibilityError,
+                    MemoryError,
                 ):
                     raise
                 except ROUTER_HANDLED_ERRORS as exc:
@@ -5279,7 +5434,10 @@ async def convert_batch(
         workers_completed = True
     except BrokenProcessPool as exc:
         raise HTTPException(status_code=503, detail=BATCH_GENERATION_FAILED_DETAIL) from exc
-    except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as exc:
+    except (
+        DynamicMaterialCandidateError, DynamicMaterialSolverError,
+        MaterialArchiveProfileError, MaterialOpticalCompatibilityError,
+    ) as exc:
         _handle_core_error(exc, "batch material generation")
     except WipeTowerLayoutError as exc:
         raise to_http_exception(exc, "batch 3MF layout") from exc

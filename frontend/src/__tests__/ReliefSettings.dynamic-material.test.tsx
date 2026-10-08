@@ -27,8 +27,11 @@ describe("ReliefSettings dynamic material depth", () => {
     expect(Number(slider.getAttribute("min"))).toBeCloseTo(0.2, 10);
   });
 
-  it("uses the configured dynamic maximum as the relief minimum", () => {
+  it.each(["material", "lumina_box"] as const)(
+    "uses the configured dynamic maximum as the relief minimum for %s archives",
+    (sourceVersion) => {
     useConverterStore.setState({
+      source_version: sourceVersion,
       materialDynamicLayerCountEnabled: true,
       materialMaxLayerCount: 9,
     } as never);
@@ -37,5 +40,6 @@ describe("ReliefSettings dynamic material depth", () => {
 
     const slider = screen.getByRole("slider", { name: "最大高度" });
     expect(Number(slider.getAttribute("min"))).toBeCloseTo(0.52, 10);
-  });
+    },
+  );
 });

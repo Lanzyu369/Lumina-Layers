@@ -87,6 +87,7 @@ from api.routers import (
     five_color_router,
     health_router,
     lut_router,
+    lumina_box_router,
     lut_registry_router,
     material_registry_router,
     material_sync_router,
@@ -517,6 +518,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # --- Shutdown ---
     cleanup_task.cancel()
     await cancel_material_sync_auto_refresh_tasks(material_sync_refresh_tasks)
+    from api.backed_gradient_jobs import cancel_backed_gradient_jobs
+
+    await cancel_backed_gradient_jobs()
     worker_pool.shutdown(wait=True)
     log.info("Worker pool shutdown complete", extra={"event": "worker_pool_shutdown"})
 
@@ -664,6 +668,7 @@ def create_app() -> FastAPI:
     app.include_router(five_color_router)
     app.include_router(health_router)
     app.include_router(lut_router)
+    app.include_router(lumina_box_router)
     app.include_router(lut_registry_router)
     if _material_registry_service_enabled():
         app.include_router(material_registry_router)

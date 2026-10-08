@@ -12,13 +12,16 @@ import {
   updateGradientCardMaterial,
 } from "../api/extractor";
 import type { SavedMaterialLibraryItem } from "../api/types";
+import { LUMINA_BOX_PRODUCTION_MODEL_ID } from "../api/luminaBoxMaterials";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import { useI18n } from "../i18n/context";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
+import { useLuminaBoxMaterialNavigation } from "../stores/luminaBoxMaterialNavigation";
 
 import { normalizeResourceUrl } from "../utils/resourceUrl";
 import Button from "./ui/Button";
+import LuminaBoxLibraryCard from "./LuminaBoxLibraryCard";
 import {
   StatusBanner,
   mutedSectionCardClass,
@@ -58,6 +61,8 @@ const parseHexColor = (hex: string): [number, number, number] | null => {
 };
 
 const DEFAULT_EDIT_COLOR: [number, number, number] = [128, 128, 128];
+type MaterialProfileKind = "stage_a" | "lumina_box";
+const MATERIAL_PROFILE_KINDS: MaterialProfileKind[] = ["stage_a", "lumina_box"];
 
 const formatNumericValue = (value: number | null | undefined, digits = 3) =>
   typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
@@ -149,6 +154,9 @@ export default function MaterialLibraryPanel() {
   const setActiveTab = useWidgetStore((state) => state.setActiveTab);
   const startMaterialVerification = useSingleStageStore((state) => state.startMaterialVerification);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const libraryRequestSequenceRef = useRef(0);
+  const libraryProfileOperationEpochRef = useRef(0);
+  const [profileKind, setProfileKind] = useState<MaterialProfileKind>(() => useLuminaBoxMaterialNavigation.getState().libraryProfileKind);
   const [materials, setMaterials] = useState<SavedMaterialLibraryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
@@ -162,12 +170,19 @@ export default function MaterialLibraryPanel() {
   const [editingMaterial, setEditingMaterial] = useState<SavedMaterialLibraryItem | null>(null);
   const [expandedBrandGroupKeys, setExpandedBrandGroupKeys] = useState<string[]>([]);
 
-  const refreshMaterials = useCallback(async () => {
+  const refreshMaterials = useCallback(async (
+    requestedProfileKind: MaterialProfileKind = profileKind,
+  ) => {
+    const requestSequence = ++libraryRequestSequenceRef.current;
     setIsLoading(true);
     setError(null);
     try {
-      const response = await listGradientCardMaterials();
-      const nextMaterials = (response.materials ?? []).map(normalizeLibraryItem);
+      const response = await listGradientCardMaterials({ profileKind: requestedProfileKind });
+      if (requestSequence !== libraryRequestSequenceRef.current) return [];
+      const nextMaterials = (response.materials ?? [])
+        .filter((item) => (item.profile_kind ?? "stage_a") === requestedProfileKind)
+        .filter((item) => requestedProfileKind !== "lumina_box" || item.optical_model_id === LUMINA_BOX_PRODUCTION_MODEL_ID)
+        .map(normalizeLibraryItem);
       setMaterials(nextMaterials);
       setHistoryMaterial((previous) =>
         previous
@@ -181,18 +196,37 @@ export default function MaterialLibraryPanel() {
       );
       return nextMaterials;
     } catch (err) {
+      if (requestSequence !== libraryRequestSequenceRef.current) return [];
       setError(formatMaterialLibraryError(err, "mat_gradient_library_load_failed", t));
       setMaterials([]);
       setSelectedDirectoryNames([]);
       return [];
     } finally {
-      setIsLoading(false);
+      if (requestSequence === libraryRequestSequenceRef.current) {
+        setIsLoading(false);
+      }
     }
-  }, [t]);
+  }, [profileKind, t]);
 
   useEffect(() => {
-    void refreshMaterials();
-  }, [refreshMaterials]);
+    void refreshMaterials(profileKind);
+  }, [profileKind, refreshMaterials]);
+
+  const handleProfileKindChange = useCallback((nextProfileKind: MaterialProfileKind) => {
+    if (nextProfileKind === profileKind) return;
+    libraryRequestSequenceRef.current += 1;
+    libraryProfileOperationEpochRef.current += 1;
+    setProfileKind(nextProfileKind);
+    setMaterials([]);
+    setSelectedDirectoryNames([]);
+    setHistoryMaterial(null);
+    setEditingMaterial(null);
+    setError(null);
+    setSuccess(null);
+    setIsExporting(false);
+    setIsImporting(false);
+    setExpandedBrandGroupKeys([]);
+  }, [profileKind]);
 
   const dateFormatter = useMemo(
     () => new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en-US", {
@@ -252,6 +286,10 @@ export default function MaterialLibraryPanel() {
   const expandedBrandGroupKeySet = useMemo(() => new Set(expandedBrandGroupKeys), [expandedBrandGroupKeys]);
 
   const handleStartVerification = useCallback((item: SavedMaterialLibraryItem) => {
+    if (item.profile_kind === "lumina_box") {
+      if (item.capture_dataset_id && item.material_symbol) useLuminaBoxMaterialNavigation.getState().resumeCapture(item.capture_dataset_id, item.material_symbol);
+      return;
+    }
     startMaterialVerification({
       materialName: item.material_name,
       directoryName: item.directory_name,
@@ -295,7 +333,7 @@ export default function MaterialLibraryPanel() {
         const response = await updateGradientCardMaterial(directoryName, {
           materialName: values.materialName,
           brand: values.brand,
-          estimatedRgb: values.estimatedRgb,
+          ...(editingMaterial.profile_kind === "lumina_box" ? {} : { estimatedRgb: values.estimatedRgb }),
         });
         const nextItem = normalizeLibraryItem(response.material);
         setMaterials((previous) =>
@@ -347,12 +385,17 @@ export default function MaterialLibraryPanel() {
   }, [formatCreatedAt, t]);
 
   const toggleMaterialSelection = useCallback((directoryName: string) => {
+    const material = materials.find((item) => item.directory_name === directoryName);
+    if (!material || (material.profile_kind ?? "stage_a") !== profileKind) {
+      setError(t("mat_gradient_library_profile_incompatible"));
+      return;
+    }
     setSelectedDirectoryNames((previous) =>
       previous.includes(directoryName)
         ? previous.filter((item) => item !== directoryName)
         : [...previous, directoryName],
     );
-  }, []);
+  }, [materials, profileKind, t]);
 
   const toggleSelectAll = useCallback(() => {
     setSelectedDirectoryNames(
@@ -373,20 +416,39 @@ export default function MaterialLibraryPanel() {
       setError(t("mat_gradient_library_export_requires_selection"));
       return;
     }
+    const selectedMaterials = materials.filter((item) =>
+      selectedDirectoryNames.includes(item.directory_name),
+    );
+    if (
+      selectedMaterials.length !== selectedDirectoryNames.length
+      || selectedMaterials.some((item) => (item.profile_kind ?? "stage_a") !== profileKind)
+    ) {
+      setSelectedDirectoryNames([]);
+      setError(t("mat_gradient_library_profile_incompatible"));
+      return;
+    }
+    const operationEpoch = libraryProfileOperationEpochRef.current;
+    const isCurrentOperation = (): boolean => (
+      operationEpoch === libraryProfileOperationEpochRef.current
+    );
     setIsExporting(true);
     setError(null);
     setSuccess(null);
     try {
       const response = await exportGradientCardMaterials(selectedDirectoryNames);
+      if (!isCurrentOperation()) return;
       const downloadUrl = normalizeResourceUrl(response.download_url) ?? response.download_url;
       triggerDownload(downloadUrl, response.filename);
       setSuccess(response.message || t("mat_gradient_library_export_success"));
     } catch (err) {
+      if (!isCurrentOperation()) return;
       setError(formatMaterialLibraryError(err, "mat_gradient_library_export_failed", t));
     } finally {
-      setIsExporting(false);
+      if (isCurrentOperation()) {
+        setIsExporting(false);
+      }
     }
-  }, [selectedDirectoryNames, t]);
+  }, [materials, profileKind, selectedDirectoryNames, t]);
 
   const handleImportClick = useCallback(() => {
     setError(null);
@@ -400,12 +462,19 @@ export default function MaterialLibraryPanel() {
     if (files.length === 0) {
       return;
     }
+    const importedProfileKind = profileKind;
+    const operationEpoch = libraryProfileOperationEpochRef.current;
+    const isCurrentOperation = (): boolean => (
+      operationEpoch === libraryProfileOperationEpochRef.current
+    );
     setIsImporting(true);
     setError(null);
     setSuccess(null);
     try {
       const response = await importGradientCardMaterials(files);
-      const refreshedMaterials = await refreshMaterials();
+      if (!isCurrentOperation()) return;
+      const refreshedMaterials = await refreshMaterials(importedProfileKind);
+      if (!isCurrentOperation()) return;
       const importedDirectoryNames = (response.imported_materials ?? [])
         .map((item) => item.directory_name)
         .filter((directoryName) =>
@@ -414,11 +483,14 @@ export default function MaterialLibraryPanel() {
       setSelectedDirectoryNames(importedDirectoryNames);
       setSuccess(response.message || t("mat_gradient_library_import_success"));
     } catch (err) {
+      if (!isCurrentOperation()) return;
       setError(formatMaterialLibraryError(err, "mat_gradient_library_import_failed", t));
     } finally {
-      setIsImporting(false);
+      if (isCurrentOperation()) {
+        setIsImporting(false);
+      }
     }
-  }, [refreshMaterials, t]);
+  }, [profileKind, refreshMaterials, t]);
 
   return (
     <motion.aside
@@ -437,6 +509,40 @@ export default function MaterialLibraryPanel() {
         data-testid="material-library-import-input"
         onChange={(event) => void handleImportArchives(event)}
       />
+
+      <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
+        <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+          {t("mat_gradient_library_profile_kind_label")}
+        </span>
+        <div
+          className="grid grid-cols-2 gap-1.5"
+          data-testid="material-library-profile-kind-selector"
+        >
+          {MATERIAL_PROFILE_KINDS.map((kind) => {
+            const isActive = profileKind === kind;
+            return (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => handleProfileKindChange(kind)}
+                aria-pressed={isActive}
+                className={`h-9 rounded-lg border text-xs font-medium transition-all ${
+                  isActive
+                    ? "border-blue-400 bg-blue-500/10 text-blue-600 ring-1 ring-blue-500/20 dark:border-blue-500 dark:text-blue-400"
+                    : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600"
+                }`}
+                data-testid={`material-library-profile-${kind}`}
+              >
+                {t(
+                  kind === "lumina_box"
+                    ? "mat_gradient_library_profile_kind_lumina_box"
+                    : "mat_gradient_library_profile_kind_stage_a",
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div className={`${mutedSectionCardClass} flex flex-col gap-1 px-4 py-3`}>
@@ -702,7 +808,13 @@ export default function MaterialLibraryPanel() {
         </section>
       ) : materials.length === 0 ? (
         <section className={`${resolveSectionCardClass(workspace.mode)} flex min-h-48 items-center justify-center`}>
-          <p className="max-w-lg text-center text-sm text-slate-500 dark:text-slate-400">{t("mat_gradient_library_empty")}</p>
+          <p className="max-w-lg text-center text-sm text-slate-500 dark:text-slate-400">
+            {t(
+              profileKind === "lumina_box"
+                ? "mat_gradient_library_empty_lumina_box"
+                : "mat_gradient_library_empty_stage_a",
+            )}
+          </p>
         </section>
       ) : (
         <div className="grid gap-6">
@@ -750,6 +862,11 @@ export default function MaterialLibraryPanel() {
                 {isCollapsed ? null : (
                   <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,19rem),1fr))]">
                 {items.map((item) => {
+                  if (profileKind === "lumina_box") return <LuminaBoxLibraryCard key={item.directory_name} item={item}
+                    selected={selectedDirectoryNames.includes(item.directory_name)}
+                    busy={pendingDeleteDirectoryName === item.directory_name || pendingUpdateDirectoryName === item.directory_name}
+                    onSelect={() => toggleMaterialSelection(item.directory_name)} onEdit={() => handleOpenEditDialog(item)}
+                    onDelete={() => void handleDeleteMaterial(item)} />;
                   const estimatedRgb = isRgbTriplet(item.estimated_rgb) ? item.estimated_rgb : null;
                   const estimatedHex = estimatedRgb ? toHex(estimatedRgb) : "-";
                   const itemBrand = getMaterialBrand(item);
@@ -1059,11 +1176,11 @@ function MaterialLibraryEditDialog({
           <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
             {t("mat_gradient_library_edit_title")}
           </h3>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          {item.profile_kind !== "lumina_box" ? <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             {tRuntime("mat_gradient_library_edit_desc", {
               directoryName: item.directory_name,
             })}
-          </p>
+          </p> : null}
         </div>
 
         <label className="flex flex-col gap-1.5">
@@ -1092,7 +1209,7 @@ function MaterialLibraryEditDialog({
           />
         </label>
 
-        <div className="flex flex-col gap-1.5">
+        {item.profile_kind !== "lumina_box" ? <><div className="flex flex-col gap-1.5">
           <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
             {t("mat_gradient_library_edit_color_label")}
           </span>
@@ -1144,7 +1261,7 @@ function MaterialLibraryEditDialog({
           <p className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
             {item.directory_name}
           </p>
-        </div>
+        </div></> : null}
 
         <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
           <Button

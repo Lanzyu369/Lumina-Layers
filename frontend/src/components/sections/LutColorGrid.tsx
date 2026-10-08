@@ -1,5 +1,8 @@
 import { useState, useMemo, useCallback, useEffect, memo } from "react";
-import { useConverterStore } from "../../stores/converter";
+import {
+  isMaterialArchiveSourceVersion,
+  useConverterStore,
+} from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { hexToRgb, sortByColorDistance } from "../../utils/colorUtils";
 import { isCardModeAvailable } from "../../utils/cardUtils";
@@ -146,7 +149,7 @@ const ColorSwatch = memo(function ColorSwatch({
  */
 export default function LutColorGrid() {
   const sourceVersion = useConverterStore((s) => s.source_version);
-  if (sourceVersion === "material") {
+  if (isMaterialArchiveSourceVersion(sourceVersion)) {
     return <MaterialColorPicker />;
   }
   return <LutColorGridInner />;

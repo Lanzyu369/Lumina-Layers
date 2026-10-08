@@ -28,12 +28,41 @@ Public API
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import logging
 from dataclasses import dataclass
 from typing import Any
 
 import cv2
 import numpy as np
+
+from core.colorchecker.color_metrics import delta_e_2000
+from core.km_xyz import (
+    KM_XYZ_MODEL_ID,
+    km_layer_rt,
+    km_relative_xyz_to_lab,
+    km_relative_xyz_to_linear_srgb,
+    km_relative_xyz_to_srgb_uint8,
+    km_stack_reflectance,
+    linear_srgb_to_km_relative_xyz,
+)
+from core.material_optical_runtime import (
+    BEER_LAMBERT_MODEL_ID,
+    is_relative_xyz_model,
+    require_beer_lambert_materials,
+    validate_material_optical_contract,
+)
+from core.lumina_box_spectral import (
+    BoxWhiteReference,
+    LUMINA_BOX_SPECTRAL_MODEL_ID,
+    LuminaBoxSpectralModel,
+    SpectralMaterialParameters,
+)
+from core.backed_gradient_smooth import SPECTRAL_SMOOTH_MODEL_ID
+from core.backed_gradient_material import (
+    BackedGradientComponent, BackedGradientReference, BackedGradientMaterialModel,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -56,8 +85,8 @@ DEFAULT_BEAM_WIDTH: int = 32
 
 @dataclass(frozen=True)
 class MaterialParams:
-    """Loaded Beer-Lambert parameters for one material.
-    单种耗材的 Beer-Lambert 参数。
+    """One saved material and its explicitly identified optical parameters.
+    单个已保存耗材及明确标识的光学参数。
 
     Attributes:
         name: Human-readable material name (e.g. "PLA Red"). (耗材名称)
@@ -79,6 +108,37 @@ class MaterialParams:
     C0_white: np.ndarray  # (3,) float64, linear
     estimated_rgb: np.ndarray  # (3,) uint8
     material_type: str | None = None
+    optical_model_id: str = BEER_LAMBERT_MODEL_ID
+    km_K: np.ndarray | None = None
+    km_S: np.ndarray | None = None
+    coefficient_unit: str | None = None
+    measurement_protocol_id: str | None = None
+    color_bridge_id: str | None = None
+    archive_revision_id: str | None = None
+    spectral_parameters: SpectralMaterialParameters | None = None
+    spectral_reference: BoxWhiteReference | None = None
+    is_reference_white: bool = False
+    spectral_backing_parameters: SpectralMaterialParameters | None = None
+    spectral_backing_thickness_mm: float = 1.2
+    backed_gradient_component: BackedGradientComponent | None = None
+    backed_gradient_reference: BackedGradientReference | None = None
+    backed_gradient_backing_component: BackedGradientComponent | None = None
+    backed_gradient_backing_thickness_mm: float = 1.2
+
+
+@dataclass(frozen=True)
+class MaterialColorPredictionBatch:
+    """Float-preserving colorimetric predictions for material recipes.
+
+    耗材配方的保留浮点精度色度预测。KM 的 ``matching_xyz`` 是仪器协议下
+    的相对 XYZ 响应；Beer-Lambert 路径不使用该字段并返回 ``None``。
+    """
+
+    optical_model_id: str
+    linear_srgb: np.ndarray
+    matching_xyz: np.ndarray | None
+    lab: np.ndarray
+    display_srgb: np.ndarray
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +177,228 @@ def rgb_to_lab(srgb_uint8: np.ndarray) -> np.ndarray:
     srgb_f32 = srgb_uint8.astype(np.float32) / 255.0
     lab = cv2.cvtColor(srgb_f32.reshape(-1, 1, 3), cv2.COLOR_RGB2LAB)
     return lab.reshape(-1, 3).astype(np.float64)
+
+
+def target_srgb_to_material_lab(
+    target_srgb: np.ndarray,
+    materials: list[MaterialParams],
+) -> np.ndarray:
+    """Convert target sRGB rows into the palette's matching Lab space.
+
+    将目标 sRGB 转换到所选耗材模型使用的 Lab 匹配空间。
+    """
+
+    contract = validate_material_optical_contract(materials)
+    targets = np.asarray(target_srgb, dtype=np.uint8)
+    if targets.ndim == 1:
+        if targets.shape != (3,):
+            raise ValueError("target_srgb must end with three channels")
+        targets = targets.reshape(1, 3)
+    elif targets.ndim != 2 or targets.shape[1] != 3:
+        raise ValueError("target_srgb must have shape (C, 3)")
+    if is_relative_xyz_model(contract.model_id):
+        linear = srgb_to_linear(targets)
+        relative_xyz = linear_srgb_to_km_relative_xyz(linear)
+        return np.asarray(km_relative_xyz_to_lab(relative_xyz), dtype=np.float64)
+    return rgb_to_lab(targets)
+
+
+def _linear_substrate_to_km_boundary(substrate_linear: np.ndarray) -> np.ndarray:
+    """Map the public linear-RGB substrate input to a valid KM boundary.
+
+    ``white`` and ``black`` are optical boundary definitions, so retain their
+    exact unit/zero responses instead of round-tripping the diagonal bridge.
+    """
+
+    substrate = np.asarray(substrate_linear, dtype=np.float64).reshape(3)
+    if np.array_equal(substrate, np.ones(3, dtype=np.float64)):
+        return np.ones(3, dtype=np.float64)
+    if np.array_equal(substrate, np.zeros(3, dtype=np.float64)):
+        return np.zeros(3, dtype=np.float64)
+    return np.clip(
+        np.asarray(linear_srgb_to_km_relative_xyz(substrate), dtype=np.float64),
+        0.0,
+        1.0,
+    ).reshape(3)
+
+
+def _km_forward_batch_relative_xyz(
+    recipes: np.ndarray,
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+    substrate_linear: np.ndarray,
+) -> np.ndarray:
+    """Vectorized Bottom-to-Top KM stack prediction in relative XYZ.
+
+    在相对 XYZ 空间批量计算自底向上的 KM 叠层。
+    """
+
+    recipe_arr = np.asarray(recipes)
+    if recipe_arr.ndim != 2:
+        raise ValueError(f"recipes must be shaped (C, N), got {recipe_arr.shape}")
+    contract = validate_material_optical_contract(materials)
+    if contract.model_id == SPECTRAL_SMOOTH_MODEL_ID:
+        return _backed_gradient_forward_batch_relative_xyz(recipes, materials, layer_height_mm, substrate_linear)
+    if contract.model_id == LUMINA_BOX_SPECTRAL_MODEL_ID:
+        return _spectral_forward_batch_relative_xyz(
+            recipe_arr, materials, layer_height_mm, substrate_linear,
+        )
+    if contract.model_id != KM_XYZ_MODEL_ID:
+        raise ValueError("KM forward prediction requires km_xyz/v1 materials")
+    substrate_rgb = np.asarray(substrate_linear, dtype=np.float64).reshape(3)
+    substrate_xyz = _linear_substrate_to_km_boundary(substrate_rgb)
+    row_count, layer_count = recipe_arr.shape
+    if row_count == 0:
+        return np.zeros((0, 3), dtype=np.float64)
+    if layer_count == 0:
+        return np.broadcast_to(substrate_xyz, (row_count, 3)).copy()
+
+    all_k = np.stack([np.asarray(material.km_K) for material in materials]).astype(
+        np.float64,
+        copy=False,
+    )
+    all_s = np.stack([np.asarray(material.km_S) for material in materials]).astype(
+        np.float64,
+        copy=False,
+    )
+    layer_r, layer_t = km_layer_rt(all_k, all_s, float(layer_height_mm))
+    current = np.broadcast_to(substrate_xyz, (row_count, 3)).copy()
+    for layer_index in range(layer_count):
+        material_indices = recipe_arr[:, layer_index].astype(np.int64, copy=False)
+        reflectance = layer_r[material_indices]
+        transmittance = layer_t[material_indices]
+        denominator = 1.0 - reflectance * current
+        if np.any(denominator <= 0.0) or not np.all(np.isfinite(denominator)):
+            raise ValueError("KM stack recurrence reached a singular optical boundary")
+        current = reflectance + (
+            transmittance * transmittance * current
+        ) / denominator
+    return current
+
+
+@lru_cache(maxsize=16)
+def _backed_gradient_runtime(
+    reference_id: str, white: BackedGradientComponent, black: BackedGradientComponent,
+    white_xyz: tuple[float, ...], black_xyz: tuple[float, ...],
+) -> BackedGradientMaterialModel:
+    return BackedGradientMaterialModel(BackedGradientReference(
+        reference_id, white, black, {"W": white_xyz, "K": black_xyz},
+    ))
+
+
+def _backed_gradient_forward_batch_relative_xyz(
+    recipes: np.ndarray,
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+    substrate_linear: np.ndarray,
+) -> np.ndarray:
+    reference = materials[0].backed_gradient_reference
+    backing = materials[0].backed_gradient_backing_component
+    if backing is None:
+        backing = reference.black if np.array_equal(substrate_linear, np.zeros(3)) else reference.white
+    model = _backed_gradient_runtime(
+        reference.reference_id, reference.white, reference.black,
+        tuple(reference.anchors["W"]), tuple(reference.anchors["K"]),
+    )
+    return model.predict_recipes(
+        [material.backed_gradient_component for material in materials], recipes, layer_height_mm,
+        backing=backing, backing_mm=materials[0].backed_gradient_backing_thickness_mm,
+    ) / 100.0
+
+
+def _spectral_forward_batch_relative_xyz(
+    recipes: np.ndarray,
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+    substrate_linear: np.ndarray,
+) -> np.ndarray:
+    reference = materials[0].spectral_reference
+    if reference is None:
+        raise ValueError("Box prediction requires its saved calibration white")
+    backing = materials[0].spectral_backing_parameters
+    if backing is None:
+        substrate = np.asarray(substrate_linear, dtype=np.float64).reshape(3)
+        if np.array_equal(substrate, np.ones(3)):
+            index = find_white_material_index(materials)
+            backing = materials[index].spectral_parameters if index is not None else reference.white_parameters
+        elif np.array_equal(substrate, np.zeros(3)):
+            black = next((material for material in materials
+                          if "black" in material.name.casefold() or "黑" in material.name), None)
+            if black is None:
+                raise ValueError("Box black-substrate prediction requires an actual black backing material")
+            backing = black.spectral_parameters
+        else:
+            raise ValueError("Box prediction requires a selected physical backing material")
+    if backing is None or any(material.spectral_parameters is None for material in materials):
+        raise ValueError("Box material spectral parameters are incomplete")
+    return LuminaBoxSpectralModel().predict_recipes(
+        [material.spectral_parameters for material in materials], recipes, layer_height_mm, reference,
+        base_parameters=backing,
+        base_thickness_mm=materials[0].spectral_backing_thickness_mm,
+    )
+
+
+def predict_material_recipes_colorimetry(
+    recipes: np.ndarray,
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+    substrate: str = "white",
+) -> MaterialColorPredictionBatch:
+    """Predict display and matching-space colors without KM quantization.
+
+    在 KM 匹配路径中保留浮点 XYZ/Lab，仅在显示端生成 8 位 sRGB。
+    """
+
+    normalized_substrate = str(substrate).lower()
+    if normalized_substrate == "white":
+        substrate_linear = np.ones(3, dtype=np.float64)
+    elif normalized_substrate == "black":
+        substrate_linear = np.zeros(3, dtype=np.float64)
+    else:
+        raise ValueError("substrate must be 'white' or 'black'")
+    contract = validate_material_optical_contract(materials)
+    recipe_arr = np.asarray(recipes)
+    if recipe_arr.ndim != 2:
+        raise ValueError(f"recipes must be shaped (C, N), got {recipe_arr.shape}")
+
+    if is_relative_xyz_model(contract.model_id):
+        relative_xyz = _km_forward_batch_relative_xyz(
+            recipe_arr,
+            materials,
+            layer_height_mm,
+            substrate_linear,
+        )
+        linear_rgb = np.asarray(
+            km_relative_xyz_to_linear_srgb(relative_xyz),
+            dtype=np.float64,
+        )
+        lab = np.asarray(km_relative_xyz_to_lab(relative_xyz), dtype=np.float64)
+        display = np.asarray(
+            km_relative_xyz_to_srgb_uint8(relative_xyz),
+            dtype=np.uint8,
+        )
+        return MaterialColorPredictionBatch(
+            optical_model_id=contract.model_id,
+            linear_srgb=linear_rgb,
+            matching_xyz=relative_xyz,
+            lab=lab,
+            display_srgb=display,
+        )
+
+    linear_rgb = forward_batch_model(
+        recipe_arr,
+        materials,
+        layer_height_mm,
+        substrate_linear,
+    )
+    display = linear_to_srgb_uint8(linear_rgb)
+    return MaterialColorPredictionBatch(
+        optical_model_id=contract.model_id,
+        linear_srgb=linear_rgb,
+        matching_xyz=None,
+        lab=rgb_to_lab(display),
+        display_srgb=display,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -166,11 +448,42 @@ def forward_model(
     Returns:
         (3,) predicted color in linear RGB. (预测颜色 linear RGB)
     """
+    contract = validate_material_optical_contract(materials)
     if substrate_linear is None:
         substrate_linear = np.ones(3, dtype=np.float64)
-    C = substrate_linear.copy()
-    for layer_idx in range(len(recipe)):
-        mat_id = int(recipe[layer_idx])
+    substrate_values = np.asarray(substrate_linear, dtype=np.float64).reshape(3)
+    recipe_arr = np.asarray(recipe, dtype=np.int32).reshape(-1)
+    if contract.model_id in (LUMINA_BOX_SPECTRAL_MODEL_ID, SPECTRAL_SMOOTH_MODEL_ID):
+        recipe_arr = np.asarray(recipe).reshape(-1)
+        relative_xyz = _km_forward_batch_relative_xyz(
+            recipe_arr.reshape(1, -1), materials, layer_height_mm, substrate_values,
+        )[0]
+        return np.asarray(km_relative_xyz_to_linear_srgb(relative_xyz), dtype=np.float64).reshape(3)
+    if contract.model_id == KM_XYZ_MODEL_ID:
+        substrate_xyz = _linear_substrate_to_km_boundary(substrate_values)
+        if recipe_arr.size == 0:
+            relative_xyz = substrate_xyz
+        else:
+            absorption = np.stack(
+                [np.asarray(materials[int(index)].km_K) for index in recipe_arr]
+            )
+            scattering = np.stack(
+                [np.asarray(materials[int(index)].km_S) for index in recipe_arr]
+            )
+            relative_xyz = km_stack_reflectance(
+                absorption,
+                scattering,
+                float(layer_height_mm),
+                substrate_xyz,
+            )
+        return np.asarray(
+            km_relative_xyz_to_linear_srgb(relative_xyz),
+            dtype=np.float64,
+        ).reshape(3)
+
+    C = substrate_values.copy()
+    for layer_idx in range(len(recipe_arr)):
+        mat_id = int(recipe_arr[layer_idx])
         mat = materials[mat_id]
         C = beer_lambert_layer(C, mat.E, mat.k, layer_height_mm)
     return C
@@ -207,8 +520,29 @@ def predict_material_recipe_srgb(
     else:
         raise ValueError(f"Unsupported substrate: {substrate}")
 
+    contract = validate_material_optical_contract(materials)
+    recipe_arr = np.asarray(recipe, dtype=np.int32)
+    if contract.model_id in (LUMINA_BOX_SPECTRAL_MODEL_ID, SPECTRAL_SMOOTH_MODEL_ID):
+        recipe_arr = np.asarray(recipe)
+        predicted_xyz = _km_forward_batch_relative_xyz(
+            recipe_arr.reshape(1, -1), materials, layer_height_mm, substrate_linear,
+        )[0]
+        return km_relative_xyz_to_srgb_uint8(predicted_xyz).reshape(3)
+    if contract.model_id == KM_XYZ_MODEL_ID:
+        substrate_xyz = _linear_substrate_to_km_boundary(substrate_linear)
+        if recipe_arr.size == 0:
+            predicted_xyz = substrate_xyz
+        else:
+            predicted_xyz = km_stack_reflectance(
+                np.stack([np.asarray(materials[int(i)].km_K) for i in recipe_arr]),
+                np.stack([np.asarray(materials[int(i)].km_S) for i in recipe_arr]),
+                float(layer_height_mm),
+                substrate_xyz,
+            )
+        return km_relative_xyz_to_srgb_uint8(predicted_xyz).reshape(3)
+
     predicted_linear = forward_model(
-        np.asarray(recipe, dtype=np.int32),
+        recipe_arr,
         materials,
         layer_height_mm,
         substrate_linear,
@@ -347,6 +681,27 @@ def solve_image_colors(
     if layer_height_mm not in ALLOWED_LAYER_HEIGHTS_MM:
         raise ValueError(
             f"layer_height_mm must be one of {ALLOWED_LAYER_HEIGHTS_MM}, got {layer_height_mm}"
+        )
+    contract = validate_material_optical_contract(materials)
+
+    if is_relative_xyz_model(contract.model_id):
+        from core.material_candidate_cache import (
+            MaterialCandidateCacheConfig,
+            build_material_candidate_runtime,
+        )
+
+        runtime = build_material_candidate_runtime(
+            materials=materials,
+            layer_count=int(layer_count),
+            layer_height_mm=float(layer_height_mm),
+            substrate=str(substrate),
+            config=MaterialCandidateCacheConfig.preview_safe(),
+        )
+        return runtime.lookup(
+            np.asarray(unique_colors_srgb, dtype=np.uint8),
+            materials,
+            hue_weight=0.0,
+            neighbor_coherence=0.0,
         )
 
     C_count = unique_colors_srgb.shape[0]
@@ -518,6 +873,7 @@ def _compute_material_affines(
     Returns:
         _MaterialAffineSet with (M, 3) ``a`` and ``b`` arrays.
     """
+    require_beer_lambert_materials(materials)
     k_stack = np.stack([m.k for m in materials], axis=0).astype(np.float64)
     e_stack = np.stack([m.E for m in materials], axis=0).astype(np.float64)
     a = np.exp(-k_stack * float(layer_height_mm))
@@ -696,6 +1052,7 @@ def solve_image_colors_optimal(
         raise ValueError(
             f"layer_height_mm must be one of {ALLOWED_LAYER_HEIGHTS_MM}, got {layer_height_mm}"
         )
+    contract = validate_material_optical_contract(materials)
 
     C_count = unique_colors_srgb.shape[0]
     if C_count == 0:
@@ -703,6 +1060,26 @@ def solve_image_colors_optimal(
             np.zeros((0, 3), dtype=np.uint8),
             np.zeros((0, layer_count), dtype=np.int32),
             np.zeros((0,), dtype=np.float64),
+        )
+
+    if is_relative_xyz_model(contract.model_id):
+        from core.material_candidate_cache import (
+            MaterialCandidateCacheConfig,
+            build_material_candidate_runtime,
+        )
+
+        runtime = build_material_candidate_runtime(
+            materials=materials,
+            layer_count=int(layer_count),
+            layer_height_mm=float(layer_height_mm),
+            substrate=str(substrate),
+            config=MaterialCandidateCacheConfig.preview_safe(),
+        )
+        return runtime.lookup(
+            np.asarray(unique_colors_srgb, dtype=np.uint8),
+            materials,
+            hue_weight=0.0,
+            neighbor_coherence=0.0,
         )
 
     # ---- Memory feasibility guard ----
@@ -942,11 +1319,15 @@ def suggest_colors_for_target(
     """Suggest up to ``top_k`` achievable colors near ``target_srgb``.
     为 ``target_srgb`` 返回至多 ``top_k`` 个可达的近似色建议。
 
-    Uses the same MITM enumeration as :func:`solve_image_colors_optimal` but
-    scores every final color against a single target, keeps a heap of the
-    best ``top_k * oversample`` candidates across chunks, and finally applies
+    Beer-Lambert palettes use the same MITM enumeration as
+    :func:`solve_image_colors_optimal` but
+    score every final color against a single target, keep a heap of the
+    best ``top_k * oversample`` candidates across chunks, and finally apply
     a greedy Lab-ΔE spacing filter so returned suggestions are perceptually
-    distinct.
+    distinct. Relative-XYZ palettes use the preview-safe candidate budget
+    without inverse refinement.
+    Beer-Lambert 耗材沿用 MITM 枚举并筛选感知上不同的近似色；相对 XYZ
+    耗材使用预览候选预算上限，不执行反向精修。
 
     Args:
         target_srgb: (3,) uint8 target color in sRGB. (目标 sRGB 颜色)
@@ -986,6 +1367,32 @@ def suggest_colors_for_target(
         raise ValueError(f"top_k must be positive, got {top_k}")
     if min_spacing < 0.0:
         raise ValueError(f"min_spacing must be non-negative, got {min_spacing}")
+
+    contract = validate_material_optical_contract(materials)
+    if is_relative_xyz_model(contract.model_id):
+        from core.material_candidate_cache import (
+            MaterialCandidateCacheConfig,
+            PREVIEW_SAFE_CANDIDATE_BUDGET,
+            build_material_candidate_runtime,
+        )
+
+        runtime = build_material_candidate_runtime(
+            materials=materials,
+            layer_count=int(layer_count),
+            layer_height_mm=float(layer_height_mm),
+            substrate=str(substrate),
+            config=MaterialCandidateCacheConfig(
+                candidate_budget=PREVIEW_SAFE_CANDIDATE_BUDGET,
+                candidate_pool_multiplier=1,
+                enable_inverse_refinement=False,
+            ),
+        )
+        return runtime.lookup_top_k(
+            target_srgb,
+            materials,
+            top_k=int(top_k),
+            min_spacing=float(min_spacing),
+        )
 
     substrate_linear = (
         np.zeros(3, dtype=np.float64)
@@ -1147,11 +1554,25 @@ def find_white_material_index(
     """
     if not materials:
         return None
+    contract = validate_material_optical_contract(materials)
+    if contract.model_id in (LUMINA_BOX_SPECTRAL_MODEL_ID, SPECTRAL_SMOOTH_MODEL_ID):
+        for index, material in enumerate(materials):
+            if material.is_reference_white or (
+                material.backed_gradient_component is not None
+                and material.backed_gradient_component.kind == "white"
+            ):
+                return index
     white_linear = np.ones(3, dtype=np.float64)
     best_idx: int | None = None
     best_distance = float("inf")
     for idx, mat in enumerate(materials):
-        distance = float(np.linalg.norm(mat.E.astype(np.float64) - white_linear))
+        if is_relative_xyz_model(contract.model_id):
+            material_linear = srgb_to_linear(
+                np.asarray(mat.estimated_rgb, dtype=np.uint8).reshape(1, 3)
+            )[0]
+        else:
+            material_linear = mat.E.astype(np.float64)
+        distance = float(np.linalg.norm(material_linear - white_linear))
         if distance < best_distance:
             best_distance = distance
             best_idx = idx
@@ -1190,9 +1611,22 @@ def forward_batch_model(
         raise ValueError(f"recipes must be shaped (C, N), got {recipes_arr.shape}")
     if not materials:
         raise ValueError("At least one material must be provided")
+    contract = validate_material_optical_contract(materials)
     if substrate_linear is None:
         substrate_linear = np.ones(3, dtype=np.float64)
     substrate_linear = np.asarray(substrate_linear, dtype=np.float64).reshape(3)
+
+    if is_relative_xyz_model(contract.model_id):
+        relative_xyz = _km_forward_batch_relative_xyz(
+            recipes_arr,
+            materials,
+            float(layer_height_mm),
+            substrate_linear,
+        )
+        return np.asarray(
+            km_relative_xyz_to_linear_srgb(relative_xyz),
+            dtype=np.float64,
+        )
 
     C_count, N = recipes_arr.shape
     if C_count == 0:
@@ -1330,6 +1764,7 @@ def ensure_not_worse_than_smaller_N(
         )
     if substrate not in ("white", "black"):
         raise ValueError(f"substrate must be 'white' or 'black', got {substrate!r}")
+    contract = validate_material_optical_contract(materials) if materials else None
 
     unique_colors_srgb = np.asarray(unique_colors_srgb)
     baseline_matched_rgb = np.asarray(baseline_matched_rgb)
@@ -1390,7 +1825,10 @@ def ensure_not_worse_than_smaller_N(
         if substrate == "white"
         else np.zeros(3, dtype=np.float64)
     )
-    target_labs = rgb_to_lab(unique_colors_srgb.astype(np.uint8)).astype(np.float64)
+    target_labs = target_srgb_to_material_lab(
+        unique_colors_srgb.astype(np.uint8),
+        materials,
+    ).astype(np.float64)
 
     M = len(materials)
     for k in range(int(min_layer_count), int(target_layer_count)):
@@ -1410,7 +1848,11 @@ def ensure_not_worse_than_smaller_N(
         _chunk = min(_k_top, max(1, (32 * 1024 * 1024) // max(1, _k_bot * 24)))
         _peak_bytes = C_count * _chunk * _k_bot * 8
         _MEMORY_LIMIT = 1024 * 1024 * 1024  # 1 GiB
-        if _peak_bytes > _MEMORY_LIMIT:
+        if (
+            contract is not None
+            and contract.model_id == BEER_LAMBERT_MODEL_ID
+            and _peak_bytes > _MEMORY_LIMIT
+        ):
             _log.warning(
                 "ensure_not_worse: skipping k=%d (M=%d, K_bot=%d, C=%d) "
                 "— estimated delta_e row size %d MiB exceeds limit",
@@ -1429,12 +1871,21 @@ def ensure_not_worse_than_smaller_N(
         padded_recipes = _pad_with_white_bottom(
             recipes_short, int(target_layer_count), int(white_material_index)
         )
-        padded_linear = forward_batch_model(
-            padded_recipes, materials, layer_height_mm, substrate_linear
+        padded_prediction = predict_material_recipes_colorimetry(
+            padded_recipes,
+            materials,
+            layer_height_mm,
+            substrate,
         )
-        padded_srgb = linear_to_srgb_uint8(padded_linear)
-        padded_lab = rgb_to_lab(padded_srgb).astype(np.float64)
-        padded_delta_e = np.linalg.norm(padded_lab - target_labs, axis=1)
+        padded_srgb = padded_prediction.display_srgb
+        padded_lab = padded_prediction.lab.astype(np.float64, copy=False)
+        if contract is not None and is_relative_xyz_model(contract.model_id):
+            padded_delta_e = np.asarray(
+                delta_e_2000(padded_lab, target_labs),
+                dtype=np.float64,
+            )
+        else:
+            padded_delta_e = np.linalg.norm(padded_lab - target_labs, axis=1)
 
         improved = padded_delta_e < result_delta_e
         improved_count = int(np.count_nonzero(improved))

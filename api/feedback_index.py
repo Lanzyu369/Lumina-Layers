@@ -17,6 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable
 
+from api.feedback_archive_family import is_material_archive_source
 from api.structured_logging import get_logger
 
 __all__ = [
@@ -57,6 +58,48 @@ def _iter_list(value: Any) -> Iterable[Any]:
     """Yield items if ``value`` is list-like, otherwise yield nothing."""
     if isinstance(value, list):
         yield from value
+
+
+def _material_dynamic_summary(value: Any) -> str | None:
+    """Return a bounded dynamic-material evidence summary.
+
+    Only the count, effective-cap range, coverage scope, and effective pixel
+    count are suitable for the human-facing index and AI summary.  Exact
+    recipes remain exclusively in ``ticket.json`` for replay tooling.
+
+    仅返回配方数量、有效层数上限范围、覆盖范围和有效像素数；精确配方只保留
+    在 ``ticket.json`` 中供复现工具使用，不展开到人类摘要。
+    """
+
+    if not isinstance(value, dict):
+        return None
+    recipes = value.get("recipes")
+    benefit_curve = value.get("benefit_curve")
+    if not isinstance(recipes, list) or not isinstance(benefit_curve, list):
+        return None
+
+    caps: list[int] = []
+    for point in benefit_curve:
+        if isinstance(point, dict) and isinstance(
+            point.get("max_effective_layer_count"), int
+        ):
+            caps.append(point["max_effective_layer_count"])
+    if not caps and recipes:
+        first_recipe = recipes[0]
+        if isinstance(first_recipe, dict):
+            for option in _iter_list(first_recipe.get("layer_cap_options")):
+                if isinstance(option, dict) and isinstance(
+                    option.get("max_effective_layer_count"), int
+                ):
+                    caps.append(option["max_effective_layer_count"])
+    cap_range = (
+        f"{min(caps)}-{max(caps)}" if caps else _MISSING
+    )
+    return (
+        f"recipes={len(recipes)}; caps={cap_range}; "
+        f"scope={_safe_str(value.get('scope'))}; "
+        f"pixel_count={_safe_str(value.get('pixel_count'))}"
+    )
 
 
 def _format_timestamp_ms(ts: Any) -> str:
@@ -214,8 +257,8 @@ def _reproduction_suggestion(
     Rules:
       * If the recent action history contains an ``api_error``, surface the
         most recent one so the developer knows where to start.
-      * If ``source_version == 'material'`` AND ``material_layer_count`` is
-        known, call out the high-fidelity material-archive mode.
+      * If a material-archive source has a known ``material_layer_count``,
+        call out the high-fidelity material-archive mode.
       * Always include the ``load_bug_repro.py`` pointer.
 
     启发式复现建议：最近 API 错误、耗材档案高保真提醒、以及统一的
@@ -235,7 +278,7 @@ def _reproduction_suggestion(
                 f" / Last API error at `{path}` ({status_code}) — start debugging there."
             )
     if (
-        context.get("source_version") == "material"
+        is_material_archive_source(context.get("source_version"))
         and context.get("material_dynamic_layer_count_enabled") is True
     ):
         minimum = context.get("material_min_layer_count")
@@ -250,7 +293,7 @@ def _reproduction_suggestion(
             "backing material and range when reproducing."
         )
     elif (
-        context.get("source_version") == "material"
+        is_material_archive_source(context.get("source_version"))
         and context.get("material_layer_count") is not None
     ):
         layers = context.get("material_layer_count")
@@ -573,6 +616,7 @@ def generate_index_markdown(
     description = _safe_str(payload.get("description"))
     attachments = payload.get("attachments") or {}
     session_history = context.get("session_history") or []
+    is_material_archive = is_material_archive_source(context.get("source_version"))
 
     snapshot_lines = []
     for key in (
@@ -594,7 +638,19 @@ def generate_index_markdown(
         "enable_smooth_vector_preview",
         "vector_preview_renderer",
     ):
-        snapshot_lines.append(f"- {key}: {_safe_str(context.get(key))}")
+        value = (
+            "not_applicable"
+            if key == "lut_name" and is_material_archive
+            else context.get(key)
+        )
+        snapshot_lines.append(f"- {key}: {_safe_str(value)}")
+    if (
+        is_material_archive
+        and context.get("material_dynamic_layer_count_enabled") is True
+    ):
+        dynamic_summary = _material_dynamic_summary(context.get("material_dynamic"))
+        if dynamic_summary is not None:
+            snapshot_lines.append(f"- material_dynamic: {dynamic_summary}")
 
     session_lines = []
     raw_sessions = list(_iter_list(session_history))
@@ -677,7 +733,12 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
     active_tab = context.get("active_tab") or "unknown"
     source_version = context.get("source_version") or "legacy"
     color_mode = context.get("color_mode") or "(无)"
-    lut_name = context.get("lut_name") or "(无)"
+    is_material_archive = is_material_archive_source(source_version)
+    lut_name = (
+        "not_applicable"
+        if is_material_archive
+        else context.get("lut_name") or "(无)"
+    )
     material_dirs = context.get("selected_material_dir_names") or []
     layer_count = context.get("material_layer_count")
     layer_height = context.get("material_layer_height_mm")
@@ -758,7 +819,7 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
         )
 
     material_block = ""
-    if source_version == "material":
+    if is_material_archive:
         selected_materials = (
             ", ".join(material_dirs) if material_dirs else "(未选择)"
         )
@@ -771,6 +832,11 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
                 f"最小层数：{minimum}；最大层数：{maximum}；"
                 f"ΔE00 容差：{tolerance}；层高：{layer_height}mm；底板：{backing}。"
             )
+            dynamic_summary = _material_dynamic_summary(
+                context.get("material_dynamic")
+            )
+            if dynamic_summary is not None:
+                material_block += f"动态结果：{dynamic_summary}。"
         else:
             material_block = (
                 f"选中耗材：{selected_materials}；"

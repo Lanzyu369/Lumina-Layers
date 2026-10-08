@@ -1177,12 +1177,17 @@ class TestSessionLutInfo:
         finally:
             self._clear_override()
 
-    def test_material_archive_session_base_channel_uses_white_slot(self) -> None:
+    @pytest.mark.parametrize("profile_kind,backing_index,expected", [
+        ("stage_a", None, 2), ("stage_a", 1, 2), ("lumina_box", None, 2), ("lumina_box", 1, 1),
+    ])
+    def test_material_archive_session_base_channel_uses_white_or_explicit_box_backing(self, profile_kind, backing_index, expected) -> None:
         store = SessionStore(ttl=60)
         session_id = store.create()
         store.put(session_id, "lut_path", "__material_archive__")
         store.put(session_id, "lut_name", "__material_archive__")
         store.put(session_id, "material_source", "material_archive")
+        store.put(session_id, "material_profile_kind", profile_kind)
+        store.put(session_id, "material_backing_material_index", backing_index)
         store.put(session_id, "selected_materials", [
             "瑞贝思/瑞贝思 PLA 绿",
             "瑞贝思/瑞贝思 PLA 黄",
@@ -1212,7 +1217,7 @@ class TestSessionLutInfo:
             response = client.get(f"/api/lut/session/{session_id}/info")
             assert response.status_code == 200, response.text
             data = response.json()
-            assert data["base_channel_idx"] == 2
+            assert data["base_channel_idx"] == expected
             assert data["max_color_layers"] == 10
         finally:
             self._clear_override()

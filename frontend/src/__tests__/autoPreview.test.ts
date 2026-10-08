@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import {
   fetchMaterialSolverCacheStatus,
+  fetchMaterialSolverRuntimeStatus,
   type MaterialSolverCacheKey,
 } from "../api/materialCache";
 import { DEFAULT_STATE, useConverterStore } from "../stores/converter";
@@ -14,6 +15,7 @@ import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 
 vi.mock("../api/materialCache", () => ({
   fetchMaterialSolverCacheStatus: vi.fn(),
+  fetchMaterialSolverRuntimeStatus: vi.fn(),
 }));
 
 function fakeFile(name = "test.png"): File {
@@ -56,15 +58,17 @@ function materialCacheStatus(
 describe("useAutoPreview", () => {
   const mockSubmitPreview = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
 
-  function establishMaterialPreviewBaseline() {
+  function establishMaterialPreviewBaseline(
+    sourceVersion: "material" | "lumina_box" = "material",
+  ) {
     useConverterStore.setState({
       imageFile: fakeFile("material-preview.png"),
-      source_version: "material",
+      source_version: sourceVersion,
       lut_name: "",
       lut_names: [],
       selectedMaterialDirNames: ["profile/yellow", "profile/black"],
       materialLayerCount: 10,
-      materialLayerHeightMm: 0.04,
+      materialLayerHeightMm: sourceVersion === "lumina_box" ? 0.08 : 0.04,
       materialBackingMaterialDirName: "profile/black",
       target_width_mm: 148,
       modeling_mode: ModelingMode.HIGH_FIDELITY,
@@ -115,6 +119,9 @@ describe("useAutoPreview", () => {
     mockSubmitPreview.mockResolvedValue(undefined);
     vi.mocked(fetchMaterialSolverCacheStatus).mockImplementation(
       async (key) => materialCacheStatus(key, true),
+    );
+    vi.mocked(fetchMaterialSolverRuntimeStatus).mockImplementation(
+      async (key) => ({ ...materialCacheStatus(key, true), entry: null, candidate_budget: 33_554_432 }),
     );
     useConverterStore.setState({
       ...DEFAULT_STATE,
@@ -704,11 +711,37 @@ describe("useAutoPreview", () => {
         layerCount: 8,
         layerHeightMm: 0.04,
         substrate: "white",
+        materialProfileKind: "stage_a",
       },
       { gridResolution: undefined },
     );
     expect(mockSubmitPreview).not.toHaveBeenCalled();
     expect(useConverterStore.getState().previewAutoRefreshPending).toBe(false);
+  });
+
+  it("uses a Lumina Box cache key before auto-refreshing a measured-material preview", async () => {
+    renderHook(() => useAutoPreview());
+
+    act(() => {
+      establishMaterialPreviewBaseline("lumina_box");
+    });
+    act(() => {
+      useConverterStore.getState().setMaterialLayerCount(8);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    expect(fetchMaterialSolverRuntimeStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        materialDirectoryNames: ["profile/yellow", "profile/black"],
+        materialProfileKind: "lumina_box",
+        backingMaterialIndex: 1,
+        backingThicknessMm: 1.2,
+      }),
+    );
+    expect(fetchMaterialSolverCacheStatus).not.toHaveBeenCalled();
+    expect(mockSubmitPreview).toHaveBeenCalledTimes(1);
   });
 
   it("keeps checking material cache keys after a miss", async () => {

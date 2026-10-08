@@ -189,6 +189,25 @@ describe("dynamic material request transport", () => {
     expect(useConverterStore.getState().color_layers).toBe(9);
   });
 
+  it("uses the same physical backing for fixed Box preview and generation", async () => {
+    seedMaterialState(false);
+    useConverterStore.setState({ source_version: "lumina_box", spacer_thick: 0.43, base_spacer_thick: 0.43 });
+    await useConverterStore.getState().submitPreview();
+    await useConverterStore.getState().submitGenerate();
+    for (const params of [mocks.convertPreview.mock.calls[0][1], mocks.convertGenerate.mock.calls[0][1]]) {
+      expect(params).toMatchObject({ material_profile_kind: "lumina_box", material_backing_material_index: 0, spacer_thick: 0.43 });
+    }
+  });
+
+  it.each(["thickness", "material"])("invalidates a fixed Box preview when backing %s changes", (kind) => {
+    seedMaterialState(false);
+    useConverterStore.setState({ source_version: "lumina_box", sessionId: "old-preview", previewImageUrl: "/api/files/old", hasManualPreview: true });
+    if (kind === "thickness") useConverterStore.getState().setSpacerThick(0.4);
+    else useConverterStore.getState().setMaterialBackingMaterialDirName("brand/blue");
+    expect(useConverterStore.getState().sessionId).toBeNull();
+    expect(useConverterStore.getState().previewAutoRefreshPending).toBe(true);
+  });
+
   it("sends the same dynamic contract for generate", async () => {
     seedMaterialState(true);
     useConverterStore.setState({ sessionId: "dynamic-session" });

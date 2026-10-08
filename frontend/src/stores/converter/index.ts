@@ -14,7 +14,9 @@ export {
   collectConverterKeepFileIds,
   getMaterialArchiveReliefMinimumExtraHeight,
   getMaterialArchiveReliefMinimumTotalHeight,
+  getMaterialArchiveProfileKind,
   inferDefaultMaterialBackingDirName,
+  isMaterialArchiveSourceVersion,
   isDynamicMaterialActive,
   resolveBugReportOriginalImageFile,
   hasOnlySvgInputs,
@@ -31,4 +33,6 @@ export type {
   ModelSurfaceModelRotation,
   ConverterState,
   ConverterActions,
+  MaterialArchiveProfileKind,
+  SourceVersion,
 } from "./store";

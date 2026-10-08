@@ -384,7 +384,7 @@ export type AdvancedParams = AdvancedParamsFull | AdvancedParamsSizeTrimmed;
 export interface WorkflowSnapshot {
   color_mode: string | null;
   lut_name: string | null;
-  source_version: "legacy" | "native" | "material" | null;
+  source_version: "legacy" | "native" | "material" | "lumina_box" | null;
   selected_native_db_names: readonly string[];
   selected_material_dir_names: readonly string[];
   material_layer_count: number | null;

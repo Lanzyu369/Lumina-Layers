@@ -29,6 +29,10 @@ export interface MaterialSolverCacheKey {
   layerCount: number;
   layerHeightMm: number;
   substrate: "white" | "black";
+  /** Defaults to the historical Stage A archive family. */
+  materialProfileKind?: "stage_a" | "lumina_box";
+  backingMaterialIndex?: number;
+  backingThicknessMm?: number;
 }
 
 /**
@@ -60,6 +64,13 @@ function _formData(
   fd.append("layer_count", String(key.layerCount));
   fd.append("layer_height_mm", String(key.layerHeightMm));
   fd.append("substrate", key.substrate);
+  fd.append("material_profile_kind", key.materialProfileKind ?? "stage_a");
+  if (key.materialProfileKind === "lumina_box") {
+    if (key.backingMaterialIndex != null) {
+      fd.append("material_backing_material_index", String(key.backingMaterialIndex));
+    }
+    fd.append("spacer_thick", String(key.backingThicknessMm ?? 1.2));
+  }
   if (extra) {
     for (const [k, v] of Object.entries(extra)) {
       fd.append(k, v);
@@ -283,9 +294,10 @@ export interface MaterialColorSuggestOptions {
  * Suggest achievable colors close to ``targetHex`` for a given material palette.
  * 为指定目标颜色返回可达近似色建议。
  *
- * The backend prefers the exact solver cache, then the persisted hybrid
- * runtime, and only falls back to live MITM enumeration when no reusable
- * solver data exists. The ``source`` field tells the UI which path ran.
+ * Stage A prefers the exact solver cache, then the persisted candidate
+ * runtime, then live MITM enumeration. Lumina Box skips the affine cache,
+ * prefers its KM candidate runtime, and otherwise uses a bounded live KM
+ * solve. The ``source`` field tells the UI which path ran.
  */
 export async function fetchMaterialColorSuggestions(
   key: MaterialSolverCacheKey,

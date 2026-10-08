@@ -6,6 +6,7 @@ import {
   previewMaterialRecipe,
   generateMaterialRecipeSwatch,
 } from "../api/extractor";
+import { LUMINA_BOX_PRODUCTION_MODEL_ID } from "../api/luminaBoxMaterials";
 import {
   apiErrorToVisibleMessage,
   buildApiResourceUrl,
@@ -36,6 +37,8 @@ const SUBSTRATE_OPTIONS: ("white" | "black")[] = ["white", "black"];
 const ALLOWED_LAYER_HEIGHTS_MM = [0.04, 0.08, 0.1] as const;
 const DEFAULT_LAYER_HEIGHT_MM = 0.08;
 const UNASSIGNED_BRAND_GROUP_KEY = "__unassigned__";
+type MaterialProfileKind = "stage_a" | "lumina_box";
+const MATERIAL_PROFILE_KINDS: MaterialProfileKind[] = ["stage_a", "lumina_box"];
 
 const isRgbTriplet = (value: number[] | null | undefined): value is [number, number, number] =>
   Array.isArray(value) && value.length === 3;
@@ -91,6 +94,7 @@ interface PaletteEntry {
   directoryName: string;
   materialName: string;
   brand: string;
+  profileKind: MaterialProfileKind;
   hex: string;
   rgbCss: string;
 }
@@ -104,6 +108,7 @@ interface CollectedRecipe {
   label: string;
   layerHeightMm: number;
   substrate: string;
+  profileKind: MaterialProfileKind;
 }
 
 type PaletteBrandGroup = {
@@ -111,10 +116,18 @@ type PaletteBrandGroup = {
   items: PaletteEntry[];
 };
 
-const buildPaletteEntries = (items: SavedMaterialLibraryItem[]): PaletteEntry[] => {
+const buildPaletteEntries = (
+  items: SavedMaterialLibraryItem[],
+  profileKind: MaterialProfileKind,
+): PaletteEntry[] => {
   const entries: PaletteEntry[] = [];
   for (const item of items) {
     if (!item.directory_name) continue;
+    const itemProfileKind = item.profile_kind ?? "stage_a";
+    // Preserve the chosen family even if a stale/proxy response contains rows
+    // from another profile kind.
+    if (itemProfileKind !== profileKind) continue;
+    if (profileKind === "lumina_box" && item.optical_model_id !== LUMINA_BOX_PRODUCTION_MODEL_ID) continue;
     const rgb = isRgbTriplet(item.estimated_rgb) ? item.estimated_rgb : null;
     const hex = rgb ? toHex(rgb) : "#808080";
     const rgbCss = rgb ? toRgbCss(rgb) : "#808080";
@@ -122,6 +135,7 @@ const buildPaletteEntries = (items: SavedMaterialLibraryItem[]): PaletteEntry[] 
       directoryName: item.directory_name,
       materialName: item.material_name || item.directory_name,
       brand: item.brand?.trim() ?? "",
+      profileKind: itemProfileKind,
       hex,
       rgbCss,
     });
@@ -149,6 +163,7 @@ const matchesQuery = (entry: PaletteEntry, query: string): boolean => {
 export default function MaterialRecipeQueryPanel() {
   const { t } = useI18n();
   const workspace = useWorkspaceMode();
+  const [profileKind, setProfileKind] = useState<MaterialProfileKind>("stage_a");
   const [palette, setPalette] = useState<PaletteEntry[]>([]);
   const [paletteLoading, setPaletteLoading] = useState(true);
   const [paletteError, setPaletteError] = useState<string | null>(null);
@@ -170,12 +185,15 @@ export default function MaterialRecipeQueryPanel() {
   const [swatchPreviewUrl, setSwatchPreviewUrl] = useState<string | null>(null);
   const [collapsedBrandGroupKeys, setCollapsedBrandGroupKeys] = useState<string[]>([]);
   const swatchRequestSequenceRef = useRef(0);
+  const paletteRequestSequenceRef = useRef(0);
+  const recipeRequestSequenceRef = useRef(0);
 
   useEffect(
     () =>
       registerGeneratedArtifactInvalidator(({ preservePreviews }) => {
         swatchRequestSequenceRef.current += 1;
         setIsGeneratingSwatch(false);
+        setIsDownloadingSwatch(false);
         setSwatchDownloadUrl(null);
         if (!preservePreviews) {
           setSwatchPreviewUrl(null);
@@ -184,20 +202,49 @@ export default function MaterialRecipeQueryPanel() {
     [],
   );
 
+  const handleProfileKindChange = useCallback((nextProfileKind: MaterialProfileKind) => {
+    if (nextProfileKind === profileKind) return;
+    // Invalidate every family-bound artifact before switching the palette so a
+    // slower response from the prior family cannot restore an incompatible
+    // recipe, queue, or downloadable swatch.
+    paletteRequestSequenceRef.current += 1;
+    recipeRequestSequenceRef.current += 1;
+    swatchRequestSequenceRef.current += 1;
+    setProfileKind(nextProfileKind);
+    setPalette([]);
+    setPaletteLoading(true);
+    setPaletteError(null);
+    setLayers([]);
+    setResult(null);
+    setError(null);
+    setSearchQuery("");
+    setCollectedRecipes([]);
+    setIsComputing(false);
+    setIsGeneratingSwatch(false);
+    setIsDownloadingSwatch(false);
+    setSwatchDownloadUrl(null);
+    setSwatchPreviewUrl(null);
+    setCollapsedBrandGroupKeys([]);
+  }, [profileKind]);
+
   const canAddToCollection = result !== null && result.predicted_hex !== undefined;
   const isAlreadyCollected = useMemo(() => {
     if (!result) return false;
-    const key = layers.map((l) => l.directoryName).join(",") + ":" + result.predicted_hex;
+    const key = `${profileKind}:${layers.map((l) => l.directoryName).join(",")}:${result.predicted_hex}`;
     return collectedRecipes.some(
-      (r) => r.directoryNames.join(",") + ":" + r.resultHex === key,
+      (r) => `${r.profileKind}:${r.directoryNames.join(",")}:${r.resultHex}` === key,
     );
-  }, [collectedRecipes, layers, result]);
+  }, [collectedRecipes, layers, profileKind, result]);
 
   const handleAddToCollection = useCallback(() => {
     if (!result || !layers.length) return;
+    if ((result.material_profile_kind ?? profileKind) !== profileKind) {
+      setError(t("material_recipe_profile_incompatible"));
+      return;
+    }
     const dirNames = layers.map((l) => l.directoryName);
-    const key = dirNames.join(",") + ":" + result.predicted_hex;
-    if (collectedRecipes.some((r) => r.directoryNames.join(",") + ":" + r.resultHex === key)) return;
+    const key = `${profileKind}:${dirNames.join(",")}:${result.predicted_hex}`;
+    if (collectedRecipes.some((r) => `${r.profileKind}:${r.directoryNames.join(",")}:${r.resultHex}` === key)) return;
     const recipe: CollectedRecipe = {
       id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       directoryNames: dirNames,
@@ -207,9 +254,10 @@ export default function MaterialRecipeQueryPanel() {
       label: layers.map((l) => l.materialName).join(" \u2192 "),
       layerHeightMm: layerHeightMm,
       substrate,
+      profileKind,
     };
     setCollectedRecipes((prev) => [...prev, recipe]);
-  }, [result, layers, collectedRecipes, layerHeightMm, substrate]);
+  }, [result, layers, collectedRecipes, layerHeightMm, profileKind, substrate, t]);
 
   const handleRemoveFromCollection = useCallback((id: string) => {
     setCollectedRecipes((prev) => prev.filter((r) => r.id !== id));
@@ -224,6 +272,10 @@ export default function MaterialRecipeQueryPanel() {
 
   const handleGenerateSwatch = useCallback(async () => {
     if (collectedRecipes.length === 0) return;
+    if (collectedRecipes.some((recipe) => recipe.profileKind !== profileKind)) {
+      setError(t("material_recipe_profile_incompatible"));
+      return;
+    }
     const settings = useSettingsStore.getState();
     const requestIdentity = captureGeneratedArtifactIdentity(
       settings.deviceProfileId,
@@ -253,6 +305,7 @@ export default function MaterialRecipeQueryPanel() {
           layer_height_mm: r.layerHeightMm,
           substrate: r.substrate,
         })),
+        material_profile_kind: profileKind,
         block_size_mm: swatchBlockSize,
         gap_mm: swatchGap,
         cols: swatchCols,
@@ -279,15 +332,20 @@ export default function MaterialRecipeQueryPanel() {
         setIsGeneratingSwatch(false);
       }
     }
-  }, [collectedRecipes, swatchBlockSize, swatchGap, swatchCols, swatchStructureMode, t]);
+  }, [collectedRecipes, profileKind, swatchBlockSize, swatchGap, swatchCols, swatchStructureMode, t]);
 
   const handleDownloadSwatch = useCallback(async () => {
     if (!swatchDownloadUrl || isDownloadingSwatch) return;
+    const requestSequence = ++swatchRequestSequenceRef.current;
+    const isCurrentRequest = (): boolean => (
+      requestSequence === swatchRequestSequenceRef.current
+    );
     setIsDownloadingSwatch(true);
     setError(null);
     let objectUrl: string | null = null;
     try {
       const blob = await downloadResourceBlob(buildApiResourceUrl(swatchDownloadUrl));
+      if (!isCurrentRequest()) return;
       objectUrl = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = objectUrl;
@@ -297,22 +355,28 @@ export default function MaterialRecipeQueryPanel() {
       anchor.click();
       anchor.remove();
     } catch (err) {
+      if (!isCurrentRequest()) return;
       setError(resolveMaterialRecipeError(err, t("material_recipe_download_swatch_failed")));
     } finally {
       if (objectUrl) {
         URL.revokeObjectURL(objectUrl);
       }
-      setIsDownloadingSwatch(false);
+      if (isCurrentRequest()) {
+        setIsDownloadingSwatch(false);
+      }
     }
   }, [isDownloadingSwatch, swatchDownloadUrl, t]);
 
-  const loadPalette = useCallback(async () => {
+  const loadPalette = useCallback(async (requestedProfileKind: MaterialProfileKind) => {
+    const requestSequence = ++paletteRequestSequenceRef.current;
     setPaletteLoading(true);
     setPaletteError(null);
     try {
-      const response = await listGradientCardMaterials();
-      setPalette(buildPaletteEntries(response.materials ?? []));
+      const response = await listGradientCardMaterials({ profileKind: requestedProfileKind });
+      if (requestSequence !== paletteRequestSequenceRef.current) return;
+      setPalette(buildPaletteEntries(response.materials ?? [], requestedProfileKind));
     } catch (err) {
+      if (requestSequence !== paletteRequestSequenceRef.current) return;
       const message = resolveMaterialRecipeError(
         err,
         t("material_recipe_palette_load_failed"),
@@ -320,19 +384,25 @@ export default function MaterialRecipeQueryPanel() {
       setPaletteError(message);
       setPalette([]);
     } finally {
-      setPaletteLoading(false);
+      if (requestSequence === paletteRequestSequenceRef.current) {
+        setPaletteLoading(false);
+      }
     }
   }, [t]);
 
   useEffect(() => {
-    void loadPalette();
-  }, [loadPalette]);
+    void loadPalette(profileKind);
+  }, [loadPalette, profileKind]);
 
   const handleAppendLayer = useCallback((entry: PaletteEntry) => {
+    if (entry.profileKind !== profileKind) {
+      setError(t("material_recipe_profile_incompatible"));
+      return;
+    }
     setLayers((prev) => [...prev, entry]);
     setResult(null);
     setError(null);
-  }, []);
+  }, [profileKind, t]);
 
   const handleRemoveLayer = useCallback((index: number) => {
     setLayers((prev) => prev.filter((_, i) => i !== index));
@@ -400,16 +470,20 @@ export default function MaterialRecipeQueryPanel() {
 
   const handleCompute = useCallback(async () => {
     if (layers.length === 0) return;
+    const requestSequence = ++recipeRequestSequenceRef.current;
     setIsComputing(true);
     setError(null);
     try {
       const response = await previewMaterialRecipe({
         directory_names: toSubstrateFirstDirectoryNames(layers),
+        material_profile_kind: profileKind,
         layer_height_mm: layerHeightMm,
         substrate,
       });
+      if (requestSequence !== recipeRequestSequenceRef.current) return;
       setResult(response);
     } catch (err) {
+      if (requestSequence !== recipeRequestSequenceRef.current) return;
       const message = resolveMaterialRecipeError(
         err,
         t("material_recipe_query_failed"),
@@ -417,9 +491,11 @@ export default function MaterialRecipeQueryPanel() {
       setError(message);
       setResult(null);
     } finally {
-      setIsComputing(false);
+      if (requestSequence === recipeRequestSequenceRef.current) {
+        setIsComputing(false);
+      }
     }
-  }, [layers, layerHeightMm, substrate, t]);
+  }, [layers, layerHeightMm, profileKind, substrate, t]);
 
   const layerCountLabel = useMemo(
     () => tRuntime("material_recipe_layers_count", { count: layers.length }),
@@ -455,6 +531,40 @@ export default function MaterialRecipeQueryPanel() {
           </section>
 
           <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                {t("mat_gradient_library_profile_kind_label")}
+              </span>
+              <div
+                className="grid grid-cols-2 gap-1.5"
+                data-testid="material-recipe-profile-kind-selector"
+              >
+                {MATERIAL_PROFILE_KINDS.map((kind) => {
+                  const isActive = profileKind === kind;
+                  return (
+                    <button
+                      key={kind}
+                      type="button"
+                      onClick={() => handleProfileKindChange(kind)}
+                      aria-pressed={isActive}
+                      className={`h-9 rounded-lg border text-xs font-medium transition-all ${
+                        isActive
+                          ? "border-blue-400 bg-blue-500/10 text-blue-600 ring-1 ring-blue-500/20 dark:border-blue-500 dark:text-blue-400"
+                          : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600"
+                      }`}
+                      data-testid={`material-recipe-profile-${kind}`}
+                    >
+                      {t(
+                        kind === "lumina_box"
+                          ? "mat_gradient_library_profile_kind_lumina_box"
+                          : "mat_gradient_library_profile_kind_stage_a",
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <label className="flex flex-col gap-1.5">
                 <span className="text-xs font-medium text-slate-500 dark:text-slate-400">

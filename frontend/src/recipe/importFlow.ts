@@ -3,7 +3,7 @@
  * 配方导入编排：协调解析、恢复和 store 更新。
  */
 
-import { isValidImageType, RAW_EXTENSIONS_CONVERTER, useConverterStore } from "../stores/converter";
+import { isMaterialArchiveSourceVersion, isValidImageType, RAW_EXTENSIONS_CONVERTER, useConverterStore } from "../stores/converter";
 import { saveGeneratedFile, type SaveOutcome } from "../utils/saveGeneratedFile";
 import {
   resolveBuildPlateSelection,
@@ -254,8 +254,11 @@ export function applyImport(
   const store = useConverterStore.getState();
   const conv = restoreResult.recipe.recipe.converter;
 
-  const importedTolerance =
-    conv?.source?.material_delta_e00_tolerance;
+  const importedTolerance = isMaterialArchiveSourceVersion(
+    conv?.source?.source_version,
+  )
+    ? conv?.source?.material_delta_e00_tolerance
+    : undefined;
   if (typeof importedTolerance === "number") {
     useSettingsStore
       .getState()

@@ -381,6 +381,40 @@ describe("buildWorkshopColorLibrary", () => {
     });
   });
 
+  it("hydrates a Lumina Box archive with its own material profile filter", async () => {
+    const loadMaterialCatalog = vi.fn(async (
+      _signal?: AbortSignal,
+      profileKind?: "stage_a" | "lumina_box",
+    ) => ({
+      materials: [
+        {
+          material_name: "Measured White",
+          directory_name: "lumina-white",
+          material_file_url: null,
+          estimated_rgb: [250, 250, 248],
+        },
+      ],
+      profileKind,
+    }));
+    useConverterStore.setState({
+      source_version: "lumina_box",
+      selectedMaterialDirNames: ["lumina-white"],
+    });
+
+    const library = await readWorkshopColorLibrary({
+      loadMaterialCatalog,
+    });
+
+    expect(loadMaterialCatalog).toHaveBeenCalledWith(
+      expect.any(AbortSignal),
+      "lumina_box",
+    );
+    expect(library).toMatchObject({
+      sourceKind: "material-archive",
+      colors: [{ label: "Measured White", hex: "#FAFAF8" }],
+    });
+  });
+
   it("hydrates the selected native database after loading its catalog", async () => {
     const fetchLutCatalog = vi.fn(async () => {
       useConverterStore.setState({

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ColorMode, ModelingMode } from "../../api/types";
+import { useActionHistoryStore } from "../../stores/actionHistoryStore";
 import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useSingleStageStore } from "../../stores/singleStageStore";
@@ -15,12 +16,75 @@ import {
 
 declare const __LUMINA_VERSION__: string;
 
+const DYNAMIC_MATERIAL_RESULT = {
+  recipes: [
+    {
+      target_srgb: [17, 34, 51] as [number, number, number],
+      matched_srgb: [20, 30, 40] as [number, number, number],
+      actual_layer_count: 5,
+      padding_layer_count: 2,
+      actual_recipe_top_to_bottom: [0, 1, 0, 1, 0],
+      print_recipe_top_to_bottom: [0, 1, 0, 1, 0, 1, 1],
+      selected_delta_e00: 0.3,
+      best_range_delta_e00: 0.2,
+      fixed_max_delta_e00: 0.4,
+      delta_e00_sacrifice: 0.1,
+      layer_cap_options: [
+        {
+          max_effective_layer_count: 5,
+          actual_layer_count: 5,
+          matched_srgb: [20, 30, 40] as [number, number, number],
+          actual_recipe_top_to_bottom: [0, 1, 0, 1, 0],
+          print_recipe_top_to_bottom: [0, 1, 0, 1, 0, 1, 1],
+          delta_e00: 0.3,
+        },
+        {
+          max_effective_layer_count: 6,
+          actual_layer_count: 5,
+          matched_srgb: [20, 30, 40] as [number, number, number],
+          actual_recipe_top_to_bottom: [0, 1, 0, 1, 0],
+          print_recipe_top_to_bottom: [0, 1, 0, 1, 0, 1, 1],
+          delta_e00: 0.3,
+        },
+        {
+          max_effective_layer_count: 7,
+          actual_layer_count: 5,
+          matched_srgb: [20, 30, 40] as [number, number, number],
+          actual_recipe_top_to_bottom: [0, 1, 0, 1, 0],
+          print_recipe_top_to_bottom: [0, 1, 0, 1, 0, 1, 1],
+          delta_e00: 0.3,
+        },
+      ],
+    },
+  ],
+  benefit_curve: [
+    {
+      max_effective_layer_count: 5,
+      weighted_mean_delta_e00: 0.3,
+      marginal_delta_e00_reduction: 0,
+    },
+    {
+      max_effective_layer_count: 6,
+      weighted_mean_delta_e00: 0.25,
+      marginal_delta_e00_reduction: 0.05,
+    },
+    {
+      max_effective_layer_count: 7,
+      weighted_mean_delta_e00: 0.2,
+      marginal_delta_e00_reduction: 0.05,
+    },
+  ],
+  scope: "automatic_pixels" as const,
+  pixel_count: 37,
+};
+
 describe("collectBugReportContext", () => {
   const originalWindow = globalThis.window;
   const originalNavigator = globalThis.navigator;
 
   beforeEach(() => {
     _clearClientLogBufferForTests();
+    useActionHistoryStore.getState()._resetForTests();
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -35,6 +99,13 @@ describe("collectBugReportContext", () => {
       selectedMaterialDirNames: [],
       materialLayerCount: 5,
       materialLayerHeightMm: 0.08,
+      materialDynamicLayerCountEnabled: false,
+      materialMinLayerCount: 5,
+      materialMaxLayerCount: 10,
+      materialDynamicRecipes: [],
+      materialLayerBenefitCurve: [],
+      materialLayerBenefitScope: "all_printable_pixels",
+      materialLayerBenefitPixelCount: 0,
       downloadUrl: null,
       threemfDiskPath: null,
       largeFormatEnabled: false,
@@ -92,6 +163,7 @@ describe("collectBugReportContext", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     _clearClientLogBufferForTests();
+    useActionHistoryStore.getState()._resetForTests();
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: originalWindow,
@@ -136,6 +208,7 @@ describe("collectBugReportContext", () => {
       material_min_layer_count: null,
       material_max_layer_count: null,
       material_delta_e00_tolerance: null,
+      material_dynamic: null,
       material_layer_height_mm: null,
       material_backing_material_dir_name: null,
       preserve_upload_filename_for_3mf: false,
@@ -376,17 +449,120 @@ describe("collectBugReportContext", () => {
       materialDynamicLayerCountEnabled: true,
       materialMinLayerCount: 5,
       materialMaxLayerCount: 9,
+      materialDynamicRecipes: DYNAMIC_MATERIAL_RESULT.recipes,
+      materialLayerBenefitCurve: DYNAMIC_MATERIAL_RESULT.benefit_curve,
+      materialLayerBenefitScope: DYNAMIC_MATERIAL_RESULT.scope,
+      materialLayerBenefitPixelCount: DYNAMIC_MATERIAL_RESULT.pixel_count,
     });
     useSettingsStore.setState({ materialDeltaE00Tolerance: 0.4 });
     useWidgetStore.setState({ activeTab: "converter" });
 
-    const context = collectBugReportContext() as unknown as Record<string, unknown>;
+    const context = collectBugReportContext();
 
     expect(context.material_dynamic_layer_count_enabled).toBe(true);
     expect(context.material_min_layer_count).toBe(5);
     expect(context.material_max_layer_count).toBe(9);
     expect(context.material_delta_e00_tolerance).toBe(0.4);
     expect(context.material_backing_material_dir_name).toBe("brand/white");
+    expect(context.material_dynamic).toEqual(DYNAMIC_MATERIAL_RESULT);
+  });
+
+  it("treats Lumina Box as a material archive without stale LUT state", () => {
+    useConverterStore.setState({
+      source_version: "lumina_box",
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      lut_name: "stale-legacy-lut",
+      selectedMaterialDirNames: ["Lumina/red", "Lumina/white"],
+      materialLayerCount: 9,
+      materialLayerHeightMm: 0.04,
+      materialBackingMaterialDirName: "Lumina/white",
+      materialDynamicLayerCountEnabled: true,
+      materialMinLayerCount: 5,
+      materialMaxLayerCount: 9,
+      materialDynamicRecipes: DYNAMIC_MATERIAL_RESULT.recipes,
+      materialLayerBenefitCurve: DYNAMIC_MATERIAL_RESULT.benefit_curve,
+      materialLayerBenefitScope: DYNAMIC_MATERIAL_RESULT.scope,
+      materialLayerBenefitPixelCount: DYNAMIC_MATERIAL_RESULT.pixel_count,
+    });
+    useSettingsStore.setState({ materialDeltaE00Tolerance: 0.35 });
+    useWidgetStore.setState({ activeTab: "converter" });
+    useActionHistoryStore.setState({
+      history: [
+        {
+          timestamp: 1_747_000_000_000,
+          action_type: "material_param_commit",
+          snapshot: {
+            color_mode: null,
+            lut_name: null,
+            source_version: "lumina_box",
+            selected_native_db_names: [],
+            selected_material_dir_names: ["Lumina/red", "Lumina/white"],
+            material_layer_count: 9,
+            material_layer_height_mm: 0.04,
+            material_backing_material_dir_name: "Lumina/white",
+            active_tab: "converter",
+            advanced_params: null,
+          },
+        },
+      ],
+    });
+
+    const context = collectBugReportContext();
+    expect(context.optical_model_id).toBe("backed_gradient_spectral_four_flux_smooth/v3");
+    const advanced = context.advanced_params as AdvancedParamsFull;
+
+    expect(context.source_version).toBe("lumina_box");
+    expect(context.color_mode).toBeNull();
+    expect(context.lut_name).toBeNull();
+    expect(context.selected_material_dir_names).toEqual([
+      "Lumina/red",
+      "Lumina/white",
+    ]);
+    expect(context.material_layer_count).toBe(9);
+    expect(context.material_layer_height_mm).toBe(0.04);
+    expect(context.material_backing_material_dir_name).toBe("Lumina/white");
+    expect(context.material_dynamic_layer_count_enabled).toBe(true);
+    expect(context.material_min_layer_count).toBe(5);
+    expect(context.material_max_layer_count).toBe(9);
+    expect(context.material_delta_e00_tolerance).toBe(0.35);
+    expect(context.material_dynamic).toEqual(DYNAMIC_MATERIAL_RESULT);
+    expect(context.material_dynamic?.recipes).not.toBe(
+      DYNAMIC_MATERIAL_RESULT.recipes,
+    );
+    expect(advanced.generation.material_dynamic_layer_count_enabled).toBe(true);
+    expect(advanced.generation.material_delta_e00_tolerance).toBe(0.35);
+    expect(context.action_history).toHaveLength(1);
+    expect(context.action_history?.[0]?.snapshot.source_version).toBe(
+      "lumina_box",
+    );
+  });
+
+  it("clears dynamic solver evidence outside enabled material archives", () => {
+    useWidgetStore.setState({ activeTab: "converter" });
+    useConverterStore.setState({
+      source_version: "native",
+      lut_name: "native-lut",
+      materialDynamicLayerCountEnabled: true,
+      materialDynamicRecipes: DYNAMIC_MATERIAL_RESULT.recipes,
+      materialLayerBenefitCurve: DYNAMIC_MATERIAL_RESULT.benefit_curve,
+      materialLayerBenefitScope: DYNAMIC_MATERIAL_RESULT.scope,
+      materialLayerBenefitPixelCount: DYNAMIC_MATERIAL_RESULT.pixel_count,
+    });
+
+    const nativeContext = collectBugReportContext();
+
+    expect(nativeContext.lut_name).toBe("native-lut");
+    expect(nativeContext.material_dynamic).toBeNull();
+
+    useConverterStore.setState({
+      source_version: "material",
+      materialDynamicLayerCountEnabled: false,
+    });
+
+    const fixedMaterialContext = collectBugReportContext();
+
+    expect(fixedMaterialContext.lut_name).toBeNull();
+    expect(fixedMaterialContext.material_dynamic).toBeNull();
   });
 
   it("collects native LUT source details on converter tab", () => {
@@ -836,6 +1012,7 @@ describe("collectBugReportContext", () => {
       "material_min_layer_count",
       "material_max_layer_count",
       "material_delta_e00_tolerance",
+      "material_dynamic",
       "material_layer_height_mm",
       "material_backing_material_dir_name",
       "preserve_upload_filename_for_3mf",

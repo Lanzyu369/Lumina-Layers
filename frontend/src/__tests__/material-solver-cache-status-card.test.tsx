@@ -9,6 +9,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import MaterialSolverCacheStatusCard from "../components/MaterialSolverCacheStatusCard";
+import { translations } from "../i18n/translations";
 import {
   buildMaterialSolverCache,
   buildMaterialSolverRuntime,
@@ -218,6 +219,7 @@ describe("MaterialSolverCacheStatusCard", () => {
         layerCount: 5,
         layerHeightMm: 0.08,
         substrate: "white",
+        materialProfileKind: "stage_a",
       },
       // With the opt-in toggle off, the call omits a concrete
       // gridResolution so the backend applies its low-tier default.
@@ -314,6 +316,7 @@ describe("MaterialSolverCacheStatusCard", () => {
         layerCount: 5,
         layerHeightMm: 0.08,
         substrate: "white",
+        materialProfileKind: "stage_a",
       },
       { gridResolution: undefined },
     );
@@ -325,6 +328,120 @@ describe("MaterialSolverCacheStatusCard", () => {
       ).toHaveAttribute("data-tone", "ok");
     });
     expect(screen.getByText("缓存已就绪")).toBeInTheDocument();
+  });
+
+  it("keeps cache build available for large high-grid combinations", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "No cache found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      entry: null,
+    });
+    useSettingsStore.setState({
+      enableSolverCacheGridSelection: true,
+      solverCacheGridResolution: 2048,
+    });
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={Array.from(
+          { length: 12 },
+          (_, idx) => `mat-${idx}`,
+        )}
+        layerCount={8}
+        layerHeightMm={0.08}
+      />,
+    );
+
+    const buildButton = await screen.findByRole("button", {
+      name: "立即构建缓存",
+    });
+    expect(buildButton).not.toBeDisabled();
+    expect(
+      screen.queryByText(/超过穷举或内存预算/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("lets large palettes build the hybrid runtime independently of the exhaustive cache", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "No cache found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      entry: null,
+    });
+    vi.mocked(fetchMaterialSolverRuntimeStatus).mockResolvedValue({
+      status: "ok",
+      message: "No runtime found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      candidate_budget: 33_554_432,
+      entry: null,
+    });
+    vi.mocked(buildMaterialSolverRuntime).mockResolvedValue({
+      status: "ok",
+      message: "Built runtime",
+      entry: buildRuntimeEntry({ layer_count: 8, layer_height_mm: 0.08 }),
+    });
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={Array.from(
+          { length: 22 },
+          (_, idx) => `mat-${idx}`,
+        )}
+        layerCount={8}
+        layerHeightMm={0.08}
+      />,
+    );
+
+    const exhaustiveBuildButton = await screen.findByRole("button", {
+      name: "立即构建缓存",
+    });
+    expect(exhaustiveBuildButton).not.toBeDisabled();
+
+    const runtimeSection = await screen.findByTestId(
+      "material-solver-runtime-section",
+    );
+    const runtimeBuildButton = within(runtimeSection).getByRole("button");
+    expect(runtimeBuildButton).not.toBeDisabled();
+
+    await act(async () => {
+      fireEvent.click(runtimeBuildButton);
+    });
+
+    await waitFor(() => {
+      expect(buildMaterialSolverRuntime).toHaveBeenCalledTimes(1);
+    });
+    expect(buildMaterialSolverRuntime).toHaveBeenCalledWith(
+      {
+        materialDirectoryNames: Array.from(
+          { length: 22 },
+          (_, idx) => `mat-${idx}`,
+        ),
+        layerCount: 8,
+        layerHeightMm: 0.08,
+        substrate: "white",
+        materialProfileKind: "stage_a",
+      },
+      { candidateBudget: 33_554_432 },
+    );
+    expect(buildMaterialSolverCache).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("material-solver-runtime-status-pill"),
+      ).toHaveAttribute("data-tone", "ok");
+    });
   });
 
   it("forwards selected runtime candidate budget to status build and delete calls", async () => {
@@ -475,6 +592,7 @@ describe("MaterialSolverCacheStatusCard", () => {
         layerCount: 8,
         layerHeightMm: 0.04,
         substrate: "white",
+        materialProfileKind: "stage_a",
       },
       { candidateBudget: 33_554_432, maxPoints: 8000 },
     );
@@ -729,9 +847,12 @@ describe("MaterialSolverCacheStatusCard", () => {
       candidate_budget: 33_554_432,
       entry: null,
     });
-    vi.mocked(buildMaterialSolverRuntime).mockRejectedValue(
-      new Error("Request failed with status code 500"),
-    );
+    vi.mocked(buildMaterialSolverRuntime).mockRejectedValue({
+      response: {
+        status: 500,
+        data: { detail: "Traceback: private worker path C:\\secret\\runtime.py" },
+      },
+    });
 
     render(
       <MaterialSolverCacheStatusCard
@@ -756,6 +877,7 @@ describe("MaterialSolverCacheStatusCard", () => {
     expect(
       screen.getByText("智能缓存构建失败，请稍后重试。"),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/Traceback|private worker path/i)).toBeNull();
     expectRawMaterialCacheErrorsHidden();
   });
 
@@ -863,6 +985,130 @@ describe("MaterialSolverCacheStatusCard", () => {
       screen.getByText("配方覆盖图加载失败，请稍后重试。"),
     ).toBeInTheDocument();
     expectRawMaterialCacheErrorsHidden();
+  });
+
+  it("uses only the KM candidate runtime controls for Lumina Box", async () => {
+    vi.mocked(fetchMaterialSolverRuntimeStatus).mockResolvedValue({
+      status: "ok",
+      message: "No KM runtime found",
+      cached: false,
+      palette_hash: "km-fingerprint",
+      profile_kind: "lumina_box",
+      optical_model: "km_xyz/v1",
+      protocol_id: "lumina_box_xyz_paired_km/v1",
+      color_bridge_id: "d65_10_to_d65_2_diagonal/v1",
+      archive_revision_ids: ["revision-a", "revision-b"],
+      layer_count: 5,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      candidate_budget: 33_554_432,
+      entry: null,
+    });
+    vi.mocked(buildMaterialSolverRuntime).mockResolvedValue({
+      status: "ok",
+      message: "Built KM runtime",
+      entry: buildRuntimeEntry({
+        palette_hash: "km-fingerprint",
+        profile_kind: "lumina_box",
+        optical_model: "km_xyz/v1",
+        protocol_id: "lumina_box_xyz_paired_km/v1",
+        color_bridge_id: "d65_10_to_d65_2_diagonal/v1",
+        archive_revision_ids: ["revision-a", "revision-b"],
+      }),
+    });
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={["red", "white"]}
+        layerCount={5}
+        layerHeightMm={0.08}
+        materialProfileKind="lumina_box"
+      />,
+    );
+
+    expect(
+      await screen.findByTestId("material-solver-cache-lumina-box-notice"),
+    ).toHaveTextContent(translations.basic_material_cache_lumina_box_not_applicable.zh);
+    expect(
+      screen.queryByTestId("material-solver-cache-stage-a-section"),
+    ).not.toBeInTheDocument();
+    expect(fetchMaterialSolverCacheStatus).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(fetchMaterialSolverRuntimeStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ materialProfileKind: "lumina_box" }),
+        { candidateBudget: 33_554_432 },
+      );
+    });
+
+    const runtimeSection = screen.getByTestId("material-solver-runtime-section");
+    const buildButton = within(runtimeSection).getByRole("button", {
+      name: "构建智能缓存",
+    });
+    await act(async () => {
+      fireEvent.click(buildButton);
+    });
+    await waitFor(() => {
+      expect(buildMaterialSolverRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({ materialProfileKind: "lumina_box" }),
+        { candidateBudget: 33_554_432 },
+      );
+    });
+    expect(buildMaterialSolverCache).not.toHaveBeenCalled();
+  });
+
+  it("caps Lumina Box runtime choices at the supported 32M tier", async () => {
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={["red", "white"]}
+        layerCount={5}
+        layerHeightMm={0.08}
+        materialProfileKind="lumina_box"
+      />,
+    );
+
+    const runtimeSection = await screen.findByTestId(
+      "material-solver-runtime-section",
+    );
+    fireEvent.click(within(runtimeSection).getByRole("combobox"));
+
+    expect(
+      await screen.findByRole("option", { name: /32M/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /64M/ })).toBeNull();
+  });
+
+  it("shows actionable safe 4xx detail for a Lumina Box runtime build", async () => {
+    vi.mocked(buildMaterialSolverRuntime).mockRejectedValue({
+      response: {
+        status: 422,
+        data: {
+          detail:
+            "Candidate runtime build exceeds the 8 GiB memory budget; choose 32M or lower.",
+        },
+      },
+    });
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={["red", "white"]}
+        layerCount={5}
+        layerHeightMm={0.08}
+        materialProfileKind="lumina_box"
+      />,
+    );
+
+    const runtimeSection = await screen.findByTestId(
+      "material-solver-runtime-section",
+    );
+    fireEvent.click(
+      within(runtimeSection).getByRole("button", { name: "构建智能缓存" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "智能缓存构建失败：Candidate runtime build exceeds the 8 GiB memory budget; choose 32M or lower.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("forwards the chosen gridResolution to every API call when the opt-in toggle is on", async () => {

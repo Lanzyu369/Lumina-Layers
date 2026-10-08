@@ -227,11 +227,14 @@ describe("ActionBar — auto batch mode", () => {
     expect(btn).not.toBeDisabled();
   });
 
-  it("enables batch generate button for material archive source without a legacy LUT", () => {
+  it.each([
+    ["Stage A", "material"],
+    ["Lumina Box", "lumina_box"],
+  ] as const)("enables batch generate button for %s material archive source without a legacy LUT", (_label, sourceVersion) => {
     useConverterStore.setState({
       batchMode: true,
       batchFiles: [makeFile("a.png")],
-      source_version: "material",
+      source_version: sourceVersion,
       lut_name: "",
       selectedMaterialDirNames: ["brand/red", "brand/white"],
       materialLayerCount: 7,
@@ -282,7 +285,7 @@ describe("ActionBar — auto batch mode", () => {
     useConverterStore.setState({
       batchMode: true,
       batchFiles: [makeFile("a.png")],
-      source_version: "material",
+      source_version: "lumina_box",
       lut_name: "",
       selectedMaterialDirNames: [],
     });

@@ -5,6 +5,13 @@ import type {
   SessionRingEntry,
 } from "../types/actionHistory";
 import type { ClientLogEntry } from "../utils/clientLog";
+import type { ConverterRecipeMaterialDynamic } from "../recipe/types";
+
+/**
+ * Dynamic solver evidence uses the same wire shape as a converter share card.
+ * It is captured for bug reproduction only and never restores a recipe.
+ */
+export type BugReportMaterialDynamic = ConverterRecipeMaterialDynamic;
 
 export interface FinalArtifactRef {
   session_id: string | null;
@@ -67,7 +74,8 @@ export interface BugReportContextPayload {
   color_mode: string | null;
   lut_name: string | null;
   lut_names?: string[];
-  source_version: "legacy" | "native" | "material" | null;
+  source_version: "legacy" | "native" | "material" | "lumina_box" | null;
+  optical_model_id?: string;
   selected_native_brand_key: string | null;
   selected_native_db_names: string[];
   selected_material_dir_names: string[];
@@ -76,6 +84,7 @@ export interface BugReportContextPayload {
   material_min_layer_count?: number | null;
   material_max_layer_count?: number | null;
   material_delta_e00_tolerance?: number | null;
+  material_dynamic?: BugReportMaterialDynamic | null;
   material_layer_height_mm: number | null;
   material_backing_material_dir_name: string | null;
   /** Client-local preference used to name ordinary single-item 3MF downloads. */

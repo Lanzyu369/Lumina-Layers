@@ -177,10 +177,6 @@ def test_persisted_candidate_multiplier_scales_down_with_large_budgets() -> None
 
 
 
-
-
-
-
 def test_sobol_candidate_generation_is_deterministic_and_bounded() -> None:
     first = generate_candidate_recipes(
         material_count=5,

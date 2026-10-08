@@ -1347,6 +1347,22 @@ class TestRegionDetectCanary:
 class TestRegionRequantizeCanary:
     """Successful region-requantize requests expose the structured done fields."""
 
+    @pytest.fixture(autouse=True)
+    def _profile_loader_uses_route_material_stub(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Keep legacy canaries isolated from real material archives."""
+
+        monkeypatch.setattr(
+            replace_router,
+            "load_and_validate_material_archive_profile",
+            lambda directory_names, *, profile_kind: (
+                str(profile_kind or "stage_a"),
+                replace_router.load_multiple_materials(directory_names),
+            ),
+        )
+
     def test_region_requantize_group_fallback_warning_has_actionable_fields(
         self,
         _isolate_dependency_overrides,

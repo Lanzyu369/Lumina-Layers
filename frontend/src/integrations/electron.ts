@@ -1,8 +1,20 @@
 import { useEffect } from "react";
 import { useSettingsStore } from "../stores/settingsStore";
+import { translations } from "../i18n/translations";
+import type { LuminaBoxNativeSerialApi } from "../api/luminaBoxDesktopSerial";
+
+interface SerialPickerLabels {
+  title: string;
+  message: string;
+  empty: string;
+  cancel: string;
+  next: string;
+  previous: string;
+}
 
 interface ElectronAPI {
-  setLanguage: (lang: string) => void;
+  nativeSerial?: LuminaBoxNativeSerialApi;
+  setLanguage: (lang: string, serialLabels?: SerialPickerLabels) => void;
   getAppVersion: () => Promise<string>;
   getNativeBedModel?: (
     deviceProfileId: string,
@@ -25,16 +37,27 @@ interface ElectronAPI {
 export const electronAPI: ElectronAPI | null =
   (window as unknown as { electronAPI?: ElectronAPI }).electronAPI ?? null;
 
+function syncLanguage(language: "zh" | "en"): void {
+  electronAPI?.setLanguage(language, {
+    title: translations.lumina_box_serial_picker_title[language],
+    message: translations.lumina_box_serial_picker_message[language],
+    empty: translations.lumina_box_serial_picker_empty[language],
+    cancel: translations.app_quit_cancel[language],
+    next: translations.lumina_box_serial_picker_next[language],
+    previous: translations.lumina_box_serial_picker_previous[language],
+  });
+}
+
 export function useElectronLanguageSync(): void {
   useEffect(() => {
     if (!electronAPI) return;
 
     const language = useSettingsStore.getState().language;
-    electronAPI.setLanguage(language);
+    syncLanguage(language);
 
     const unsub = useSettingsStore.subscribe((state, prev) => {
       if (state.language !== prev.language) {
-        electronAPI?.setLanguage(state.language);
+        syncLanguage(state.language);
       }
     });
 

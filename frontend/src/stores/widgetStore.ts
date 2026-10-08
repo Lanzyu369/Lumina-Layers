@@ -40,6 +40,7 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
   extractor: [],
   "gradient-card-generate": [],
   "gradient-card-extract": [],
+  "lumina-box": [],
   "material-library": [],
   "material-cloud-sync": [],
   "material-recipe": [],

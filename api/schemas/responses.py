@@ -345,6 +345,7 @@ class SavedMaterialLibraryItemResponse(BaseModel):
     material_name: str
     directory_name: str
     brand: str | None = None
+    notes: str | None = None
     material_type: str | None = None
     material_type_source: Literal["archive", "legacy_name"] | None = None
     material_product_id: str | None = None
@@ -354,6 +355,7 @@ class SavedMaterialLibraryItemResponse(BaseModel):
     updated_at: str | None = None
     material_file_url: str | None = None
     stage_a_params_url: str | None = None
+    optical_parameters_url: str | None = None
     estimated_rgb: list[int] = Field(default_factory=list)
     layer_height_mm: float | None = None
     mean_delta_e: float | None = None
@@ -369,6 +371,15 @@ class SavedMaterialLibraryItemResponse(BaseModel):
     sync_revision_id: str | None = None
     sync_channel: str | None = None
     sync_official: bool = False
+    profile_kind: Literal["stage_a", "lumina_box"] = "stage_a"
+    acquisition_source: str | None = None
+    optical_model_id: str | None = None
+    capture_dataset_id: str | None = None
+    material_symbol: str | None = None
+    reference_id: str | None = None
+    measurement_protocol_id: str | None = None
+    color_bridge_id: str | None = None
+    estimated_xyz: list[float] = Field(default_factory=list)
 
 
 class GradientCardMaterialLibraryResponse(BaseModel):
@@ -627,6 +638,10 @@ class MaterialRecipePreviewResponse(BaseModel):
     """
 
     status: str = Field("ok", description="Status indicator.")
+    material_profile_kind: Literal["stage_a", "lumina_box"] = Field(
+        "stage_a",
+        description="Validated optical-profile family used for this preview.",
+    )
     layer_count: int = Field(..., description="Number of layers in the recipe.")
     layer_height_mm: float = Field(..., description="Per-layer thickness in millimeters.")
     substrate: str = Field(..., description="Substrate identifier ('white' or 'black').")
@@ -665,13 +680,15 @@ class MaterialColorSuggestionsResponse(BaseModel):
 
     ``source`` is ``"cache"`` when a persisted ``MaterialSolverCache`` served
     the query, ``"runtime"`` when the persisted hybrid candidate runtime served
-    it, or ``"mitm"`` when the MITM fallback ran in-process. The frontend uses
-    this to decide whether to nudge the user to build reusable solver data.
+    it, ``"mitm"`` for the legacy Stage A live fallback, or ``"km_live"`` for
+    the bounded Lumina Box KM live fallback. The frontend uses this to decide
+    whether to nudge the user to build reusable solver data.
     """
 
     status: str
     message: str
     source: str
+    profile_kind: Literal["stage_a", "lumina_box"] = "stage_a"
     palette_hash: str
     layer_count: int
     layer_height_mm: float
@@ -701,6 +718,11 @@ class MaterialSolverRuntimeEntryResponse(BaseModel):
     """
 
     palette_hash: str
+    profile_kind: Literal["stage_a", "lumina_box"] = "stage_a"
+    optical_model: str = "beer_lambert/v1"
+    protocol_id: str | None = None
+    color_bridge_id: str | None = None
+    archive_revision_ids: list[str] = Field(default_factory=list)
     material_directory_names: list[str] = Field(default_factory=list)
     layer_count: int
     layer_height_mm: float
@@ -726,6 +748,11 @@ class MaterialSolverRuntimeStatusResponse(BaseModel):
     message: str
     cached: bool
     palette_hash: str
+    profile_kind: Literal["stage_a", "lumina_box"] = "stage_a"
+    optical_model: str = "beer_lambert/v1"
+    protocol_id: str | None = None
+    color_bridge_id: str | None = None
+    archive_revision_ids: list[str] = Field(default_factory=list)
     layer_count: int
     layer_height_mm: float
     substrate: str
@@ -752,6 +779,11 @@ class MaterialSolverRuntimeDeleteResponse(BaseModel):
     message: str
     deleted: bool
     palette_hash: str
+    profile_kind: Literal["stage_a", "lumina_box"] = "stage_a"
+    optical_model: str = "beer_lambert/v1"
+    protocol_id: str | None = None
+    color_bridge_id: str | None = None
+    archive_revision_ids: list[str] = Field(default_factory=list)
     layer_count: int
     layer_height_mm: float
     substrate: str
@@ -766,6 +798,11 @@ class MaterialSolverRuntimeDetailsResponse(BaseModel):
     status: str
     message: str
     palette_hash: str
+    profile_kind: Literal["stage_a", "lumina_box"] = "stage_a"
+    optical_model: str = "beer_lambert/v1"
+    protocol_id: str | None = None
+    color_bridge_id: str | None = None
+    archive_revision_ids: list[str] = Field(default_factory=list)
     material_directory_names: list[str] = Field(default_factory=list)
     layer_count: int
     layer_height_mm: float

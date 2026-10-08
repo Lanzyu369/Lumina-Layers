@@ -2,8 +2,9 @@
 
 针对渐变 region 的"二次量化"：对每个被选中的连通区域，独立跑一次 K-Means
 色彩量化（只基于该 region 的**原图像**像素，不与全图共用 256 色预算），
-然后用管线本来就在使用的 ``MaterialSolverCache.lookup()`` 把本地调色板
-重新匹配成材料配方，再把结果写回 ``matched_rgb`` 的对应像素。
+然后用管线本来就在使用的只读材料颜色目录 ``lookup()`` 把本地调色板
+重新匹配成材料配方，再把结果写回 ``matched_rgb`` 的对应像素。Stage A
+传入传统缓存，Lumina Box 则传入候选运行时适配器。
 
 Why this module
 ===============
@@ -35,14 +36,48 @@ worker-safe (picklable) and has no UI or HTTP dependencies.
 
 from __future__ import annotations
 
-from typing import Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol, Sequence
 
 import numpy as np
 
 from core.gradient_group_analyzer import REGION_ID_ENCODING_MULTIPLIER
-from core.material_cache import MaterialSolverCache
 from core.material_color_solver import MaterialParams
 from core.pipeline.processing_ops.kmeans_quantizer import quantize_colors
+
+if TYPE_CHECKING:
+    from core.material_candidate_cache import MaterialCandidateRuntime
+
+
+class MaterialColorCatalog(Protocol):
+    """Read-only color-to-recipe catalog used by region re-quantisation."""
+
+    def lookup(
+        self,
+        target_srgb: np.ndarray,
+        user_materials: list[MaterialParams],
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return matched RGB, recipes, and color differences.
+
+        返回匹配 RGB、配方索引与色差。
+        """
+
+
+@dataclass(frozen=True)
+class MaterialCandidateRuntimeCatalog:
+    """Explicit adapter from a KM candidate runtime to the region catalog.
+
+    将 KM 候选运行时显式适配为区域重算只读目录，避免把它伪装成仿射缓存。
+    """
+
+    runtime: "MaterialCandidateRuntime"
+
+    def lookup(
+        self,
+        target_srgb: np.ndarray,
+        user_materials: list[MaterialParams],
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return self.runtime.lookup(target_srgb, user_materials)
 
 
 # Hard bounds on the user-facing colour budget. The lower bound keeps the
@@ -98,7 +133,7 @@ def requantize_gradient_regions(
     region_id_map: np.ndarray,
     targets: Sequence[tuple[int, int]],
     materials: Sequence[MaterialParams],
-    material_solver_cache: MaterialSolverCache,
+    material_solver_cache: MaterialColorCatalog,
     local_quantize_colors: int,
 ) -> tuple[np.ndarray, int]:
     """Re-quantise the listed gradient regions in-place-style.
@@ -110,7 +145,7 @@ def requantize_gradient_regions(
     2. Run K-Means (via :func:`quantize_colors`) with ``local_quantize_colors``
        clusters — this is the "dedicated colour budget" for this region.
     3. Unique-colour-dedup the new quantised palette and push those unique
-       colours through ``material_solver_cache.lookup`` to obtain per-colour
+       colours through the supplied catalog's ``lookup`` to obtain per-colour
        matched-RGB values (the same path the preview pipeline uses).
     4. Write the per-pixel matched-RGB back into the output array at the
        region's coordinates.
@@ -135,10 +170,10 @@ def requantize_gradient_regions(
             Duplicate entries are tolerated but processed only once.
         materials: Selected material palette (same list the solver cache
             was loaded against).
-        material_solver_cache: Loaded :class:`MaterialSolverCache` — the
-            caller must have resolved it via
-            :func:`core.material_cache.load_material_solver_cache_with_fallback`
-            for the same materials / layer count / substrate as the preview.
+        material_solver_cache: Read-only color catalog for the same materials,
+            layer count, layer height, and substrate as the preview. Stage A
+            supplies ``MaterialSolverCache``; Lumina Box supplies
+            ``MaterialCandidateRuntimeCatalog``.
         local_quantize_colors: Per-region k-means cluster count, validated
             against ``[MIN_LOCAL_QUANTIZE_COLORS, MAX_LOCAL_QUANTIZE_COLORS]``.
             If a region has fewer unique source colours than requested, the

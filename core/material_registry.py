@@ -140,7 +140,7 @@ def _load_bundle_manifest(zip_path: Path) -> dict[str, Any] | None:
         return None
     if str(manifest_payload.get("kind") or "") != "lumina_material_bundle":
         return None
-    if str(manifest_payload.get("schema_version") or "") != "2.0":
+    if str(manifest_payload.get("schema_version") or "") not in {"2.0", "3.0"}:
         return None
     packages = manifest_payload.get("packages")
     if not isinstance(packages, list):
@@ -668,8 +668,8 @@ def build_material_registry_catalog(
     offset: int | None = 0,
     query: str | None = None,
 ) -> dict[str, Any]:
-    """Build a catalog from local v2 package ZIP files.
-    从本地 v2 耗材包 ZIP 文件构建 catalog。
+    """Build a catalog from local supported package ZIP files.
+    从本地受支持版本的耗材包 ZIP 文件构建 catalog。
     """
     normalized_channels = normalize_material_registry_channels(channels)
     channel_set = set(normalized_channels)

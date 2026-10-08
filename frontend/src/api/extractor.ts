@@ -605,12 +605,23 @@ export async function previewMaterialRecipe(
 
 export async function listGradientCardMaterials(options?: {
   includeFileUrls?: boolean;
+  /** Defaults to the historical Stage A-only material-library view. */
+  profileKind?: "stage_a" | "lumina_box" | "all";
   signal?: AbortSignal;
 }): Promise<GradientCardMaterialLibraryResponse> {
+  const params: Record<string, boolean | "stage_a" | "lumina_box" | "all"> = {};
+  if (options?.includeFileUrls) {
+    params.include_file_urls = true;
+  }
+  // No option keeps the historical no-query request shape. An explicit value
+  // is forwarded so callers can state their profile contract deliberately.
+  if (options?.profileKind) {
+    params.profile_kind = options.profileKind;
+  }
   const response = await apiClient.get<GradientCardMaterialLibraryResponse>(
     "/extractor/gradient-card-materials",
     {
-      params: options?.includeFileUrls ? { include_file_urls: true } : undefined,
+      params: Object.keys(params).length > 0 ? params : undefined,
       timeout: 3_600_000,
       ...(options?.signal ? { signal: options.signal } : {}),
     },

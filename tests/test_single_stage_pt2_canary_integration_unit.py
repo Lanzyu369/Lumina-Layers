@@ -35,6 +35,24 @@ def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     return TestClient(app, base_url="http://localhost:8000"), store, registry
 
 
+@pytest.fixture(autouse=True)
+def _profile_loader_uses_test_palette_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep legacy canaries focused while the route now validates profiles."""
+
+    from api.routers import single_stage
+
+    monkeypatch.setattr(
+        single_stage,
+        "load_and_validate_material_archive_profile",
+        lambda directory_names, *, profile_kind: (
+            str(profile_kind or "stage_a"),
+            single_stage.load_multiple_materials(directory_names),
+        ),
+    )
+
+
 def _capture_single_stage_logger(
     caplog: pytest.LogCaptureFixture,
 ) -> logging.Logger:

@@ -171,6 +171,7 @@ describe("convertPreview", () => {
       ...previewParams,
       lut_name: "__material_archive__",
       material_source: "material_archive",
+      material_profile_kind: "lumina_box",
       selected_materials: ["brand/white", "brand/blue"],
       material_dynamic_layer_count_enabled: true,
       material_min_layer_count: 6,
@@ -179,6 +180,8 @@ describe("convertPreview", () => {
     });
 
     const formData = mockPost.mock.calls[0][1] as FormData;
+    expect(formData.get("material_source")).toBe("material_archive");
+    expect(formData.get("material_profile_kind")).toBe("lumina_box");
     expect(formData.get("material_dynamic_layer_count_enabled")).toBe("true");
     expect(formData.get("material_min_layer_count")).toBe("6");
     expect(formData.get("material_max_layer_count")).toBe("9");
@@ -321,6 +324,7 @@ describe("convertBatch", () => {
       ...baseBatchParams,
       lut_name: "__material_archive__",
       material_source: "material_archive",
+      material_profile_kind: "lumina_box",
       selected_materials: ["brand/red", "brand/white"],
       material_layer_count: 7,
       material_layer_height_mm: 0.06,
@@ -341,6 +345,7 @@ describe("convertBatch", () => {
     expect(formData.getAll("images")).toHaveLength(1);
     expect(formData.get("lut_name")).toBe("__material_archive__");
     expect(formData.get("material_source")).toBe("material_archive");
+    expect(formData.get("material_profile_kind")).toBe("lumina_box");
     expect(formData.get("selected_materials")).toBe(JSON.stringify(["brand/red", "brand/white"]));
     expect(formData.get("material_layer_count")).toBe("7");
     expect(formData.get("material_layer_height_mm")).toBe("0.06");

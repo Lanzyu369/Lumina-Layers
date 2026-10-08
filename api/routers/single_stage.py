@@ -96,6 +96,9 @@ from core.material_candidate_cache import (
     load_material_candidate_runtime_metadata,
     save_material_candidate_runtime,
 )
+from core.material_lut_provider import (
+    load_persisted_candidate_runtime_with_fallback,
+)
 from core.material_color_solver import (
     DEFAULT_SUGGEST_MIN_SPACING,
     DEFAULT_SUGGEST_TOP_K,
@@ -107,6 +110,19 @@ from core.material_color_solver import (
     suggest_colors_for_target,
 )
 from core.material_lut_synthesis import load_multiple_materials
+from core.km_xyz import KM_XYZ_MODEL_ID
+from core.lumina_box_spectral import LUMINA_BOX_SPECTRAL_MODEL_ID
+from core.backed_gradient_smooth import SPECTRAL_SMOOTH_MODEL_ID
+from core.material_optical_runtime import (
+    BEER_LAMBERT_MODEL_ID,
+    MaterialOpticalCompatibilityError,
+    bind_material_print_backing,
+    validate_material_optical_contract,
+)
+from core.pipeline._input_validation_common import (
+    MaterialArchiveProfileError,
+    load_and_validate_material_archive_profile,
+)
 from core.lut_details.identity import canonicalize_lut_manufacturer
 from core.single_stage import (
     material_files,
@@ -176,6 +192,10 @@ MATERIAL_SOLVER_CACHE_BUILD_FAILED_DETAIL = (
 MATERIAL_SOLVER_RUNTIME_BUILD_FAILED_DETAIL = (
     "Material solver runtime could not be built. "
     "Check material inputs and cache storage, then try again."
+)
+MATERIAL_SOLVER_RUNTIME_BUSY_DETAIL = (
+    "A KM candidate runtime build or live KM suggestion is already running. "
+    "Wait for it to finish, then retry."
 )
 MATERIAL_SWATCH_EXPORT_FAILED_DETAIL = (
     "Material swatch export failed. Check the selected material recipes and "
@@ -1531,6 +1551,9 @@ async def extractor_update_gradient_card_material(
     }
     if payload.estimated_rgb is not None:
         update_kwargs["estimated_rgb"] = payload.estimated_rgb
+    for field in ("notes", "material_type"):
+        if field in payload.model_fields_set:
+            update_kwargs[field] = getattr(payload, field)
     material_backup: MaterialDirectoryBackup | None = None
     material_backup = _create_material_directory_backup_or_raise(
         directory_name,
@@ -1615,7 +1638,8 @@ async def extractor_update_gradient_card_material(
         material={
             **public_material_response_item(result.material_summary),
             "material_file_url": material_file_url,
-            "stage_a_params_url": stage_a_params_url,
+            "stage_a_params_url": stage_a_params_url if result.material_summary.get("profile_kind", "stage_a") == "stage_a" else None,
+            "optical_parameters_url": stage_a_params_url if result.material_summary.get("profile_kind") == "lumina_box" else None,
         },
     )
 
@@ -1790,6 +1814,10 @@ async def extractor_import_gradient_card_materials(
 @router.get("/gradient-card-materials")
 async def extractor_list_gradient_card_materials(
     request: Request,
+    profile_kind: str = Query(
+        "stage_a",
+        description="Material profile kind: stage_a, lumina_box, or all.",
+    ),
     include_file_urls: bool = Query(
         False,
         description="Register temporary /api/files URLs for each material archive.",
@@ -1801,13 +1829,25 @@ async def extractor_list_gradient_card_materials(
     """
     _enforce_material_library_request(request)
     try:
-        materials = list_saved_stage_a_material_archives()
-    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+        # Keep the historical no-argument call for the default Stage A view:
+        # local extensions and focused tests can still substitute the legacy
+        # callable.  The new filter is only forwarded when explicitly chosen.
+        materials = (
+            list_saved_stage_a_material_archives()
+            if profile_kind.strip().lower() == "stage_a"
+            else list_saved_stage_a_material_archives(profile_kind=profile_kind)
+        )
+        if profile_kind.strip().lower() == "lumina_box":
+            materials = [item for item in materials if item.get("optical_model_id") == SPECTRAL_SMOOTH_MODEL_ID]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (TypeError, OSError, RuntimeError) as exc:
         log.error(
             "Gradient card material library failed",
             extra={
                 "event": "extractor_gradient_card_material_library_failed",
                 "include_file_urls": bool(include_file_urls),
+                "profile_kind": profile_kind,
                 "error_type": type(exc).__name__,
                 "error_message": str(exc),
             },
@@ -1956,6 +1996,67 @@ def _validate_grid_resolution(grid_resolution: int) -> None:
         )
 
 
+def _load_profiled_material_recipe_palette_or_raise(
+    directory_names: list[str],
+    *,
+    material_profile_kind: str,
+    backing_material_index: int | None = None,
+    backing_thickness_mm: float = 1.2,
+    layer_height_mm: float = 0.08,
+    substrate: str = "white",
+) -> tuple[str, list[Any]]:
+    """Load a recipe palette after validating its archive/profile contract.
+
+    在计算色彩前，读取配方耗材并校验其档案类型和共享光学契约。
+
+    The shared archive boundary keeps this lightweight query endpoint aligned
+    with converter material-archive validation: old requests remain Stage A,
+    while Lumina Box selections validate their spectral model, measurement
+    protocol, and white reference before binding the physical backing.
+    """
+
+    try:
+        kind, materials = load_and_validate_material_archive_profile(
+            directory_names,
+            profile_kind=material_profile_kind,
+        )
+        return kind, bind_material_print_backing(
+            materials, backing_material_index=backing_material_index,
+            thickness_mm=backing_thickness_mm, layer_height_mm=layer_height_mm,
+            substrate=substrate,
+        )
+    except MaterialArchiveProfileError as exc:
+        # Preserve Stage A's missing-directory and actionable validation errors.
+        # The pipeline boundary collapses these into a generic profile error;
+        # the query API retains the loader's existing 404/422 contract.
+        if material_profile_kind == "stage_a":
+            try:
+                load_multiple_materials(directory_names)
+            except (FileNotFoundError, OSError) as missing_exc:
+                raise HTTPException(
+                    status_code=404,
+                    detail=str(missing_exc),
+                ) from missing_exc
+            except (ValueError, TypeError) as validation_exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=str(validation_exc),
+                ) from validation_exc
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.error_type, "message": str(exc)},
+        ) from exc
+    except MaterialOpticalCompatibilityError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.error_type, "message": str(exc)},
+        ) from exc
+    except (FileNotFoundError, OSError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _load_palette_or_raise(directory_names: list[str]):
     """Load MaterialParams for the given directory names with API-friendly errors."""
     try:
@@ -1964,6 +2065,49 @@ def _load_palette_or_raise(directory_names: list[str]):
         raise HTTPException(status_code=404, detail=str(exc))
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+def _require_stage_a_solver_cache(material_profile_kind: str) -> None:
+    """Reject affine solver-cache operations for Lumina Box profiles.
+
+    拒绝对 Lumina Box 档案使用仅适用于 Stage A 的仿射求解缓存。
+    """
+
+    if material_profile_kind != "stage_a":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "material_solver_cache_not_applicable",
+                "message": (
+                    "The traditional MaterialSolverCache is not applicable to "
+                    "Lumina Box profiles; use the KM candidate runtime instead."
+                ),
+            },
+        )
+
+
+def _runtime_identity(
+    materials: list[Any],
+    *,
+    profile_kind: str,
+) -> dict[str, Any]:
+    """Return public profile/contract identity for one validated palette."""
+
+    contract = validate_material_optical_contract(materials)
+    canonical_materials = sorted(
+        materials,
+        key=lambda material: str(getattr(material, "directory_name", "")),
+    )
+    return {
+        "profile_kind": profile_kind,
+        "optical_model": contract.model_id,
+        "protocol_id": contract.measurement_protocol_id,
+        "color_bridge_id": contract.color_bridge_id,
+        "archive_revision_ids": [
+            str(getattr(material, "archive_revision_id", None) or "")
+            for material in canonical_materials
+        ],
+    }
 
 
 def _remove_generated_path(path: str | None) -> None:
@@ -1998,7 +2142,7 @@ async def material_recipe_preview(
     payload: MaterialRecipePreviewRequest,
 ) -> MaterialRecipePreviewResponse:
     """Forward-simulate a stacked-material recipe to predict its visible color.
-    根据选定耗材按顺序叠层，使用 Beer-Lambert 正向模型预测可见颜色。
+    根据选定耗材按顺序叠层，使用对应档案族的正向模型预测可见颜色。
 
     Layer count is intentionally unconstrained beyond the schema's
     ``max_length`` so users can preview any depth (the 5-layer limits in
@@ -2007,14 +2151,29 @@ async def material_recipe_preview(
 
     层数仅受 schema 上限限制；求解器的 5 层下限不约束本接口。
     """
-    materials = _load_palette_or_raise(payload.directory_names)
-    recipe = np.arange(len(materials), dtype=np.int32)
-    predicted_srgb = predict_material_recipe_srgb(
-        recipe=recipe,
-        materials=materials,
+    material_profile_kind, materials = _load_profiled_material_recipe_palette_or_raise(
+        payload.directory_names,
+        material_profile_kind=payload.material_profile_kind,
         layer_height_mm=float(payload.layer_height_mm),
         substrate=payload.substrate,
     )
+    recipe = np.arange(len(materials), dtype=np.int32)
+    try:
+        # ``predict_material_recipe_srgb`` is the existing optical dispatcher:
+        # Stage A retains Beer-Lambert behavior and Lumina Box follows its spectral
+        # forward path after the profile boundary above has accepted it.
+        predicted_srgb = predict_material_recipe_srgb(
+            recipe=recipe,
+            materials=materials,
+            layer_height_mm=float(payload.layer_height_mm),
+            substrate=payload.substrate,
+        )
+    except (MaterialOpticalCompatibilityError, ValueError) as exc:
+        error_type = getattr(exc, "error_type", type(exc).__name__)
+        raise HTTPException(
+            status_code=422,
+            detail={"code": error_type, "message": str(exc)},
+        ) from exc
     predicted_rgb = [int(c) for c in predicted_srgb.tolist()]
     predicted_hex = "#{:02X}{:02X}{:02X}".format(*predicted_rgb)
 
@@ -2038,12 +2197,14 @@ async def material_recipe_preview(
             "layer_count": len(materials),
             "layer_height_mm": float(payload.layer_height_mm),
             "substrate": payload.substrate,
+            "material_profile_kind": material_profile_kind,
             "predicted_hex": predicted_hex,
         },
     )
 
     return MaterialRecipePreviewResponse(
         status="ok",
+        material_profile_kind=material_profile_kind,
         layer_count=len(materials),
         layer_height_mm=float(payload.layer_height_mm),
         substrate=payload.substrate,
@@ -2076,9 +2237,26 @@ async def generate_material_swatch(
         generate_material_recipe_swatch,
     )
 
+    material_profile_kind = payload.material_profile_kind
     items: list[MaterialRecipeSwatchItem] = []
     for recipe_req in payload.recipes:
-        materials = _load_palette_or_raise(recipe_req.directory_names)
+        validated_kind, materials = _load_profiled_material_recipe_palette_or_raise(
+            recipe_req.directory_names,
+            material_profile_kind=material_profile_kind,
+            layer_height_mm=float(recipe_req.layer_height_mm),
+            substrate=recipe_req.substrate,
+        )
+        # The schema constrains the request kind, and the shared archive
+        # boundary constrains each recipe. Keep this defensive check local so
+        # a future loader cannot silently produce a mixed swatch batch.
+        if validated_kind != material_profile_kind:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "material_profile_kind_mismatch",
+                    "message": "Material swatch recipes must share one material_profile_kind.",
+                },
+            )
         mat_names = [m.name for m in materials]
         mat_hexes = [
             "#{:02X}{:02X}{:02X}".format(
@@ -2117,6 +2295,7 @@ async def generate_material_swatch(
             extra={
                 "event": "extractor_material_swatch_failed",
                 "recipe_count": len(items),
+                "material_profile_kind": material_profile_kind,
                 "status_code": 500,
                 "error_type": "MaterialSwatchGenerationFailed",
                 "error_message": status_msg or "Material swatch generation failed",
@@ -2175,6 +2354,7 @@ async def generate_material_swatch(
                     "registration_stage": "preview",
                     "download_id": download_id,
                     "recipe_count": len(items),
+                    "material_profile_kind": material_profile_kind,
                     "session_id": sid,
                 },
             )
@@ -2184,6 +2364,7 @@ async def generate_material_swatch(
         extra={
             "event": "extractor_material_swatch_done",
             "recipe_count": len(items),
+            "material_profile_kind": material_profile_kind,
             "download_id": download_id,
             "block_size_mm": payload.block_size_mm,
             "gap_mm": payload.gap_mm,
@@ -2194,6 +2375,7 @@ async def generate_material_swatch(
     return MaterialRecipeSwatchResponse(
         status="ok",
         message=status_msg,
+        material_profile_kind=material_profile_kind,
         download_url=f"/api/files/{download_id}",
         preview_url=preview_url,
         recipe_count=len(items),
@@ -2252,8 +2434,31 @@ def _runtime_entry_from_metadata(
         if isinstance(entry, dict) and entry.get("directory_name")
     ]
     inverse = metadata.get("inverse_refinement") or {}
+    optical_model = str(
+        metadata.get("optical_model_id") or BEER_LAMBERT_MODEL_ID
+    )
+    profile_kind = "lumina_box" if optical_model in {KM_XYZ_MODEL_ID, LUMINA_BOX_SPECTRAL_MODEL_ID, SPECTRAL_SMOOTH_MODEL_ID} else "stage_a"
+    raw_revision_ids = metadata.get("archive_revision_ids") or []
+    archive_revision_ids = (
+        [str(value) for value in raw_revision_ids]
+        if isinstance(raw_revision_ids, list)
+        else []
+    )
     return MaterialSolverRuntimeEntryResponse(
         palette_hash=str(metadata["cache_id"]),
+        profile_kind=profile_kind,
+        optical_model=optical_model,
+        protocol_id=(
+            str(metadata["measurement_protocol_id"])
+            if metadata.get("measurement_protocol_id") is not None
+            else None
+        ),
+        color_bridge_id=(
+            str(metadata["color_bridge_id"])
+            if metadata.get("color_bridge_id") is not None
+            else None
+        ),
+        archive_revision_ids=archive_revision_ids,
         material_directory_names=material_dir_names,
         layer_count=int(metadata.get("layer_count", 0)),
         layer_height_mm=float(metadata.get("layer_height_mm", 0.0)),
@@ -2361,6 +2566,7 @@ async def material_solver_cache_status(
     layer_height_mm: float = Form(...),
     substrate: str = Form("white"),
     grid_resolution: int = Form(DEFAULT_GRID_RESOLUTION),
+    material_profile_kind: str = Form("stage_a"),
 ) -> MaterialSolverCacheStatusResponse:
     """Check whether a cache exists for the given palette & parameters.
     查询指定调色板与参数组合的缓存是否存在。
@@ -2368,7 +2574,11 @@ async def material_solver_cache_status(
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_grid_resolution(grid_resolution)
-    materials = _load_palette_or_raise(dir_names)
+    validated_kind, materials = _load_profiled_material_recipe_palette_or_raise(
+        dir_names,
+        material_profile_kind=material_profile_kind,
+    )
+    _require_stage_a_solver_cache(validated_kind)
     palette_hash = _palette_cache_identity(materials)
     # Use the fallback loader so exact-mode caches (grid=0) and any-grid
     # bucketed caches are discoverable regardless of the caller's requested
@@ -2449,6 +2659,7 @@ async def material_solver_cache_build(
     layer_height_mm: float = Form(...),
     substrate: str = Form("white"),
     grid_resolution: int = Form(DEFAULT_GRID_RESOLUTION),
+    material_profile_kind: str = Form("stage_a"),
 ) -> MaterialSolverCacheBuildResponse:
     """Build and persist a solver cache synchronously.
     同步构建并持久化求解器缓存。
@@ -2461,7 +2672,11 @@ async def material_solver_cache_build(
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_grid_resolution(grid_resolution)
-    materials = _load_palette_or_raise(dir_names)
+    validated_kind, materials = _load_profiled_material_recipe_palette_or_raise(
+        dir_names,
+        material_profile_kind=material_profile_kind,
+    )
+    _require_stage_a_solver_cache(validated_kind)
     def _run_build():
         return build_material_solver_cache(
             materials,
@@ -2560,6 +2775,7 @@ async def material_solver_cache_delete(
     layer_height_mm: float = Form(...),
     substrate: str = Form("white"),
     grid_resolution: int = Form(DEFAULT_GRID_RESOLUTION),
+    material_profile_kind: str = Form("stage_a"),
 ) -> MaterialSolverCacheDeleteResponse:
     """Delete a persisted solver cache entry.
     删除已持久化的求解器缓存条目。
@@ -2567,7 +2783,11 @@ async def material_solver_cache_delete(
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_grid_resolution(grid_resolution)
-    materials = _load_palette_or_raise(dir_names)
+    validated_kind, materials = _load_profiled_material_recipe_palette_or_raise(
+        dir_names,
+        material_profile_kind=material_profile_kind,
+    )
+    _require_stage_a_solver_cache(validated_kind)
     palette_hash = _palette_cache_identity(materials)
     deleted = delete_cached_entry(
         materials, layer_count, layer_height_mm, substrate,
@@ -2609,6 +2829,9 @@ async def material_solver_runtime_status(
     layer_height_mm: float = Form(...),
     substrate: str = Form("white"),
     candidate_budget: int = Form(DEFAULT_PERSISTED_CANDIDATE_BUDGET),
+    material_profile_kind: str = Form("stage_a"),
+    material_backing_material_index: int | None = Form(None, ge=0),
+    spacer_thick: float = Form(1.2, ge=0.2, le=10.0),
 ) -> MaterialSolverRuntimeStatusResponse:
     """Check whether a persisted hybrid candidate runtime exists.
     查询指定组合是否已有持久化 hybrid candidate runtime。
@@ -2616,7 +2839,15 @@ async def material_solver_runtime_status(
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_candidate_budget(candidate_budget)
-    materials = _load_palette_or_raise(dir_names)
+    validated_kind, materials = _load_profiled_material_recipe_palette_or_raise(
+        dir_names,
+        material_profile_kind=material_profile_kind,
+        backing_material_index=material_backing_material_index,
+        backing_thickness_mm=spacer_thick,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+    )
+    identity = _runtime_identity(materials, profile_kind=validated_kind)
     palette_hash = _palette_cache_identity(materials)
     metadata_record = load_material_candidate_runtime_metadata(
         materials,
@@ -2647,6 +2878,7 @@ async def material_solver_runtime_status(
             message="No hybrid runtime found for this combination",
             cached=False,
             palette_hash=palette_hash,
+            **identity,
             layer_count=layer_count,
             layer_height_mm=layer_height_mm,
             substrate=substrate,
@@ -2660,6 +2892,7 @@ async def material_solver_runtime_status(
         message="Hybrid runtime found",
         cached=True,
         palette_hash=palette_hash,
+        **identity,
         layer_count=layer_count,
         layer_height_mm=layer_height_mm,
         substrate=substrate,
@@ -2678,6 +2911,9 @@ async def material_solver_runtime_build(
     layer_height_mm: float = Form(...),
     substrate: str = Form("white"),
     candidate_budget: int = Form(DEFAULT_PERSISTED_CANDIDATE_BUDGET),
+    material_profile_kind: str = Form("stage_a"),
+    material_backing_material_index: int | None = Form(None, ge=0),
+    spacer_thick: float = Form(1.2, ge=0.2, le=10.0),
 ) -> MaterialSolverRuntimeBuildResponse:
     """Build and persist a hybrid candidate runtime synchronously.
     同步构建并持久化 hybrid candidate runtime。
@@ -2685,7 +2921,14 @@ async def material_solver_runtime_build(
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_candidate_budget(candidate_budget)
-    materials = _load_palette_or_raise(dir_names)
+    _validated_kind, materials = _load_profiled_material_recipe_palette_or_raise(
+        dir_names,
+        material_profile_kind=material_profile_kind,
+        backing_material_index=material_backing_material_index,
+        backing_thickness_mm=spacer_thick,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+    )
     palette_hash = _palette_cache_identity(materials)
     config = MaterialCandidateCacheConfig.persisted_for_budget(
         int(candidate_budget)
@@ -2807,6 +3050,9 @@ async def material_solver_runtime_delete(
     layer_height_mm: float = Form(...),
     substrate: str = Form("white"),
     candidate_budget: int = Form(DEFAULT_PERSISTED_CANDIDATE_BUDGET),
+    material_profile_kind: str = Form("stage_a"),
+    material_backing_material_index: int | None = Form(None, ge=0),
+    spacer_thick: float = Form(1.2, ge=0.2, le=10.0),
 ) -> MaterialSolverRuntimeDeleteResponse:
     """Delete a persisted hybrid candidate runtime entry.
     删除持久化 hybrid candidate runtime 条目。
@@ -2814,7 +3060,15 @@ async def material_solver_runtime_delete(
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_candidate_budget(candidate_budget)
-    materials = _load_palette_or_raise(dir_names)
+    validated_kind, materials = _load_profiled_material_recipe_palette_or_raise(
+        dir_names,
+        material_profile_kind=material_profile_kind,
+        backing_material_index=material_backing_material_index,
+        backing_thickness_mm=spacer_thick,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+    )
+    identity = _runtime_identity(materials, profile_kind=validated_kind)
     palette_hash = _palette_cache_identity(materials)
     deleted = delete_material_candidate_runtime(
         materials,
@@ -2845,6 +3099,7 @@ async def material_solver_runtime_delete(
         ),
         deleted=bool(deleted),
         palette_hash=palette_hash,
+        **identity,
         layer_count=layer_count,
         layer_height_mm=layer_height_mm,
         substrate=substrate,
@@ -2863,6 +3118,9 @@ async def material_solver_runtime_details(
     substrate: str = Form("white"),
     candidate_budget: int = Form(DEFAULT_PERSISTED_CANDIDATE_BUDGET),
     max_points: int = Form(8000, ge=128, le=50000),
+    material_profile_kind: str = Form("stage_a"),
+    material_backing_material_index: int | None = Form(None, ge=0),
+    spacer_thick: float = Form(1.2, ge=0.2, le=10.0),
 ) -> MaterialSolverRuntimeDetailsResponse:
     """Return a LUT-details-shaped payload for a built hybrid runtime.
     返回已构建 hybrid runtime 的 LUT 详情同构可视化载荷。
@@ -2870,7 +3128,15 @@ async def material_solver_runtime_details(
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_candidate_budget(candidate_budget)
-    materials = _load_palette_or_raise(dir_names)
+    validated_kind, materials = _load_profiled_material_recipe_palette_or_raise(
+        dir_names,
+        material_profile_kind=material_profile_kind,
+        backing_material_index=material_backing_material_index,
+        backing_thickness_mm=spacer_thick,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+    )
+    identity = _runtime_identity(materials, profile_kind=validated_kind)
     palette_hash = _palette_cache_identity(materials)
     runtime = load_material_candidate_runtime(
         materials,
@@ -2940,6 +3206,7 @@ async def material_solver_runtime_details(
             f"budget={candidate_budget}"
         ),
         palette_hash=palette_hash,
+        **identity,
         material_directory_names=list(dir_names),
         layer_count=layer_count,
         layer_height_mm=layer_height_mm,
@@ -3057,6 +3324,7 @@ async def material_solver_cache_details(
     substrate: str = Form("white"),
     grid_resolution: int = Form(DEFAULT_GRID_RESOLUTION),
     max_points: int = Form(8000, ge=128, le=50000),
+    material_profile_kind: str = Form("stage_a"),
 ) -> MaterialSolverCacheDetailsResponse:
     """Return a LUT-details-shaped visualization payload for a built cache.
     返回与 LUT 详情同构的可视化载荷，用于已构建的求解器缓存。
@@ -3101,7 +3369,11 @@ async def material_solver_cache_details(
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_grid_resolution(grid_resolution)
-    materials = _load_palette_or_raise(dir_names)
+    validated_kind, materials = _load_profiled_material_recipe_palette_or_raise(
+        dir_names,
+        material_profile_kind=material_profile_kind,
+    )
+    _require_stage_a_solver_cache(validated_kind)
     palette_hash = _palette_cache_identity(materials)
 
     cache, actual_grid = load_material_solver_cache_with_fallback(
@@ -3228,6 +3500,9 @@ async def material_solver_cache_suggest_colors(
     top_k: int = Form(DEFAULT_SUGGEST_TOP_K),
     min_spacing: float = Form(DEFAULT_SUGGEST_MIN_SPACING),
     grid_resolution: int = Form(DEFAULT_GRID_RESOLUTION),
+    material_profile_kind: str = Form("stage_a"),
+    material_backing_material_index: int | None = Form(None, ge=0),
+    spacer_thick: float = Form(1.2, ge=0.2, le=10.0),
 ) -> MaterialColorSuggestionsResponse:
     """Return up to ``top_k`` achievable colors near ``target_hex``.
     为 ``target_hex`` 返回至多 ``top_k`` 个可达近似色建议。
@@ -3250,15 +3525,24 @@ async def material_solver_cache_suggest_colors(
     _validate_grid_resolution(grid_resolution)
     _validate_suggest_parameters(top_k, min_spacing)
     target_hex_clean, target_rgb_tuple = _parse_target_hex(target_hex)
-    materials = _load_palette_or_raise(dir_names)
+    validated_kind, materials = _load_profiled_material_recipe_palette_or_raise(
+        dir_names,
+        material_profile_kind=material_profile_kind,
+        backing_material_index=material_backing_material_index,
+        backing_thickness_mm=spacer_thick,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+    )
     palette_hash = _palette_cache_identity(materials)
 
     target_rgb_arr = np.asarray(target_rgb_tuple, dtype=np.uint8)
 
-    cache = load_material_solver_cache(
-        materials, layer_count, layer_height_mm, substrate,
-        grid_resolution=grid_resolution,
-    )
+    cache = None
+    if validated_kind == "stage_a":
+        cache = load_material_solver_cache(
+            materials, layer_count, layer_height_mm, substrate,
+            grid_resolution=grid_resolution,
+        )
     if cache is not None:
         try:
             suggestions = cache.lookup_top_k(
@@ -3275,13 +3559,21 @@ async def material_solver_cache_suggest_colors(
             f"(via solver cache, {cache.valid_cell_count} cells)."
         )
     else:
-        runtime = load_material_candidate_runtime(
-            materials,
-            layer_count,
-            layer_height_mm,
-            substrate,
-            candidate_budget=DEFAULT_PERSISTED_CANDIDATE_BUDGET,
-        )
+        if validated_kind == "lumina_box":
+            runtime = load_persisted_candidate_runtime_with_fallback(
+                materials,
+                layer_count,
+                layer_height_mm,
+                substrate,
+            )
+        else:
+            runtime = load_material_candidate_runtime(
+                materials,
+                layer_count,
+                layer_height_mm,
+                substrate,
+                candidate_budget=DEFAULT_PERSISTED_CANDIDATE_BUDGET,
+            )
         if runtime is not None:
             try:
                 suggestions = runtime.lookup_top_k(
@@ -3298,26 +3590,49 @@ async def material_solver_cache_suggest_colors(
                 f"(via hybrid runtime, {runtime.valid_cell_count} candidates)."
             )
         else:
+
             def _run_suggest() -> list[ColorSuggestion]:
-                return suggest_colors_for_target(
-                    target_rgb_arr,
-                    materials,
-                    layer_count=layer_count,
-                    layer_height_mm=layer_height_mm,
-                    substrate=substrate,
-                    top_k=top_k,
-                    min_spacing=min_spacing,
-                )
+                gated = validated_kind == "lumina_box"
+                if gated and not _RUNTIME_BUILD_GLOBAL_SEMAPHORE.acquire(blocking=False):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=MATERIAL_SOLVER_RUNTIME_BUSY_DETAIL,
+                    )
+                try:
+                    return suggest_colors_for_target(
+                        target_rgb_arr,
+                        materials,
+                        layer_count=layer_count,
+                        layer_height_mm=layer_height_mm,
+                        substrate=substrate,
+                        top_k=top_k,
+                        min_spacing=min_spacing,
+                    )
+                finally:
+                    # The worker owns the gate until computation actually ends,
+                    # including when its awaiting request is cancelled.
+                    if gated:
+                        _RUNTIME_BUILD_GLOBAL_SEMAPHORE.release()
 
             try:
-                suggestions = await anyio.to_thread.run_sync(_run_suggest)
+                suggestions = await anyio.to_thread.run_sync(
+                    _run_suggest,
+                    abandon_on_cancel=False,
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc))
-            source = "mitm"
-            message = (
-                f"Returned {len(suggestions)} achievable colors "
-                f"(via MITM fallback)."
-            )
+            if validated_kind == "lumina_box":
+                source = "km_live"
+                message = (
+                    f"Returned {len(suggestions)} achievable colors "
+                    f"(via bounded live KM fallback)."
+                )
+            else:
+                source = "mitm"
+                message = (
+                    f"Returned {len(suggestions)} achievable colors "
+                    f"(via MITM fallback)."
+                )
 
     log.info(
         "Material solver cache color suggestions returned",
@@ -3335,6 +3650,7 @@ async def material_solver_cache_suggest_colors(
         status="ok",
         message=message,
         source=source,
+        profile_kind=validated_kind,
         palette_hash=palette_hash,
         layer_count=layer_count,
         layer_height_mm=layer_height_mm,

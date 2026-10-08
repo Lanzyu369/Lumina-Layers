@@ -152,6 +152,21 @@ class TestParameterAnnotations:
                 f"Parameter '{name}' has non-serializable type {ann}"
             )
 
+    def test_preview_has_expected_param_count(self) -> None:
+        """worker_generate_preview should expose the full preview parameter set."""
+        sig = inspect.signature(worker_generate_preview)
+        assert len(sig.parameters) == 38
+
+    def test_model_has_expected_param_count(self) -> None:
+        """worker_generate_model should have 3 parameters."""
+        sig = inspect.signature(worker_generate_model)
+        assert len(sig.parameters) == 3
+
+    def test_large_format_svg_native_has_expected_param_count(self) -> None:
+        """worker_generate_large_format_svg_native should have 3 parameters."""
+        sig = inspect.signature(worker_generate_large_format_svg_native)
+        assert len(sig.parameters) == 3
+
     def test_preview_param_names(self) -> None:
         """Verify expected parameter names for worker_generate_preview."""
         sig = inspect.signature(worker_generate_preview)
@@ -170,6 +185,7 @@ class TestParameterAnnotations:
             "material_min_layer_count", "material_max_layer_count",
             "material_delta_e00_tolerance", "auto_dynamic_range",
             "high_precision_3d_preview", "replacement_regions",
+            "material_profile_kind", "spacer_thick",
             "svg_hole_compensation_enabled", "svg_hole_max_area_mm2",
             "svg_hole_max_width_mm",
         }
@@ -338,7 +354,9 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
     }
 
 
-def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
+def test_worker_batch_convert_item_forwards_relief_params_intact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """worker_batch_convert_item should pass batch relief params through.
 
     When ``convert_image_to_3d`` reports a synthetic 3MF path that does not
@@ -349,6 +367,13 @@ def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
     """
 
     color_height_map = {"#ff0000": 1.7, "#ffffff": 1.3}
+    from core.pipeline import _input_validation_common as archive_validation
+
+    monkeypatch.setattr(
+        archive_validation,
+        "load_and_validate_material_archive_profile",
+        lambda selected_materials, *, profile_kind: ("stage_a", []),
+    )
 
     with patch(
         "core.converter.convert_image_to_3d",
@@ -400,6 +425,7 @@ def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
     assert call_kwargs["separate_backing"] is True
     assert call_kwargs["high_precision_3d_preview"] is True
     assert call_kwargs["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
+    assert call_kwargs["material_profile_kind"] == "stage_a"
 
 
 def test_worker_generate_preview_accepts_numpy_preview_image(tmp_path) -> None:

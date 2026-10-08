@@ -5,6 +5,8 @@ import type {
 } from "../api/types";
 import { listGradientCardMaterials } from "../api/extractor";
 import {
+  getMaterialArchiveProfileKind,
+  isMaterialArchiveSourceVersion,
   resolveConverterSourceSelection,
   useConverterStore,
   type ConverterState,
@@ -293,7 +295,7 @@ export function buildWorkshopColorLibrary(
   if (!selection.isReady) {
     return null;
   }
-  if (state.source_version === "material") {
+  if (isMaterialArchiveSourceVersion(state.source_version)) {
     return materialLibrary(state);
   }
   if (state.source_version === "native") {
@@ -304,6 +306,7 @@ export function buildWorkshopColorLibrary(
 
 type WorkshopMaterialCatalogLoader = (
   signal?: AbortSignal,
+  profileKind?: "stage_a" | "lumina_box",
 ) => Promise<{
   materials?: SavedMaterialLibraryItem[];
 }>;
@@ -326,9 +329,9 @@ export function getWorkshopColorLibrarySelectionKey(
   state: WorkshopColorLibrarySelectionState =
     useConverterStore.getState(),
 ): string {
-  if (state.source_version === "material") {
+  if (isMaterialArchiveSourceVersion(state.source_version)) {
     return JSON.stringify([
-      "material",
+      state.source_version,
       state.selectedMaterialDirNames,
     ]);
   }
@@ -366,12 +369,15 @@ async function hydrateWorkshopColorLibrary(
     return null;
   }
 
-  if (state.source_version === "material") {
+  if (isMaterialArchiveSourceVersion(state.source_version)) {
     if (state.selectedMaterialDirNames.length === 0) {
       return null;
     }
     try {
-      const response = await loadMaterialCatalog(signal);
+      const response = await loadMaterialCatalog(
+        signal,
+        getMaterialArchiveProfileKind(state.source_version) ?? "stage_a",
+      );
       assertNotAborted(signal);
       state = useConverterStore.getState();
       if (getWorkshopColorLibrarySelectionKey(state) !== key) {
@@ -479,8 +485,10 @@ export async function readWorkshopColorLibrary(
     const controller = new AbortController();
     const loadMaterialCatalog =
       options.loadMaterialCatalog ??
-      ((signal?: AbortSignal) =>
-        listGradientCardMaterials({ signal }));
+      ((
+        signal?: AbortSignal,
+        profileKind: "stage_a" | "lumina_box" = "stage_a",
+      ) => listGradientCardMaterials({ signal, profileKind }));
     flight = {
       controller,
       promise: Promise.resolve(null),

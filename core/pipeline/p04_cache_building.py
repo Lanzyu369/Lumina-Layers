@@ -125,6 +125,11 @@ def run(ctx: dict) -> dict:
         'use_lut_constrained': use_lut_constrained,
         'auto_dynamic_range': auto_dynamic_range,
         'material_source': material_source,
+        # Archive kind is part of preview-analysis identity. Generation must
+        # retain it so a Lumina Box cache can never be resumed as Stage A.
+        'material_profile_kind': ctx.get('material_profile_kind'),
+        'spacer_thick': ctx.get('spacer_thick', 1.2),
+        'material_optical_context': ctx.get('material_optical_context'),
         'backing_color_id': backing_color_id,
         'is_dark': is_dark,
         'bed_label': BedManager.DEFAULT_BED,

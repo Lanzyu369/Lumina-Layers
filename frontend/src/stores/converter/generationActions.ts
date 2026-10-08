@@ -31,6 +31,7 @@ import {
   resolveConverterSourceSelection,
 } from "./sources";
 import type { ConverterActions, ConverterState } from "./types";
+import { isMaterialArchiveSourceVersion } from "./types";
 
 const BATCH_PREVIEW_BROWSER_SAFE_LIMIT = 96;
 
@@ -239,7 +240,7 @@ export function createGenerationActions(
       if (!sourceSelection.isReady) {
         set({
           error:
-            state.source_version === "material"
+            isMaterialArchiveSourceVersion(state.source_version)
               ? "请先选择耗材"
               : state.source_version === "native"
                 ? "请先选择品牌和数据库"
@@ -600,7 +601,7 @@ export function createGenerationActions(
       if (!sourceSelection.isReady) {
         set({
           error:
-            state.source_version === "material"
+            isMaterialArchiveSourceVersion(state.source_version)
               ? "请先选择耗材"
               : state.source_version === "native"
                 ? "请先选择品牌和数据库"
