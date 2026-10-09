@@ -58,9 +58,7 @@ import SettingsCategoryNav, {
   type SettingsCategoryId,
 } from "./settings/SettingsCategoryNav";
 import {
-  PanelIntro,
   StatusBanner,
-  resolvePanelSurfaceClass,
   resolveSectionCardClass,
   workstationInputClass,
 } from "./ui/panelPrimitives";
@@ -602,14 +600,9 @@ export default function SettingsPanel() {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="settings-panel"
-      className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
-      >
-      <PanelIntro
-        title={t("settings.title")}
-        description={t("settings.desc")}
-      />
-
-      <div className="grid min-h-0 items-start gap-5 lg:grid-cols-[14rem_minmax(0,1fr)]">
+      className={`panel-surface flex h-full min-h-0 w-full flex-col overflow-hidden px-3 py-3 sm:px-5 sm:py-4 lg:px-7 lg:py-5 ${workspace.isCompact ? "sm:px-4" : ""}`}
+    >
+      <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-5 lg:grid-cols-[14rem_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]">
         <SettingsCategoryNav
           ariaLabel={t("settings.category_nav_label")}
           categories={settingsCategories}
@@ -618,10 +611,12 @@ export default function SettingsPanel() {
         />
 
         <div
+          key={activeCategory}
           id={`settings-category-panel-${activeCategory}`}
           role="region"
           aria-labelledby={`settings-category-${activeCategory}`}
-          className="min-w-0"
+          tabIndex={0}
+          className="dock-scrollbar min-h-0 min-w-0 overflow-auto"
         >
           {activeCategory === "device" && (
             <section

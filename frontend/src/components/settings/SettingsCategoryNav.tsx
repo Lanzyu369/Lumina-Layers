@@ -33,7 +33,7 @@ export default function SettingsCategoryNav({
     <nav
       aria-label={ariaLabel}
       data-testid="settings-category-nav"
-      className="dock-scrollbar flex min-w-0 gap-2 overflow-x-auto rounded-[24px] border border-slate-200/75 bg-slate-100/65 p-2 dark:border-slate-700/75 dark:bg-slate-900/55 lg:sticky lg:top-0 lg:flex-col lg:self-start lg:overflow-visible"
+      className="dock-scrollbar flex min-h-0 min-w-0 gap-2 overflow-x-auto rounded-[24px] border border-slate-200/75 bg-slate-100/65 p-2 dark:border-slate-700/75 dark:bg-slate-900/55 lg:max-h-full lg:flex-col lg:self-start lg:overflow-y-auto"
     >
       {categories.map((category) => {
         const active = category.id === activeCategory;
