@@ -267,7 +267,7 @@ describe("recipe round-trip properties", () => {
           overrides.enable_wipe_tower_auto_placement,
         );
         expect(restored.backing_infill_density_percent).toBe(
-          restored.enable_relief || restored.puzzleEnabled
+          restored.enable_relief
             ? 100
             : overrides.backing_infill_density_percent,
         );

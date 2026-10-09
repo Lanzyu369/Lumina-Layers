@@ -1,0 +1,45 @@
+name: Prepare native 3MF wheels
+description: Build the pinned Fat Cat binding and patched neroued writer for the current runner
+
+inputs:
+  python:
+    description: Python executable to use for the wheel build
+    required: false
+    default: python
+runs:
+  using: composite
+  steps:
+    - name: Build the pinned native wheelhouse
+      shell: bash
+      env:
+        PYTHON_EXECUTABLE: ${{ inputs.python }}
+      run: |
+        set -euo pipefail
+        contract=scripts/fatcat_packaging_contract.py
+        FATCAT_REPOSITORY="$("$PYTHON_EXECUTABLE" "$contract" --get FATCAT_REPOSITORY)"
+        FATCAT_REF="$("$PYTHON_EXECUTABLE" "$contract" --get FATCAT_SOURCE_COMMIT)"
+        NEROUED_REPOSITORY="$("$PYTHON_EXECUTABLE" "$contract" --get FATCAT_WRITER_REPOSITORY)"
+        NEROUED_REF="$("$PYTHON_EXECUTABLE" "$contract" --get FATCAT_WRITER_SOURCE_COMMIT)"
+        writer_patch="$("$PYTHON_EXECUTABLE" "$contract" --get FATCAT_WRITER_PATCH)"
+        native_root="$RUNNER_TEMP/lumina-3mf-native"
+        fatcat_root="$native_root/fatcat"
+        neroued_root="$native_root/neroued"
+        mkdir -p "$native_root"
+
+        git clone --no-checkout "$FATCAT_REPOSITORY" "$fatcat_root"
+        git -C "$fatcat_root" fetch --depth=1 origin "$FATCAT_REF"
+        git -C "$fatcat_root" checkout --detach "$FATCAT_REF"
+
+        git clone --no-checkout "$NEROUED_REPOSITORY" "$neroued_root"
+        git -C "$neroued_root" fetch --depth=1 origin "$NEROUED_REF"
+        git -C "$neroued_root" checkout --detach "$NEROUED_REF"
+        git -C "$neroued_root" apply \
+          "$GITHUB_WORKSPACE/$writer_patch"
+
+        "$PYTHON_EXECUTABLE" -m pip install --upgrade build
+        "$PYTHON_EXECUTABLE" scripts/build_3mf_native_wheels.py \
+          --fatcat-root "$fatcat_root" \
+          --neroued-source "$neroued_root" \
+          --output-dir "$GITHUB_WORKSPACE/wheelhouse/3mf" \
+          --python "$PYTHON_EXECUTABLE" \
+          --install

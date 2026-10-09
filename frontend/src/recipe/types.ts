@@ -199,6 +199,8 @@ export interface ConverterRecipeDevice {
   device_profile_id?: string;
   /** Slicer-native build plate selected for the device profile. */
   build_plate_id?: string;
+  /** Device-local template ID; import the native project on each device. */
+  custom_3mf_template_id?: string | null;
   /** Preserve the slicer's base-layer height modifier choice. */
   enable_base_layer_height_modifier?: boolean;
   /** Allow Lumina to adapt the model and wipe-tower layout during export. */

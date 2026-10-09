@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from copy import deepcopy
-import json
-from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-from config import format_native_nozzle_size, list_printer_profiles
+from config import format_native_nozzle_size
 
 
 PROTECTED_LUMINA_PROCESS_SETTINGS: dict[str, Any] = {
@@ -24,14 +21,13 @@ PROTECTED_LUMINA_PROCESS_SETTINGS: dict[str, Any] = {
     "elefant_foot_compensation": "0",
     "sparse_infill_density": "100%",
     "sparse_infill_pattern": "zig-zag",
-    "print_speed": "100",
     "travel_speed": "150",
     "enable_support": "0",
     "brim_width": "5",
     "brim_type": "auto_brim",
 }
 
-_PROTECTED_LINE_WIDTH_KEYS: tuple[str, ...] = (
+_PROTECTED_LINE_WIDTH_KEYS = (
     "line_width",
     "inner_wall_line_width",
     "outer_wall_line_width",
@@ -41,175 +37,87 @@ _PROTECTED_LINE_WIDTH_KEYS: tuple[str, ...] = (
     "support_line_width",
 )
 
-_PROTECTED_DIFFERENCE_KEYS: tuple[str, ...] = (
-    *PROTECTED_LUMINA_PROCESS_SETTINGS.keys(),
-    *_PROTECTED_LINE_WIDTH_KEYS,
-    "initial_layer_line_width",
-    "printer_settings_id",
-    "nozzle_temperature",
-    "nozzle_temperature_initial_layer",
-    "bed_temperature",
-    "bed_temperature_initial_layer",
-    "textured_plate_temp",
-    "textured_plate_temp_initial_layer",
-    "hot_plate_temp",
-    "hot_plate_temp_initial_layer",
-    "eng_plate_temp",
-    "eng_plate_temp_initial_layer",
-    "cool_plate_temp",
-    "cool_plate_temp_initial_layer",
-    "filament_type",
-)
-
-
-def _has_meaningful_value(value: Any) -> bool:
-    return value is not None and str(value).strip() not in {"", "null", "None"}
-
 
 def _format_mm(value: float) -> str:
     return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
-def _first_nozzle_mm(settings: dict[str, Any]) -> float:
-    raw = settings.get("nozzle_diameter")
-    if isinstance(raw, list) and raw:
-        raw = raw[0]
-    normalized = format_native_nozzle_size(raw)
-    if normalized is None:
-        normalized = format_native_nozzle_size(settings.get("printer_variant"))
-    return float(normalized or "0.4")
-
-
-def _normalized_nozzle_size_from_settings(settings: dict[str, Any]) -> str:
-    raw = settings.get("nozzle_diameter")
-    if isinstance(raw, list) and raw:
-        raw = raw[0]
-    return (
-        format_native_nozzle_size(raw)
-        or format_native_nozzle_size(settings.get("printer_variant"))
-        or "0.4"
-    )
-
-
-def _default_line_widths(settings: dict[str, Any]) -> tuple[str, str]:
-    nozzle = _first_nozzle_mm(settings)
-    line_width = nozzle + 0.02
-    initial_line_width = 0.25 if nozzle <= 0.25 else line_width
-    return _format_mm(line_width), _format_mm(initial_line_width)
-
-
-def _match_lumina_printer_id(settings: dict[str, Any], source_profile_name: str | None) -> str | None:
-    model = str(settings.get("printer_model") or "").strip().casefold()
-    source = str(source_profile_name or "").strip().casefold()
-    for profile in list_printer_profiles():
-        display_name = profile.display_name.casefold()
-        if model == display_name or source.startswith(display_name):
-            return profile.id
-    return None
-
-
-def _load_lumina_line_width_contract(
-    settings: dict[str, Any],
+def merge_lumina_process_settings(
+    defaults: dict[str, Any],
+    requested: dict[str, Any] | None,
     *,
-    slicer_id: str | None,
-    source_profile_name: str | None,
-) -> dict[str, str]:
-    if not slicer_id:
-        return {}
-    printer_id = _match_lumina_printer_id(settings, source_profile_name)
-    if not printer_id:
-        return {}
-    try:
-        profile = next(item for item in list_printer_profiles() if item.id == printer_id)
-        template_name = profile.get_template_file(
-            slicer_id,
-            nozzle_size=_normalized_nozzle_size_from_settings(settings),
-        )
-        template_path = Path(__file__).resolve().parents[1] / "printer_profiles" / template_name
-        template = json.loads(template_path.read_text(encoding="utf-8"))
-    except (StopIteration, OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return {}
-    keys = (*_PROTECTED_LINE_WIDTH_KEYS, "initial_layer_line_width")
-    return {key: str(template[key]) for key in keys if key in template}
-
-
-def _merge_difference_index(value: Any) -> list[str]:
-    existing: list[str] = []
-    if isinstance(value, list):
-        raw_items = value
-    elif _has_meaningful_value(value):
-        raw_items = [value]
-    else:
-        raw_items = []
-    for raw_item in raw_items:
-        for token in str(raw_item).split(";"):
-            normalized = token.strip()
-            if normalized:
-                existing.append(normalized)
-    merged = sorted({*existing, *_PROTECTED_DIFFERENCE_KEYS})
-    return [";".join(merged)] if merged else []
-
-
-def apply_lumina_process_overlay(
-    native_settings: dict[str, Any],
-    *,
-    slot_count: int = 8,
-    source_profile_name: str | None = None,
-    slicer_id: str | None = None,
+    aliases: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Apply Lumina's protected 3MF process settings over native profiles.
+    """Replace defaults sharing a native field with an explicit override.
 
-    Native slicer profiles identify machines and provide defaults. They must
-    not replace Lumina's current printable process contract such as 0.08 mm
-    layer height and fixed slot-array shapes.
+    根据工艺别名合并明确设置，移除同一原生字段的默认值。
+    明确提供的相互矛盾值会保留，交由 Fat Cat 拒绝。
+
+    Args:
+        defaults: Product process defaults. 产品工艺默认值。
+        requested: Caller-supplied settings. 调用方明确提供的设置。
+        aliases: FatCat's public input-to-native field mapping.
+            FatCat 公共合同中的输入名称映射。
+
+    Returns:
+        Combined values retaining explicit conflicts for validation.
+        合并后的设置；明确输入中的冲突值仍保留以供校验。
     """
-    merged = deepcopy(native_settings)
-    merged.update(PROTECTED_LUMINA_PROCESS_SETTINGS)
-    # Orca 2.4's precise-wall correction can delete a large printable region
-    # when Arachne is used with Lumina's intentional one-wall artwork process.
-    # Bambu Studio already ships the equivalent profile with this disabled.
-    orca_precise_wall_override = slicer_id == "OrcaSlicer"
-    if orca_precise_wall_override:
-        merged["precise_outer_wall"] = "0"
-    profile_name = source_profile_name or merged.get("printer_model")
-    if _has_meaningful_value(profile_name):
-        merged["printer_settings_id"] = str(profile_name)
-    line_width, initial_line_width = _default_line_widths(merged)
-    template_line_widths = _load_lumina_line_width_contract(
-        merged,
-        slicer_id=slicer_id,
-        source_profile_name=source_profile_name,
+
+    supplied = dict(requested or {})
+    field_aliases = (
+        aliases if aliases is not None
+        else {"initial_layer_height": "initial_layer_print_height"}
     )
-    for key in _PROTECTED_LINE_WIDTH_KEYS:
-        merged[key] = template_line_widths.get(key, line_width)
-    merged["initial_layer_line_width"] = template_line_widths.get(
-        "initial_layer_line_width",
-        initial_line_width,
-    )
-    merged["nozzle_temperature"] = ["220"] * slot_count
-    merged["nozzle_temperature_initial_layer"] = ["220"] * slot_count
-    merged["bed_temperature"] = ["60"] * slot_count
-    merged["bed_temperature_initial_layer"] = ["60"] * slot_count
-    for key in (
-        "textured_plate_temp",
-        "textured_plate_temp_initial_layer",
-        "hot_plate_temp",
-        "hot_plate_temp_initial_layer",
-        "eng_plate_temp",
-        "eng_plate_temp_initial_layer",
-    ):
-        merged[key] = ["60"] * slot_count
-    merged["cool_plate_temp"] = ["0"] * slot_count
-    merged["cool_plate_temp_initial_layer"] = ["0"] * slot_count
-    merged["filament_type"] = ["PLA"] * slot_count
-    merged["different_settings_to_system"] = _merge_difference_index(
-        merged.get("different_settings_to_system")
-    )
-    if orca_precise_wall_override:
-        merged["different_settings_to_system"] = _merge_difference_index(
-            [
-                *merged["different_settings_to_system"],
-                "precise_outer_wall",
-            ]
-        )
-    return merged
+    overridden = {
+        field_aliases.get(key, key)
+        for key, value in supplied.items()
+        if value is not None
+    }
+    result = {
+        key: value for key, value in defaults.items()
+        if field_aliases.get(key, key) not in overridden
+    }
+    result.update(supplied)
+    return result
+
+
+def build_lumina_process_settings(
+    settings: dict[str, Any] | None = None,
+    *,
+    nozzle_size: object = None,
+    slicer_id: str = "",
+    aliases: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Return the explicit Lumina process values for one export.
+
+    返回本次导出明确使用的 Lumina 工艺参数；不会读取机器模板。
+
+    Args:
+        settings: Explicit process overrides. 明确的工艺覆盖值。
+        nozzle_size: Selected nozzle diameter. 已选喷嘴直径。
+        slicer_id: Selected slicer identity. 已选切片软件身份。
+        aliases: Public FatCat process aliases. FatCat 公共工艺别名。
+
+    Returns:
+        Product defaults combined with explicit overrides.
+        合并产品默认值与明确覆盖值的工艺设置。
+    """
+
+    requested = dict(settings or {})
+    nozzle = format_native_nozzle_size(nozzle_size) or "0.4"
+    nozzle_mm = float(nozzle)
+    line_width = _format_mm(nozzle_mm + 0.02)
+    initial_line_width = "0.25" if nozzle_mm <= 0.25 else line_width
+    result = {key: str(value) for key, value in PROTECTED_LUMINA_PROCESS_SETTINGS.items()}
+    if slicer_id == "PrusaSlicer":
+        # Product default: Prusa has no automatic-brim enum.
+        result["brim_type"] = "outer_only"
+    result.update({key: line_width for key in _PROTECTED_LINE_WIDTH_KEYS})
+    result["initial_layer_line_width"] = initial_line_width
+    explicit = {
+        key: str(value)
+        for key, value in requested.items()
+        if value is not None and not isinstance(value, (dict, list, tuple))
+    }
+    return merge_lumina_process_settings(result, explicit, aliases=aliases)

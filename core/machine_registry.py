@@ -12,18 +12,14 @@ from typing import Any
 
 @dataclass(frozen=True)
 class BuildPlateProfile:
-    """One slicer-native build plate definition.
+    """Build plate identity and artwork for the device picker.
 
-    单个切片软件原生打印板定义。项目、盘面和厂商 sidecar 可能使用不同值，
-    因此三者保持为显式字段，禁止在写出阶段猜测。
+    设备选择器使用的打印板身份和图片；原生项目字段由 FatCat 解析。
     """
 
     id: str
     display_name: str
     display_name_zh: str
-    project_value: str
-    plate_value: str
-    sidecar_value: str
     image: str
     source_path: str
     source_version: str
@@ -32,16 +28,15 @@ class BuildPlateProfile:
 
 @dataclass(frozen=True)
 class DeviceProfile:
-    """Resolved Lumina device profile at slicer + machine + nozzle grain."""
+    """UI device identity and hardware at slicer + machine + nozzle grain.
+    按切片器、机器和喷嘴确定的 UI 设备身份与硬件信息。
+    """
 
     device_profile_id: str
     machine_profile_id: str
     slicer_id: str
     slicer_display_name: str
     source_version: str
-    application_metadata: str
-    client_version: str
-    sidecar_policy: str
     display_name: str
     brand: str
     vendor_key: str
@@ -52,7 +47,6 @@ class DeviceProfile:
     bed_model: str
     nozzle_size: str
     source_profile_name: str
-    template: str
     revision: str
     supported: bool
     build_plates: tuple[BuildPlateProfile, ...]
@@ -123,6 +117,7 @@ _REGISTRY_TO_DETECTED_SLICER_ID = {
     "AnycubicSlicerNext": "anycubic_slicer_next",
     "FlashStudio": "flash_studio",
     "QIDIStudio": "qidi_studio",
+    "PrusaSlicer": "prusa_slicer",
 }
 
 
@@ -383,7 +378,9 @@ def _require_mapping(value: Any, *, label: str) -> dict[str, Any]:
 
 
 def load_machine_registry(path: str | Path) -> MachineRegistry:
-    """Load a generated Lumina machine registry JSON file.
+    """Load registry entries and current native Prusa devices from FatCat.
+
+    读取已有机器目录，并从 FatCat 公共目录加入当前 Prusa 设备。
 
     Args:
         path: Path to ``machine_registry/registry.json``.
@@ -411,9 +408,6 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
                 display_name_zh=str(
                     plate.get("display_name_zh") or plate["display_name"]
                 ),
-                project_value=str(plate["project_value"]),
-                plate_value=str(plate["plate_value"]),
-                sidecar_value=str(plate.get("sidecar_value") or ""),
                 image=str(plate["image"]),
                 source_path=str(plate["source_path"]),
                 source_version=str(plate["source_version"]),
@@ -459,9 +453,6 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
                     slicer_id=slicer_id,
                     slicer_display_name=str(slicer["display_name"]),
                     source_version=str(slicer["source_version"]),
-                    application_metadata=str(slicer["application_metadata"]),
-                    client_version=str(slicer.get("client_version") or ""),
-                    sidecar_policy=str(slicer["sidecar_policy"]),
                     display_name=str(machine["display_name"]),
                     brand=str(machine["brand"]),
                     vendor_key=str(machine["vendor_key"]),
@@ -472,7 +463,6 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
                     bed_model=str(machine.get("bed_model", "")),
                     nozzle_size=str(nozzle["nozzle_size"]),
                     source_profile_name=str(nozzle["source_profile_name"]),
-                    template=str(nozzle["template"]),
                     revision=str(nozzle["revision"]),
                     supported=bool(nozzle.get("supported", True)),
                     build_plates=machine_build_plates,
@@ -488,9 +478,53 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
                     plate.id: plate for plate in machine_build_plates
                 }
 
+    _add_prusa_devices(devices, build_plates_by_device_id, registry_path.parent)
     return MachineRegistry(
         schema_version=int(data["schema_version"]),
         generated_at=str(data["generated_at"]),
         devices_by_id=devices,
         build_plates_by_device_id=build_plates_by_device_id,
     )
+
+
+def _add_prusa_devices(
+    devices: dict[str, DeviceProfile],
+    build_plates: dict[str, dict[str, BuildPlateProfile]],
+    registry_root: Path,
+) -> None:
+    from utils.fatcat_metadata import native_project_source_catalog
+
+    catalog = native_project_source_catalog("PrusaSlicer")
+    version = str(catalog["application_version"])
+    asset_index = registry_root / "slicers" / "PrusaSlicer" / version / "picker-assets.json"
+    thumbnails = (
+        json.loads(asset_index.read_text(encoding="utf-8"))["thumbnails"]
+        if asset_index.is_file() else {}
+    )
+    for source in catalog["sources"]:
+        hardware = source["hardware_settings"]
+        bed = hardware["bed"]
+        sheet = hardware["sheet"]
+        plate_id = "prusa-sheet:" + str(sheet["type"])
+        plate = BuildPlateProfile(
+            id=plate_id, display_name=str(sheet["name"]),
+            display_name_zh=str(sheet["name"]), image="",
+            source_path="", source_version=version, revision=version,
+        )
+        machine_id = str(source["machine_uid"]).replace(":", "-")
+        nozzle = str(source["nozzle_uid"]).removeprefix("nozzle:").removesuffix("mm")
+        device_id = f"PrusaSlicer:{machine_id}:{nozzle}"
+        device = DeviceProfile(
+            device_profile_id=device_id, machine_profile_id=machine_id,
+            slicer_id="PrusaSlicer", slicer_display_name=f"PrusaSlicer {version}",
+            source_version=version, display_name=str(source["display_name"]),
+            brand="Prusa", vendor_key="PrusaResearch", bed_width=int(bed["width"]),
+            bed_depth=int(bed["height"]), bed_height=int(bed["max_print_height"]),
+            thumbnail=str(thumbnails.get(source["machine_uid"], "")),
+            bed_model="", nozzle_size=nozzle,
+            source_profile_name=str(source["source_machine_profile_name"]),
+            revision=version, supported=True,
+            build_plates=(plate,), default_build_plate_id=plate_id,
+        )
+        devices[device_id] = device
+        build_plates[device_id] = {plate_id: plate}

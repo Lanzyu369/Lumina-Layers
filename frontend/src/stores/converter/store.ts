@@ -5941,16 +5941,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     setPuzzleEnabled: (enabled: boolean) =>
       set((state) => {
         const puzzleEnabled = enabled && !state.batchMode;
-        if (puzzleEnabled) {
-          persistBackingInfillDensityPercent(
-            BACKING_INFILL_DENSITY_DEFAULT_PERCENT,
-          );
-        }
         return {
           puzzleEnabled,
-          backing_infill_density_percent: puzzleEnabled
-            ? BACKING_INFILL_DENSITY_DEFAULT_PERCENT
-            : state.backing_infill_density_percent,
           largeFormatEnabled: enabled ? false : state.largeFormatEnabled,
           add_loop: enabled ? false : state.add_loop,
           ...buildFridgeMagnetState(state, {
@@ -9971,6 +9963,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           nozzle_size: generateSettings.nozzleSize,
           device_profile_id: generateSettings.deviceProfileId,
           build_plate_id: generateSettings.buildPlateId,
+          custom_3mf_template_id: generateSettings.custom3mfTemplateId,
           enable_base_layer_height_modifier:
             generateSettings.enableBaseLayerHeightModifier,
           enable_wipe_tower_auto_placement:
@@ -10841,6 +10834,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           nozzle_size: settings.nozzleSize,
           device_profile_id: settings.deviceProfileId,
           build_plate_id: settings.buildPlateId,
+          custom_3mf_template_id: settings.custom3mfTemplateId,
           enable_base_layer_height_modifier:
             settings.enableBaseLayerHeightModifier,
           enable_wipe_tower_auto_placement:

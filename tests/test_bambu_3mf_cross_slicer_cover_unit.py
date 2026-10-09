@@ -9,8 +9,9 @@ These tests cover task 9 of the ``3mf-cover-thumbnail`` spec:
   and its native ``Metadata/plate_1_small.png`` / ``plate_1.json`` sidecars.
 - ``Metadata/model_settings.config`` / ``project_settings.config`` /
   ``slice_info.config`` byte-equality across ``cover_source=None`` vs
-  real-image variants — only PNG byte assets driven by ``cover_source`` are
-  allowed to differ. There is no on-disk baseline; the strategy is to drive
+  real-image variants. PNG assets driven by ``cover_source`` may differ;
+  generated Production UUID attributes are normalized only in model parts.
+  There is no on-disk baseline; the strategy is to drive
   two exports with the same logical inputs and confirm config bytes are
   identical regardless of ``cover_source`` value.
 - ``cover_source=None`` still emits all three thumbnails as legal opaque
@@ -451,7 +452,19 @@ class TestMetadataInvariantsAcrossCoverSource:
 
             differing: set[str] = set()
             for name in sorted(a_names):
-                if a_zf.read(name) != b_zf.read(name):
+                a_bytes, b_bytes = a_zf.read(name), b_zf.read(name)
+                if name.endswith(".model"):
+                    # Normalize per-export identity only; retain every other
+                    # geometry attribute, metadata field and resource byte.
+                    roots = [ET.fromstring(payload) for payload in (a_bytes, b_bytes)]
+                    for root in roots:
+                        for element in root.iter():
+                            element.attrib.pop(
+                                "{http://schemas.microsoft.com/3dmanufacturing/production/2015/06}UUID",
+                                None,
+                            )
+                    a_bytes, b_bytes = (ET.tostring(root) for root in roots)
+                if a_bytes != b_bytes:
                     differing.add(name)
 
         unexpected = differing - _COVER_DRIVEN_PNG_PATHS

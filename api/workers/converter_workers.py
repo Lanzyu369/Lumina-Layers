@@ -1021,148 +1021,17 @@ def _batch_compute_xy_bbox_mm(
     return width_mm, depth_mm
 
 
-def _batch_extract_slots_from_3mf(threemf_path: str) -> list[dict]:
-    """Extract canonical material slot identities from a per-image 3MF.
-    从 per-image 3MF 中提取规范化的材料 slot 身份信息。
+def _batch_extract_slots_from_3mf(
+    threemf_path: str,
+    target: "MetadataTarget | SourceMaterialTarget | None" = None,
+) -> list[dict]:
+    """Read canonical source slots through Fat Cat.
 
-    Reads ``Metadata/project_settings.config`` for ``filament_colour`` /
-    ``filament_ids`` arrays, and ``Metadata/model_settings.config`` for
-    per-part ``name`` ↔ ``extruder`` pairs (Bambu writes slot identity
-    here rather than as ``<basematerial>`` nodes when objects are split
-    across attached part files). Combines them into a list of
-    ``MaterialSlot`` field dicts so the parent process can build a
-    ``PerImageMetadataSidecar`` without re-implementing 3MF parsing.
-
-    读取 ``Metadata/project_settings.config`` 中的 ``filament_colour`` /
-    ``filament_ids`` 数组，以及 ``Metadata/model_settings.config`` 里每个
-    ``<part>`` 的 ``name`` / ``extruder`` 元数据（Bambu 将 slot 名写在
-    这里，而不是 ``<basematerial>`` 节点），组合成 ``MaterialSlot``
-    字段字典列表，供父进程构建 ``PerImageMetadataSidecar``。
-
-    Args:
-        threemf_path: Path to the produced per-image 3MF.
-            (per-image 3MF 文件路径)
-
-    Returns:
-        list[dict]: Each dict has ``slot_id`` (int, 0-based), ``slot_name``
-            (str), ``preview_color`` (str like ``"#101010"``) and
-            ``material_id`` (str). The list length matches the slot count
-            stored in the 3MF and is guaranteed >= 1; otherwise this raises
-            ``RuntimeError`` so the worker surfaces the failure to the
-            parent process.
-            (每个 dict 含 ``slot_id`` / ``slot_name`` / ``preview_color`` /
-            ``material_id``，列表长度 ≥ 1；否则抛 ``RuntimeError``)
+    通过 Fat Cat 读取规范化的源耗材槽位。
     """
-    import json
-    import xml.etree.ElementTree as ET
-    import zipfile
+    from utils.fatcat_metadata import read_source_metadata
 
-    with zipfile.ZipFile(threemf_path, "r") as archive:
-        try:
-            project_bytes = archive.read("Metadata/project_settings.config")
-        except KeyError as exc:
-            raise RuntimeError(
-                f"3MF missing Metadata/project_settings.config: {threemf_path}"
-            ) from exc
-        try:
-            model_settings_bytes = archive.read("Metadata/model_settings.config")
-        except KeyError as exc:
-            raise RuntimeError(
-                f"3MF missing Metadata/model_settings.config: {threemf_path}"
-            ) from exc
-
-    project_settings = json.loads(project_bytes.decode("utf-8"))
-    filament_colours = list(project_settings.get("filament_colour") or [])
-    filament_ids = list(project_settings.get("filament_ids") or [])
-    filament_settings_ids = list(
-        project_settings.get("filament_settings_id") or []
-    )
-
-    # Walk model_settings.config: each <part> has metadata "name" and
-    # "extruder"; the extruder value is the 1-based slot index. We map it
-    # back to a 0-based slot_id and pick up the canonical slot_name.
-    # 解析 model_settings.config：每个 <part> 携带 name / extruder 元数据；
-    # extruder 是 1-based slot 索引，这里换算成 0-based slot_id 同时取 name。
-    slot_id_to_name: dict[int, str] = {}
-    try:
-        ms_root = ET.fromstring(model_settings_bytes)
-    except ET.ParseError as exc:
-        raise RuntimeError(
-            f"3MF model_settings.config malformed: {threemf_path}: {exc}"
-        ) from exc
-    for part in ms_root.iter("part"):
-        name_value: str | None = None
-        extruder_value: str | None = None
-        for meta in part.findall("metadata"):
-            key = meta.get("key")
-            if key == "name":
-                name_value = meta.get("value")
-            elif key == "extruder":
-                extruder_value = meta.get("value")
-        if name_value is None or extruder_value is None:
-            continue
-        try:
-            extruder_idx_1based = int(extruder_value)
-        except ValueError:
-            continue
-        slot_id = extruder_idx_1based - 1
-        if slot_id < 0:
-            continue
-        # First writer wins so identical extruder slots stay stable across
-        # multiple parts that share a slot (each slot's canonical name
-        # stays the one we saw first).
-        # 同 slot 多个 part 时以首次出现的 name 为准。
-        slot_id_to_name.setdefault(slot_id, name_value)
-
-    slot_count = max(
-        len(filament_colours),
-        max(slot_id_to_name) + 1 if slot_id_to_name else 0,
-        1,
-    )
-
-    slots: list[dict] = []
-    for idx in range(slot_count):
-        slot_name = slot_id_to_name.get(idx)
-        if not slot_name:
-            # Defensive fallback so the sidecar still validates; the
-            # downstream merge writer treats this as an opaque slot.
-            # 兜底命名，确保 sidecar 通过 schema 校验。
-            slot_name = f"Slot {idx + 1}"
-
-        if idx < len(filament_colours) and filament_colours[idx]:
-            raw_color = str(filament_colours[idx]).strip()
-            preview_color = (
-                raw_color if raw_color.startswith("#") else f"#{raw_color}"
-            )
-            preview_color = preview_color.upper()
-            if len(preview_color) != 7:
-                preview_color = "#CCCCCC"
-        else:
-            preview_color = "#CCCCCC"
-
-        material_id = ""
-        if idx < len(filament_ids) and filament_ids[idx]:
-            material_id = str(filament_ids[idx])
-        if not material_id and idx < len(filament_settings_ids):
-            material_id = str(filament_settings_ids[idx])
-        if not material_id:
-            material_id = f"GFA{idx:02d}"
-
-        slots.append(
-            {
-                "slot_id": idx,
-                "slot_name": slot_name,
-                "preview_color": preview_color,
-                "material_id": material_id,
-            }
-        )
-
-    if not slots:
-        raise RuntimeError(
-            f"3MF has no recoverable material slots: {threemf_path}"
-        )
-
-    return slots
+    return read_source_metadata(threemf_path, target=target)["slots"]
 
 
 def worker_batch_convert_item(
@@ -1428,16 +1297,23 @@ def worker_batch_convert_item(
         final_glb_path = target_glb_path
 
     # Build the sidecar from the moved 3MF + occupied image footprint.
-    # ``_batch_extract_slots_from_3mf`` is intentionally tolerant: if a
-    # field is missing it falls back to a deterministic placeholder so
-    # the sidecar still validates as ``PerImageMetadataSidecar``.
-    # 用产出 3MF + 输入图实际占位构建 sidecar；缺失字段走确定性 fallback。
+    # FatCat reads source slots; Lumina computes the image footprint.
+    # FatCat 读取源槽位，Lumina 计算输入图实际占位。
     width_mm, depth_mm = _batch_compute_xy_bbox_mm(
         image_path,
         target_width_mm,
         svg_pixels_per_mm=svg_pixels_per_mm,
     )
-    slots = _batch_extract_slots_from_3mf(target_3mf_path)
+    from utils.fatcat_metadata import select_metadata_target
+
+    slot_target = select_metadata_target(
+        slicer=slicer,
+        printer_id=printer_id,
+        nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
+    )
+    slots = _batch_extract_slots_from_3mf(target_3mf_path, target=slot_target)
     sidecar_payload = {
         "schema_version": 1,
         "source_filename": source_filename,
@@ -1721,12 +1597,14 @@ def worker_generate_model_surface_overlay(
             slot_names=overlay.slot_names,
             preview_colors=overlay.preview_colors,
             project_slot_names=overlay.project_slot_names,
+            material_types=overlay.scene.metadata.get("material_types"),
             preserve_template_filament_slots=(
                 False if converter_params.get("material_source") == "material_archive" else None
             ),
             settings={"layer_height": f"{display_layer_height_mm:g}"},
             color_mode=str(converter_params.get("color_mode", "4-Color")),
             printer_id=str(normalized_params.get("printer_id", "bambu-h2d")),
+            custom_3mf_template_id=normalized_params.get("custom_3mf_template_id"),
             slicer=str(normalized_params.get("slicer", "BambuStudio")),
             nozzle_size=str(normalized_params.get("nozzle_size", "0.4")),
             cover_source=cover_source,
@@ -1908,6 +1786,7 @@ def worker_generate_large_format_svg_native(
     from core.pipeline._input_validation_common import (
         _apply_material_archive_branch,
     )
+    from core.pipeline.preview_color_utils import build_lut_material_types
     from core.pipeline.vector_branch import (
         _build_vector_processor,
         _generate_vector_outline_mesh,
@@ -1985,6 +1864,13 @@ def worker_generate_large_format_svg_native(
         target_width_mm=total_width_mm,
         color_replacements=vector_replacements,
     )
+    if material_source != "material_archive":
+        from utils.lut_manager import LUTManager
+
+        _, _, lut_metadata = LUTManager.load_lut_with_metadata(lut_path)
+        worker_ctx["material_types"] = build_lut_material_types(
+            lut_metadata, analysis.slot_names,
+        )
     matched_rgb_path = params.get("matched_rgb_path")
     mask_solid_path = params.get("mask_solid_path")
     material_matrix_path = params.get("material_matrix_path")
@@ -2407,27 +2293,13 @@ def worker_generate_large_format_svg_native(
                 settings={
                     "layer_height": layer_height_setting,
                     "initial_layer_height": layer_height_setting,
-                    "wall_loops": "1",
-                    "top_shell_layers": "0",
-                    "bottom_shell_layers": "1",
-                    "bottom_surface_pattern": "monotonicline",
-                    "elefant_foot_compensation": "0",
-                    "sparse_infill_density": "100%",
-                    "sparse_infill_pattern": "zig-zag",
-                    "nozzle_temperature": ["220"] * 8,
-                    "bed_temperature": ["60"] * 8,
-                    "filament_type": ["PLA"] * 8,
-                    "print_speed": "100",
-                    "travel_speed": "150",
-                    "enable_support": "0",
-                    "brim_width": "5",
-                    "brim_type": "auto_brim",
                 },
                 color_mode=tile_processor.color_mode,
                 printer_id=params.get("printer_id", "bambu-h2d"),
                 slicer=params.get("slicer", "BambuStudio"),
                 nozzle_size=params.get("nozzle_size", "0.4"),
                 project_slot_names=slot_names,
+                material_types=worker_ctx.get("material_types"),
                 enable_base_layer_height_modifier=bool(
                     worker_ctx.get("enable_base_layer_height_modifier", True)
                 ),
@@ -2449,6 +2321,7 @@ def worker_generate_large_format_svg_native(
                 ),
                 cover_source=tile_cover,
                 device_profile_id=params.get("device_profile_id") or None,
+                custom_3mf_template_id=params.get("custom_3mf_template_id") or None,
                 build_plate_id=params.get("build_plate_id") or None,
                 preserve_template_filament_slots=(
                     False if material_source == "material_archive" else None

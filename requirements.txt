@@ -31,8 +31,13 @@ msgpack
 psutil>=5.9.8
 # Vectorizer (C++ image-to-SVG)
 neroued-vectorizer>=0.1.1
-# 3MF writer (C++ streaming 3MF with Production Extension)
-neroued-3mf>=0.4.0,<0.5.0
+# 3MF writer (C++ streaming 3MF with Production Extension).
+# Python 3.12+ uses the exact downstream wheel built from the pinned
+# neroued-3mf v0.4.0 source plus Fat Cat's B7 multi-group Production patch.
+# Older runtimes keep the stock writer for legacy development paths.
+neroued-3mf==0.4.0+fatcat.b7; python_version >= "3.12"
+neroued-3mf>=0.4.0,<0.5.0; python_version < "3.12"
+-r requirements-3mf-native.txt
 # Test support for async pytest cases
 pytest>=8.0,<9.0
 pytest-asyncio>=0.23.0

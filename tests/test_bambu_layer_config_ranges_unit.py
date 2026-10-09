@@ -324,6 +324,46 @@ def test_equal_distance_candidates_choose_lower_height() -> None:
     assert _parse_range(xml_bytes)[2] == pytest.approx(0.16)
 
 
+def test_layer_range_business_result_is_structured_and_legacy_xml_is_derived_from_it() -> None:
+    inputs = {
+        "base_height_mm": 0.8,
+        "color_height_mm": 2.4,
+        "nozzle_mm": 0.4,
+        "face": "down",
+        "fine_layer_height_mm": 0.08,
+        "object_id": 1,
+        "enable_base_layer_height_modifier": True,
+        "backing_infill_density_percent": 60,
+    }
+
+    result = writer_module.build_layer_config_ranges_data(**inputs)
+    legacy_xml = _call_build_layer_config_ranges_xml(**inputs)
+
+    assert result is not None
+    assert result["model_index"] == 1
+    assert result["ranges"]
+    assert isinstance(result["ranges"][0]["min_z"], float)
+    coarse_range = result["ranges"][0]
+    assert coarse_range["use_default_extruder"] is True
+    assert coarse_range["layer_height_mm"] == pytest.approx(0.2)
+    assert "options" not in coarse_range
+    protected_result = writer_module.build_layer_config_ranges_data(
+        **{**inputs, "solid_depth_mm": 0.1}
+    )
+    assert protected_result is not None
+    protected_ranges = [
+        item for item in protected_result["ranges"]
+        if item.get("infill_density_percent") is not None
+    ]
+    assert protected_ranges
+    assert all(item["infill_density_percent"] == 100 for item in protected_ranges)
+    assert all("options" not in item for item in result["ranges"])
+    assert legacy_xml is not None
+    legacy_root = ET.fromstring(legacy_xml)
+    assert legacy_root.find("./object").attrib["id"] == str(result["model_index"])
+    assert len(legacy_root.findall("./object/range")) == len(result["ranges"])
+
+
 def test_e2e_writer_produces_valid_xml(tmp_path) -> None:
     output_path = tmp_path / "writer-e2e.3mf"
     writer = _make_writer(
@@ -395,11 +435,12 @@ def test_writer_forwards_layer_heights_and_strict_printer_limits(tmp_path, monke
         face_orientation="down",
         nozzle_size="0.2",
     )
+    writer.add_mesh(_make_box_mesh(), "Slot 1", (255, 0, 0))
     template = writer._get_base_config_template()
     template["initial_layer_print_height"] = "0.10"
     template["min_layer_height"] = ["0.04", "0.06", "invalid"]
     template["max_layer_height"] = ["0.14", "0.12", None]
-    monkeypatch.setattr(writer, "_get_base_config_template", lambda: template)
+    writer._custom_template = template
 
     captured: dict[str, object] = {}
 
@@ -407,18 +448,20 @@ def test_writer_forwards_layer_heights_and_strict_printer_limits(tmp_path, monke
         captured.update(kwargs)
         return None
 
-    monkeypatch.setattr(writer_module, "build_layer_config_ranges_xml", capture_builder_call)
-    writer.add_mesh(_make_box_mesh(), "Slot 1", (255, 0, 0))
-
+    monkeypatch.setattr(
+        writer_module,
+        "build_layer_config_ranges_data",
+        capture_builder_call,
+    )
     writer.export()
 
     assert captured["fine_layer_height_mm"] == pytest.approx(0.06)
-    assert captured["initial_layer_height_mm"] == pytest.approx(0.10)
+    assert captured["initial_layer_height_mm"] == pytest.approx(0.20)
     assert captured["min_layer_height_mm"] == pytest.approx(0.06)
     assert captured["max_layer_height_mm"] == pytest.approx(0.12)
 
 
-def test_writer_skips_face_up_modifier_when_canonical_initial_height_is_missing(
+def test_writer_skips_face_up_modifier_when_effective_initial_height_is_missing(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -430,12 +473,15 @@ def test_writer_skips_face_up_modifier_when_canonical_initial_height_is_missing(
         face_orientation="up",
         nozzle_size="0.4",
     )
-    template = writer._get_base_config_template()
-    template.pop("initial_layer_print_height", None)
-    template["initial_layer_height"] = "0.08"
-    monkeypatch.setattr(writer, "_get_base_config_template", lambda: template)
     writer.add_mesh(_make_box_mesh(), "Slot 1", (255, 0, 0))
+    # Exercise the boundary when the selected target cannot resolve first-layer
+    # height. Removing a template value alone still leaves the product default.
+    read_layout = writer_module.read_project_layout
 
+    def unresolved_first_layer(*args, **kwargs):
+        return {**read_layout(*args, **kwargs), "initial_layer_height": None}
+
+    monkeypatch.setattr(writer_module, "read_project_layout", unresolved_first_layer)
     writer.export()
 
     with zipfile.ZipFile(output_path) as package:

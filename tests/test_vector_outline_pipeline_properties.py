@@ -1402,8 +1402,8 @@ def test_vector_outline_real_3mf_filament_arrays_match_base_palette() -> None:
 
     This is the strict quantitative shape the user-visible Bambu Studio open
     sees; it complements the upstream mock-based guard above by exercising
-    the full ``BambuStudio3MFWriter._build_project_settings_bytes`` and
-    ``_build_model_settings_bytes`` paths.
+    the full ``BambuStudio3MFWriter.export`` path through FatCat metadata
+    composition and the native package writer.
     """
     import json
     import zipfile

@@ -312,7 +312,7 @@ class TestVectorBranchExport:
 
         assert fake_processor.layer_height_mm == pytest.approx(0.10)
         assert project_settings["layer_height"] == "0.1"
-        assert project_settings["initial_layer_height"] == "0.1"
+        assert project_settings["initial_layer_print_height"] == "0.1"
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")

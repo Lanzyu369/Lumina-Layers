@@ -42,17 +42,14 @@ _NEUTRAL_PLATE_STYLES = {
 
 @dataclass(frozen=True)
 class NativeBuildPlateSpec:
-    """Describe one native slicer build plate and its metadata values.
+    """Picker labels and the upstream value used to resolve machine support.
 
-    描述切片软件原生打印板及其写入 3MF 时使用的元数据值。
+    选择器标签及解析机型支持范围时使用的上游打印板名称。
     """
 
     id: str
     display_name: str
     project_value: str
-    plate_value: str
-    sidecar_value: str
-    source_filename: str
     display_name_zh: str = ""
 
 
@@ -61,45 +58,30 @@ _BAMBU_PLATES = (
         "cool-plate",
         "Cool Plate",
         "Cool Plate",
-        "Cool Plate",
-        "cool_plate",
-        "bed_cool.png",
         display_name_zh="低温打印板",
     ),
     NativeBuildPlateSpec(
         "engineering-plate",
         "Engineering Plate",
         "Engineering Plate",
-        "Engineering Plate",
-        "eng_plate",
-        "bed_engineering.png",
         display_name_zh="工程材料打印板",
     ),
     NativeBuildPlateSpec(
         "smooth-pei-plate",
         "Smooth PEI Plate / High Temp Plate",
         "High Temp Plate",
-        "High Temp Plate",
-        "hot_plate",
-        "bed_high_templ.png",
         display_name_zh="光面PEI打印板 / 高温打印板",
     ),
     NativeBuildPlateSpec(
         "textured-pei-plate",
         "Textured PEI Plate",
         "Textured PEI Plate",
-        "Textured PEI Plate",
-        "textured_plate",
-        "bed_pei.png",
         display_name_zh="纹理PEI打印板",
     ),
     NativeBuildPlateSpec(
         "supertack-plate",
         "Bambu Cool Plate SuperTack",
         "Supertack Plate",
-        "Supertack Plate",
-        "supertack_plate",
-        "bed_cool_supertack.png",
         display_name_zh="增稳低温打印板",
     ),
 )
@@ -109,54 +91,36 @@ _ORCA_PLATES = (
         "smooth-cool-plate",
         "Smooth Cool Plate",
         "Cool Plate",
-        "Cool Plate",
-        "cool_plate",
-        "bed_cool.png",
         display_name_zh="光滑的低温打印床",
     ),
     NativeBuildPlateSpec(
         "engineering-plate",
         "Engineering Plate",
         "Engineering Plate",
-        "Engineering Plate",
-        "eng_plate",
-        "bed_engineering.png",
         display_name_zh="工程材料热床",
     ),
     NativeBuildPlateSpec(
         "smooth-high-temp-plate",
         "Smooth High Temp Plate",
         "High Temp Plate",
-        "High Temp Plate",
-        "hot_plate",
-        "bed_high_templ.png",
         display_name_zh="光滑高温打印热床",
     ),
     NativeBuildPlateSpec(
         "textured-pei-plate",
         "Textured PEI Plate",
         "Textured PEI Plate",
-        "Textured PEI Plate",
-        "textured_plate",
-        "bed_pei.png",
         display_name_zh="纹理PEI热床",
     ),
     NativeBuildPlateSpec(
         "textured-cool-plate",
         "Textured Cool Plate",
         "Textured Cool Plate",
-        "Textured Cool Plate",
-        "textured_cool_plate",
-        "bed_pei_cool.png",
         display_name_zh="纹理的低温打印床",
     ),
     NativeBuildPlateSpec(
         "supertack-plate",
         "Cool Plate (SuperTack)",
         "Supertack Plate",
-        "Supertack Plate",
-        "supertack_plate",
-        "bed_cool_supertack.png",
         display_name_zh="低温打印板（超强粘附）",
     ),
 )
@@ -510,17 +474,13 @@ def _write_neutral_build_plate_assets(output_root: Path) -> dict[str, bytes]:
 def copy_native_build_plate_assets(
     *,
     slicer_id: str,
-    source_root: Path,
-    source_version: str,
     output_root: Path,
-    source_roots: dict[str, Path] | None = None,
 ) -> list[dict[str, str]]:
     """Generate app-owned neutral plate artwork and emit registry records.
 
     生成 Lumina 自有中性打印板图片及带来源校验值的注册表记录。
     """
 
-    del source_root, source_version, source_roots
     assets = _write_neutral_build_plate_assets(output_root)
     payload: list[dict[str, str]] = []
     for spec in native_build_plate_specs(slicer_id):
@@ -532,9 +492,6 @@ def copy_native_build_plate_assets(
                 "id": spec.id,
                 "display_name": spec.display_name,
                 "display_name_zh": spec.display_name_zh,
-                "project_value": spec.project_value,
-                "plate_value": spec.plate_value,
-                "sidecar_value": spec.sidecar_value,
                 "image": relative.as_posix(),
                 "source_path": (
                     f"LuminaStudio:generated/build_plates/{filename}"

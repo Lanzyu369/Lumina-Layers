@@ -43,7 +43,7 @@ def _device_ids(data: dict[str, Any]) -> set[str]:
     return ids
 
 
-def test_bundled_machine_registry_assets_and_templates_exist() -> None:
+def test_bundled_machine_registry_assets_exist() -> None:
     root = _registry_root()
     data = _load_registry()
     assert not [
@@ -95,11 +95,6 @@ def test_bundled_machine_registry_assets_and_templates_exist() -> None:
                 device_profile_id = str(nozzle["device_profile_id"])
                 assert device_profile_id not in device_ids
                 device_ids.add(device_profile_id)
-                template_path = root / str(nozzle["template"])
-                assert template_path.exists(), str(nozzle["template"])
-                template = json.loads(template_path.read_text(encoding="utf-8"))
-                assert template.get("printer_model") == machine["display_name"]
-                assert str(nozzle["nozzle_size"]) in str(template.get("printer_settings_id", ""))
 
 
 def test_bundled_build_plate_art_uses_one_app_owned_neutral_asset_set() -> None:
@@ -199,18 +194,12 @@ def test_bundled_machine_registry_keeps_upgraded_ac_and_elegoo_versions() -> Non
 
     anycubic = slicers["AnycubicSlicerNext"][0]
     assert anycubic["source_version"] == "1.3.2605.22"
-    assert anycubic["application_metadata"] == "AnycubicSlicerNext-1.4.1.2"
-    assert anycubic["client_version"] == "1.4.1.2 20260604104233"
 
     elegoo = slicers["ElegooSlicer"][0]
     assert elegoo["source_version"] == "01.05.01.06"
-    assert elegoo["application_metadata"] == "ElegooSlicer-01.05.01.06"
 
     flash_studio = slicers["FlashStudio"][0]
     assert flash_studio["source_version"] == "02.01.01.00"
-    assert flash_studio["application_metadata"] == "BambuStudio-2.3.2"
-    assert flash_studio["client_version"] == ""
-    assert flash_studio["sidecar_policy"] == "orca_like"
     assert {
         machine["display_name"]: [nozzle["nozzle_size"] for nozzle in machine["nozzles"]]
         for machine in flash_studio["machines"]
@@ -225,9 +214,6 @@ def test_bundled_machine_registry_keeps_upgraded_ac_and_elegoo_versions() -> Non
 
     qidi_studio = slicers["QIDIStudio"][0]
     assert qidi_studio["source_version"] == "02.07.02.60"
-    assert qidi_studio["application_metadata"] == "QIDIStudio-02.07.02.60"
-    assert qidi_studio["client_version"] == "02.07.02.60"
-    assert qidi_studio["sidecar_policy"] == "qidi_studio"
     assert {
         machine["display_name"]: [nozzle["nozzle_size"] for nozzle in machine["nozzles"]]
         for machine in qidi_studio["machines"]

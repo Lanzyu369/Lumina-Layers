@@ -654,7 +654,7 @@ export function restoreConverterRecipe(
     ),
     base_spacer_thick: conv.geometry.spacer_thick,
     backing_infill_density_percent:
-      conv.relief.enable_relief || puzzleEnabled
+      conv.relief.enable_relief
         ? 100
         : normalizeBackingInfillDensityPercent(
             conv.geometry.backing_infill_density_percent,

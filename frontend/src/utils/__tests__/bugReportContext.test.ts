@@ -124,6 +124,7 @@ describe("collectBugReportContext", () => {
       nozzle_size: useSettingsStore.getState().nozzleSize,
       device_profile_id: useSettingsStore.getState().deviceProfileId,
       build_plate_id: useSettingsStore.getState().buildPlateId,
+      custom_3mf_template_id: null,
       color_mode: "8-Color Max",
       lut_name: "My LUT",
       source_version: null,

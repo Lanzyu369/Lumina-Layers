@@ -3,7 +3,7 @@
 Validates:
 - P6: build_item == object == model_instance == assemble_item == N
 - P7: Structural fingerprint matches multi-object 3MF shape
-- P8: MaterialSlot quadruples round-trip via lumina_merged_slots_json
+- P8: Native material identities, colours and part extruders survive slot merging
 - P9: XY bbox min matches (tx_mm, ty_mm) within 1e-3 mm
 - P10: Z range unchanged within 1e-6 mm
 
@@ -18,6 +18,7 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 
 from hypothesis import given, settings
@@ -33,7 +34,6 @@ from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
     MergedItem,
     MaterialSlot,
-    _LUMINA_SLOTS_JSON_KEY,
 )
 
 _NS_CORE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
@@ -99,17 +99,6 @@ _ascii_name_strategy = st.text(
 
 
 @st.composite
-def _slot_strategy(draw: st.DrawFn, slot_id: int) -> MaterialSlot:
-    """Generate a MaterialSlot with a given slot_id."""
-    return MaterialSlot(
-        slot_id=slot_id,
-        slot_name=draw(_ascii_name_strategy),
-        preview_color=draw(_hex_color_strategy),
-        material_id=draw(_ascii_name_strategy),
-    )
-
-
-@st.composite
 def _merged_items_strategy(draw: st.DrawFn) -> list[tuple[MergedItem, float, float]]:
     """Generate N ∈ [2, 5] MergedItems with source 3MFs.
 
@@ -118,19 +107,35 @@ def _merged_items_strategy(draw: st.DrawFn) -> list[tuple[MergedItem, float, flo
     n = draw(st.integers(min_value=2, max_value=5))
     os.makedirs(TEMP_DIR, exist_ok=True)
 
+    # A global slot ID identifies the same material in every input item.
+    palette_ids = draw(st.lists(
+        st.integers(min_value=0, max_value=16), min_size=1, max_size=8, unique=True,
+    ))
+    palette_names = draw(st.lists(
+        _ascii_name_strategy, min_size=len(palette_ids), max_size=len(palette_ids), unique=True,
+    ))
+    global_palette = {
+        slot_id: MaterialSlot(
+            slot_id=slot_id, slot_name=name,
+            preview_color=draw(_hex_color_strategy), material_id=draw(_ascii_name_strategy),
+        )
+        for slot_id, name in zip(palette_ids, palette_names)
+    }
     items: list[tuple[MergedItem, float, float]] = []
     for idx in range(n):
-        # Generate 1-4 unique slot_ids in [0, 16].
-        num_slots = draw(st.integers(min_value=1, max_value=4))
+        num_slots = draw(st.integers(min_value=1, max_value=min(4, len(palette_ids))))
         slot_ids = draw(
             st.lists(
-                st.integers(min_value=0, max_value=16),
+                st.sampled_from(palette_ids),
                 min_size=num_slots,
                 max_size=num_slots,
                 unique=True,
             )
         )
-        slots = tuple(draw(_slot_strategy(sid)) for sid in slot_ids)
+        slots = tuple(
+            replace(global_palette[sid], source_slot_index=index)
+            for index, sid in enumerate(slot_ids)
+        )
 
         # Use slot_names for the 3MF fixture.
         slot_names = [s.slot_name for s in slots]
@@ -297,18 +302,14 @@ def _parse_merged_3mf(path: Path) -> dict:
                 "local_max_z": max_z,
             })
 
-        # Extract slots JSON from config.
-        slots_per_item: list[list[dict]] = []
-        for cfg_obj in config_objects:
-            slots_json_str = None
-            for md in cfg_obj.findall("metadata"):
-                if md.get("key") == _LUMINA_SLOTS_JSON_KEY:
-                    slots_json_str = md.get("value")
-                    break
-            if slots_json_str:
-                slots_per_item.append(json.loads(slots_json_str))
-            else:
-                slots_per_item.append([])
+        # Read the slicer's native part metadata and project material arrays.
+        parts_per_item = [
+            [
+                {md.get("key"): md.get("value") for md in part.findall("metadata")}
+                for part in cfg_obj.findall("part")
+            ]
+            for cfg_obj in config_objects
+        ]
 
         return {
             "build_item_count": len(build_items),
@@ -328,7 +329,7 @@ def _parse_merged_3mf(path: Path) -> dict:
             "content_type_overrides": content_type_overrides,
             "project_settings": project_settings,
             "per_item_data": per_item_data,
-            "slots_per_item": slots_per_item,
+            "parts_per_item": parts_per_item,
         }
 
 
@@ -389,13 +390,16 @@ def test_p7_structural_fingerprint(items_data: list[tuple[MergedItem, float, flo
 
         result = _parse_merged_3mf(Path(out_path))
 
-        # 3D relationships include N object links only. Bambu project metadata
-        # remains at canonical Metadata/* paths, matching real multi-object
-        # Bambu exports.
+        # FatCat links both source model objects and every emitted settings part.
         assert result["object_relationship_count"] == N, (
             f"object_relationship_count={result['object_relationship_count']} != N={N}"
         )
-        assert result["metadata_relationship_targets"] == set()
+        metadata_parts = {
+            "Metadata/model_settings.config", "Metadata/project_settings.config",
+            "Metadata/slice_info.config", "Metadata/lumina_wipe_tower_placement.json",
+            "Metadata/filament_sequence.json", "Metadata/cut_information.xml",
+        }
+        assert result["metadata_relationship_targets"] == metadata_parts
         assert result["root_metadata"].get("Application", "").startswith("BambuStudio-")
         assert result["root_metadata"].get("BambuStudio:3mfVersion") == "1"
         assert result["object_relationship_targets"] == {
@@ -406,8 +410,11 @@ def test_p7_structural_fingerprint(items_data: list[tuple[MergedItem, float, flo
             "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"
             in result["top_relationship_types"]
         )
-        assert result["content_type_defaults"] == {"gcode", "model", "png", "rels"}
-        assert result["content_type_overrides"] == set()
+        assert result["content_type_defaults"] == {"config", "json", "model", "png", "rels", "xml"}
+        assert result["content_type_overrides"] == {
+            "/3D/3dmodel.model", *("/" + path for path in metadata_parts),
+            *(f"/3D/Objects/object_{idx}.model" for idx in range(1, N + 1)),
+        }
         assert result["project_settings"].get("filament_colour")
         assert result["has_plate"]
 
@@ -431,7 +438,10 @@ def test_p7_structural_fingerprint(items_data: list[tuple[MergedItem, float, flo
 @settings(max_examples=50, deadline=None)
 @given(items_data=_merged_items_strategy())
 def test_p8_slots_round_trip(items_data: list[tuple[MergedItem, float, float]]) -> None:
-    """P8: MaterialSlot quadruples round-trip via lumina_merged_slots_json."""
+    """P8: Preserve native material identities and remap each part's extruder.
+
+    保留原生材料身份与颜色，并将各部件的耗材索引映射到合并后的全局槽位。
+    """
     items = [item for item, _, _ in items_data]
 
     os.makedirs(TEMP_DIR, exist_ok=True)
@@ -444,27 +454,35 @@ def test_p8_slots_round_trip(items_data: list[tuple[MergedItem, float, float]]) 
 
         result = _parse_merged_3mf(Path(out_path))
 
+        identity_keys = ("filament_settings_id", "filament_type", "filament_vendor")
+        expected_by_id = {}
+        for item in items:
+            with zipfile.ZipFile(item.source_3mf_path) as source:
+                project = json.loads(source.read("Metadata/project_settings.config"))
+            for slot in item.slots:
+                expected = {
+                    key: project[key][slot.source_slot_index] for key in identity_keys
+                }
+                expected["filament_colour"] = slot.preview_color.upper()
+                if slot.slot_id in expected_by_id:
+                    assert expected_by_id[slot.slot_id] == expected
+                expected_by_id[slot.slot_id] = expected
+
+        output_ids = sorted(expected_by_id)
+        for key in identity_keys:
+            assert result["project_settings"][key] == [
+                expected_by_id[slot_id][key] for slot_id in output_ids
+            ]
+        assert [
+            colour.upper() for colour in result["project_settings"]["filament_colour"]
+        ] == [expected_by_id[slot_id]["filament_colour"] for slot_id in output_ids]
+        extruder_by_id = {slot_id: index + 1 for index, slot_id in enumerate(output_ids)}
         for idx, item in enumerate(items):
-            recovered_slots = result["slots_per_item"][idx]
-            assert len(recovered_slots) == len(item.slots), (
-                f"Item {idx}: slot count mismatch: "
-                f"recovered={len(recovered_slots)} input={len(item.slots)}"
-            )
-            for s_idx, (recovered, original) in enumerate(
-                zip(recovered_slots, item.slots)
-            ):
-                assert recovered["slot_id"] == original.slot_id, (
-                    f"Item {idx} slot {s_idx}: slot_id mismatch"
-                )
-                assert recovered["slot_name"] == original.slot_name, (
-                    f"Item {idx} slot {s_idx}: slot_name mismatch"
-                )
-                assert recovered["preview_color"] == original.preview_color, (
-                    f"Item {idx} slot {s_idx}: preview_color mismatch"
-                )
-                assert recovered["material_id"] == original.material_id, (
-                    f"Item {idx} slot {s_idx}: material_id mismatch"
-                )
+            parts = result["parts_per_item"][idx]
+            assert len(parts) == len(item.slots)
+            assert {part["name"]: int(part["extruder"]) for part in parts} == {
+                slot.slot_name: extruder_by_id[slot.slot_id] for slot in item.slots
+            }
     finally:
         _cleanup_items(items, out_path)
 

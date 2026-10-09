@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -9,6 +10,7 @@ import pytest
 import trimesh
 
 from config import list_printer_profiles
+from core.machine_registry import load_machine_registry, resolve_machine_registry_root
 from core.wipe_tower_placement import (
     Rect,
     WipeTowerPlacementRequest,
@@ -16,7 +18,13 @@ from core.wipe_tower_placement import (
 )
 from utils.bambu_3mf_writer import (
     BambuStudio3MFWriter,
+    _build_wipe_tower_placement_request,
     read_wipe_tower_placement_warnings,
+)
+from utils.fatcat_metadata import (
+    compose_builtin_project_settings,
+    compose_project_settings,
+    read_project_layout,
 )
 
 
@@ -37,16 +45,32 @@ def _add_material_boxes(
 
 
 def _project_settings(writer: BambuStudio3MFWriter) -> dict[str, object]:
-    return json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+    original_path = writer.output_path
+    try:
+        with TemporaryDirectory() as directory:
+            writer.output_path = str(Path(directory) / "placement.3mf")
+            writer.export()
+            with zipfile.ZipFile(writer.output_path) as package:
+                return json.loads(package.read("Metadata/project_settings.config"))
+    finally:
+        writer.output_path = original_path
 
 
 def _placement_request(
     writer: BambuStudio3MFWriter,
 ) -> WipeTowerPlacementRequest:
-    template = writer._get_base_config_template()
+    request = writer._build_fatcat_project_request(
+        writer._build_material_palette()[0], writer._select_metadata_target(),
+    )
+    if request.get("project_source") == "fatcat_native":
+        result = compose_builtin_project_settings(request)
+    else:
+        result = compose_project_settings(writer._get_base_config_template(), request)
+    template = json.loads(result["project_settings_json"])
     bounds_min, bounds_max = writer._get_mesh_bounds()
-    request = writer._build_wipe_tower_placement_request(
-        template,
+    request = _build_wipe_tower_placement_request(
+        read_project_layout(template, slicer_id=writer.slicer),
+        printer_id=writer.printer_id, slicer=writer.slicer, nozzle_size=writer.nozzle_size,
         model_bounds=Rect(
             float(bounds_min[0]),
             float(bounds_min[1]),
@@ -60,36 +84,65 @@ def _placement_request(
     return request
 
 
+def _assert_native_a1_rib_has_no_space(writer: BambuStudio3MFWriter) -> None:
+    """Prove the reserved native rib envelope cannot fit either free strip."""
+    request = _placement_request(writer)
+    assert request.tower_square_rib_body is True
+    assert request.purge_volume == 45.0
+    assert request.tower_infill_spacing_ratio == 1.5
+    assert request.layer_height == 0.08
+    assert request.model_brim == 5.0
+    assert request.tower_brim == 3.0
+    assert request.tower_rib_width == 8.0
+    # Ignoring discrete paths and structural lines already gives a 50.31 mm
+    # square. Brims, ribs, edge clearance and model separation only enlarge
+    # it. The same lower bound applies to every configured strip width.
+    body_min = ((request.material_count - 1) * request.purge_volume
+                / request.layer_height * request.tower_infill_spacing_ratio) ** 0.5
+    tower_min = body_min + 2 * (request.tower_brim + request.edge_clearance) + request.tower_rib_width
+    model_margin = request.model_brim + request.edge_clearance
+    separation = request.model_tower_clearance - 2 * request.edge_clearance
+    assert request.model_bounds.width + 2 * model_margin + tower_min + separation > 180
+    assert request.model_bounds.height + 2 * model_margin + tower_min + separation > 180
+
+
+def _use_rectangular_a1_source(writer: BambuStudio3MFWriter) -> None:
+    # The old strip regressions used a rectangular source. Retain those
+    # feasible-source guarantees alongside the actual native rib no-fit case.
+    source = writer._get_base_config_template()
+    source["prime_tower_rib_wall"] = "0"
+    writer._custom_template = source
+    writer._wipe_tower_placement_cache = None
+
+
 def _auto_placement_profile_slicer_cases() -> tuple[
     tuple[str, str, str | None], ...
 ]:
     cases: list[tuple[str, str, str | None]] = []
+    registry = load_machine_registry(resolve_machine_registry_root() / "registry.json")
     for profile in list_printer_profiles():
-        slicers = list(profile.slicer_templates)
-        if profile.brand == "Bambu Lab":
-            slicers.insert(0, "BambuStudio")
-        if not slicers:
-            slicers.append("BambuStudio")
-        for slicer in dict.fromkeys(slicers):
-            device_profile_id = (
-                "SnapmakerOrca:snapmaker:snapmaker-u1:0.4"
-                if profile.id == "snapmaker-u1" and slicer == "SnapmakerOrca"
-                else None
-            )
-            cases.append((profile.id, slicer, device_profile_id))
+        devices = [
+            device for device in registry.devices_by_id.values()
+            if device.supported
+            and device.nozzle_size == "0.4"
+            and device.display_name.casefold() == profile.display_name.casefold()
+            and device.brand.casefold() == profile.brand.casefold()
+        ]
+        cases.extend(
+            (profile.id, device.slicer_id, device.device_profile_id)
+            for device in devices
+        )
     return tuple(cases)
 
 
 @pytest.mark.parametrize(
     ("printer_id", "slicer", "expected_volume"),
     (
-        # The bundled project template carries 30 mm3 but does not persist it
-        # as a project override. Bambu Studio therefore slices with its native
-        # 45 mm3 material default, which is the value footprint planning must
-        # reserve.
+        # These are the active native material defaults for the selected
+        # slicer profiles, not values inferred from a legacy machine template.
         ("bambu-a1-mini", "BambuStudio", 45.0),
-        ("bambu-a1-mini", "OrcaSlicer", 45.0),
-        ("flashforge-creator-5", "FlashStudio", 30.0),
+        ("bambu-a1-mini", "OrcaSlicer", 30.0),
+        ("flashforge-creator-5", "FlashStudio", 45.0),
         ("anycubic-kobra-3-v2", "AnycubicSlicerNext", 20.0),
     ),
 )
@@ -103,10 +156,45 @@ def test_tower_planning_uses_native_slicer_prime_volume(
         printer_id=printer_id,
         slicer=slicer,
     )
+    _add_material_boxes(writer, width=4.0, depth=4.0, height=1.2, count=1)
 
-    assert writer._resolve_tower_purge_volume(
-        writer._get_base_config_template()
-    ) == pytest.approx(expected_volume)
+    layout = read_project_layout(writer._get_base_config_template(), slicer_id=slicer)
+    assert layout["purge_volume"] == pytest.approx(expected_volume)
+
+
+@pytest.mark.parametrize(
+    ("slicer", "wall_fields", "rib_width", "square_rib_body"),
+    [
+        ("OrcaSlicer", {"wipe_tower_wall_type": "rib"}, 8.0, True),
+        ("OrcaSlicer", {"wipe_tower_wall_type": "rectangle"}, 0.0, False),
+        ("OrcaSlicer", {"wipe_tower_wall_type": "rib", "wipe_tower_rib_width": "0"}, 0.0, True),
+        ("BambuStudio", {"prime_tower_rib_wall": "1"}, 8.0, True),
+        ("BambuStudio", {"prime_tower_rib_wall": "1", "prime_tower_rib_width": "0"}, 0.0, True),
+        ("BambuStudio", {"prime_tower_rib_wall": "0"}, 0.0, False),
+    ],
+)
+def test_layout_consumes_native_rib_settings(slicer, wall_fields, rib_width, square_rib_body) -> None:
+    writer = BambuStudio3MFWriter("rib-layout.3mf", slicer=slicer)
+    prefix = "prime_tower" if slicer == "BambuStudio" else "wipe_tower"
+    project = {
+        "printable_area": ["0x0", "256x0", "256x256", "0x256"],
+        "prime_tower_brim_width": "3", "prime_tower_infill_gap": "150%",
+        "prime_volume": "45", f"{prefix}_rib_width": "8",
+        f"{prefix}_extra_rib_length": "6", **wall_fields,
+    }
+    request = _build_wipe_tower_placement_request(
+        read_project_layout(project, slicer_id=slicer),
+        printer_id=writer.printer_id, slicer=slicer, nozzle_size=writer.nozzle_size,
+        model_bounds=Rect(0.0, 0.0, 18.6, 13.2),
+        model_height=1.2, material_count=8,
+    )
+    assert request is not None
+    assert request.tower_rib_width == rib_width
+    assert request.tower_square_rib_body is square_rib_body
+    assert request.tower_extra_rib_length == 6.0
+    assert request.tower_brim == 3.0
+    assert request.tower_infill_spacing_ratio == 1.5
+    assert request.purge_volume == 45.0
 
 
 @pytest.mark.parametrize(
@@ -167,16 +255,24 @@ def test_enabled_auto_placement_replans_typical_model_across_all_profiles(
 
 
 def test_qidi_comma_grouped_bed_exclusions_are_parsed_as_polygons() -> None:
-    q2_polygons = BambuStudio3MFWriter._parse_bed_exclusion_polygons(
-        ["0x0,11x0,11x16,0x16"]
+    q2_polygons = tuple(
+        tuple(tuple(point) for point in polygon)
+        for polygon in read_project_layout(
+            {"bed_exclude_area": ["0x0,11x0,11x16,0x16"]},
+            slicer_id="QIDIStudio",
+        )["bed_exclusions"]
     )
-    x_max_polygons = BambuStudio3MFWriter._parse_bed_exclusion_polygons(
-        [
-            "0x0,16x0,16x13,0x13,0x0,0x0,0x0,0x0,"
-            "0x13,6x13,6x23,0x23,0x13,0x13,0x13,0x13,"
-            "0x387,53x387,53x390,0x390,0x387,0x387,0x397,0x390,"
-            "338x390,338x384,390x384,390x390,0x390"
-        ]
+    x_max_polygons = tuple(
+        tuple(tuple(point) for point in polygon)
+        for polygon in read_project_layout(
+            {"bed_exclude_area": [
+                "0x0,16x0,16x13,0x13,0x0,0x0,0x0,0x0,"
+                "0x13,6x13,6x23,0x23,0x13,0x13,0x13,0x13,"
+                "0x387,53x387,53x390,0x390,0x387,0x387,0x397,0x390,"
+                "338x390,338x384,390x384,390x390,0x390"
+            ]},
+            slicer_id="QIDIStudio",
+        )["bed_exclusions"]
     )
 
     assert q2_polygons == (
@@ -211,8 +307,12 @@ def test_irregular_nine_point_bed_exclusion_remains_one_polygon() -> None:
         (0.0, 4.0),
     )
 
-    polygons = BambuStudio3MFWriter._parse_bed_exclusion_polygons(
-        [",".join(f"{x:g}x{y:g}" for x, y in points)]
+    polygons = tuple(
+        tuple(tuple(point) for point in polygon)
+        for polygon in read_project_layout(
+            {"bed_exclude_area": [",".join(f"{x:g}x{y:g}" for x, y in points)]},
+            slicer_id="QIDIStudio",
+        )["bed_exclusions"]
     )
 
     assert polygons == (points,)
@@ -235,8 +335,12 @@ def test_subdivided_rectangle_edges_are_not_treated_as_qidi_sentinels() -> None:
         (0.0, 0.0),
     )
 
-    polygons = BambuStudio3MFWriter._parse_bed_exclusion_polygons(
-        [",".join(f"{x:g}x{y:g}" for x, y in points)]
+    polygons = tuple(
+        tuple(tuple(point) for point in polygon)
+        for polygon in read_project_layout(
+            {"bed_exclude_area": [",".join(f"{x:g}x{y:g}" for x, y in points)]},
+            slicer_id="QIDIStudio",
+        )["bed_exclusions"]
     )
 
     assert polygons == (points,)
@@ -282,8 +386,8 @@ def test_p1s_auto_layout_uses_compact_right_side_tower() -> None:
     assert placement is not None
     assert placement.reason == "adapted_right"
     assert placement.model_translation == pytest.approx((128.0, 128.0))
-    assert placement.tower_x == pytest.approx(219.0)
-    assert placement.tower_y == pytest.approx(81.625)
+    assert placement.tower_x == pytest.approx(192.0)
+    assert placement.tower_y == pytest.approx(100.75)
     assert placement.tower_width == pytest.approx(30.0)
     assert placement.tower_rotation == pytest.approx(0.0)
 
@@ -303,10 +407,14 @@ def test_u1_auto_placement_changes_tower_size_and_position_for_typical_model() -
     assert placement is not None
     assert placement.adapted is True
     assert placement.requires_manual_adjustment is False
-    assert placement.tower_width != pytest.approx(float(template["prime_tower_width"]))
-    assert (placement.tower_x, placement.tower_y) != pytest.approx(
-        (float(template["wipe_tower_x"][0]), float(template["wipe_tower_y"][0]))
-    )
+    assert placement.tower_width > 0
+    # The native rib planner squares the body before recalculating paths.
+    # A wider conservative estimate must not shrink the reserved Y extent.
+    assert placement.tower_bounds.height >= placement.tower_bounds.width
+    assert "wipe_tower_x" not in template
+    assert "wipe_tower_y" not in template
+    assert placement.tower_x is not None
+    assert placement.tower_y is not None
 
 
 def test_disabled_auto_placement_preserves_u1_template_without_warning(
@@ -346,7 +454,10 @@ def test_disabled_auto_placement_preserves_u1_template_without_warning(
         "prime_tower_width",
         "wipe_tower_rotation_angle",
     ):
-        assert settings[key] == template[key]
+        if key in template:
+            assert settings[key] == template[key]
+        else:
+            assert key not in settings
     assert placement == {
         "schema_version": 1,
         "enabled": False,
@@ -370,32 +481,38 @@ def test_a1_mini_uses_vertical_strip_for_tall_model(
     )
     _add_material_boxes(writer, width=100.0, depth=155.0)
 
-    settings = _project_settings(writer)
     placement = writer._get_wipe_tower_placement()
 
     assert placement is not None
-    assert placement.requires_manual_adjustment is False
+    if slicer == "BambuStudio":
+        assert placement.requires_manual_adjustment is True
+        assert placement.warning_code == "wipe_tower_manual_adjustment_required"
+        assert placement.reason == "no_safe_layout_without_scaling_or_disabling_tower"
+        _assert_native_a1_rib_has_no_space(writer)
+    else:
+        assert placement.requires_manual_adjustment is False
+        assert placement.warning_code is None
+        assert placement.reason == "adapted_right"
     assert placement.adapted is True
-    assert float(settings["prime_tower_width"]) <= 174.0
-    # Bambu/Orca clamp imported X/Y against the unrotated footprint. A physical
-    # vertical strip therefore has to be produced by narrowing the tower so its
-    # purge-derived depth becomes the long axis, without a 90-degree rotation.
-    assert settings["wipe_tower_rotation_angle"] == "0"
-    assert placement.tower_bounds.height > placement.tower_bounds.width
+    assert placement.model_bounds.width == pytest.approx(100.0)
+    assert placement.model_bounds.height == pytest.approx(155.0)
+    assert _layout_is_safe(placement, _placement_request(writer)) is (slicer == "OrcaSlicer")
+    if slicer == "BambuStudio":
+        _use_rectangular_a1_source(writer)
+        placement = writer._get_wipe_tower_placement()
+    settings = _project_settings(writer)
+    assert placement is not None and not placement.requires_manual_adjustment
+    assert _layout_is_safe(placement, _placement_request(writer))
+    assert placement.model_bounds.width == pytest.approx(100.0)
+    assert placement.model_bounds.height == pytest.approx(155.0)
     assert placement.tower_width == pytest.approx(30.0)
-    assert placement.tower_depth > placement.tower_width
+    assert placement.tower_bounds.height > placement.tower_bounds.width
+    assert settings["wipe_tower_rotation_angle"] == "0"
     assert placement.tower_bounds.right + 3.0 <= 178.0 + 1e-6
-    assert float(settings["wipe_tower_x"][0]) == pytest.approx(
-        placement.tower_bounds.left
-    )
-    assert float(settings["wipe_tower_y"][0]) == pytest.approx(
-        placement.tower_bounds.bottom
-    )
+    assert float(settings["wipe_tower_x"][0]) == pytest.approx(placement.tower_bounds.left)
+    assert float(settings["wipe_tower_y"][0]) == pytest.approx(placement.tower_bounds.bottom)
     assert set(settings["different_settings_to_system"][0].split(";")) >= {
-        "prime_tower_width",
-        "wipe_tower_rotation_angle",
-        "wipe_tower_x",
-        "wipe_tower_y",
+        "prime_tower_width", "wipe_tower_rotation_angle", "wipe_tower_x", "wipe_tower_y",
     }
 
 
@@ -410,9 +527,20 @@ def test_a1_mini_adapted_strip_keeps_visible_physical_edge_clearance() -> None:
     placement = writer._get_wipe_tower_placement()
 
     assert placement is not None
-    assert placement.requires_manual_adjustment is False
+    assert placement.requires_manual_adjustment is True
+    assert placement.warning_code == "wipe_tower_manual_adjustment_required"
+    assert placement.reason == "no_safe_layout_without_scaling_or_disabling_tower"
     assert placement.adapted is True
-    assert placement.reason in {"adapted_right", "adapted_left"}
+    assert placement.model_bounds.width == pytest.approx(110.0)
+    assert placement.model_bounds.height == pytest.approx(124.0)
+    assert _layout_is_safe(placement, _placement_request(writer)) is False
+    _assert_native_a1_rib_has_no_space(writer)
+    _use_rectangular_a1_source(writer)
+    placement = writer._get_wipe_tower_placement()
+    assert placement is not None and not placement.requires_manual_adjustment
+    assert _layout_is_safe(placement, _placement_request(writer))
+    assert placement.model_bounds.width == pytest.approx(110.0)
+    assert placement.model_bounds.height == pytest.approx(124.0)
     assert placement.tower_width == pytest.approx(30.0)
     assert placement.tower_bounds.height > placement.tower_bounds.width
     physical_tower = placement.tower_bounds.expanded(3.0)
@@ -454,14 +582,22 @@ def test_a1_mini_uses_nearest_feasible_width_when_30_mm_would_squeeze_model() ->
     placement = writer._get_wipe_tower_placement()
 
     assert placement is not None
-    assert placement.requires_manual_adjustment is False
-    assert placement.reason in {"adapted_right", "adapted_left"}
+    assert placement.requires_manual_adjustment is True
+    assert placement.warning_code == "wipe_tower_manual_adjustment_required"
+    assert placement.reason == "no_safe_layout_without_scaling_or_disabling_tower"
+    assert placement.model_bounds.width == pytest.approx(130.0)
+    assert placement.model_bounds.height == pytest.approx(146.6)
+    assert _layout_is_safe(placement, _placement_request(writer)) is False
+    _assert_native_a1_rib_has_no_space(writer)
+    _use_rectangular_a1_source(writer)
+    placement = writer._get_wipe_tower_placement()
+    assert placement is not None and not placement.requires_manual_adjustment
+    assert _layout_is_safe(placement, _placement_request(writer))
+    assert placement.model_bounds.width == pytest.approx(130.0)
+    assert placement.model_bounds.height == pytest.approx(146.6)
     assert placement.tower_width == pytest.approx(22.0)
     assert placement.tower_bounds.height > placement.tower_bounds.width
-    assert placement.model_bounds.width == pytest.approx(130.0)
-    model_brim_right = placement.model_bounds.right + 5.0
-    tower_brim_left = placement.tower_bounds.left - 3.0
-    assert tower_brim_left - model_brim_right >= 8.0 - 1e-6
+    assert (placement.tower_bounds.left - 3.0) - (placement.model_bounds.right + 5.0) >= 8.0 - 1e-6
 
 
 @pytest.mark.parametrize("material_count", (4, 5, 6, 8))
@@ -493,15 +629,17 @@ def test_orca_multicolor_project_collapses_dual_variant_filament_arrays(
 
     assert len(settings["filament_colour"]) == material_count
     assert len(settings["filament_settings_id"]) == material_count
+    source = writer._get_base_config_template()
     for key in (
         "filament_extruder_variant",
         "filament_flow_ratio",
         "filament_max_volumetric_speed",
         "filament_retraction_length",
         "filament_self_index",
-        "flush_volumes_vector",
     ):
         assert len(settings[key]) == material_count
+    assert "flush_volumes_vector" not in source
+    assert "flush_volumes_vector" not in settings
 
 
 def test_profile_model_brim_is_reserved_unless_explicitly_disabled() -> None:
@@ -652,7 +790,7 @@ def test_missing_printable_area_exports_with_manual_warning(
     _add_material_boxes(writer, width=80.0, depth=80.0)
     template = writer._get_base_config_template()
     template.pop("printable_area", None)
-    monkeypatch.setattr(writer, "_get_base_config_template", lambda: template)
+    writer._custom_template = template
 
     writer.export()
 

@@ -2,14 +2,10 @@
 
 中文标题：3MF 封面缩略图构建器
 
-This module turns a single cover image source into the five PNG byte payloads
-that a Bambu/Orca-style 3MF package needs:
+This module turns a cover image into five PNG byte payloads. Fat Cat describes
+their package paths and relationships.
 
-- 三张 OPC + Bambu 私有 cover 缩略图（写入 ``Auxiliaries/.thumbnails/``）
-- 两张 512×512 盘内 plate 预览（写入 ``Metadata/plate_*.png``）
-
-公开类型与常量来自 spec ``.kiro/specs/3mf-cover-thumbnail/design.md``，与样本
-``元数据分析/ferris+wheel+electric3.3mf`` 中的目录结构与关系类型 URI 完全一致。
+本模块生成三张封面缩略图与两张 512×512 盘内预览 PNG；包内路径与关系由 Fat Cat 描述。
 
 设计要点：
 - 5 张 PNG 共享同一份解码结果（``_decode_source`` 只跑一次）；
@@ -36,7 +32,26 @@ __all__ = [
     "COVER_THUMBNAIL_SPECS",
     "COVER_PLATE_SPECS",
     "clear_cover_thumbnail_cache",
+    "build_plate_small_preview",
 ]
+
+
+def build_plate_small_preview(plate_main: bytes) -> bytes:
+    """Build the native 128x128 plate preview.
+
+    构建原生的 128x128 盘面预览。
+
+    Args:
+        plate_main: Encoded main plate image. 编码后的主盘面图片。
+
+    Returns:
+        Resized RGBA PNG bytes. 缩放后的 RGBA PNG 字节。
+    """
+    with Image.open(io.BytesIO(plate_main)) as image:
+        resized = image.convert("RGBA").resize((128, 128), Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        resized.save(buffer, format="PNG", optimize=True)
+        return buffer.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -56,16 +71,9 @@ class CoverSpec:
             (调试与日志用的逻辑名)
         width: Target width in pixels. (目标宽度，像素)
         height: Target height in pixels. (目标高度，像素)
-        zip_path: Path inside the 3MF ZIP package, no leading ``/``. The
-            package-level relationship target is ``"/" + zip_path``.
-            (在 3MF ZIP 包内的路径，不含开头 ``/``；写关系条目时 ``Target = "/" +
-            zip_path``)
-        relationship_type: OPC / Bambu relationship type URI written into
-            ``_rels/.rels``. ``None`` means the PNG is not exposed via a
-            package-level relationship (e.g. plate previews referenced from
-            ``Metadata/model_settings.config`` keys).
-            (写入 ``_rels/.rels`` 的关系类型 URI；``None`` 表示该 PNG 不通过包级
-            关系暴露)
+        zip_path: Fat Cat supplied package path. (Fat Cat 提供的包内路径)
+        relationship_type: Fat Cat supplied relationship URI, if any.
+            Fat Cat 提供的关系 URI；未声明时为空。
     """
 
     logical_name: str
@@ -75,59 +83,28 @@ class CoverSpec:
     relationship_type: Optional[str]
 
 
-# Auxiliaries/.thumbnails/* — written into _rels/.rels per design table.
-# 顺序与 ``元数据分析/ferris+wheel+electric3.3mf`` 一致。
+def _cover_spec(logical_name: str, role: str, width: int, height: int) -> CoverSpec:
+    from utils.fatcat_metadata import metadata_resource_specs
+
+    resource = metadata_resource_specs("BambuStudio")[role]
+    return CoverSpec(
+        logical_name, width, height, resource["path"],
+        resource.get("relationship", {}).get("type"),
+    )
+
+
+# Image dimensions for each resource role.
 COVER_THUMBNAIL_SPECS: Tuple[CoverSpec, ...] = (
-    CoverSpec(
-        logical_name="package",
-        width=240,
-        height=180,
-        zip_path="Auxiliaries/.thumbnails/thumbnail_3mf.png",
-        relationship_type=(
-            "http://schemas.openxmlformats.org/package/2006/"
-            "relationships/metadata/thumbnail"
-        ),
-    ),
-    CoverSpec(
-        logical_name="middle",
-        width=680,
-        height=510,
-        zip_path="Auxiliaries/.thumbnails/thumbnail_middle.png",
-        relationship_type=(
-            "http://schemas.bambulab.com/package/2021/cover-thumbnail-middle"
-        ),
-    ),
-    CoverSpec(
-        logical_name="small",
-        width=251,
-        height=188,
-        zip_path="Auxiliaries/.thumbnails/thumbnail_small.png",
-        relationship_type=(
-            "http://schemas.bambulab.com/package/2021/cover-thumbnail-small"
-        ),
-    ),
+    _cover_spec("package", "thumbnail_package", 240, 180),
+    _cover_spec("middle", "thumbnail_middle", 680, 510),
+    _cover_spec("small", "thumbnail_small", 251, 188),
 )
 
 
-# Metadata/plate_*.png — referenced via Metadata/model_settings.config keys.
-# 没有包级关系条目，因此 ``relationship_type=None``。
 COVER_PLATE_SPECS: Tuple[CoverSpec, ...] = (
-    CoverSpec(
-        logical_name="plate",
-        width=512,
-        height=512,
-        zip_path="Metadata/plate_1.png",
-        relationship_type=None,
-    ),
-    CoverSpec(
-        logical_name="plate_no_light",
-        width=512,
-        height=512,
-        zip_path="Metadata/plate_no_light_1.png",
-        relationship_type=None,
-    ),
+    _cover_spec("plate", "plate_main", 512, 512),
+    _cover_spec("plate_no_light", "plate_no_light", 512, 512),
 )
-
 
 @dataclass(frozen=True)
 class CoverPngBundle:
@@ -136,16 +113,11 @@ class CoverPngBundle:
     单次 3MF 导出所需的全部 cover + plate PNG 字节集合。
 
     Attributes:
-        thumbnail_3mf: 240×180 OPC standard cover PNG bytes, written to
-            ``Auxiliaries/.thumbnails/thumbnail_3mf.png``.
-        thumbnail_middle: 680×510 Bambu cover-thumbnail-middle PNG bytes,
-            written to ``Auxiliaries/.thumbnails/thumbnail_middle.png``.
-        thumbnail_small: 251×188 Bambu cover-thumbnail-small PNG bytes,
-            written to ``Auxiliaries/.thumbnails/thumbnail_small.png``.
-        plate_main: 512×512 plate preview PNG bytes, written to
-            ``Metadata/plate_1.png``.
-        plate_no_light: 512×512 plate-no-light preview PNG bytes, written to
-            ``Metadata/plate_no_light_1.png``.
+        thumbnail_3mf: 240×180 package cover PNG bytes.（包级封面 PNG）
+        thumbnail_middle: 680×510 cover PNG bytes.（中尺寸封面 PNG）
+        thumbnail_small: 251×188 cover PNG bytes.（小尺寸封面 PNG）
+        plate_main: 512×512 plate preview PNG bytes.（盘内预览 PNG）
+        plate_no_light: 512×512 unlit plate preview PNG bytes.（无光照盘内预览 PNG）
         is_placeholder: ``True`` iff all five fields come from the placeholder
             cache (i.e. were not derived from a usable ``cover_source``).
             (是否所有 PNG 均为占位字节)

@@ -51,6 +51,8 @@ class MaterialRecipeSwatchItem:
         result_hex: Predicted blended hex color.
         layer_height_mm: Per-layer thickness (mm).
         substrate: Substrate identifier.
+        material_types: Explicit archive material types matching each layer.
+            （逐层对应的档案材料类型；缺失时保留空值，兼容旧输入。）
     """
     directory_names: list[str]
     material_names: list[str]
@@ -58,6 +60,7 @@ class MaterialRecipeSwatchItem:
     result_hex: str
     layer_height_mm: float = 0.08
     substrate: str = "white"
+    material_types: list[str | None] | None = None
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -319,8 +322,14 @@ def generate_material_recipe_swatch(
     material_map: dict[str, tuple[int, int, int]] = {
         _GRID_MATERIAL_NAME: _hex_to_rgb(_GRID_MATERIAL_HEX),
     }
+    material_types: dict[str, str | None] = {_GRID_MATERIAL_NAME: "PLA Basic"}
     for recipe in recipes:
         for i, mat_name in enumerate(recipe.material_names):
+            material_types[mat_name] = (
+                recipe.material_types[i]
+                if recipe.material_types is not None and i < len(recipe.material_types)
+                else None
+            )
             if mat_name not in material_map:
                 hex_c = recipe.material_hexes[i] if i < len(recipe.material_hexes) else "#808080"
                 material_map[mat_name] = _hex_to_rgb(hex_c)
@@ -449,6 +458,7 @@ def generate_material_recipe_swatch(
             scene=scene,
             output_path=output_path,
             slot_names=valid_slot_names,
+            material_types={name: material_types[name] for name in valid_slot_names},
             preview_colors=preview_colors,
             settings={
                 "layer_height": str(layer_h),

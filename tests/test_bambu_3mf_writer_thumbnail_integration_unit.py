@@ -3,11 +3,9 @@
 中文标题：BambuStudio3MFWriter 封面缩略图导出集成测试
 
 These tests cover task 2 of the ``3mf-cover-thumbnail`` spec:
-the two-phase ``export()`` (``n3mf.write_to_file`` followed by
-``_inject_cover_relationships_postprocess``) plus the
-``_inject_metadata_parts`` switch from constant 2×2 placeholder PNGs to the
-``CoverPngBundle`` fields for plate previews and the three
-``Auxiliaries/.thumbnails/*.png`` parts.
+the single package write with FatCat metadata and ``CoverPngBundle`` plate
+previews, plus the three ``Auxiliaries/.thumbnails/*.png`` parts. Cover assets
+and relationships are supplied before neroued writes the archive.
 
 Validates: Requirements 1.1, 1.2, 1.3, 1.4, 1.5, 3.1, 3.4, 3.5, 6.1, 6.2,
 6.3, 6.4, 6.5, 7.4 / Properties 1, 4, 5, 6, 7, 8, 9.

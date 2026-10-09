@@ -61,7 +61,7 @@ def test_generate_schema_rejects_unsafe_backing_infill_density(
         )
 
 
-def test_generate_schema_rejects_sparse_relief_and_sparse_puzzle() -> None:
+def test_generate_schema_rejects_sparse_relief_but_accepts_flat_puzzle() -> None:
     with pytest.raises(ValidationError, match="relief mode"):
         ConvertGenerateRequest(
             lut_name="test_lut",
@@ -69,14 +69,15 @@ def test_generate_schema_rejects_sparse_relief_and_sparse_puzzle() -> None:
             backing_infill_density_percent=20,
         )
 
-    with pytest.raises(ValidationError, match="puzzle generation"):
-        PuzzleGenerateRequest(
-            target_height_mm=100.0,
-            params=ConvertGenerateRequest(
-                lut_name="test_lut",
-                backing_infill_density_percent=20,
-            )
-        )
+    request = PuzzleGenerateRequest(
+        target_height_mm=100.0,
+        params=ConvertGenerateRequest(
+            lut_name="test_lut", backing_infill_density_percent=20,
+            enable_base_layer_height_modifier=False,
+        ),
+    )
+    assert request.params.backing_infill_density_percent == 20
+    assert request.params.enable_base_layer_height_modifier is False
 
 
 def test_canonical_solid_depth_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None:

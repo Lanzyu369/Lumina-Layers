@@ -44,7 +44,10 @@ from api.selection_state import unpack_applied_region_mask
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
 from api.worker_pool import WorkerPoolManager
-from api.workers.converter_workers import worker_generate_model
+from api.workers.converter_workers import (
+    _batch_extract_slots_from_3mf,
+    worker_generate_model,
+)
 from config import ModelingMode as CoreModelingMode
 from config import TEMP_DIR
 from core.puzzle import (
@@ -59,12 +62,17 @@ from core.puzzle import (
     render_puzzle_overlay,
     resolve_puzzle_mask_geometry,
 )
-from core.puzzle_3mf import PuzzlePiece3MFSource, assemble_puzzle_3mf
+from core.puzzle_3mf import (
+    PuzzlePiece3MFSource,
+    assemble_puzzle_3mf,
+)
 from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
     DynamicMaterialSolverError,
 )
 from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
+from utils.fatcat_metadata import select_metadata_target
+from utils.merged_bambu_3mf_writer import MaterialSlot as WriterMaterialSlot
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
@@ -1077,6 +1085,14 @@ async def generate_puzzle(
         nozzle_size=generate_params.nozzle_size,
         device_profile_id=generate_params.device_profile_id,
         build_plate_id=generate_params.build_plate_id,
+        custom_3mf_template_id=generate_params.custom_3mf_template_id,
+    )
+    metadata_target = select_metadata_target(
+        slicer=generate_params.slicer,
+        printer_id=generate_params.printer_id,
+        nozzle_size=generate_params.nozzle_size,
+        device_profile_id=generate_params.device_profile_id,
+        build_plate_id=generate_params.build_plate_id,
     )
     if generate_params.enable_fridge_magnet:
         raise HTTPException(status_code=422, detail="Puzzle mode does not support fridge magnet cavities.")
@@ -1265,6 +1281,8 @@ async def generate_puzzle(
         worker_params: dict[str, Any] = {
             "target_width_mm": piece.bbox_mm[2] - piece.bbox_mm[0],
             "spacer_thick": generate_params.spacer_thick,
+            "backing_infill_density_percent": generate_params.backing_infill_density_percent,
+            "enable_base_layer_height_modifier": generate_params.enable_base_layer_height_modifier,
             "structure_mode": generate_params.structure_mode.value,
             "color_mode": generate_params.color_mode.value,
             "add_loop": False,
@@ -1594,10 +1612,13 @@ async def generate_puzzle(
 
     preview_colors = cache.get("preview_colors")
     slot_names = cache.get("slot_names")
+    color_conf = cache.get("color_conf") or {}
     if preview_colors is None or slot_names is None:
-        color_conf = cache.get("color_conf") or {}
         preview_colors = color_conf.get("preview")
         slot_names = color_conf.get("slots")
+    slot_index_by_name = color_conf.get("map") or {
+        name: index for index, name in enumerate(slot_names or [])
+    }
 
     overview_buffer = io.BytesIO()
     render_assembly_overview(
@@ -1608,17 +1629,29 @@ async def generate_puzzle(
     overview_png_bytes = overview_buffer.getvalue()
 
     try:
+        piece_slots = [
+            tuple(
+                WriterMaterialSlot(**slot)
+                for slot in _batch_extract_slots_from_3mf(
+                    piece_source.threemf_path,
+                    target=metadata_target,
+                )
+            )
+            for piece_source in piece_sources
+        ]
         assemble_puzzle_3mf(
             piece_sources=piece_sources,
+            piece_slots=piece_slots,
             output_path=combined_3mf_path,
-            preview_colors=preview_colors,
             slot_names=slot_names,
+            preview_colors=preview_colors,
+            slot_index_by_name=slot_index_by_name,
             printer_id=generate_params.printer_id,
-            slicer=generate_params.slicer,
             nozzle_size=generate_params.nozzle_size,
             device_profile_id=generate_params.device_profile_id,
             build_plate_id=generate_params.build_plate_id,
             overview_png_bytes=overview_png_bytes,
+            metadata_target=metadata_target,
             enable_wipe_tower_auto_placement=(
                 generate_params.enable_wipe_tower_auto_placement
             ),

@@ -679,6 +679,10 @@ LEGACY_SLICER_ID_ALIASES: dict[str, str] = {
     "qidi_studio": "QIDIStudio",
     "qidi studio": "QIDIStudio",
     "qidistudio": "QIDIStudio",
+    "prusa": "PrusaSlicer",
+    "prusa_slicer": "PrusaSlicer",
+    "prusa slicer": "PrusaSlicer",
+    "prusaslicer": "PrusaSlicer",
 }
 
 
@@ -778,8 +782,8 @@ def format_native_nozzle_size(nozzle_size: Any) -> Optional[str]:
 
 @dataclass
 class PrinterProfile:
-    """Printer hardware profile for 3MF export template selection.
-    打印机硬件配置，用于 3MF 导出模板选择。
+    """Lumina printer hardware facts used by geometry and device selection.
+    Lumina 几何和设备选择使用的打印机硬件事实。
 
     Attributes:
         id (str): Unique printer identifier, e.g. "bambu-h2d". (唯一打印机标识)
@@ -790,11 +794,9 @@ class PrinterProfile:
         bed_height (int): Max print height in mm. (最大打印高度，毫米)
         nozzle_count (int): Number of nozzles, 1=single, 2=dual. (喷头数量)
         is_dual_head (bool): Whether the printer has dual print heads. (是否双头)
-        template_file (str): Default (BambuStudio) config template filename. (默认模板文件名)
-        slicer_templates (dict[str, str]): Slicer-specific template filenames. (切片器专属模板)
         thumbnail (str): Thumbnail image filename, reserved for future use. (缩略图文件名，预留)
-        supported_nozzle_sizes (tuple[str, ...]): Supported nozzle sizes for template variants.
-            (支持生成模板变体的喷嘴尺寸)
+        supported_nozzle_sizes (tuple[str, ...]): Supported hardware nozzle sizes.
+            (支持的硬件喷嘴尺寸)
     """
 
     id: str
@@ -805,39 +807,8 @@ class PrinterProfile:
     bed_height: int
     nozzle_count: int
     is_dual_head: bool
-    template_file: str
-    slicer_templates: dict = field(default_factory=dict)
     thumbnail: str = ""
     supported_nozzle_sizes: tuple[str, ...] = ("0.2", "0.4")
-
-    def get_template_file(self, slicer: str = "BambuStudio", nozzle_size: Optional[str | float] = None) -> str:
-        """Return template filename for the given slicer.
-        返回指定切片器的模板文件名。
-
-        Args:
-            slicer (str): Slicer identifier, e.g. "BambuStudio" or "OrcaSlicer". (切片器标识)
-            nozzle_size (Optional[str | float]): Requested nozzle size. When omitted,
-                the base template is returned. (请求的喷嘴尺寸，未提供时返回基础模板)
-
-        Returns:
-            str: Template filename. Falls back to default template_file. (模板文件名，回退到默认)
-        """
-        normalized_slicer = normalize_slicer_software_id(slicer)
-        template_file = self.slicer_templates.get(normalized_slicer, self.template_file)
-
-        native_size = format_native_nozzle_size(nozzle_size)
-        normalized_size = normalize_nozzle_size(nozzle_size)
-        if native_size in self.supported_nozzle_sizes:
-            selected_size = native_size
-        elif normalized_size in self.supported_nozzle_sizes:
-            selected_size = normalized_size
-        else:
-            selected_size = None
-        if selected_size is None or selected_size == "0.4":
-            return template_file
-
-        stem, ext = os.path.splitext(template_file)
-        return f"{stem}_{selected_size.replace('.', '_')}{ext}"
 
 
 # Supported slicer software list
@@ -849,6 +820,7 @@ SUPPORTED_SLICERS: list[dict[str, str]] = [
     {"id": "AnycubicSlicerNext", "display_name": "Anycubic Slicer Next"},
     {"id": "FlashStudio", "display_name": "Flash Studio Desktop"},
     {"id": "QIDIStudio", "display_name": "QIDI Studio"},
+    {"id": "PrusaSlicer", "display_name": "PrusaSlicer 3.0.0-alpha12"},
 ]
 
 DEFAULT_SLICER_ID: str = "BambuStudio"
@@ -864,8 +836,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=180,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="bambu_a1_mini.json",
-        slicer_templates={"OrcaSlicer": "orca_a1_mini.json"},
     ),
     "bambu-a1": PrinterProfile(
         id="bambu-a1",
@@ -876,8 +846,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=256,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="bambu_a1.json",
-        slicer_templates={"OrcaSlicer": "orca_a1.json"},
     ),
     "bambu-p1p": PrinterProfile(
         id="bambu-p1p",
@@ -888,8 +856,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=256,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="bambu_p1p.json",
-        slicer_templates={"OrcaSlicer": "orca_p1p.json"},
     ),
     "bambu-p1s": PrinterProfile(
         id="bambu-p1s",
@@ -900,8 +866,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=250,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="bambu_p1s.json",
-        slicer_templates={"OrcaSlicer": "orca_p1s.json"},
     ),
     "bambu-x1c": PrinterProfile(
         id="bambu-x1c",
@@ -912,8 +876,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=256,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="bambu_x1c.json",
-        slicer_templates={"OrcaSlicer": "orca_x1c.json"},
     ),
     "bambu-x1e": PrinterProfile(
         id="bambu-x1e",
@@ -924,8 +886,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=256,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="bambu_x1e.json",
-        slicer_templates={"OrcaSlicer": "orca_x1e.json"},
     ),
     "bambu-lab-x2d": PrinterProfile(
         id="bambu-lab-x2d",
@@ -936,7 +896,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=261,
         nozzle_count=2,
         is_dual_head=True,
-        template_file="bambu_x2d.json",
     ),
     "bambu-lab-a2l": PrinterProfile(
         id="bambu-lab-a2l",
@@ -947,7 +906,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=325,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="bambu_a2l.json",
     ),
     "bambu-h2d": PrinterProfile(
         id="bambu-h2d",
@@ -958,8 +916,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=325,
         nozzle_count=2,
         is_dual_head=True,
-        template_file="bambu_h2d.json",
-        slicer_templates={"OrcaSlicer": "orca_h2d.json"},
     ),
     "bambu-h2d-pro": PrinterProfile(
         id="bambu-h2d-pro",
@@ -970,20 +926,16 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=325,
         nozzle_count=2,
         is_dual_head=True,
-        template_file="bambu_h2d_pro.json",
-        slicer_templates={"OrcaSlicer": "orca_h2d_pro.json"},
     ),
     "bambu-h2s": PrinterProfile(
         id="bambu-h2s",
         display_name="Bambu Lab H2S",
         brand="Bambu Lab",
-        bed_width=350,
+        bed_width=340,
         bed_depth=320,
-        bed_height=325,
-        nozzle_count=2,
-        is_dual_head=True,
-        template_file="bambu_h2s.json",
-        slicer_templates={"OrcaSlicer": "orca_h2s.json"},
+        bed_height=340,
+        nozzle_count=1,
+        is_dual_head=False,
     ),
     "bambu-p2s": PrinterProfile(
         id="bambu-p2s",
@@ -994,20 +946,16 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=250,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="bambu_p2s.json",
-        slicer_templates={"OrcaSlicer": "orca_p2s.json"},
     ),
     "bambu-h2c": PrinterProfile(
         id="bambu-h2c",
         display_name="Bambu Lab H2C",
         brand="Bambu Lab",
-        bed_width=350,
+        bed_width=330,
         bed_depth=320,
         bed_height=325,
         nozzle_count=2,
         is_dual_head=True,
-        template_file="bambu_h2c.json",
-        slicer_templates={"OrcaSlicer": "orca_h2c.json"},
     ),
     "snapmaker-u1": PrinterProfile(
         id="snapmaker-u1",
@@ -1018,8 +966,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=270,
         nozzle_count=4,
         is_dual_head=False,
-        template_file="snapmaker_u1.json",
-        slicer_templates={"SnapmakerOrca": "snapmaker_u1.json"},
     ),
     "elegoo-cc2": PrinterProfile(
         id="elegoo-cc2",
@@ -1030,8 +976,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=256,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="elegoo_cc2.json",
-        slicer_templates={"ElegooSlicer": "elegoo_cc2.json"},
     ),
     "anycubic-kobra-3-max": PrinterProfile(
         id="anycubic-kobra-3-max",
@@ -1042,8 +986,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=501,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="anycubic_kobra_3_max.json",
-        slicer_templates={"AnycubicSlicerNext": "anycubic_kobra_3_max.json"},
     ),
     "anycubic-kobra-3-v2": PrinterProfile(
         id="anycubic-kobra-3-v2",
@@ -1054,8 +996,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=260,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="anycubic_kobra_3_v2.json",
-        slicer_templates={"AnycubicSlicerNext": "anycubic_kobra_3_v2.json"},
     ),
     "anycubic-kobra-s1": PrinterProfile(
         id="anycubic-kobra-s1",
@@ -1066,8 +1006,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=250,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="anycubic_kobra_s1.json",
-        slicer_templates={"AnycubicSlicerNext": "anycubic_kobra_s1.json"},
     ),
     "anycubic-kobra-s1-max": PrinterProfile(
         id="anycubic-kobra-s1-max",
@@ -1078,8 +1016,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=350,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="anycubic_kobra_s1_max.json",
-        slicer_templates={"AnycubicSlicerNext": "anycubic_kobra_s1_max.json"},
     ),
     "anycubic-kobra-x": PrinterProfile(
         id="anycubic-kobra-x",
@@ -1090,8 +1026,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=260,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="anycubic_kobra_x.json",
-        slicer_templates={"AnycubicSlicerNext": "anycubic_kobra_x.json"},
     ),
     "flashforge-ad5x": PrinterProfile(
         id="flashforge-ad5x",
@@ -1102,8 +1036,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=220,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="flashforge_ad5x.json",
-        slicer_templates={"FlashStudio": "flashforge_ad5x.json"},
         supported_nozzle_sizes=("0.25", "0.4"),
     ),
     "flashforge-creator-5": PrinterProfile(
@@ -1115,8 +1047,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=256,
         nozzle_count=4,
         is_dual_head=False,
-        template_file="flashforge_creator_5.json",
-        slicer_templates={"FlashStudio": "flashforge_creator_5.json"},
         supported_nozzle_sizes=("0.25", "0.4"),
     ),
     "flashforge-creator-5-pro": PrinterProfile(
@@ -1128,8 +1058,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=256,
         nozzle_count=4,
         is_dual_head=False,
-        template_file="flashforge_creator_5_pro.json",
-        slicer_templates={"FlashStudio": "flashforge_creator_5_pro.json"},
         supported_nozzle_sizes=("0.25", "0.4"),
     ),
     "flashforge-guider-3-ultra": PrinterProfile(
@@ -1141,8 +1069,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=600,
         nozzle_count=2,
         is_dual_head=True,
-        template_file="flashforge_guider_3_ultra.json",
-        slicer_templates={"FlashStudio": "flashforge_guider_3_ultra.json"},
         supported_nozzle_sizes=("0.4",),
     ),
     "flashforge-guider4": PrinterProfile(
@@ -1154,8 +1080,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=300,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="flashforge_guider4.json",
-        slicer_templates={"FlashStudio": "flashforge_guider4.json"},
         supported_nozzle_sizes=("0.25", "0.4"),
     ),
     "flashforge-guider4-pro": PrinterProfile(
@@ -1167,8 +1091,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=300,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="flashforge_guider4_pro.json",
-        slicer_templates={"FlashStudio": "flashforge_guider4_pro.json"},
         supported_nozzle_sizes=("0.25", "0.4"),
     ),
     "qidi-q2": PrinterProfile(
@@ -1180,8 +1102,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=256,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="qidi_q2.json",
-        slicer_templates={"QIDIStudio": "qidi_q2.json"},
         supported_nozzle_sizes=("0.2", "0.4"),
     ),
     "qidi-q2c": PrinterProfile(
@@ -1193,8 +1113,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=256,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="qidi_q2c.json",
-        slicer_templates={"QIDIStudio": "qidi_q2c.json"},
         supported_nozzle_sizes=("0.2", "0.4"),
     ),
     "qidi-x-max-4": PrinterProfile(
@@ -1206,8 +1124,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=340,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="qidi_x_max_4.json",
-        slicer_templates={"QIDIStudio": "qidi_x_max_4.json"},
         supported_nozzle_sizes=("0.2", "0.4"),
     ),
     "qidi-x-plus-5": PrinterProfile(
@@ -1219,8 +1135,6 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         bed_height=300,
         nozzle_count=1,
         is_dual_head=False,
-        template_file="qidi_x_plus_5.json",
-        slicer_templates={"QIDIStudio": "qidi_x_plus_5.json"},
         supported_nozzle_sizes=("0.4",),
     ),
 }
@@ -1229,8 +1143,8 @@ DEFAULT_PRINTER_ID: str = "bambu-h2d"
 
 
 def get_printer_profile(printer_id: str) -> PrinterProfile:
-    """Get printer profile by ID, falling back to default (H2D) for unknown IDs.
-    根据 ID 获取打印机配置，未知 ID 回退到默认机型 H2D。
+    """Resolve a product or FatCat Prusa profile; unknown IDs retain H2D fallback.
+    解析本体或 FatCat Prusa 机型；未知 ID 保留 H2D 回退。
 
     Args:
         printer_id (str): Printer identifier, e.g. "bambu-h2d". (打印机标识)
@@ -1239,6 +1153,36 @@ def get_printer_profile(printer_id: str) -> PrinterProfile:
         PrinterProfile: Matching profile or default H2D profile. (匹配的配置或默认 H2D 配置)
     """
     normalized_printer_id = normalize_printer_profile_id(printer_id)
+    profile = PRINTER_PROFILES.get(normalized_printer_id)
+    if profile is not None:
+        return profile
+    if "prusa" in normalized_printer_id:
+        from core.machine_registry import _registry_printer_slug
+        from utils.fatcat_metadata import native_project_source_catalog
+
+        sources = native_project_source_catalog("PrusaSlicer")["sources"]
+        matches = [
+            row for row in sources
+            if normalized_printer_id in {
+                _registry_printer_slug(row["display_name"]),
+                str(row["machine_uid"]).replace(":", "-"),
+            }
+        ]
+        if matches:
+            source = matches[0]
+            hardware = source["hardware_settings"]
+            bed = hardware["bed"]
+            return PrinterProfile(
+                id=normalized_printer_id, display_name=source["display_name"], brand="Prusa",
+                bed_width=int(bed["width"]), bed_depth=int(bed["height"]),
+                bed_height=int(bed["max_print_height"]),
+                nozzle_count=int(hardware["tool_count"]),
+                is_dual_head=int(hardware["tool_count"]) > 1,
+                supported_nozzle_sizes=tuple(dict.fromkeys(
+                    str(row["nozzle_uid"]).removeprefix("nozzle:").removesuffix("mm")
+                    for row in matches
+                )),
+            )
     return PRINTER_PROFILES.get(
         normalized_printer_id,
         PRINTER_PROFILES[DEFAULT_PRINTER_ID],

@@ -569,6 +569,7 @@ def generate_index_markdown(
     snapshot_lines = []
     for key in (
         "active_tab",
+        "custom_3mf_template_id",
         "source_version",
         "color_mode",
         "lut_name",
@@ -764,6 +765,8 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
             )
 
     advanced_line = _render_advanced_params_summary_safe(context)
+    if context.get("custom_3mf_template_id"):
+        advanced_line += f" 3MF template: {_safe_str(context['custom_3mf_template_id'])}."
     workshop_line = _format_workshop_diagnostics_summary(context)
 
     workshop_block = f"{workshop_line}\n\n" if workshop_line else ""

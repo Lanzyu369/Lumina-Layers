@@ -203,6 +203,7 @@ export function collectBugReportContext(): BugReportContextPayload {
     nozzle_size: settings.nozzleSize,
     device_profile_id: settings.deviceProfileId,
     build_plate_id: settings.buildPlateId,
+    custom_3mf_template_id: settings.custom3mfTemplateId,
     color_mode: colorMode,
     lut_name: lutName,
     ...(lutNames ? { lut_names: lutNames } : {}),

@@ -282,6 +282,7 @@ def generate_calibration_board(
         output_path=output_path,
         slot_names=slot_names,
         preview_colors=preview_colors,
+        material_types={name: "PLA Basic" for name in slot_names},
         settings={
             "layer_height": "0.08",
             "initial_layer_height": "0.08",
@@ -593,6 +594,7 @@ def generate_smart_board(
         output_path=output_path,
         slot_names=slot_names,
         preview_colors=preview_colors,
+        material_types={name: "PLA Basic" for name in slot_names},
         settings={
             "layer_height": "0.08",
             "initial_layer_height": "0.08",
@@ -850,6 +852,7 @@ def _generate_8color_board_artifacts(
         output_path=out_path,
         slot_names=conf["slots"],
         preview_colors=conf["preview"],
+        material_types={name: "PLA Basic" for name in conf["slots"]},
         settings={
             "layer_height": "0.08",
             "initial_layer_height": "0.08",
@@ -1200,6 +1203,7 @@ def generate_bw_calibration_board(
         output_path=output_path,
         slot_names=slot_names,
         preview_colors=preview_colors,
+        material_types={name: "PLA Basic" for name in slot_names},
         settings={
             "layer_height": "0.08",
             "initial_layer_height": "0.08",
@@ -1740,6 +1744,7 @@ def _generate_5color_base_page(
         output_path=output_path,
         slot_names=slot_names[:4],
         preview_colors=preview_colors,
+        material_types={name: "PLA Basic" for name in slot_names[:4]},
         settings={
             "layer_height": "0.08",
             "initial_layer_height": "0.08",
@@ -1879,6 +1884,7 @@ def _generate_5color_extended_page(
         output_path=output_path,
         slot_names=slot_names,
         preview_colors=preview_colors,
+        material_types={name: "PLA Basic" for name in slot_names},
         settings={
             "layer_height": "0.08",
             "initial_layer_height": "0.08",

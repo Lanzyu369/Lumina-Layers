@@ -1,5 +1,9 @@
 # Machine Adapter V2 Implementation Plan
 
+> **Historical plan:** The legacy template-generation and matrix-verification steps below
+> were superseded by FatCat's native source catalog. Use
+> `docs/machine-adapter-v2-maintenance.md` for the current maintenance workflow.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a development-time slicer profile importer that reads native Bambu/Orca-family machine JSON and generates Lumina's internal machine registry, while preserving current 3MF metadata and protected Lumina process settings.
@@ -1141,6 +1145,8 @@ git commit -m "feat(machine): load 3MF templates from machine registry"
 ```
 
 ## Task 8: Restore Metadata Matrix Verification
+
+> **已废弃（2026-09-28）：** 该历史步骤依赖已删除的 `printer_profiles/` 模板树和 `scripts/verify_3mf_template_matrix.py`。FatCat 原生来源目录已取代此流程；当前维护说明见 `docs/machine-adapter-v2-maintenance.md`。下面的步骤仅供历史追溯，不是可执行任务。
 
 **Files:**
 - Modify: `scripts/verify_3mf_template_matrix.py`

@@ -2509,21 +2509,6 @@ def _run_vector_branch(ctx: dict) -> dict:
         vec_print_settings = {
             "layer_height": layer_height_setting,
             "initial_layer_height": layer_height_setting,
-            "wall_loops": "1",
-            "top_shell_layers": "0",
-            "bottom_shell_layers": "1",
-            "bottom_surface_pattern": "monotonicline",
-            "elefant_foot_compensation": "0",
-            "sparse_infill_density": "100%",
-            "sparse_infill_pattern": "zig-zag",
-            "nozzle_temperature": ["220"] * 8,
-            "bed_temperature": ["60"] * 8,
-            "filament_type": ["PLA"] * 8,
-            "print_speed": "100",
-            "travel_speed": "150",
-            "enable_support": "0",
-            "brim_width": "5",
-            "brim_type": "auto_brim",
             "line_width": _lw,
             "initial_layer_line_width": _lw,
         }
@@ -2606,6 +2591,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             slicer=ctx.get("slicer", "BambuStudio"),
             nozzle_size=ctx.get("nozzle_size", "0.4"),
             project_slot_names=vec_slot_list,
+            material_types=ctx.get("material_types"),
             enable_base_layer_height_modifier=(
                 bool(ctx.get("enable_base_layer_height_modifier", True))
                 and not bool(ctx.get("enable_relief", False))
@@ -2622,6 +2608,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             ),
             cover_source=vector_cover_source,
             device_profile_id=ctx.get("device_profile_id") or None,
+            custom_3mf_template_id=ctx.get("custom_3mf_template_id") or None,
             build_plate_id=ctx.get("build_plate_id") or None,
             preserve_template_filament_slots=(
                 False

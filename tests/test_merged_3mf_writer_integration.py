@@ -224,9 +224,8 @@ class TestMergedWriterBambuCompatibility:
                     for obj in config_objects
                 )
 
-                # 7. Reference Bambu multi-object packages keep
-                # Metadata/*.config files in place, but do not attach them
-                # through 3D/_rels/3dmodel.model.rels.
+                # 7. FatCat links every settings part and external model through
+                # 3D/_rels/3dmodel.model.rels.
                 ns_rels = "http://schemas.openxmlformats.org/package/2006/relationships"
                 rels = ET.fromstring(zf.read("3D/_rels/3dmodel.model.rels"))
                 relationships = rels.findall(f"{{{ns_rels}}}Relationship")
@@ -239,13 +238,16 @@ class TestMergedWriterBambuCompatibility:
                     "3D/Objects/object_1.model",
                     "3D/Objects/object_2.model",
                 }
-                assert not [
-                    rel
-                    for rel in relationships
-                    if rel.get("Type")
-                    == "http://schemas.bambulab.com/package/2021/settings"
-                    or (rel.get("Target") or "").lstrip("/").startswith("Metadata/")
-                ]
+                assert {
+                    rel.get("Target") for rel in relationships
+                    if rel.get("Type") == "http://schemas.bambulab.com/package/2021/settings"
+                } == {
+                    "/Metadata/model_settings.config", "/Metadata/project_settings.config",
+                    "/Metadata/slice_info.config", "/Metadata/lumina_wipe_tower_placement.json",
+                    "/Metadata/filament_sequence.json", "/Metadata/cut_information.xml",
+                }
+                assert all((rel.get("Target") or "").lstrip("/") in zf.namelist()
+                           for rel in relationships)
 
                 # 8. Root relationships carry the main model and any package
                 # cover thumbnails that are present in the ZIP.
@@ -265,15 +267,27 @@ class TestMergedWriterBambuCompatibility:
                 if names & thumbnail_names:
                     assert top_targets & thumbnail_names
 
-                # 9. Content types follow the same compact shape as the
-                # trusted reference 3MFs under 元数据分析/.
+                # 9. Each serialized part has the FatCat dialect content type.
                 ct_root = ET.fromstring(zf.read("[Content_Types].xml"))
                 ct_ns = "http://schemas.openxmlformats.org/package/2006/content-types"
                 assert {
                     node.get("Extension")
                     for node in ct_root.findall(f"{{{ct_ns}}}Default")
-                } == {"gcode", "model", "png", "rels"}
-                assert not ct_root.findall(f"{{{ct_ns}}}Override")
+                } == {"config", "json", "model", "png", "rels", "xml"}
+                assert {
+                    node.get("PartName"): node.get("ContentType")
+                    for node in ct_root.findall(f"{{{ct_ns}}}Override")
+                } == {
+                    "/3D/3dmodel.model": "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
+                    "/3D/Objects/object_1.model": "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
+                    "/3D/Objects/object_2.model": "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
+                    "/Metadata/model_settings.config": "text/xml",
+                    "/Metadata/project_settings.config": "text/xml",
+                    "/Metadata/slice_info.config": "text/xml",
+                    "/Metadata/cut_information.xml": "text/xml",
+                    "/Metadata/filament_sequence.json": "application/json",
+                    "/Metadata/lumina_wipe_tower_placement.json": "application/json",
+                }
 
                 # 10. These sidecars use model indexes in Bambu reference
                 # packages; using generated assembly ids can make the slicer
@@ -747,8 +761,8 @@ class TestMergedWriterBambuCompatibility:
         scene = trimesh.Scene()
         box = trimesh.creation.box(extents=[10.0, 8.0, 2.0])
         box.apply_translation([5.0, 4.0, 1.0])
-        box.metadata["bambu_material_name"] = "Bambu PLA Black"
-        scene.add_geometry(box, geom_name="Bambu PLA Black")
+        box.metadata["bambu_material_name"] = "Bambu PETG Basic"
+        scene.add_geometry(box, geom_name="Bambu PETG Basic")
 
         fd, src_path = tempfile.mkstemp(
             suffix=".3mf",
@@ -759,8 +773,8 @@ class TestMergedWriterBambuCompatibility:
         export_scene_with_bambu_metadata(
             scene=scene,
             output_path=src_path,
-            slot_names=["Bambu PLA Black"],
-            preview_colors={"Bambu PLA Black": (16, 16, 16, 255)},
+            slot_names=["Bambu PETG Basic"],
+            preview_colors={"Bambu PETG Basic": (16, 16, 16, 255)},
             settings={},
             color_mode="4-Color",
             printer_id="bambu-p1s",
@@ -775,14 +789,14 @@ class TestMergedWriterBambuCompatibility:
             MergedItem(
                 source_filename="preset-a.png",
                 source_3mf_path=Path(src_path),
-                slots=(MaterialSlot(0, "Bambu PLA Black", "#101010", "GFL00"),),
+                slots=(MaterialSlot(0, "Bambu PETG Basic", "#101010", "GFL00"),),
                 tx_mm=10.0,
                 ty_mm=20.0,
             ),
             MergedItem(
                 source_filename="preset-b.png",
                 source_3mf_path=Path(src_path),
-                slots=(MaterialSlot(0, "Bambu PLA Black", "#101010", "GFL00"),),
+                slots=(MaterialSlot(0, "Bambu PETG Basic", "#101010", "GFL00"),),
                 tx_mm=40.0,
                 ty_mm=20.0,
             ),
@@ -954,16 +968,18 @@ class TestMergedWriterBambuCompatibility:
                 relationships = rels.findall(
                     "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"
                 )
-                assert "/Metadata/layer_config_ranges.xml" not in {
-                    rel.get("Target")
-                    for rel in relationships
+                assert {
+                    rel.get("Target") for rel in relationships
+                    if rel.get("Type") == "http://schemas.bambulab.com/package/2021/settings"
+                } == {
+                    "/Metadata/model_settings.config", "/Metadata/project_settings.config",
+                    "/Metadata/slice_info.config", "/Metadata/lumina_wipe_tower_placement.json",
+                    "/Metadata/filament_sequence.json", "/Metadata/cut_information.xml",
+                    "/Metadata/layer_config_ranges.xml",
                 }
-                assert not [
-                    rel
-                    for rel in relationships
-                    if rel.get("Type")
-                    == "http://schemas.bambulab.com/package/2021/settings"
-                ]
+                assert all((rel.get("Target") or "").lstrip("/") in zf.namelist()
+                           for rel in relationships)
+
         finally:
             for p in (src1, src2, Path(out_path)):
                 try:

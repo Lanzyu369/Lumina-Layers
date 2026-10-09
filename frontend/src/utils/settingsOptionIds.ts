@@ -79,6 +79,7 @@ const LAYER_CONFIG_RANGE_SLICER_IDS: ReadonlySet<string> = new Set([
   "AnycubicSlicerNext",
   "FlashStudio",
   "QIDIStudio",
+  "PrusaSlicer",
 ]);
 
 const DEFAULT_NOZZLE_SIZE = "0.4";

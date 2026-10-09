@@ -57,8 +57,6 @@ class ImportSource:
     source_version: str
     vendor_keys: tuple[str, ...]
     machine_name: str | None = None
-    application_metadata: str | None = None
-    client_version: str | None = None
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -437,9 +435,6 @@ def run_import(
     vendor_keys: tuple[str, ...],
     output_root: Path,
     machine_name: str | None = None,
-    application_metadata: str | None = None,
-    client_version: str | None = None,
-    build_plate_source_roots: dict[str, Path] | None = None,
 ) -> ImportResult:
     source = ImportSource(
         slicer_id=slicer_id,
@@ -447,15 +442,12 @@ def run_import(
         source_version=source_version,
         vendor_keys=vendor_keys,
         machine_name=machine_name,
-        application_metadata=application_metadata,
-        client_version=client_version,
     )
-    slicer_payload, templates, device_count = _collect_import_payload(
+    slicer_payload, device_count = _collect_import_payload(
         source,
         output_root=output_root,
-        build_plate_source_roots=build_plate_source_roots,
     )
-    _write_import_payload(output_root=output_root, slicers=[slicer_payload], templates=templates)
+    _write_import_payload(output_root=output_root, slicers=[slicer_payload])
     return ImportResult(device_count=device_count)
 
 
@@ -465,8 +457,7 @@ def _collect_import_payload(
     output_root: Path,
     asset_roots: tuple[AssetRoot, ...] = (),
     bed_model_metadata_roots: tuple[AssetRoot, ...] | None = None,
-    build_plate_source_roots: dict[str, Path] | None = None,
-) -> tuple[dict[str, Any], list[tuple[str, dict[str, Any]]], int]:
+) -> tuple[dict[str, Any], int]:
     slicer_id = source.slicer_id
     source_root = source.source_root
     source_version = source.source_version
@@ -478,17 +469,12 @@ def _collect_import_payload(
     provider = get_provider(slicer_id)
     build_plates = copy_native_build_plate_assets(
         slicer_id=provider.slicer_id,
-        source_root=source_root,
-        source_version=source_version,
         output_root=output_root,
-        source_roots=build_plate_source_roots,
     )
     available_build_plate_ids = {str(plate["id"]) for plate in build_plates}
     machines: dict[str, dict[str, Any]] = {}
     machine_plate_resolutions: dict[str, list[tuple[list[str], str]]] = {}
-    templates: list[tuple[str, dict[str, Any]]] = []
     seen_device_profile_ids: set[str] = set()
-    seen_template_paths: set[str] = set()
 
     for vendor_key in vendor_keys:
         try:
@@ -517,7 +503,7 @@ def _collect_import_payload(
                 settings=profile.settings,
             ):
                 continue
-            entry, template = build_device_registry_entry(
+            entry = build_device_registry_entry(
                 provider=provider,
                 source_version=source_version,
                 profile=profile,
@@ -526,10 +512,6 @@ def _collect_import_payload(
             if device_profile_id in seen_device_profile_ids:
                 raise ValueError(f"Duplicate machine registry device profile: {device_profile_id}")
             seen_device_profile_ids.add(device_profile_id)
-            template_path = str(entry["template"])
-            if template_path in seen_template_paths:
-                raise ValueError(f"Duplicate machine registry template path: {template_path}")
-            seen_template_paths.add(template_path)
             machine_id = str(entry["machine_profile_id"])
             thumbnail = _copy_thumbnail_asset(
                 source_root=source_root,
@@ -594,12 +576,10 @@ def _collect_import_payload(
                     "device_profile_id": device_profile_id,
                     "nozzle_size": entry["nozzle_size"],
                     "source_profile_name": entry["source_profile_name"],
-                    "template": template_path,
                     "revision": entry["revision"],
                     "supported": entry["supported"],
                 }
             )
-            templates.append((template_path, template))
 
     for machine_id, resolutions in machine_plate_resolutions.items():
         supported_build_plate_ids, default_build_plate_id = (
@@ -608,46 +588,25 @@ def _collect_import_payload(
         machines[machine_id]["supported_build_plate_ids"] = supported_build_plate_ids
         machines[machine_id]["default_build_plate_id"] = default_build_plate_id
 
-    if source.application_metadata is not None:
-        application_metadata = source.application_metadata
-    elif provider.default_application_metadata is not None:
-        application_metadata = provider.default_application_metadata
-    else:
-        application_metadata = (
-            f"ElegooSlicer-{source_version}"
-            if provider.slicer_id == "ElegooSlicer"
-            else f"{provider.slicer_id}-{source_version}"
-        )
-    client_version = (
-        source.client_version
-        if source.client_version is not None
-        else provider.default_client_version
-    )
     slicer_payload = {
         "slicer_id": provider.slicer_id,
         "display_name": provider.display_name,
         "source_kind": "local_install",
         "source_version": source_version,
         "profile_format": provider.profile_format,
-        "application_metadata": application_metadata,
-        "sidecar_policy": provider.sidecar_policy,
         "build_plates": build_plates,
         "machines": list(machines.values()),
     }
-    if client_version is not None:
-        slicer_payload["client_version"] = client_version
     device_count = sum(len(machine["nozzles"]) for machine in machines.values())
-    return slicer_payload, templates, device_count
+    return slicer_payload, device_count
 
 
 def _write_import_payload(
     *,
     output_root: Path,
     slicers: list[dict[str, Any]],
-    templates: list[tuple[str, dict[str, Any]]],
 ) -> None:
     seen_device_profile_ids: set[str] = set()
-    seen_template_paths: set[str] = set()
     for slicer in slicers:
         for machine in slicer.get("machines", []):
             for nozzle in machine.get("nozzles", []):
@@ -655,10 +614,6 @@ def _write_import_payload(
                 if device_profile_id in seen_device_profile_ids:
                     raise ValueError(f"Duplicate machine registry device profile: {device_profile_id}")
                 seen_device_profile_ids.add(device_profile_id)
-                template_path = str(nozzle["template"])
-                if template_path in seen_template_paths:
-                    raise ValueError(f"Duplicate machine registry template path: {template_path}")
-                seen_template_paths.add(template_path)
 
     registry = {
         "schema_version": 1,
@@ -666,8 +621,6 @@ def _write_import_payload(
         "slicers": slicers,
     }
     _write_json(output_root / "registry.json", registry)
-    for relative_template_path, template in templates:
-        _write_json(output_root / relative_template_path, template)
 
 
 def run_import_sources(
@@ -684,7 +637,6 @@ def run_import_sources(
             "No machine profile sources were discovered; refusing to overwrite registry"
         )
     slicers: list[dict[str, Any]] = []
-    templates: list[tuple[str, dict[str, Any]]] = []
     device_count = 0
     source_asset_roots = tuple(
         (source.source_root, vendor_key)
@@ -692,9 +644,6 @@ def run_import_sources(
         for vendor_key in source.vendor_keys
     )
     all_asset_roots = (*source_asset_roots, *asset_search_roots)
-    build_plate_source_roots = {
-        source.slicer_id: source.source_root for source in sources
-    }
     for source in sources:
         if bed_model_metadata_search_roots_by_slicer is None:
             bed_model_metadata_roots = all_asset_roots
@@ -709,19 +658,17 @@ def run_import_sources(
                     (),
                 ),
             )
-        slicer_payload, source_templates, source_device_count = _collect_import_payload(
+        slicer_payload, source_device_count = _collect_import_payload(
             source,
             output_root=output_root,
             asset_roots=all_asset_roots,
             bed_model_metadata_roots=bed_model_metadata_roots,
-            build_plate_source_roots=build_plate_source_roots,
         )
         if source_device_count == 0:
             continue
         slicers.append(slicer_payload)
-        templates.extend(source_templates)
         device_count += source_device_count
-    _write_import_payload(output_root=output_root, slicers=slicers, templates=templates)
+    _write_import_payload(output_root=output_root, slicers=slicers)
     return ImportResult(device_count=device_count)
 
 
@@ -730,8 +677,6 @@ def main() -> int:
     parser.add_argument("--slicer", required=True)
     parser.add_argument("--source-root", required=True)
     parser.add_argument("--source-version", required=True)
-    parser.add_argument("--application-metadata")
-    parser.add_argument("--client-version")
     parser.add_argument("--vendor", action="append", dest="vendors")
     parser.add_argument("--machine-name")
     parser.add_argument("--output", required=True)
@@ -745,8 +690,6 @@ def main() -> int:
         vendor_keys=tuple(args.vendors or provider.default_vendor_keys),
         output_root=Path(args.output),
         machine_name=args.machine_name,
-        application_metadata=args.application_metadata,
-        client_version=args.client_version,
     )
     print(f"Imported {result.device_count} device profiles")
     return 0

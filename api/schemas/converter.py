@@ -619,6 +619,7 @@ class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
     free_color_set: Optional[Set[str]] = Field(None, description="自由色集合 (hex)")
     printer_id: str = Field("bambu-h2d", description="Printer profile ID")
     slicer: str = Field("BambuStudio", description="Slicer software name")
+    custom_3mf_template_id: str | None = None
     nozzle_size: str = Field("0.4", description="Printer nozzle size")
     device_profile_id: Optional[str] = Field(
         None,
@@ -850,19 +851,6 @@ class PuzzleGenerateRequest(PuzzleLayoutPreviewRequest):
     """
 
     params: ConvertGenerateRequest = Field(..., description="每块共享的生成参数")
-
-    @model_validator(mode="after")
-    def validate_sparse_backing_contract(self) -> "PuzzleGenerateRequest":
-        """Reject sparse infill because puzzle assembly strips object ranges.
-        拼图装配会移除对象高度范围，因此拒绝稀疏底板填充。
-        """
-        if self.params.backing_infill_density_percent < 100:
-            raise ValueError(
-                "Sparse backing infill is not supported for puzzle generation; "
-                "use 100% backing infill."
-            )
-        return self
-
 
 class ConvertBatchRequest(BaseModel):
     """Request model for batch image conversion.

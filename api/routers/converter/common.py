@@ -190,6 +190,24 @@ def _public_pipeline_validation_detail(
         (line.strip() for line in raw_status.splitlines() if line.strip()),
         "",
     )
+    if first_line == (
+        "[ERROR] 3MF export failed: PrusaSlicer 3: selected materials exceed "
+        "this hardware's native material slots; select an MMU/multi-tool configuration"
+    ):
+        return {
+            "error": "export_material_capacity_exceeded",
+            "message": "The selected Prusa device has too few material slots. "
+            "Select an MMU or multi-tool configuration with enough slots, or reduce the palette.",
+        }
+    if first_line == (
+        "[ERROR] 3MF export failed: PrusaSlicer 3: material type differs from native "
+        "preset; provide a config exported with that material"
+    ):
+        return {
+            "error": "export_native_material_mismatch",
+            "message": "The selected Prusa preset uses a different material. "
+            "Import a PrusaSlicer project with the required native material settings.",
+        }
     normalized_mode = str(modeling_mode or "").strip().lower()
     normalized_source = str(source_path or "").strip().lower()
     if (

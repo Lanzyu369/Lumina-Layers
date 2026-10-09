@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -92,7 +93,9 @@ def populated_client(
     original_image = source_dir / "hello.png"
     original_image.write_bytes(b"PNGDATA_SENTINEL")
     final_artifact = source_dir / "model.3mf"
-    final_artifact.write_bytes(b"3MFDATA_SENTINEL")
+    with zipfile.ZipFile(final_artifact, "w") as project:
+        project.writestr("3D/3dmodel.model", b"3MFDATA_SENTINEL")
+        project.writestr("Metadata/project_settings.config", '{"layer_height":"0.2"}')
 
     monkeypatch.setenv("LUMINA_FEEDBACK_DUMP_DIR", str(feedback_root))
     monkeypatch.setenv("LUMINA_FEEDBACK_STARTUP_CLEANUP", "false")
@@ -136,7 +139,8 @@ def test_full_submit_populates_ticket_directory(
     assert (ticket_dir / "original.png").exists()
     assert (ticket_dir / "original.png").read_bytes() == b"PNGDATA_SENTINEL"
     assert (ticket_dir / "final.3mf").exists()
-    assert (ticket_dir / "final.3mf").read_bytes() == b"3MFDATA_SENTINEL"
+    with zipfile.ZipFile(ticket_dir / "final.3mf") as project:
+        assert project.read("3D/3dmodel.model") == b"3MFDATA_SENTINEL"
 
     # Background task artifacts (TestClient runs them synchronously).
     assert (ticket_dir / "index.md").exists()
@@ -254,4 +258,5 @@ def test_submit_redacts_final_artifact_disk_path_from_persisted_payload(
     active_ref = persisted["context"]["active_final_artifact_ref"]
     assert "disk_path" not in active_ref
     assert private_path.as_posix() not in json.dumps(persisted, ensure_ascii=False)
-    assert (ticket_dir / "final.3mf").read_bytes() == b"3MFDATA_SENTINEL"
+    with zipfile.ZipFile(ticket_dir / "final.3mf") as project:
+        assert project.read("3D/3dmodel.model") == b"3MFDATA_SENTINEL"

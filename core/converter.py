@@ -344,6 +344,7 @@ def convert_image_to_3d(
     *,
     backing_infill_density_percent: int = 100,
     enable_wipe_tower_auto_placement: bool = True,
+    custom_3mf_template_id: Optional[str] = None,
     height_identity_rgb_path: Optional[str] = None,
     original_matched_rgb_path: Optional[str] = None,
     original_material_matrix_path: Optional[str] = None,
@@ -364,6 +365,8 @@ def convert_image_to_3d(
     主要转换函数：将图像转换为 3D 模型。
 
     Args:
+        custom_3mf_template_id: Saved native project template for export.
+            (导出时使用的已保存原生项目模板)
         svg_hole_compensation_enabled: Fill enclosed source-SVG voids before
             matching, in vector mode. (矢量模式下在配色前补 SVG 二维孔洞)
         svg_hole_max_area_mm2: Maximum filled hole area; zero disables this
@@ -505,6 +508,7 @@ def convert_image_to_3d(
         "nozzle_size": nozzle_size,
         "device_profile_id": device_profile_id,
         "build_plate_id": build_plate_id,
+        "custom_3mf_template_id": custom_3mf_template_id,
         "enable_base_layer_height_modifier": enable_base_layer_height_modifier,
         "center_on_bed": center_on_bed,
         "relief_global_max_height": relief_global_max_height,
@@ -775,6 +779,7 @@ def generate_final_model(
     *,
     backing_infill_density_percent: int = 100,
     enable_wipe_tower_auto_placement: bool = True,
+    custom_3mf_template_id: Optional[str] = None,
     height_identity_rgb_path: Optional[str] = None,
     original_matched_rgb_path: Optional[str] = None,
     original_material_matrix_path: Optional[str] = None,
@@ -798,6 +803,8 @@ def generate_final_model(
     - smooth_sigma=10 (gentle bilateral filter, preserve edges)
 
     Args:
+        custom_3mf_template_id: Saved native project template for export.
+            (用于导出的已保存原生项目模板 ID。)
         svg_hole_compensation_enabled: Fill enclosed source-SVG voids before
             matching, in vector mode. (矢量模式下在配色前补 SVG 二维孔洞)
         svg_hole_max_area_mm2: Maximum filled hole area; zero disables this
@@ -977,6 +984,7 @@ def generate_final_model(
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
         build_plate_id=build_plate_id,
+        custom_3mf_template_id=custom_3mf_template_id,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
         enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
         center_on_bed=center_on_bed,

@@ -81,6 +81,7 @@ from utils.merged_bambu_3mf_writer import (
     MergedItem,
     MaterialSlot as WriterMaterialSlot,
 )
+from utils.fatcat_metadata import select_metadata_target
 from config import (
     PrinterConfig,
     SVG_PIXELS_PER_MM_DEFAULT,
@@ -2328,6 +2329,8 @@ async def convert_generate(
         nozzle_size=request.nozzle_size,
         device_profile_id=request.device_profile_id,
         build_plate_id=request.build_plate_id,
+        custom_3mf_template_id=request.custom_3mf_template_id,
+        supports_custom_template=True,
     )
     _validate_native_vector_relief_compatibility(request)
 
@@ -2912,6 +2915,7 @@ async def convert_generate(
         "nozzle_size": request.nozzle_size,
         "device_profile_id": request.device_profile_id,
         "build_plate_id": request.build_plate_id,
+        "custom_3mf_template_id": request.custom_3mf_template_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "enable_wipe_tower_auto_placement": request.enable_wipe_tower_auto_placement,
         "material_source": session_material_source,
@@ -3398,6 +3402,7 @@ def _resolve_large_format_shared_params(
         "nozzle_size": request.nozzle_size,
         "device_profile_id": request.device_profile_id,
         "build_plate_id": request.build_plate_id,
+        "custom_3mf_template_id": request.custom_3mf_template_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "enable_wipe_tower_auto_placement": request.enable_wipe_tower_auto_placement,
         "relief_global_max_height": relief_global_max_height,
@@ -4329,6 +4334,8 @@ async def convert_generate_large_format(
         nozzle_size=request.nozzle_size,
         device_profile_id=request.device_profile_id,
         build_plate_id=request.build_plate_id,
+        custom_3mf_template_id=request.custom_3mf_template_id,
+        supports_custom_template=True,
     )
     _validate_native_vector_relief_compatibility(request)
 
@@ -5026,6 +5033,7 @@ async def convert_batch(
     nozzle_size: str = Form("0.4", description="喷嘴直径"),
     device_profile_id: str | None = Form(None, description="机器注册表设备配置 ID"),
     build_plate_id: str | None = Form(None, description="切片软件原生打印板 ID"),
+    custom_3mf_template_id: str | None = Form(None),
     enable_base_layer_height_modifier: bool = Form(
         True,
         description="启用底板粗层高优化",
@@ -5058,6 +5066,14 @@ async def convert_batch(
     validate_export_device_selection(
         printer_id=printer_id,
         slicer=slicer,
+        nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
+        custom_3mf_template_id=custom_3mf_template_id,
+    )
+    merged_metadata_target = select_metadata_target(
+        slicer=slicer,
+        printer_id=printer_id,
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
         build_plate_id=build_plate_id,
@@ -5478,6 +5494,11 @@ async def convert_batch(
             enable_wipe_tower_auto_placement=(
                 enable_wipe_tower_auto_placement
             ),
+            metadata_target=merged_metadata_target,
+            printer_id=printer_id,
+            nozzle_size=nozzle_size,
+            device_profile_id=device_profile_id,
+            build_plate_id=build_plate_id,
         )
 
         for warning_code in read_wipe_tower_placement_warnings(merged_3mf_path):

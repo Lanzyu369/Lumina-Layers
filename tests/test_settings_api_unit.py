@@ -485,16 +485,11 @@ class TestGetPrinters:
                             "source_kind": "local_install",
                             "source_version": "02.07.01.57",
                             "profile_format": "bambu_orca",
-                            "application_metadata": "BambuStudio-02.07.01.57",
-                            "sidecar_policy": "bambu_studio",
                             "build_plates": [
                                 {
                                     "id": "textured-pei-plate",
                                     "display_name": "Textured PEI Plate",
                                     "display_name_zh": "纹理PEI打印板",
-                                    "project_value": "Textured PEI Plate",
-                                    "plate_value": "Textured PEI Plate",
-                                    "sidecar_value": "textured_plate",
                                     "image": "slicers/BambuStudio/build_plates/bed_pei.png",
                                     "source_path": "resources/images/bed_pei.png",
                                     "source_version": "02.07.01.57",
@@ -518,7 +513,6 @@ class TestGetPrinters:
                                             "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
                                             "nozzle_size": "0.4",
                                             "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
-                                            "template": "slicers/BambuStudio/templates/h2d_0_4.json",
                                             "revision": "sha256:abc",
                                             "supported": True,
                                         }
@@ -585,8 +579,6 @@ class TestGetPrinters:
                             "source_kind": "local_install",
                             "source_version": "02.04.00.00",
                             "profile_format": "bambu_orca",
-                            "application_metadata": "OrcaSlicer-02.04.00.00",
-                            "sidecar_policy": "orca_like",
                             "machines": [
                                 {
                                     "machine_profile_id": "OrcaSlicer:snapmaker:snapmaker-artisan",
@@ -602,7 +594,6 @@ class TestGetPrinters:
                                             "device_profile_id": "OrcaSlicer:snapmaker:snapmaker-artisan:0.4",
                                             "nozzle_size": "0.4",
                                             "source_profile_name": "Snapmaker Artisan 0.4 nozzle",
-                                            "template": "slicers/OrcaSlicer/templates/snapmaker-artisan_0_4.json",
                                             "revision": "sha256:artisan",
                                             "supported": True,
                                         }
@@ -747,7 +738,10 @@ class TestGetPrinters:
         tmp_path,
         monkeypatch,
     ) -> None:
+        from core.machine_registry import load_machine_registry
+
         source_root = Path(__file__).resolve().parents[1] / "machine_registry"
+        source_registry = load_machine_registry(source_root / "registry.json")
         source_data = json.loads(
             (source_root / "registry.json").read_text(encoding="utf-8")
         )
@@ -761,12 +755,6 @@ class TestGetPrinters:
             for slicer in source_data["slicers"]
             for plate in slicer.get("build_plates", [])
         }
-        runtime_paths.update(
-            str(nozzle["template"])
-            for slicer in source_data["slicers"]
-            for machine in slicer["machines"]
-            for nozzle in machine["nozzles"]
-        )
         for relative_path in runtime_paths:
             destination = registry_root / relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -789,13 +777,11 @@ class TestGetPrinters:
             for profile in printer["device_profiles"]
         }
         expected_profiles = {
-            nozzle["device_profile_id"]: {
-                "build_plate_ids": machine.get("supported_build_plate_ids", []),
-                "default_build_plate_id": machine.get("default_build_plate_id", ""),
+            device.device_profile_id: {
+                "build_plate_ids": [plate.id for plate in device.build_plates],
+                "default_build_plate_id": device.default_build_plate_id,
             }
-            for slicer in source_data["slicers"]
-            for machine in slicer["machines"]
-            for nozzle in machine["nozzles"]
+            for device in source_registry.devices_by_id.values()
         }
         assert set(actual_profiles) == set(expected_profiles)
         for profile_id, expected in expected_profiles.items():

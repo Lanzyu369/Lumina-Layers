@@ -15,7 +15,9 @@ import numpy as np
 
 from config import MODELS_DIR, PrinterConfig, get_printer_profile
 from core.naming import generate_model_filename
-from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
+from utils.slicer_3mf_writer import (
+    export_scene_with_slicer_metadata as export_scene_with_bambu_metadata,
+)
 
 _log = get_logger(__name__)
 
@@ -161,25 +163,10 @@ def run(ctx: dict) -> dict:
         ctx["error"] = "[ERROR] Mesh generation failed: No valid meshes generated"
         return ctx
 
-    # BambuStudio print settings
+    # Geometry-driven values; shared product defaults belong to the writer.
     print_settings = {
         "layer_height": "0.08",
         "initial_layer_height": "0.08",
-        "wall_loops": "1",
-        "top_shell_layers": "0",
-        "bottom_shell_layers": "1",
-        "bottom_surface_pattern": "monotonicline",
-        "elefant_foot_compensation": "0",
-        "sparse_infill_density": "100%",
-        "sparse_infill_pattern": "zig-zag",
-        "nozzle_temperature": ["220"] * 8,
-        "bed_temperature": ["60"] * 8,
-        "filament_type": ["PLA"] * 8,
-        "print_speed": "100",
-        "travel_speed": "150",
-        "enable_support": "0",
-        "brim_width": "5",
-        "brim_type": "auto_brim",
     }
 
     try:
@@ -225,6 +212,7 @@ def run(ctx: dict) -> dict:
             slot_names=valid_slot_names,
             preview_colors=preview_colors,
             project_slot_names=slot_names,
+            material_types=ctx.get("material_types"),
             settings=print_settings,
             color_mode=color_mode,
             printer_id=ctx.get("printer_id", "bambu-h2d"),
@@ -246,6 +234,7 @@ def run(ctx: dict) -> dict:
             ),
             cover_source=ctx.get("cover_source_path") or ctx.get("image_path"),
             device_profile_id=ctx.get("device_profile_id") or None,
+            custom_3mf_template_id=ctx.get("custom_3mf_template_id") or None,
             build_plate_id=ctx.get("build_plate_id") or None,
             preserve_template_filament_slots=(
                 False

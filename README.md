@@ -262,6 +262,14 @@ cd Lumina-studio
 **Core dependencies** (required; use Python 3.12):
 
 ```bash
+# Python 3.12+ requires current-platform native 3MF wheels first. Clone
+# https://github.com/MOVIBALE/fatcat-metadata and check out
+# 673b1b694dd7c3369f5094fb8ddbf77fdb869d90, then follow the desktop guide to
+# prepare the pinned neroued source and apply Lumina's B7 patch.
+# python scripts/build_3mf_native_wheels.py \
+#   --fatcat-root ../fatcat-metadata \
+#   --neroued-source ../neroued-3mf \
+#   --install
 python -m pip install -r requirements.txt
 corepack enable
 cd frontend
@@ -272,6 +280,19 @@ python start_all.py
 
 The launcher starts the backend and frontend. Open the frontend address printed
 by the launcher (default: `http://localhost:4174`).
+
+For a local or desktop install, build `wheelhouse/3mf` from the pinned public
+Fat Cat root and patched `neroued-3mf` source before installing; do not reuse
+wheels from another OS or CPU. The required public source commit is
+`673b1b694dd7c3369f5094fb8ddbf77fdb869d90`, recorded as `FATCAT_SOURCE_COMMIT`
+in `scripts/fatcat_packaging_contract.py`.
+
+Prusa export targets **PrusaSlicer 3.0.0-alpha12**, a preview format. In Settings,
+select PrusaSlicer and the exact Prusa device; built-in profiles use the native
+default 0.4 mm nozzle and sheet. Multicolor images need an MMU or enough tools.
+Single images, material-archive images, batches, puzzles and user-template images have been opened and
+sliced in the native GUI. See [3MF metadata export](docs/3mf-metadata-export.md)
+for tuning, source preservation and remaining limits.
 
 ### Option 2: Desktop Client (Electron)
 

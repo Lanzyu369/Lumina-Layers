@@ -5,7 +5,7 @@ from tools.machine_adapter.providers import get_provider
 from tools.machine_adapter.resolver import ResolvedMachineProfile, SourceFile
 
 
-def test_emitter_builds_slicer_scoped_device_profile_and_applies_lumina_overlay():
+def test_emitter_builds_slicer_scoped_device_profile():
     native = ResolvedMachineProfile(
         name="Bambu Lab H2D 0.4 nozzle",
         vendor_key="BBL",
@@ -20,7 +20,7 @@ def test_emitter_builds_slicer_scoped_device_profile_and_applies_lumina_overlay(
         source_files=(SourceFile(path="BBL/machine/H2D.json", sha256="abc"),),
     )
 
-    entry, template = build_device_registry_entry(
+    entry = build_device_registry_entry(
         provider=get_provider("BambuStudio"),
         source_version="02.07.01.57",
         profile=native,
@@ -29,11 +29,8 @@ def test_emitter_builds_slicer_scoped_device_profile_and_applies_lumina_overlay(
     assert entry["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
     assert entry["machine_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d"
     assert entry["brand"] == "Bambu Lab"
-    assert entry["sidecar_policy"] == "bambu_studio"
     assert entry["bed_width"] == 350
     assert entry["bed_depth"] == 320
-    assert template["printer_model"] == "Bambu Lab H2D"
-    assert template["layer_height"] == "0.08"
 
 
 def test_emitter_normalizes_native_nozzle_variant_for_stable_profile_id():
@@ -50,7 +47,7 @@ def test_emitter_normalizes_native_nozzle_variant_for_stable_profile_id():
         source_files=(SourceFile(path="BBL/machine/P1S.json", sha256="abc"),),
     )
 
-    entry, _template = build_device_registry_entry(
+    entry = build_device_registry_entry(
         provider=get_provider("OrcaSlicer"),
         source_version="2.3.1",
         profile=native,
@@ -58,7 +55,6 @@ def test_emitter_normalizes_native_nozzle_variant_for_stable_profile_id():
 
     assert entry["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.4"
     assert entry["nozzle_size"] == "0.4"
-    assert entry["template"].endswith("bambu-lab-p1s_0_4.json")
 
 
 def test_emitter_preserves_native_quarter_mm_nozzle_variant():
@@ -75,7 +71,7 @@ def test_emitter_preserves_native_quarter_mm_nozzle_variant():
         source_files=(SourceFile(path="Anycubic/machine/Kobra X.json", sha256="abc"),),
     )
 
-    entry, _template = build_device_registry_entry(
+    entry = build_device_registry_entry(
         provider=get_provider("AnycubicSlicerNext"),
         source_version="1.3.2605.22",
         profile=native,
@@ -83,7 +79,6 @@ def test_emitter_preserves_native_quarter_mm_nozzle_variant():
 
     assert entry["device_profile_id"] == "AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25"
     assert entry["nozzle_size"] == "0.25"
-    assert entry["template"].endswith("anycubic-kobra-x_0_25.json")
 
 
 def test_emitter_accepts_list_shaped_printable_height_from_native_profiles():
@@ -100,35 +95,13 @@ def test_emitter_accepts_list_shaped_printable_height_from_native_profiles():
         source_files=(SourceFile(path="Elegoo/machine/EOSGIGA.json", sha256="abc"),),
     )
 
-    entry, _template = build_device_registry_entry(
+    entry = build_device_registry_entry(
         provider=get_provider("ElegooSlicer"),
         source_version="01.05.00.07",
         profile=native,
     )
 
     assert entry["bed_height"] == 1010
-
-
-def test_emitter_rejects_unsafe_source_version_path_segment():
-    native = ResolvedMachineProfile(
-        name="Bambu Lab P1S 0.4 nozzle",
-        vendor_key="BBL",
-        settings={
-            "printer_model": "Bambu Lab P1S",
-            "printer_variant": "0.4",
-            "nozzle_diameter": ["0.4"],
-        },
-        source_files=(SourceFile(path="BBL/machine/P1S.json", sha256="abc"),),
-    )
-
-    import pytest
-
-    with pytest.raises(ValueError, match="Unsafe machine registry path segment"):
-        build_device_registry_entry(
-            provider=get_provider("BambuStudio"),
-            source_version="../02.07.01.57",
-            profile=native,
-        )
 
 
 def test_emitter_revision_uses_canonical_json_and_source_version():
@@ -145,7 +118,7 @@ def test_emitter_revision_uses_canonical_json_and_source_version():
         "printer_model": "Bambu Lab P1S",
     }
 
-    first, _ = build_device_registry_entry(
+    first = build_device_registry_entry(
         provider=get_provider("BambuStudio"),
         source_version="02.07.01.57",
         profile=ResolvedMachineProfile(
@@ -155,7 +128,7 @@ def test_emitter_revision_uses_canonical_json_and_source_version():
             source_files=(SourceFile(path="BBL/machine/P1S.json", sha256="abc"),),
         ),
     )
-    second, _ = build_device_registry_entry(
+    second = build_device_registry_entry(
         provider=get_provider("BambuStudio"),
         source_version="02.07.01.57",
         profile=ResolvedMachineProfile(
@@ -165,7 +138,7 @@ def test_emitter_revision_uses_canonical_json_and_source_version():
             source_files=(SourceFile(path="BBL/machine/P1S.json", sha256="abc"),),
         ),
     )
-    third, _ = build_device_registry_entry(
+    third = build_device_registry_entry(
         provider=get_provider("BambuStudio"),
         source_version="02.07.02.00",
         profile=ResolvedMachineProfile(
