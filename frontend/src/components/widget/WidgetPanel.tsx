@@ -146,7 +146,10 @@ export const WidgetPanel = React.memo(function WidgetPanel({
     };
   }, [widgetId, setExpandedHeight]);
 
-  if (!widget.visible) return null;
+  // Defensive: a missing store entry (stale same-version persisted layout)
+  // is treated as invisible instead of crashing on property access.
+  // 防御：store 条目缺失（同版本旧持久化布局）时按不可见处理，避免崩溃。
+  if (!widget || !widget.visible) return null;
 
   const isBeingDragged = isActiveDragWidget && !!transform;
   const targetHeight = isBeingDragged

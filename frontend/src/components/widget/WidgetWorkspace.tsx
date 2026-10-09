@@ -28,6 +28,7 @@ import { computeSnap, computeStackPositions, resolveResponsiveWidgetWidth, resol
 import { WidgetPanel } from './WidgetPanel';
 import { SnapGuides } from './SnapGuides';
 import BasicSettingsWidgetContent from './BasicSettingsWidgetContent';
+import ModelSurfaceSettingsWidgetContent from './ModelSurfaceSettingsWidgetContent';
 import AdvancedSettingsWidgetContent from './AdvancedSettingsWidgetContent';
 import ReliefSettingsWidgetContent from './ReliefSettingsWidgetContent';
 import OutlineSettingsWidgetContent from './OutlineSettingsWidgetContent';
@@ -42,6 +43,7 @@ import ExtractorWidgetContent from './ExtractorWidgetContent';
 import LutManagerWidgetContent from './LutManagerWidgetContent';
 import FiveColorWidgetContent from './FiveColorWidgetContent';
 import Color2DOverlay from './Color2DOverlay';
+import { ConverterDropIntentBanner, useConverterDropRouting } from '../../hooks/useConverterDropRouting';
 import { useConverterDataInit } from '../../hooks/useConverterDataInit';
 import { useWorkspaceMode } from '../../hooks/useWorkspaceMode';
 import { useI18n } from '../../i18n/context';
@@ -55,6 +57,7 @@ import { useShallow } from 'zustand/react/shallow';
  */
 const WIDGET_CONTENT_MAP: Record<WidgetId, ComponentType> = {
   'basic-settings': BasicSettingsWidgetContent,
+  'model-surface-settings': ModelSurfaceSettingsWidgetContent,
   'advanced-settings': AdvancedSettingsWidgetContent,
   'relief-settings': ReliefSettingsWidgetContent,
   'outline-settings': OutlineSettingsWidgetContent,
@@ -106,12 +109,27 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   );
   const activeWidgetIds = converterWidgetIds;
   const activeRegistry = WIDGET_REGISTRY.filter((c) => converterWidgetIds.includes(c.id));
+  // Defensive: drop ids with no store entry (stale same-version persisted
+  // layout) instead of letting undefined flow into position/height math.
+  // 防御：丢弃没有 store 条目的 id（同版本旧持久化布局），避免 undefined
+  // 流入后续位置/高度计算导致崩溃。
   const activeWidgets = useWidgetStore(
-    useShallow((s) => activeWidgetIds.map((id) => s.widgets[id]))
+    useShallow((s) =>
+      activeWidgetIds
+        .map((id) => s.widgets[id])
+        .filter((w) => Boolean(w))
+    )
   );
 
   // Initialize converter data (LUT list, bed sizes) on mount
   useConverterDataInit();
+
+  // Global STL/OBJ vs image drop routing for the whole converter tab.
+  // Mounted here (not inside panels) so it keeps working while any widget,
+  // including the model texture panel, is toggled off/unmounted.
+  // 整个转换页的全局 STL/OBJ 与图片拖放路由。挂在工作区层级（而非面板内），
+  // 即使模型贴图等任一面板被关闭卸载，拖放导入依然可用。
+  const { dropImportIntent } = useConverterDropRouting();
 
   const containerRef = useRef<HTMLDivElement>(null);
   const leftDockRef = useRef<HTMLDivElement>(null);
@@ -178,7 +196,9 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
     // 仅在当前 sub-tab 可见集合上计算 stack；否则重置后隐藏 widget 的
     // stackOrder 会把可见 widget 顶到画面外。
     const currentTabIds = converterWidgetIds;
-    const tabWidgets = currentTabIds.map((id) => state.widgets[id]);
+    const tabWidgets = currentTabIds
+      .map((id) => state.widgets[id])
+      .filter((w) => Boolean(w));
 
     // Force any free-floating widgets in current tab to snap to left edge
     tabWidgets
@@ -193,7 +213,9 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
     // Recalculate stack positions for snapped widgets in the active sub-tab.
     // Re-read state after potential snapToEdge calls.
     const updatedState = useWidgetStore.getState();
-    const updatedTabWidgets = currentTabIds.map((id) => updatedState.widgets[id]);
+    const updatedTabWidgets = currentTabIds
+      .map((id) => updatedState.widgets[id])
+      .filter((w) => Boolean(w));
     const batchedPositions: Partial<Record<WidgetId, { x: number; y: number }>> = {};
     for (const edge of ['left', 'right'] as const) {
       const stackWidgets = updatedTabWidgets.filter((w) => w.snapEdge === edge && w.visible);
@@ -278,7 +300,12 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
     useCallback(
       (s: { widgets: Record<WidgetId, { collapsed: boolean; expandedHeight: number }> }) =>
         activeWidgetIds
-          .map((id) => `${id}:${s.widgets[id].collapsed ? 1 : 0}:${s.widgets[id].expandedHeight}`)
+          .map((id) => {
+            // Treat a missing entry as collapsed/invisible instead of crashing.
+            // 条目缺失时按折叠/不可见处理，避免崩溃。
+            const widget = s.widgets[id];
+            return `${id}:${widget?.collapsed ? 1 : 0}:${widget?.expandedHeight ?? 0}`;
+          })
           .join(','),
       [activeWidgetIds]
     )
@@ -388,6 +415,7 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
       const currentTabIds = converterWidgetIds;
       const siblings = currentTabIds
         .map((wid) => state.widgets[wid])
+        .filter((w) => Boolean(w))
         .filter((w) => w.snapEdge === targetEdge && w.visible && w.id !== draggedId)
         .sort((a, b) => a.stackOrder - b.stackOrder);
 
@@ -566,6 +594,9 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
           <div className="absolute inset-0 z-10 flex flex-col" style={{ pointerEvents: 'auto' }}>
             {children}
           </div>
+
+          {/* Global drop intent banner — z-[80], fixed to viewport top */}
+          <ConverterDropIntentBanner intent={dropImportIntent} />
 
           {/* 2D Color Overlay — z-[45], above docks, covers 3D scene */}
           <AnimatePresence>

@@ -7,8 +7,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { I18nProvider } from '../i18n/context';
 import { WidgetHeader } from '../components/widget/WidgetHeader';
-import { useWidgetStore, DEFAULT_LAYOUT } from '../stores/widgetStore';
-import { computeDockBottomInset, resolveResponsiveWidgetWidth, WIDGET_WIDTH } from '../utils/widgetUtils';
+import { useWidgetStore, DEFAULT_LAYOUT, TAB_WIDGET_MAP, CONVERTER_SUB_TAB_WIDGET_MAP } from '../stores/widgetStore';
+import { computeDockBottomInset, computeStackPositions, resolveResponsiveWidgetWidth, WIDGET_WIDTH } from '../utils/widgetUtils';
 
 /** Render helper that wraps component in I18nProvider. */
 function renderWithI18n(ui: React.ReactElement) {
@@ -136,11 +136,12 @@ describe('Widget Workspace Unit Tests', () => {
       expect(state.widgets['action-bar'].collapsed).toBe(false);
     });
 
-    it('has all 14 widgets in default layout', () => {
+    it('has all 15 widgets in default layout', () => {
       const state = useWidgetStore.getState();
       const widgetIds = Object.keys(state.widgets);
-      expect(widgetIds).toHaveLength(14);
+      expect(widgetIds).toHaveLength(15);
       expect(widgetIds).toContain('basic-settings');
+      expect(widgetIds).toContain('model-surface-settings');
       expect(widgetIds).toContain('fridge-magnet-settings');
       expect(widgetIds).toContain('puzzle-settings');
       expect(widgetIds).toContain('action-bar');
@@ -151,6 +152,55 @@ describe('Widget Workspace Unit Tests', () => {
       // palette-panel and lut-color-grid have been merged into ColorWorkstation
       expect(widgetIds).not.toContain('palette-panel');
       expect(widgetIds).not.toContain('lut-color-grid');
+    });
+
+    it('registers the model texture widget as visible by default and only under the advanced sub-tab', () => {
+      const state = useWidgetStore.getState();
+      const modelSurface = state.widgets['model-surface-settings'];
+      expect(modelSurface.visible).toBe(true);
+      expect(modelSurface.collapsed).toBe(false);
+      expect(modelSurface.snapEdge).toBe('left');
+
+      expect(TAB_WIDGET_MAP.converter).toContain('model-surface-settings');
+      expect(CONVERTER_SUB_TAB_WIDGET_MAP.advanced).toContain('model-surface-settings');
+      // Must stay absent from 核心设置: the panel lives in the Creative Center sub-tab.
+      // 必须不出现在「核心设置」：该面板位于创意中心子页签。
+      expect(CONVERTER_SUB_TAB_WIDGET_MAP.core).not.toContain('model-surface-settings');
+    });
+
+    it('orders model-surface-settings above basic-settings in every default-order source', () => {
+      // Both left-dock widgets ship at stackOrder 0; computeStackPositions
+      // breaks the tie with a stable sort over CONVERTER_SUB_TAB_WIDGET_MAP
+      // iteration order. So DEFAULT_LAYOUT, TAB_WIDGET_MAP, the sub-tab map,
+      // and (for DOM order) WIDGET_REGISTRY must all list model first.
+      // 两个左坞 widget 默认同为 stackOrder 0；computeStackPositions 依靠
+      // 稳定排序按映射遍历顺序决胜，因此各处顺序都必须把模型贴图排在前面。
+      expect(DEFAULT_LAYOUT['model-surface-settings'].stackOrder).toBe(0);
+      expect(DEFAULT_LAYOUT['basic-settings'].stackOrder).toBe(0);
+
+      expect(
+        Object.keys(DEFAULT_LAYOUT).indexOf('model-surface-settings'),
+      ).toBeLessThan(Object.keys(DEFAULT_LAYOUT).indexOf('basic-settings'));
+      expect(
+        TAB_WIDGET_MAP.converter.indexOf('model-surface-settings'),
+      ).toBeLessThan(TAB_WIDGET_MAP.converter.indexOf('basic-settings'));
+      expect(
+        CONVERTER_SUB_TAB_WIDGET_MAP.advanced.indexOf('model-surface-settings'),
+      ).toBeLessThan(
+        CONVERTER_SUB_TAB_WIDGET_MAP.advanced.indexOf('basic-settings'),
+      );
+    });
+
+    it('stacks model-surface-settings above basic-settings on the left dock', () => {
+      const state = useWidgetStore.getState();
+      const leftWidgets = CONVERTER_SUB_TAB_WIDGET_MAP.advanced
+        .map((id) => state.widgets[id])
+        .filter((w) => w && w.snapEdge !== 'right' && w.visible);
+      const positions = computeStackPositions(leftWidgets, 'left', 1600);
+
+      expect(positions.get('model-surface-settings')!.y).toBeLessThan(
+        positions.get('basic-settings')!.y,
+      );
     });
   });
 

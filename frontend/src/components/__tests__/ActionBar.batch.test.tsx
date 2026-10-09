@@ -588,7 +588,7 @@ describe("ActionBar — auto batch mode", () => {
     expect(screen.queryByText(/Request failed with status code 500/)).not.toBeInTheDocument();
   });
 
-  it("disables incomplete recipe exports while model surface overlay is active", () => {
+  it("disables incomplete recipe exports while model texture is active", () => {
     useConverterStore.setState({
       batchMode: false,
       modelSurfaceEnabled: true,
@@ -606,7 +606,7 @@ describe("ActionBar — auto batch mode", () => {
     expect(screen.getByRole("button", { name: "导出分享卡" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "保存项目" })).toBeDisabled();
     expect(
-      screen.getByText("模型覆面暂不支持配方导出，因为配方无法包含上传模型和选面。"),
+      screen.getByText("模型贴图暂不支持配方导出，因为配方无法包含上传模型和选面。"),
     ).toBeInTheDocument();
     expect(recipeImportFlow.exportShareCard).not.toHaveBeenCalled();
     expect(recipeImportFlow.exportSidecar).not.toHaveBeenCalled();

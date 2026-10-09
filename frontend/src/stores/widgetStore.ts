@@ -24,6 +24,7 @@ import type {
 
 export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
   converter: [
+    "model-surface-settings",
     "basic-settings",
     "advanced-settings",
     "relief-settings",
@@ -61,6 +62,7 @@ export const CONVERTER_SUB_TAB_WIDGET_MAP: Record<ConverterSubTabId, readonly Wi
   core: ["basic-settings", "action-bar", "advanced-settings"],
   color: [],
   advanced: [
+    "model-surface-settings",
     "basic-settings",
     "advanced-settings",
     "relief-settings",
@@ -78,6 +80,18 @@ export const CONVERTER_SUB_TAB_WIDGET_MAP: Record<ConverterSubTabId, readonly Wi
 
 export const DEFAULT_LAYOUT: Record<WidgetId, WidgetLayoutState> = {
   // --- Converter 页面 ---
+  // 左侧：模型贴图（展开，置顶），从基础设置中拆出的独立面板。
+  // 与基础设置同为 stackOrder 0，靠 TAB/REGISTRY 的遍历顺序稳定排序取胜出，
+  // 因此本条目必须排在 "basic-settings" 之前。
+  "model-surface-settings": {
+    id: "model-surface-settings",
+    position: { x: 0, y: 0 },
+    collapsed: false,
+    visible: true,
+    snapEdge: "left",
+    stackOrder: 0,
+    expandedHeight: EXPANDED_HEIGHT,
+  },
   // 左侧：基础设置（展开）
   "basic-settings": {
     id: "basic-settings",
@@ -212,7 +226,14 @@ export const DEFAULT_LAYOUT: Record<WidgetId, WidgetLayoutState> = {
 // ===== Widget 注册表（静态配置，不含 component 字段）=====
 
 export const WIDGET_REGISTRY: Omit<WidgetConfig, "component">[] = [
-  // Converter 页面
+  // Converter 页面（顺序即左坞渲染顺序：模型贴图在基础设置之上）
+  {
+    id: "model-surface-settings",
+    titleKey: "widget.modelSurfaceSettings",
+    icon: "image",
+    defaultWidth: 350,
+    minWidth: 300,
+  },
   {
     id: "basic-settings",
     titleKey: "widget.basicSettings",
@@ -352,6 +373,45 @@ function _sanitizePersistedState(persistedState: unknown): WidgetStore {
     widgets,
     activeTab: validTab ? (state.activeTab as TabId) : "converter",
   } as WidgetStore;
+}
+
+/**
+ * Relocate the persisted ``model-surface-settings`` entry so its key precedes
+ * every other widget id (notably ``basic-settings``) in the hydrated record.
+ *
+ * The panel joined DEFAULT_LAYOUT only today under persist v8, so nobody has
+ * customized its position yet; the v8→v9 migration re-aligns stored record
+ * order with the new default dock order. Record key order is observable:
+ * iteration-order-sensitive flows such as ``autoArrange`` stack free-floating
+ * widgets in record order, and equal-``stackOrder`` ties fall back to stable
+ * iteration order.
+ * 将持久化的 ``model-surface-settings`` 条目前移到记录中其他 widget（尤其是
+ * ``basic-settings``）之前。该面板今日才随 v8 加入，尚无用户自定义其位置，
+ * 因此 v8→v9 迁移把存储键序与新默认坞内顺序对齐。记录键序可被观察到：
+ * ``autoArrange`` 等流程按遍历顺序收纳自由浮动 widget，相同 ``stackOrder``
+ * 的并列也依赖稳定排序的遍历顺序。
+ */
+function _promoteModelSurfaceEntry(
+  persistedState: unknown,
+): Record<string, unknown> {
+  const state =
+    typeof persistedState === "object" && persistedState !== null
+      ? (persistedState as Record<string, unknown>)
+      : {};
+  const widgets = state.widgets as
+    | Record<string, WidgetLayoutState>
+    | undefined;
+  if (!widgets || !widgets["model-surface-settings"]) {
+    return state;
+  }
+  const {
+    "model-surface-settings": modelSurfaceEntry,
+    ...restWidgets
+  } = widgets;
+  return {
+    ...state,
+    widgets: { "model-surface-settings": modelSurfaceEntry, ...restWidgets },
+  };
 }
 
 export const useWidgetStore = create<WidgetStore>()(
@@ -684,7 +744,30 @@ export const useWidgetStore = create<WidgetStore>()(
     }),
     {
       name: "lumina-widget-layout",
-      version: 8,
+      // v9: model-surface-settings promoted to the TOP of the left dock;
+      // migration relocates its persisted entry before basic-settings.
+      // v9：模型贴图面板升至左坞顶部；迁移会把已存在的条目前移到基础设置之前。
+      version: 9,
+      // Sanitize on EVERY hydration, not only when the stored version is
+      // older than ``version``. Zustand skips ``migrate`` entirely when the
+      // stored version matches, so a stale SAME-version payload written
+      // before a new widget id joined DEFAULT_LAYOUT would previously bypass
+      // the backfill and leave ``undefined`` widget entries behind (white
+      // screen in WidgetWorkspace). Running _sanitizePersistedState inside
+      // ``merge`` guarantees every hydration path — fresh, migrated, or
+      // same-version stale — ends up with all current DEFAULT_LAYOUT ids.
+      //
+      // 无论存储版本是否过期，每次水合都执行清洗。Zustand 在版本号一致时会
+      // 完全跳过 ``migrate``，因此「同版本但缺少新增 widget」的旧载荷此前
+      // 不会补齐默认项，导致 WidgetWorkspace 读到 ``undefined`` 而白屏。
+      // 把 _sanitizePersistedState 放进 ``merge`` 可保证所有水合路径
+      // （全新 / 迁移 / 同版本旧数据）都补齐当前 DEFAULT_LAYOUT 的全部 id。
+      merge: (persistedState: unknown, currentState: WidgetStore): WidgetStore => ({
+        ...currentState,
+        ..._sanitizePersistedState(
+          _promoteModelSurfaceEntry(persistedState),
+        ),
+      }),
       migrate: (persistedState, version) => {
         type PersistedWidgetState = {
           widgets?: Record<WidgetId, WidgetLayoutState>;
@@ -746,12 +829,23 @@ export const useWidgetStore = create<WidgetStore>()(
           void _drop;
           return _sanitizePersistedState({ ...rest, widgets });
         }
-        // v8 keeps the defensive sanitizer but Material/LUT widgets are part
-        // of DEFAULT_LAYOUT again, so old localStorage is backfilled instead
+        // v7 → v9 keeps the defensive sanitizer; v8 → v9 additionally
+        // relocates an existing ``model-surface-settings`` entry before
+        // ``basic-settings`` (the panel shipped today under v8, so no user
+        // could have customized its position yet). Material/LUT widgets are
+        // part of DEFAULT_LAYOUT, so old localStorage is backfilled instead
         // of being coerced away.
-        // v8 保留防御性清洗；耗材/LUT widget 已恢复到 DEFAULT_LAYOUT，因此旧
+        // v7 → v9 保留防御性清洗；v8 → v9 额外把已存在的 ``model-surface-settings``
+        // 条目前移到 ``basic-settings`` 之前（该面板今日才随 v8 上线，尚无用户
+        // 自定义其位置）。耗材/LUT widget 已恢复到 DEFAULT_LAYOUT，因此旧
         // localStorage 会被补齐，而不是被归位到 converter。
-        return _sanitizePersistedState(persistedState);
+        const state =
+          typeof persistedState === "object" && persistedState !== null
+            ? (persistedState as PersistedWidgetState)
+            : {};
+        return _sanitizePersistedState(
+          _promoteModelSurfaceEntry(state),
+        );
       },
       partialize: (state) => ({
         widgets: state.widgets,

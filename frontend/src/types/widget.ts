@@ -34,6 +34,7 @@ export type ConverterSubTabId = "core" | "color" | "advanced";
 // ===== Widget ID =====
 export type WidgetId =
   | "basic-settings"
+  | "model-surface-settings"
   | "advanced-settings"
   | "relief-settings"
   | "outline-settings"
