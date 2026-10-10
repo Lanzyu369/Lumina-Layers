@@ -109,6 +109,31 @@ describe('SelectionOutlineOverlay GPU lifecycle', () => {
     expect(frames.size).toBe(0);
   });
 
+  it('releases the WebGL context on unmount even when shader initialization fails', async () => {
+    gpu.create.mockReturnValue(null);
+    const { unmount } = render(<SelectionOutlineOverlay {...props} />);
+    expect(screen.getByTestId('fallback')).toBeInTheDocument();
+    unmount();
+    await act(async () => { await Promise.resolve(); });
+    expect(gpu.loseContext).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers from an initially lost context without remounting the selection', () => {
+    gpu.create.mockReturnValueOnce(null);
+    render(<SelectionOutlineOverlay {...props} />);
+    expect(screen.getByTestId('fallback')).toBeInTheDocument();
+    const canvas = screen.getByTestId('selection-outline-gpu');
+    const lost = new Event('webglcontextlost', { cancelable: true });
+    act(() => canvas.dispatchEvent(lost));
+    expect(lost.defaultPrevented).toBe(true);
+    act(() => canvas.dispatchEvent(new Event('webglcontextrestored')));
+    expect(screen.queryByTestId('fallback')).not.toBeInTheDocument();
+    expect(gpu.setGeometry).toHaveBeenCalledTimes(1);
+    nextFrame(300);
+    expect(gpu.draw).toHaveBeenLastCalledWith(viewport.imageScreenRect, 100, 100, 400, 300,
+      expect.any(Number), expect.any(Number), 300);
+  });
+
   it('keeps the outline still when reduced motion is enabled', () => {
     vi.mocked(window.matchMedia).mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as MediaQueryList);
     render(<SelectionOutlineOverlay {...props} />);

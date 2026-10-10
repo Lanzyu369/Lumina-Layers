@@ -32,13 +32,13 @@ export default function SelectionOutlineOverlay(props: Props) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const gl = canvas.getContext('webgl', { alpha: true, antialias: false, premultipliedAlpha: true });
-    const renderer = gl ? SelectionOutlineRenderer.create(gl) : null;
-    if (!renderer) {
+    if (!gl) {
       setGpuReady(false);
       return;
     }
+    const renderer = SelectionOutlineRenderer.create(gl);
     rendererRef.current = renderer;
-    setGpuReady(true);
+    setGpuReady(Boolean(renderer));
     const onContextLost = (event: Event) => {
       event.preventDefault();
       rendererRef.current?.dispose();
@@ -46,7 +46,7 @@ export default function SelectionOutlineOverlay(props: Props) {
       setGpuReady(false);
     };
     const onContextRestored = () => {
-      const restored = SelectionOutlineRenderer.create(gl!);
+      const restored = SelectionOutlineRenderer.create(gl);
       rendererRef.current = restored;
       setGpuReady(Boolean(restored));
     };
