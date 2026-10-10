@@ -68,17 +68,20 @@ describe('Palette-LUT Merge Unit Tests', () => {
 
   // ===== Persist version 验证 =====
   describe('Persist version', () => {
-    it('persist version is 8', () => {
+    it('persist version is 9', () => {
       // v6 -> v7: colour entry moved to a top-level secondary tab; dropped
       // colorWorkstationCollapsed.
       // v8 keeps a defensive sanitizer for unknown tabs/widgets while the
       // local main app owns Material/LUT tabs again.
+      // v9: model-surface-settings promoted to the top of the left dock;
+      // migration relocates its persisted entry before basic-settings.
       // v6→v7：颜色入口迁移到顶部二级 tab，丢弃 colorWorkstationCollapsed。
       // v8：保留未知 tab/widget 的防御性清洗，同时主应用恢复耗材/LUT 标签。
+      // v9：模型贴图面板升至左坞顶部，迁移会把已存在条目前移到基础设置之前。
       const options = (
         useWidgetStore.persist as unknown as { getOptions: () => { version: number } }
       ).getOptions();
-      expect(options.version).toBe(8);
+      expect(options.version).toBe(9);
     });
   });
 

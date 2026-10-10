@@ -62,6 +62,25 @@ describe("App Widget Toggles", () => {
     expect(screen.queryByTestId("widget-toggle-five-color")).not.toBeInTheDocument();
   });
 
+  it("shows the model texture panel toggle only under the Creative Center sub-tab", () => {
+    render(<App />);
+
+    // Core sub-tab (核心设置) must not offer the model texture panel.
+    // 核心设置子页签不得提供模型贴图面板。
+    openWidgetMenu();
+    expect(
+      screen.queryByTestId("widget-toggle-model-surface-settings"),
+    ).not.toBeInTheDocument();
+
+    // Switch to the Creative Center (创意中心) sub-tab and reopen the menu.
+    fireEvent.click(screen.getByTestId("subtab-converter-advanced"));
+    openWidgetMenu();
+
+    const modelSurfaceToggle = screen.getByTestId("widget-toggle-model-surface-settings");
+    expect(modelSurfaceToggle).toBeInTheDocument();
+    expect(modelSurfaceToggle.className).toContain("bg-blue-50");
+  });
+
   it("does not show widget toggles on LUT pages rendered as full panels", () => {
     render(<App />);
 

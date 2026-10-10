@@ -294,12 +294,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Release to add to this workflow",
   },
   model_surface_enable: {
-    zh: "模型覆面",
-    en: "Model surface overlay",
+    zh: "模型贴图",
+    en: "Model texture",
   },
   model_surface_enable_hint: {
     zh: "将当前图片贴到上传模型的选中平面，最终导出保持原模型外形尺寸。",
     en: "Place the current artwork on a selected flat model surface while preserving the source model dimensions.",
+  },
+  model_surface_switch_on: {
+    zh: "启用",
+    en: "On",
+  },
+  model_surface_switch_off: {
+    zh: "停用",
+    en: "Off",
   },
   model_surface_upload_model: {
     zh: "上传模型",
@@ -318,7 +326,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Drop an STL/OBJ model here or click to replace",
   },
   model_surface_drop_zone_hint: {
-    zh: "支持 STL / OBJ；导入后在 3D 预览里旋转模型并选择覆面平面。",
+    zh: "支持 STL / OBJ；导入后在 3D 预览里旋转模型并选择贴图平面。",
     en: "Supports STL / OBJ. After import, rotate the model and pick the target face in the 3D preview.",
   },
   model_surface_clear_model: {
@@ -390,8 +398,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Keep the artwork inside the selected surface edges by the specified distance.",
   },
   model_surface_edge_mode: {
-    zh: "覆面边界模式",
-    en: "Overlay edge mode",
+    zh: "贴图边界模式",
+    en: "Texture edge mode",
   },
   model_surface_scale: {
     zh: "贴图缩放",
@@ -450,7 +458,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Select surface",
   },
   model_surface_tool_select_hint: {
-    zh: "在模型上点选要覆面的平面，默认按平面组选择并过滤小倒角。",
+    zh: "在模型上点选要贴图的平面，默认按平面组选择并过滤小倒角。",
     en: "Pick the model face for artwork, using grouped planes by default and filtering small bevels.",
   },
   model_surface_tool_reselect: {
@@ -458,8 +466,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Reselect",
   },
   model_surface_tool_reselect_hint: {
-    zh: "重新选择当前模型的覆面平面。",
-    en: "Choose a different overlay surface on the current model.",
+    zh: "重新选择当前模型的贴图平面。",
+    en: "Choose a different texture surface on the current model.",
   },
   model_surface_tool_orbit: {
     zh: "旋转模型",
@@ -494,47 +502,47 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Scale the artwork coverage without changing model thickness or outer dimensions.",
   },
   model_surface_toolbar_group: {
-    zh: "模型覆面工具组",
-    en: "Model overlay tool groups",
+    zh: "模型贴图工具组",
+    en: "Model texture tool groups",
   },
   model_surface_toolbar_title: {
-    zh: "覆面工具",
-    en: "Overlay tools",
+    zh: "贴图工具",
+    en: "Texture tools",
   },
   model_surface_toolbar_drag: {
-    zh: "拖动覆面工具条",
-    en: "Drag overlay toolbar",
+    zh: "拖动贴图工具条",
+    en: "Drag texture toolbar",
   },
   model_surface_toolbar_drag_hint: {
     zh: "拖动后会吸附到视口边缘或角落，避免遮挡模型。",
     en: "Drag to snap the toolbar to a viewport edge or corner so it does not cover the model.",
   },
   model_surface_toolbar_collapse: {
-    zh: "收起覆面工具条",
-    en: "Collapse overlay toolbar",
+    zh: "收起贴图工具条",
+    en: "Collapse texture toolbar",
   },
   model_surface_toolbar_collapse_hint: {
     zh: "收起二级工具，只保留一个可拖动入口。",
     en: "Collapse the secondary tools and keep a small draggable entry.",
   },
   model_surface_toolbar_expand: {
-    zh: "展开覆面工具条",
-    en: "Expand overlay toolbar",
+    zh: "展开贴图工具条",
+    en: "Expand texture toolbar",
   },
   model_surface_toolbar_expand_hint: {
-    zh: "展开模型操作、覆面编辑和视图工具。",
+    zh: "展开模型操作、贴图编辑和视图工具。",
     en: "Expand model, artwork, and view tools.",
   },
   model_surface_toolbar_secondary: {
-    zh: "模型覆面二级工具栏",
-    en: "Model overlay secondary toolbar",
+    zh: "模型贴图二级工具栏",
+    en: "Model texture secondary toolbar",
   },
   model_surface_toolbar_model: {
     zh: "模型操作",
     en: "Model",
   },
   model_surface_toolbar_artwork: {
-    zh: "覆面编辑",
+    zh: "贴图编辑",
     en: "Artwork",
   },
   model_surface_toolbar_view: {
@@ -978,8 +986,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Candidate surface",
   },
   model_surface_selection_panel: {
-    zh: "选择覆面平面",
-    en: "Select overlay surface",
+    zh: "选择贴图平面",
+    en: "Select texture surface",
   },
   model_surface_selection_mode: {
     zh: "模式",
@@ -1018,8 +1026,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "small bevels filtered",
   },
   model_surface_selected_panel: {
-    zh: "已选覆面平面",
-    en: "Overlay surface selected",
+    zh: "已选贴图平面",
+    en: "Texture surface selected",
   },
   model_surface_selected_short: {
     zh: "已选",
@@ -1058,8 +1066,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Upload artwork to adjust placement",
   },
   model_surface_edit_overlay: {
-    zh: "继续调整贴面",
-    en: "Adjust overlay",
+    zh: "继续调整贴图",
+    en: "Adjust texture",
   },
   model_surface_adjust_in_viewer: {
     zh: "请在右侧 3D 预览中旋转模型、选择或重选面；选好后再移动、旋转或缩放贴图。",
@@ -2169,6 +2177,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "基础设置",
     en: "Basic Settings",
   },
+  "widget.modelSurfaceSettings": {
+    zh: "模型贴图",
+    en: "Model Texture",
+  },
   "widget.advancedSettings": {
     zh: "高级设置",
     en: "Advanced Settings",
@@ -2814,8 +2826,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Visible difference",
   },
   "tab.converterAdvanced": {
-    zh: "高级功能",
-    en: "Advanced",
+    zh: "创意中心",
+    en: "Creative Center",
   },
 
   // ==================== Settings Panel (Particle Loading) ====================
@@ -7740,8 +7752,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "The preview image is no longer available. Generate a new preview before exporting.",
   },
   recipe_export_model_surface_unavailable: {
-    zh: "模型覆面暂不支持配方导出，因为配方无法包含上传模型和选面。",
-    en: "Recipe export is unavailable for model surface overlays because the uploaded model and selected face cannot be included yet.",
+    zh: "模型贴图暂不支持配方导出，因为配方无法包含上传模型和选面。",
+    en: "Recipe export is unavailable for model texture because the uploaded model and selected face cannot be included yet.",
   },
   recipe_export_error_unknown: {
     zh: "导出没有完成，请稍后重试。",

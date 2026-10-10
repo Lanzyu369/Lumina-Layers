@@ -732,7 +732,7 @@ describe("ModelSurfaceSelector3D", () => {
 
     expect(await screen.findByRole("button", { name: "旋转模型" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重选面" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "覆面编辑" }));
+    fireEvent.click(screen.getByRole("tab", { name: "贴图编辑" }));
     expect(screen.getByRole("button", { name: "移动贴图" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "旋转贴图" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "缩放贴图" })).toBeInTheDocument();
@@ -763,7 +763,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    const tabList = await screen.findByRole("tablist", { name: "模型覆面工具组" });
+    const tabList = await screen.findByRole("tablist", { name: "模型贴图工具组" });
     const toolbarAnchor = tabList.closest('[data-model-surface-toolbar-anchor="scene-floating"]');
     const toolbarShell = tabList.closest('[data-model-surface-toolbar-shell="floating-command-band"]');
     expect(toolbarAnchor).not.toBeNull();
@@ -772,13 +772,13 @@ describe("ModelSurfaceSelector3D", () => {
     expect(toolbarShell).toHaveAttribute("data-model-surface-toolbar-snap", "top-left");
     expect(toolbarShell).toHaveClass("rounded-[22px]");
     expect(tabList).toHaveAttribute("data-model-surface-toolbar-layout", "slicer-top-tabs");
-    expect(screen.getByRole("button", { name: "拖动覆面工具条" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "收起覆面工具条" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "拖动贴图工具条" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收起贴图工具条" })).toBeInTheDocument();
     expect(within(tabList).getByRole("tab", { name: "模型操作" })).toHaveAttribute("aria-selected", "true");
-    expect(within(tabList).getByRole("tab", { name: "覆面编辑" })).toHaveAttribute("aria-selected", "false");
+    expect(within(tabList).getByRole("tab", { name: "贴图编辑" })).toHaveAttribute("aria-selected", "false");
     expect(within(tabList).getByRole("tab", { name: "视图" })).toHaveAttribute("aria-selected", "false");
 
-    const secondaryToolbar = screen.getByRole("toolbar", { name: "模型覆面二级工具栏" });
+    const secondaryToolbar = screen.getByRole("toolbar", { name: "模型贴图二级工具栏" });
     expect(secondaryToolbar).toHaveAttribute("data-model-surface-toolbar-row", "secondary");
     expect(secondaryToolbar).toHaveClass("w-full");
     expect(secondaryToolbar).toHaveClass("justify-center");
@@ -792,16 +792,16 @@ describe("ModelSurfaceSelector3D", () => {
     expect(rotateModelButton.querySelector("span")).toHaveClass("sr-only");
     expect(within(secondaryToolbar).getByRole("button", { name: "选择平面" })).toBeInTheDocument();
 
-    fireEvent.click(within(tabList).getByRole("tab", { name: "覆面编辑" }));
+    fireEvent.click(within(tabList).getByRole("tab", { name: "贴图编辑" }));
 
-    expect(within(tabList).getByRole("tab", { name: "覆面编辑" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("toolbar", { name: "模型覆面二级工具栏" })).toHaveTextContent("移动贴图");
-    expect(screen.getByRole("toolbar", { name: "模型覆面二级工具栏" })).toHaveTextContent("旋转贴图");
-    expect(screen.getByRole("toolbar", { name: "模型覆面二级工具栏" })).toHaveTextContent("缩放贴图");
+    expect(within(tabList).getByRole("tab", { name: "贴图编辑" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("toolbar", { name: "模型贴图二级工具栏" })).toHaveTextContent("移动贴图");
+    expect(screen.getByRole("toolbar", { name: "模型贴图二级工具栏" })).toHaveTextContent("旋转贴图");
+    expect(screen.getByRole("toolbar", { name: "模型贴图二级工具栏" })).toHaveTextContent("缩放贴图");
 
     fireEvent.click(within(tabList).getByRole("tab", { name: "视图" }));
 
-    const viewToolbar = screen.getByRole("toolbar", { name: "模型覆面二级工具栏" });
+    const viewToolbar = screen.getByRole("toolbar", { name: "模型贴图二级工具栏" });
     expect(viewToolbar).toHaveTextContent("默认视图");
     expect(viewToolbar).toHaveTextContent("适配视图");
     expect(within(viewToolbar).getByRole("button", { name: "缩放按钮" })).toHaveAttribute(
@@ -865,8 +865,8 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole("tab", { name: "覆面编辑" }));
-    const toolbar = screen.getByRole("toolbar", { name: "模型覆面二级工具栏" });
+    fireEvent.click(await screen.findByRole("tab", { name: "贴图编辑" }));
+    const toolbar = screen.getByRole("toolbar", { name: "模型贴图二级工具栏" });
     const edgeButton = within(toolbar).getByRole("button", { name: "铺满" });
     const insetButton = within(toolbar).getByRole("button", { name: "内缩" });
     const insetInput = within(toolbar).getByRole("spinbutton", { name: "内缩距离" });
@@ -1005,21 +1005,21 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    const dragHandle = await screen.findByRole("button", { name: "拖动覆面工具条" });
+    const dragHandle = await screen.findByRole("button", { name: "拖动贴图工具条" });
     fireEvent.mouseEnter(dragHandle);
 
     const dragTooltip = await screen.findByRole("tooltip");
-    expect(dragTooltip).toHaveTextContent("拖动覆面工具条");
+    expect(dragTooltip).toHaveTextContent("拖动贴图工具条");
     expect(dragTooltip).toHaveTextContent("拖动后会吸附到视口边缘或角落");
 
     fireEvent.mouseLeave(dragHandle);
 
-    const collapseButton = screen.getByRole("button", { name: "收起覆面工具条" });
+    const collapseButton = screen.getByRole("button", { name: "收起贴图工具条" });
     fireEvent.mouseEnter(collapseButton);
 
     await waitFor(() => {
       const tooltips = screen.getAllByRole("tooltip");
-      expect(tooltips.some((tooltip) => tooltip.textContent?.includes("收起覆面工具条"))).toBe(true);
+      expect(tooltips.some((tooltip) => tooltip.textContent?.includes("收起贴图工具条"))).toBe(true);
       expect(tooltips.some((tooltip) => tooltip.textContent?.includes("收起二级工具"))).toBe(true);
     });
 
@@ -1107,7 +1107,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    const dragHandle = await screen.findByRole("button", { name: "拖动覆面工具条" });
+    const dragHandle = await screen.findByRole("button", { name: "拖动贴图工具条" });
     fireEvent.pointerDown(dragHandle, { clientX: 24, clientY: 24, pointerId: 1 });
     fireEvent.pointerMove(window, { clientX: 940, clientY: 660, pointerId: 1 });
     fireEvent.pointerUp(window, { clientX: 940, clientY: 660, pointerId: 1 });
@@ -1188,7 +1188,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    await screen.findByRole("button", { name: "拖动覆面工具条" });
+    await screen.findByRole("button", { name: "拖动贴图工具条" });
     expect(mockUseFrame).toHaveBeenCalledTimes(1);
   });
 
@@ -1299,11 +1299,11 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "收起覆面工具条" }));
+    fireEvent.click(await screen.findByRole("button", { name: "收起贴图工具条" }));
 
     expect(screen.queryByRole("button", { name: "旋转模型" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "展开覆面工具条" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "拖动覆面工具条" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开贴图工具条" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "拖动贴图工具条" })).toBeInTheDocument();
     expect(JSON.parse(window.localStorage.getItem("lumina-model-surface-toolbar-layout-v1") ?? "{}")).toMatchObject({
       collapsed: true,
     });
@@ -1390,19 +1390,19 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    const tabList = screen.getByRole("tablist", { name: "模型覆面工具组" });
+    const tabList = screen.getByRole("tablist", { name: "模型贴图工具组" });
     await waitFor(() => {
-      expect(within(tabList).getByRole("tab", { name: "覆面编辑" })).toHaveAttribute(
+      expect(within(tabList).getByRole("tab", { name: "贴图编辑" })).toHaveAttribute(
         "aria-selected",
         "true",
       );
     });
-    const secondaryToolbar = screen.getByRole("toolbar", { name: "模型覆面二级工具栏" });
+    const secondaryToolbar = screen.getByRole("toolbar", { name: "模型贴图二级工具栏" });
     expect(within(secondaryToolbar).getByRole("button", { name: "移动贴图" })).toBeEnabled();
     expect(within(secondaryToolbar).getByRole("button", { name: "旋转贴图" })).toBeEnabled();
     expect(within(secondaryToolbar).getByRole("button", { name: "缩放贴图" })).toBeEnabled();
     expect(within(secondaryToolbar).getByRole("button", { name: "自适应" })).toBeEnabled();
-    expect(screen.getByRole("status", { name: "已选覆面平面" })).toHaveTextContent("顶部");
+    expect(screen.getByRole("status", { name: "已选贴图平面" })).toHaveTextContent("顶部");
 
     expect(screen.queryByRole("status", { name: "贴图位置读数" })).not.toBeInTheDocument();
     fireEvent.click(within(secondaryToolbar).getByRole("button", { name: "自适应" }));
@@ -1452,7 +1452,7 @@ describe("ModelSurfaceSelector3D", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "视图" }));
 
-    const viewToolbar = screen.getByRole("toolbar", { name: "模型覆面二级工具栏" });
+    const viewToolbar = screen.getByRole("toolbar", { name: "模型贴图二级工具栏" });
     const viewportFitButton = within(viewToolbar).getByRole("button", { name: "适配视图" });
     const zoomToggle = within(viewToolbar).getByRole("button", { name: "缩放按钮" });
     expect(within(viewToolbar).getByRole("button", { name: "默认视图" })).toBeInTheDocument();
@@ -1545,7 +1545,7 @@ describe("ModelSurfaceSelector3D", () => {
     fireEvent.click(screen.getByRole("tab", { name: "视图" }));
 
     expect(
-      within(screen.getByRole("toolbar", { name: "模型覆面二级工具栏" })).getByRole("button", {
+      within(screen.getByRole("toolbar", { name: "模型贴图二级工具栏" })).getByRole("button", {
         name: "适配视图",
       }),
     ).toBeInTheDocument();
@@ -1672,7 +1672,7 @@ describe("ModelSurfaceSelector3D", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "视图" }));
     fireEvent.click(
-      within(screen.getByRole("toolbar", { name: "模型覆面二级工具栏" })).getByRole("button", {
+      within(screen.getByRole("toolbar", { name: "模型贴图二级工具栏" })).getByRole("button", {
         name: "默认视图",
       }),
     );
@@ -1726,7 +1726,7 @@ describe("ModelSurfaceSelector3D", () => {
     fireEvent.click(screen.getByRole("tab", { name: "视图" }));
 
     expect(
-      within(screen.getByRole("toolbar", { name: "模型覆面二级工具栏" })).getByRole("button", {
+      within(screen.getByRole("toolbar", { name: "模型贴图二级工具栏" })).getByRole("button", {
         name: "默认视图",
       }),
     ).toBeInTheDocument();
@@ -1907,7 +1907,7 @@ describe("ModelSurfaceSelector3D", () => {
     expect(within(viewCube).queryByRole("button", { name: "默认视图" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "视图" }));
     fireEvent.click(
-      within(screen.getByRole("toolbar", { name: "模型覆面二级工具栏" })).getByRole("button", {
+      within(screen.getByRole("toolbar", { name: "模型贴图二级工具栏" })).getByRole("button", {
         name: "默认视图",
       }),
     );
@@ -2029,7 +2029,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    await screen.findByRole("status", { name: "已选覆面平面" });
+    await screen.findByRole("status", { name: "已选贴图平面" });
     fireEvent.click(screen.getByRole("tab", { name: "模型操作" }));
     fireEvent.click(screen.getByRole("button", { name: "反向查看" }));
 
@@ -2094,7 +2094,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    await screen.findByRole("status", { name: "已选覆面平面" });
+    await screen.findByRole("status", { name: "已选贴图平面" });
 
     await waitFor(() => expect(mockCamera.fov).toBeLessThanOrEqual(3));
     expect(mockCamera.position.z).toBeGreaterThan(mockControls.target.z);
@@ -2154,7 +2154,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    await screen.findByRole("status", { name: "已选覆面平面" });
+    await screen.findByRole("status", { name: "已选贴图平面" });
     await waitFor(() => expect(mockCamera.fov).toBeLessThanOrEqual(3));
 
     const focusDistance = mockCamera.position.distanceTo(mockControls.target);
@@ -2221,7 +2221,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    await screen.findByRole("status", { name: "已选覆面平面" });
+    await screen.findByRole("status", { name: "已选贴图平面" });
 
     await waitFor(() => {
       expect(onUpdateModelRotation).toHaveBeenLastCalledWith({
@@ -2295,7 +2295,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    await screen.findByRole("status", { name: "已选覆面平面" });
+    await screen.findByRole("status", { name: "已选贴图平面" });
     await waitFor(() => {
       expect(onUpdateModelRotation).toHaveBeenLastCalledWith({
         x_deg: 90,
@@ -2509,7 +2509,7 @@ describe("ModelSurfaceSelector3D", () => {
     await screen.findByRole("group", { name: "视图立方体" });
     fireEvent.click(screen.getByRole("tab", { name: "视图" }));
     fireEvent.click(
-      within(screen.getByRole("toolbar", { name: "模型覆面二级工具栏" })).getByRole("button", {
+      within(screen.getByRole("toolbar", { name: "模型贴图二级工具栏" })).getByRole("button", {
         name: "默认视图",
       }),
     );
@@ -2676,7 +2676,7 @@ describe("ModelSurfaceSelector3D", () => {
     expect(document.querySelector('group[name="model-rotation-gizmo"]')).toBeNull();
     expect(document.querySelector('lineSegments[name="model-surface-selected-outline"]')).not.toBeNull();
     expect(document.querySelector('mesh[name^="model-surface-candidate-"]')).toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: "覆面编辑" }));
+    fireEvent.click(screen.getByRole("tab", { name: "贴图编辑" }));
     expect(screen.getByRole("button", { name: "移动贴图" })).not.toBeDisabled();
   });
 
@@ -2719,7 +2719,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole("tab", { name: "覆面编辑" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "贴图编辑" }));
     await screen.findByRole("button", { name: "移动贴图" });
     expect(mockControls.enabled).toBe(true);
 
@@ -2862,7 +2862,7 @@ describe("ModelSurfaceSelector3D", () => {
       await waitFor(() => {
         expect(findArtworkTextureMaterial()).not.toBeNull();
       });
-      fireEvent.click(screen.getByRole("tab", { name: "覆面编辑" }));
+      fireEvent.click(screen.getByRole("tab", { name: "贴图编辑" }));
       fireEvent.click(screen.getByRole("button", { name: "移动贴图" }));
 
       const artworkMesh = findArtworkTextureMaterial()?.closest("mesh");
@@ -2976,7 +2976,7 @@ describe("ModelSurfaceSelector3D", () => {
     fireEvent.click(screen.getByRole("tab", { name: "模型操作" }));
     fireEvent.click(screen.getByRole("button", { name: "重选面" }));
     await waitFor(() => {
-      expect(screen.getByRole("status", { name: "选择覆面平面" })).toBeInTheDocument();
+      expect(screen.getByRole("status", { name: "选择贴图平面" })).toBeInTheDocument();
     });
     expect(document.querySelector('mesh[name^="model-surface-candidate-"]')).toBeNull();
     expect(document.querySelector('lineSegments[name="model-surface-selected-outline"]')).toBeNull();
@@ -2987,10 +2987,10 @@ describe("ModelSurfaceSelector3D", () => {
 
     expect(screen.queryByText("世界坐标")).not.toBeInTheDocument();
     expect(document.querySelector('group[name="model-rotation-gizmo"]')).toBeNull();
-    expect(screen.getByRole("status", { name: "选择覆面平面" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "选择贴图平面" })).toBeInTheDocument();
     expect(document.querySelector('mesh[name^="model-surface-candidate-"]')).toBeNull();
     expect(document.querySelector('lineSegments[name="model-surface-selected-outline"]')).toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: "覆面编辑" }));
+    fireEvent.click(screen.getByRole("tab", { name: "贴图编辑" }));
     expect(screen.getByRole("button", { name: "移动贴图" })).toBeDisabled();
   });
 
@@ -3171,7 +3171,7 @@ describe("ModelSurfaceSelector3D", () => {
     expect(panelShell).toHaveAttribute("data-model-rotation-panel-orientation", "horizontal");
     expect(panelShell).toHaveAttribute("data-model-rotation-panel-density", "compact");
     expect(screen.queryByRole("button", { name: "拖动旋转窗口" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "拖动覆面工具条" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "拖动贴图工具条" })).toBeInTheDocument();
     expect(panel).not.toBeNull();
     expect(panel).toHaveClass("bg-slate-100/90");
     expect(panel).toHaveClass("dark:bg-slate-950/82");
@@ -3378,7 +3378,7 @@ describe("ModelSurfaceSelector3D", () => {
       '[data-model-rotation-panel-shell="integrated-command-band"]',
     );
     expect(toolbarShell).toContainElement(rotationControls as HTMLElement);
-    expect(screen.getAllByRole("button", { name: "拖动覆面工具条" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "拖动贴图工具条" })).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "拖动旋转窗口" })).not.toBeInTheDocument();
     expect(document.querySelectorAll('[data-model-surface-toolbar-anchor="scene-floating"]')).toHaveLength(1);
     expect(window.localStorage.getItem("lumina-model-surface-rotation-panel-layout-v1")).toBeNull();
@@ -5108,7 +5108,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    const panel = await screen.findByRole("status", { name: "选择覆面平面" });
+    const panel = await screen.findByRole("status", { name: "选择贴图平面" });
     expect(panel).toHaveTextContent("模式");
     expect(panel).toHaveTextContent("平面组");
     expect(panel).toHaveTextContent("2 候选平面");
@@ -5162,7 +5162,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    const panel = await screen.findByRole("status", { name: "选择覆面平面" });
+    const panel = await screen.findByRole("status", { name: "选择贴图平面" });
     expect(panel).toHaveTextContent("254 候选平面");
     expect(document.querySelector('mesh[name^="model-surface-candidate-"]')).toBeNull();
 
@@ -5218,7 +5218,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    await screen.findByRole("status", { name: "选择覆面平面" });
+    await screen.findByRole("status", { name: "选择贴图平面" });
     const modelMesh = await waitFor(() => {
       const element = document.querySelector('mesh[name="model-surface-body"]');
       expect(element).not.toBeNull();
@@ -5355,7 +5355,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    const panel = await screen.findByRole("status", { name: "已选覆面平面" });
+    const panel = await screen.findByRole("status", { name: "已选贴图平面" });
     expect(panel).toHaveAttribute("data-model-surface-selected-panel", "screen-reader-status");
     expect(panel).toHaveClass("sr-only");
     expect(panel).toHaveTextContent("顶部");
@@ -5363,7 +5363,7 @@ describe("ModelSurfaceSelector3D", () => {
     expect(panel).toHaveTextContent("已选");
     expect(panel).toHaveTextContent("贴图可调整");
     expect(panel).not.toHaveTextContent("移动 / 旋转 / 缩放");
-    expect(screen.queryByRole("status", { name: "选择覆面平面" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "选择贴图平面" })).not.toBeInTheDocument();
     expect(document.querySelector('lineSegments[name="model-surface-selected-outline"]')).not.toBeNull();
     expect(document.querySelector('lineSegments[name="model-surface-selected-normal"]')).toBeNull();
     expect(document.querySelector('mesh[name="model-surface-selected-normal-tip"]')).toBeNull();
@@ -6049,7 +6049,7 @@ describe("ModelSurfaceSelector3D", () => {
 
     expect(screen.queryByRole("status", { name: "贴图位置读数" })).not.toBeInTheDocument();
 
-    fireEvent.click(await screen.findByRole("tab", { name: "覆面编辑" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "贴图编辑" }));
     fireEvent.click(screen.getByRole("button", { name: "移动贴图" }));
 
     const readout = await screen.findByRole("status", { name: "贴图位置读数" });
@@ -6115,7 +6115,7 @@ describe("ModelSurfaceSelector3D", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole("tab", { name: "覆面编辑" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "贴图编辑" }));
     fireEvent.click(screen.getByRole("button", { name: "旋转贴图" }));
 
     const panel = await screen.findByRole("group", { name: "贴图旋转" });
@@ -6301,7 +6301,7 @@ describe("ModelSurfaceSelector3D", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "重选面" }));
     await waitFor(() => {
-      expect(screen.getByRole("status", { name: "选择覆面平面" })).toBeInTheDocument();
+      expect(screen.getByRole("status", { name: "选择贴图平面" })).toBeInTheDocument();
     });
     expect(document.querySelector('mesh[name^="model-surface-candidate-"]')).toBeNull();
     expect(document.querySelector('lineSegments[name="model-surface-selected-outline"]')).toBeNull();

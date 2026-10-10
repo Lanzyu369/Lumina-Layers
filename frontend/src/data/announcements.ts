@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-08",
+    title: {
+      zh: "Lumina Layers — 10 月更新速览",
+      en: "Lumina Layers — October updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "「高级功能」现更名为「创意中心」，「模型覆面」现更名为「模型贴图」。模型贴图现位于独立面板，默认显示；即使隐藏面板，也能拖放导入模型和图片。",
+            en: "The Advanced tab is now called the Creative Center, and Model Surface Overlay is now Model Texture. Model Texture now has its own panel, shown by default; models and images can still be dragged in when the panel is hidden.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-10-07",
     title: {
       zh: "Lumina Layers — 9 月更新速览",
