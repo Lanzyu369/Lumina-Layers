@@ -10,6 +10,7 @@ vi.mock("../../api/feedback", () => ({
 vi.mock("../../utils/bugReportContext", () => ({
   collectBugReportContext: vi.fn(),
   collectBugReportOriginalImage: vi.fn(),
+  collectBugReportSourceFiles: vi.fn(() => []),
 }));
 
 import {
@@ -20,6 +21,7 @@ import {
 import {
   collectBugReportContext,
   collectBugReportOriginalImage,
+  collectBugReportSourceFiles,
 } from "../../utils/bugReportContext";
 import { BugReportModal } from "../BugReportModal";
 
@@ -125,43 +127,25 @@ function createSensitiveBugReportContext(): ReturnType<typeof collectBugReportCo
   });
 }
 
-function expectManualFallbackTextRedacted(
-  text: string,
-  description?: string,
-): void {
-  if (description != null) {
-    expect(text).toContain(`"description": "${description}"`);
-  }
-  expectNoSensitiveManualFallbackText(text);
-  const statusScanText = description ? text.split(description).join("") : text;
-  expect(statusScanText).not.toContain("Request failed with status code 500");
-  expect(statusScanText).not.toMatch(/\b500\b/);
+function expectManualFallbackTextComplete(text: string, description?: string): void {
+  if (description != null) expect(text).toContain(`"description": "${description}"`);
+  expectFullDiagnosticText(text);
+  expect(text).toContain("Request failed with status code 500");
+  expect(text).toContain("500");
   expect(text).toContain("/api/files/output-model");
 }
 
-function expectNoSensitiveManualFallbackText(text: string): void {
-  expect(text).not.toContain("/Users/min");
-  expect(text).not.toContain("/home/min");
-  expect(text).not.toContain("/private/tmp");
-  expect(text).not.toContain("/tmp/lumina");
-  expect(text).not.toContain("/var/folders");
-  expect(text).not.toContain("/Volumes/Work");
-  expect(text).not.toContain("/mnt/lumina");
-  expect(text).not.toContain("/opt/lumina");
-  expect(text).not.toContain("C:\\Users");
-  expect(text).not.toContain("C:\\tmp");
-  expect(text).not.toContain("C:/ProgramData");
-  expect(text).not.toContain("C:\\Windows\\Temp");
-  expect(text).not.toContain("file:///Users");
-  expect(text).not.toContain("file://localhost/Users");
-  expect(text).not.toContain("file:///C:");
-  expect(text).not.toContain("\\\\LUMINA-NAS");
-  expect(text).not.toContain("error_stack");
+function expectFullDiagnosticText(text: string): void {
+  expect(text).toContain("/Users/min");
+  expect(text).toContain("error_stack");
 }
 
 describe("BugReportModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(submitBugReport).mockReset();
+    vi.mocked(getBugReportStatus).mockReset();
+    vi.mocked(resubmitBugReport).mockReset();
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: undefined,
@@ -172,6 +156,38 @@ describe("BugReportModal", () => {
     });
     vi.mocked(collectBugReportContext).mockReturnValue(createBugReportContext());
     vi.mocked(collectBugReportOriginalImage).mockReturnValue(null);
+    vi.mocked(collectBugReportSourceFiles).mockReturnValue([]);
+  });
+
+  it("warns about incomplete collection and recaptures the frozen sources as a new ticket", async () => {
+    const original = new File(["<svg>original</svg>"], "original.svg");
+    const model = new File(["solid model"], "plate.stl");
+    vi.mocked(collectBugReportOriginalImage).mockReturnValue(original);
+    vi.mocked(collectBugReportSourceFiles).mockReturnValue([original, model]);
+    vi.mocked(submitBugReport).mockResolvedValueOnce({
+      ticket_id: "LUM-202610-12345678", submission_status: "pending", dump_path: "feedback/first",
+    }).mockResolvedValueOnce({
+      ticket_id: "LUM-202610-87654321", submission_status: "pending", dump_path: "feedback/second",
+    });
+    vi.mocked(getBugReportStatus).mockResolvedValueOnce({
+      ticket_id: "LUM-202610-12345678", assembly_status: "partial_failed", submission_status: "submitted",
+      error_type: null, uploaded_attachments: ["original.svg"], held_back_attachments: [],
+    });
+    render(<BugReportModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("问题描述"), { target: { value: "Model failed" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    expect(await screen.findByTestId("bug-report-collection-incomplete", {}, { timeout: 3500 })).toHaveTextContent("资料采集不完整");
+    vi.mocked(collectBugReportOriginalImage).mockReturnValue(null);
+    vi.mocked(collectBugReportSourceFiles).mockReturnValue([]);
+    fireEvent.click(screen.getByRole("button", { name: "重新采集并提交全部资料" }));
+    await waitFor(() => expect(submitBugReport).toHaveBeenCalledTimes(2));
+    const [payload, image, files] = vi.mocked(submitBugReport).mock.calls[1];
+    expect(payload).toBe(vi.mocked(submitBugReport).mock.calls[0][0]);
+    expect(image).toBe(original);
+    expect(files?.[0]).toBe(original);
+    expect(files?.[1]).toBe(model);
+    expect(resubmitBugReport).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByTestId("bug-report-ticket-id")).toHaveTextContent("LUM-202610-87654321"));
   });
 
   it("disables submit until description has content", () => {
@@ -333,6 +349,7 @@ describe("BugReportModal", () => {
           description: "Preview failed before a session existed.",
         }),
         original,
+        [],
       );
     });
     const status = await screen.findByTestId("bug-report-original-image-status");
@@ -367,13 +384,13 @@ describe("BugReportModal", () => {
 
     const status = await screen.findByTestId("bug-report-original-image-status");
     expect(status).toHaveAttribute("data-status", "too_large");
-    expect(status).toHaveTextContent("原图超过 100 MiB");
+    expect(status).toHaveTextContent("旧版本客户端因大小限制省略了原图");
   });
 
   it.each([
     ["session_fallback", "转换原图已从当前转换会话恢复"],
     ["failed", "原图保存失败"],
-    ["not_applicable", "本次未附带转换原图"],
+    ["not_applicable", "本次没有单独的转换原图"],
   ] as const)("shows the %s original-image result", async (imageStatus, text) => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "LUM-202608-0123abcd",
@@ -572,7 +589,7 @@ describe("BugReportModal", () => {
     expect(screen.queryByTestId("bug-report-copy-submitted-report")).not.toBeInTheDocument();
   }, 10_000);
 
-  it("redacts client log internals from the submitted manual fallback", async () => {
+  it("preserves full client diagnostics from the submitted manual fallback", async () => {
     const sensitiveContext = createSensitiveBugReportContext();
     vi.mocked(collectBugReportContext).mockReturnValue(sensitiveContext);
     vi.mocked(submitBugReport).mockResolvedValueOnce({
@@ -595,11 +612,11 @@ describe("BugReportModal", () => {
     const fallbackText = await screen.findByTestId(
       "bug-report-submitted-fallback-text",
     );
-    expectManualFallbackTextRedacted(
+    expectManualFallbackTextComplete(
       fallbackText.textContent ?? "",
       "Crash after generate.",
     );
-    expectManualFallbackTextRedacted(
+    expectManualFallbackTextComplete(
       decodeURIComponent(
         screen.getByText("用默认邮箱发送").getAttribute("href") ?? "",
       ),
@@ -611,13 +628,13 @@ describe("BugReportModal", () => {
 
     fireEvent.click(screen.getByTestId("bug-report-copy-submitted-report"));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-    expectManualFallbackTextRedacted(
+    expectManualFallbackTextComplete(
       String(writeText.mock.calls[0]?.[0]),
       "Crash after generate.",
     );
   });
 
-  it("redacts non-error HTTP status text from the submitted manual fallback", async () => {
+  it("preserves non-error HTTP status text from the submitted manual fallback", async () => {
     vi.mocked(collectBugReportContext).mockReturnValueOnce(createBugReportContext({
       recent_client_logs: [
         {
@@ -650,9 +667,8 @@ describe("BugReportModal", () => {
       "bug-report-submitted-fallback-text",
     );
     const text = fallbackText.textContent ?? "";
-    expect(text).not.toContain("Request failed with status code 302");
-    expect(text).not.toMatch(/\b302\b/);
-    expect(text).toContain("Request failed. Please try again.");
+    expect(text).toContain("Request failed with status code 302");
+    expect(text).toMatch(/\b302\b/);
   });
 
   it("keeps manual fallback actions visible when the upload retry fails", async () => {
@@ -831,7 +847,7 @@ describe("BugReportModal", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
-  it("redacts client log internals from the failed-submit manual fallback", async () => {
+  it("preserves full client diagnostics from the failed-submit manual fallback", async () => {
     const sensitiveContext = createSensitiveBugReportContext();
     const userDescription = "I got Request failed with status code 500 after generate";
     vi.mocked(collectBugReportContext).mockReturnValue(sensitiveContext);
@@ -850,8 +866,8 @@ describe("BugReportModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     const fallbackText = await screen.findByTestId("bug-report-fallback-text");
-    expectManualFallbackTextRedacted(fallbackText.textContent ?? "", userDescription);
-    expectManualFallbackTextRedacted(
+    expectManualFallbackTextComplete(fallbackText.textContent ?? "", userDescription);
+    expectManualFallbackTextComplete(
       decodeURIComponent(
         screen.getByText("用默认邮箱发送").getAttribute("href") ?? "",
       ),
@@ -863,7 +879,7 @@ describe("BugReportModal", () => {
 
     fireEvent.click(screen.getByTestId("bug-report-copy-failed-report"));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-    expectManualFallbackTextRedacted(String(writeText.mock.calls[0]?.[0]), userDescription);
+    expectManualFallbackTextComplete(String(writeText.mock.calls[0]?.[0]), userDescription);
   });
 
   it("copies the failed report payload for manual fallback", async () => {
@@ -915,7 +931,7 @@ describe("BugReportModal", () => {
     expect(submitBugReport).not.toHaveBeenCalled();
   });
 
-  it("truncates overly long descriptions and shows a warning banner", async () => {
+  it("preserves long descriptions", async () => {
     render(<BugReportModal open onClose={() => {}} />);
 
     fireEvent.change(screen.getByLabelText("问题描述"), {
@@ -924,8 +940,8 @@ describe("BugReportModal", () => {
 
     expect(
       (screen.getByLabelText("问题描述") as HTMLTextAreaElement).value,
-    ).toHaveLength(10000);
-    expect(await screen.findByRole("alert")).toHaveTextContent("问题描述已截断到 10000 个字符。");
+    ).toHaveLength(10001);
+    expect(screen.queryByText("问题描述已截断到 10000 个字符。")).toBeNull();
   });
 
   it("expands the collected context disclosure", async () => {
@@ -963,7 +979,7 @@ describe("BugReportModal", () => {
     expect(fullContext).toContain('"url": "/convert/generate"');
   });
 
-  it("redacts client log internals from the expanded context disclosure", async () => {
+  it("preserves full client diagnostics from the expanded context disclosure", async () => {
     vi.mocked(collectBugReportContext).mockReturnValue(
       createSensitiveBugReportContext(),
     );
@@ -975,7 +991,7 @@ describe("BugReportModal", () => {
     await screen.findByText(/"active_tab":\s*"converter"/, undefined, {
       timeout: 1500,
     });
-    expectManualFallbackTextRedacted(
+    expectManualFallbackTextComplete(
       screen.getByTestId("bug-report-context-json").textContent ?? "",
     );
   });

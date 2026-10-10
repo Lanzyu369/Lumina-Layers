@@ -24,6 +24,7 @@ import { clampValue } from "./converter";
 import { uploadImagePreview } from "../api/system";
 import { tRuntime } from "../i18n/runtime";
 import { normalizeResourceUrl } from "../utils/resourceUrl";
+import { rememberDerivedImageSource } from "../utils/sourceFileOrigins";
 
 export const RAW_EXTENSIONS = new Set([
   ".dng",
@@ -487,6 +488,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         const rotatedFile = new File([blob], `${baseName}.png`, {
           type: "image/png",
         });
+        rememberDerivedImageSource(rotatedFile, imageFile);
 
         // Revoke previous blob URL
         if (imagePreviewUrl && imagePreviewUrl.startsWith("blob:")) {

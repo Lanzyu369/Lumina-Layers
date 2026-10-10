@@ -10,10 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ACTION_HISTORY_FLUSH_DEBOUNCE_MS,
-  ACTION_HISTORY_MAX_AGE_MS,
-  ACTION_HISTORY_MAX_ENTRIES,
   ACTION_HISTORY_STORAGE_KEY,
-  SESSION_RING_MAX_ENTRIES,
   useActionHistoryStore,
 } from "../actionHistoryStore";
 import type { WorkflowSnapshot } from "../../types/actionHistory";
@@ -142,7 +139,7 @@ describe("actionHistoryStore", () => {
     expect(typeof history[0].timestamp).toBe("number");
   });
 
-  it("trims history to ACTION_HISTORY_MAX_ENTRIES keeping the newest", () => {
+  it("preserves every action beyond the former count limit", () => {
     useActionHistoryStore
       .getState()
       .setSnapshotReader(() => buildSnapshot());
@@ -154,14 +151,14 @@ describe("actionHistoryStore", () => {
     }
 
     const { history } = useActionHistoryStore.getState();
-    expect(history).toHaveLength(ACTION_HISTORY_MAX_ENTRIES);
+    expect(history).toHaveLength(150);
     // Newest timestamp should be greater than or equal to oldest kept.
     expect(history[history.length - 1].timestamp).toBeGreaterThanOrEqual(
       history[0].timestamp,
     );
   });
 
-  it("drops entries older than ACTION_HISTORY_MAX_AGE_MS", () => {
+  it("preserves actions older than the former time window", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-11T10:00:00Z"));
     useActionHistoryStore
@@ -174,13 +171,13 @@ describe("actionHistoryStore", () => {
     expect(useActionHistoryStore.getState().history).toHaveLength(1);
 
     // Advance 31 minutes — older than the 30-minute window.
-    vi.setSystemTime(new Date(Date.now() + ACTION_HISTORY_MAX_AGE_MS + 60_000));
+    vi.setSystemTime(new Date(Date.now() + 31 * 60_000));
 
     useActionHistoryStore.getState().pushAction({ action_type: "generate" });
 
     const { history } = useActionHistoryStore.getState();
-    expect(history).toHaveLength(1);
-    expect(history[0].action_type).toBe("generate");
+    expect(history).toHaveLength(2);
+    expect(history.map((entry) => entry.action_type)).toEqual(["upload_image", "generate"]);
   });
 
   it("pushAction p95 stays under the SLO target (SLO 1)", () => {
@@ -284,6 +281,7 @@ describe("actionHistoryStore", () => {
     vi.advanceTimersByTime(ACTION_HISTORY_FLUSH_DEBOUNCE_MS + 1);
 
     expect(useActionHistoryStore.getState()._persistDisabled).toBe(true);
+    expect(useActionHistoryStore.getState().history).toHaveLength(1);
     expect(postClientLogMock).toHaveBeenCalled();
     const warnCall = postClientLogMock.mock.calls.find(
       ([, opts]) => opts?.method === "warn",
@@ -316,18 +314,17 @@ describe("actionHistoryStore", () => {
     expect(useActionHistoryStore.getState().history).toHaveLength(1);
   });
 
-  it("observeSession tracks up to SESSION_RING_MAX_ENTRIES and evicts oldest", () => {
+  it("preserves every observed session beyond the former ring limit", () => {
     const store = useActionHistoryStore.getState();
-    for (let i = 0; i < SESSION_RING_MAX_ENTRIES + 1; i += 1) {
+    for (let i = 0; i < 6; i += 1) {
       store.observeSession("converter", `sess-${i}`);
     }
 
     const { sessionRing } = useActionHistoryStore.getState();
-    expect(sessionRing).toHaveLength(SESSION_RING_MAX_ENTRIES);
+    expect(sessionRing).toHaveLength(6);
     const ids = sessionRing.map((e) => e.session_id);
-    // The very first session (oldest by first_seen_at) should be gone.
-    expect(ids).not.toContain("sess-0");
-    expect(ids).toContain(`sess-${SESSION_RING_MAX_ENTRIES}`);
+    expect(ids).toContain("sess-0");
+    expect(ids).toContain("sess-5");
   });
 
   it("observeSession updates last_seen_at on repeat calls for same pair", () => {
@@ -401,6 +398,23 @@ describe("actionHistoryStore", () => {
     const state = useActionHistoryStore.getState();
     expect(state.history).toEqual([]);
     expect(state.sessionRing).toEqual([]);
+  });
+
+  it("preserves distinct actions in the same millisecond across persistence reload", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-10T00:00:00Z"));
+    const store = useActionHistoryStore.getState();
+    store.pushAction({ action_type: "preview", changed_fields: { width: { from: 10, to: 20 } } });
+    store.pushAction({ action_type: "preview", changed_fields: { width: { from: 20, to: 30 } } });
+    store.pushAction({ action_type: "preview", changed_fields: { width: { from: 20, to: 30 } } });
+    vi.advanceTimersByTime(ACTION_HISTORY_FLUSH_DEBOUNCE_MS + 1);
+    store.loadPersistedHistory();
+    store.loadPersistedHistory();
+    expect(useActionHistoryStore.getState().history.map((entry) => entry.changed_fields)).toEqual([
+      { width: { from: 10, to: 20 } },
+      { width: { from: 20, to: 30 } },
+      { width: { from: 20, to: 30 } },
+    ]);
   });
 
   it("loadPersistedHistory handles missing or unexpected shapes silently", () => {

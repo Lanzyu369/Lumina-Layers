@@ -7,9 +7,7 @@ import type {
   FridgeMagnetItem,
 } from "../../api/types";
 import type {
-  AdvancedParams,
   AdvancedParamsFull,
-  AdvancedParamsSizeTrimmed,
 } from "../../types/actionHistory";
 import { buildAdvancedParams } from "../advancedParamsBuilder";
 
@@ -23,10 +21,6 @@ import { buildAdvancedParams } from "../advancedParamsBuilder";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function byteLen(value: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(value)).length;
-}
 
 /**
  * Build a `ConverterState` by merging `overrides` on top of `DEFAULT_STATE`.
@@ -125,45 +119,6 @@ function makeHeavyState(): ConverterState {
   });
 }
 
-/**
- * Manually apply the builder's tier-N transformation to a full snapshot so
- * we can measure intermediate serialized sizes without re-running the
- * builder's search loop. Mirrors `applyTier` in advancedParamsBuilder.ts.
- */
-function applyTiersInOrder(
-  full: AdvancedParamsFull,
-  tiers: number[],
-): AdvancedParamsFull {
-  const next: AdvancedParamsFull = JSON.parse(JSON.stringify(full));
-  for (const tier of tiers) {
-    if (tier === 1) {
-      next.fridge_magnet.fridge_magnets = null;
-    } else if (tier === 2) {
-      next.relief.color_height_map = null;
-    } else if (tier === 3) {
-      next.color_replacement.replacement_regions = null;
-      next.color_replacement.free_color_set = null;
-      next.color_replacement.recipe_overrides = null;
-    } else if (tier === 4) {
-      next.puzzle.puzzleStyle = null;
-      next.puzzle.puzzleSizingMode = null;
-      next.puzzle.pieceWidthMm = null;
-      next.puzzle.pieceHeightMm = null;
-      next.puzzle.puzzleRows = null;
-      next.puzzle.puzzleCols = null;
-      next.puzzle.targetPieceCount = null;
-      next.puzzle.connectorStyle = null;
-      next.puzzle.labelsEnabled = null;
-      next.puzzle.engraveBackLabels = null;
-      next.puzzle.irregularityStrength = null;
-      next.puzzle.minNeckWidthMm = null;
-      next.large_format.tileWidthMm = null;
-      next.large_format.tileHeightMm = null;
-    }
-  }
-  return next;
-}
-
 // ---------------------------------------------------------------------------
 // Active-tab guard
 // ---------------------------------------------------------------------------
@@ -206,6 +161,7 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
 
     expect(result.generation.enable_wipe_tower_auto_placement).toBe(false);
     expect(result.generation.wipe_tower_warning_codes).toEqual([
+      "wipe_tower_manual_adjustment_required",
       "wipe_tower_manual_adjustment_required",
     ]);
   });
@@ -546,8 +502,22 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
 // Length-cap truncation
 // ---------------------------------------------------------------------------
 
-describe("buildAdvancedParams — length cap truncation", () => {
-  it("caps color_height_map at 64 entries and sets color_height_map_truncated", () => {
+describe("buildAdvancedParams — complete generation parameters", () => {
+  it("preserves every generation field even with a tiny former byte budget", () => {
+    const state = makeState({
+      enable_relief: true,
+      color_height_map: makeColorHeightMap(100),
+      enable_fridge_magnet: true,
+      fridge_magnets: Array.from({ length: 25 }, (_, i) => makeFridgeMagnet(i)),
+      replacement_regions: Array.from({ length: 50 }, (_, i) => makeReplacementRegion(i)),
+    });
+    const result = buildAdvancedParams(state, "converter", { maxBytes: 1 }) as AdvancedParamsFull;
+    expect(result.relief.color_height_map).toEqual(state.color_height_map);
+    expect(result.fridge_magnet.fridge_magnets).toHaveLength(25);
+    expect(result.color_replacement.replacement_regions).toHaveLength(50);
+    expect(result).not.toHaveProperty("_size_trimmed");
+  });
+  it("preserves all 100 color height entries", () => {
     const state = makeState({
       enable_relief: true,
       color_height_map: makeColorHeightMap(100),
@@ -557,17 +527,17 @@ describe("buildAdvancedParams — length cap truncation", () => {
     }) as AdvancedParamsFull;
 
     expect(result.relief.color_height_map).not.toBeNull();
-    expect(Object.keys(result.relief.color_height_map!)).toHaveLength(64);
-    expect(result.relief.color_height_map_truncated).toBe(true);
+    expect(Object.keys(result.relief.color_height_map!)).toHaveLength(100);
+    expect(result.relief).not.toHaveProperty("color_height_map_truncated");
 
-    // Preserves insertion order (first 64 keys of the original).
+    // Preserves every key in insertion order.
     const originalKeys = Object.keys(makeColorHeightMap(100));
     expect(Object.keys(result.relief.color_height_map!)).toEqual(
-      originalKeys.slice(0, 64),
+      originalKeys,
     );
   });
 
-  it("caps fridge_magnets at 20 items and sets fridge_magnets_truncated", () => {
+  it("preserves all 25 fridge magnets", () => {
     const state = makeState({
       enable_fridge_magnet: true,
       fridge_magnets: Array.from({ length: 25 }, (_, i) => makeFridgeMagnet(i)),
@@ -577,17 +547,17 @@ describe("buildAdvancedParams — length cap truncation", () => {
     }) as AdvancedParamsFull;
 
     expect(result.fridge_magnet.fridge_magnets).not.toBeNull();
-    expect(result.fridge_magnet.fridge_magnets).toHaveLength(20);
-    expect(result.fridge_magnet.fridge_magnets_truncated).toBe(true);
+    expect(result.fridge_magnet.fridge_magnets).toHaveLength(25);
+    expect(result.fridge_magnet).not.toHaveProperty("fridge_magnets_truncated");
 
-    // First 20 items in insertion order.
+    // Every item remains in insertion order.
     const ids = result.fridge_magnet.fridge_magnets!.map((m) => m.id);
     expect(ids).toEqual(
-      Array.from({ length: 20 }, (_, i) => `fm-${i}`),
+      Array.from({ length: 25 }, (_, i) => `fm-${i}`),
     );
   });
 
-  it("caps replacement_regions at 32 items and sets replacement_regions_truncated", () => {
+  it("preserves all 50 replacement regions", () => {
     const state = makeState({
       replacement_regions: Array.from({ length: 50 }, (_, i) =>
         makeReplacementRegion(i),
@@ -598,11 +568,11 @@ describe("buildAdvancedParams — length cap truncation", () => {
     }) as AdvancedParamsFull;
 
     expect(result.color_replacement.replacement_regions).not.toBeNull();
-    expect(result.color_replacement.replacement_regions).toHaveLength(32);
-    expect(result.color_replacement.replacement_regions_truncated).toBe(true);
+    expect(result.color_replacement.replacement_regions).toHaveLength(50);
+    expect(result.color_replacement).not.toHaveProperty("replacement_regions_truncated");
   });
 
-  it("deduplicates before capping more than 32 unique global sources", () => {
+  it("preserves every unique global source while keeping the live replacement", () => {
     const stored = Array.from({ length: 31 }, (_, i) =>
       makeReplacementRegion(i),
     );
@@ -645,7 +615,7 @@ describe("buildAdvancedParams — length cap truncation", () => {
       .replace(/^#/, "")
       .toLowerCase();
 
-    expect(regions).toHaveLength(32);
+    expect(regions).toHaveLength(33);
     expect(
       regions.filter(
         (item) =>
@@ -660,12 +630,12 @@ describe("buildAdvancedParams — length cap truncation", () => {
       },
     ]);
     expect(regions.some((item) => item.matched_hex === "#aa0001")).toBe(true);
-    expect(regions.some((item) => item.matched_hex === "#aa0002")).toBe(false);
-    expect(result.color_replacement.replacement_regions_truncated).toBe(true);
+    expect(regions.some((item) => item.matched_hex === "#aa0002")).toBe(true);
+    expect(result.color_replacement).not.toHaveProperty("replacement_regions_truncated");
     expect(result.color_replacement.spatial_edit_count).toBe(7);
   });
 
-  it("caps free_color_set at 64 items and sets free_color_set_truncated", () => {
+  it("preserves all 80 free colors", () => {
     const state = makeState({
       free_color_set: new Set(
         Array.from(
@@ -679,12 +649,12 @@ describe("buildAdvancedParams — length cap truncation", () => {
     }) as AdvancedParamsFull;
 
     expect(result.color_replacement.free_color_set).not.toBeNull();
-    expect(result.color_replacement.free_color_set).toHaveLength(64);
+    expect(result.color_replacement.free_color_set).toHaveLength(80);
     expect(result.color_replacement.free_color_set![0]).toBe("#000000");
-    expect(result.color_replacement.free_color_set_truncated).toBe(true);
+    expect(result.color_replacement).not.toHaveProperty("free_color_set_truncated");
   });
 
-  it("caps recipe_overrides at 32 items and sets recipe_overrides_truncated", () => {
+  it("preserves all 40 recipe overrides", () => {
     const state = makeState({
       recipe_overrides: Array.from({ length: 40 }, (_, i) => ({
         region_id: `region-${i}`,
@@ -698,17 +668,17 @@ describe("buildAdvancedParams — length cap truncation", () => {
     }) as AdvancedParamsFull;
 
     expect(result.color_replacement.recipe_overrides).not.toBeNull();
-    expect(result.color_replacement.recipe_overrides).toHaveLength(32);
+    expect(result.color_replacement.recipe_overrides).toHaveLength(40);
     expect(result.color_replacement.recipe_overrides![0]).toEqual({
       region_id: "region-0",
       recipe: [0, 1, 2, 4],
       layer_order: "Top2Bottom",
       virtual_materials: [{ name: "Virtual 0", hex: "#101010" }],
     });
-    expect(result.color_replacement.recipe_overrides_truncated).toBe(true);
+    expect(result.color_replacement).not.toHaveProperty("recipe_overrides_truncated");
   });
 
-  it("does not set truncation flags when collections are at or under the caps", () => {
+  it("never sets truncation flags", () => {
     const state = makeState({
       enable_relief: true,
       color_height_map: makeColorHeightMap(64),
@@ -824,108 +794,15 @@ describe("buildAdvancedParams — heightmap file and thumbnail", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Tiered size trimming
-// ---------------------------------------------------------------------------
-
-describe("buildAdvancedParams — tiered size trimming", () => {
-  it("does not mark _size_trimmed when the full object fits within maxBytes", () => {
-    const state = makeState();
-    const result = buildAdvancedParams(state, "converter", {
-      maxBytes: 8192,
-    }) as AdvancedParamsFull;
-    expect(result).not.toHaveProperty("_size_trimmed");
-    expect(result).not.toHaveProperty("_dropped_tiers");
-  });
-
-  it("fires tiers 1 → 2 → 3 → 4 in order as maxBytes decreases", () => {
+describe("buildAdvancedParams — complete snapshots", () => {
+  it("retains every heavy parameter regardless of the legacy byte option", () => {
     const state = makeHeavyState();
-    const full = buildAdvancedParams(state, "converter", {
-      maxBytes: 1_000_000,
-    }) as AdvancedParamsFull;
-
-    // Simulate what the builder's candidate objects look like after each
-    // tier, including the `_size_trimmed` / `_dropped_tiers` bookkeeping
-    // flags. These are the exact byte budgets below which each tier must
-    // fire, so using them as `maxBytes` gives a deterministic selection.
-    // 模拟构建器每一层裁剪后的候选对象（含标记字段），以其精确字节数作为
-    // 预算，确保每层触发是确定性的、不依赖手工估算的 flag 开销。
-    const candidateBytes = (tiers: number[]): number => {
-      const obj = applyTiersInOrder(full, tiers) as AdvancedParamsFull;
-      obj._size_trimmed = true;
-      obj._dropped_tiers = tiers;
-      return byteLen(obj);
-    };
-
-    const r1Bytes = candidateBytes([1]);
-    const r2Bytes = candidateBytes([1, 2]);
-    const r3Bytes = candidateBytes([1, 2, 3]);
-    const r4Bytes = candidateBytes([1, 2, 3, 4]);
-
-    // Sanity: each tier must actually shrink the candidate by at least one
-    // byte so the next tier is reachable. Tier 4 drops only a handful of
-    // puzzle/large_format scalars, so expect a small but non-zero delta.
-    expect(byteLen(full)).toBeGreaterThan(r1Bytes);
-    expect(r1Bytes).toBeGreaterThan(r2Bytes);
-    expect(r2Bytes).toBeGreaterThan(r3Bytes);
-    expect(r3Bytes).toBeGreaterThan(r4Bytes);
-
-    // Pick maxBytes = exact candidate size: the n-th candidate fits by `<=`,
-    // the (n-1)-th does not. This selects tier n precisely.
-    const r1 = buildAdvancedParams(state, "converter", {
-      maxBytes: r1Bytes,
-    }) as AdvancedParamsFull;
-    const r2 = buildAdvancedParams(state, "converter", {
-      maxBytes: r2Bytes,
-    }) as AdvancedParamsFull;
-    const r3 = buildAdvancedParams(state, "converter", {
-      maxBytes: r3Bytes,
-    }) as AdvancedParamsFull;
-    const r4 = buildAdvancedParams(state, "converter", {
-      maxBytes: r4Bytes,
-    }) as AdvancedParamsFull;
-
-    expect(r1._size_trimmed).toBe(true);
-    expect(r1._dropped_tiers).toEqual([1]);
-    expect(byteLen(r1)).toBeLessThanOrEqual(r1Bytes);
-
-    expect(r2._dropped_tiers).toEqual([1, 2]);
-    expect(byteLen(r2)).toBeLessThanOrEqual(r2Bytes);
-
-    expect(r3._dropped_tiers).toEqual([1, 2, 3]);
-    expect(r3.color_replacement.spatial_edit_count).toBe(9);
-    expect(byteLen(r3)).toBeLessThanOrEqual(r3Bytes);
-
-    expect(r4._dropped_tiers).toEqual([1, 2, 3, 4]);
-    expect(byteLen(r4)).toBeLessThanOrEqual(r4Bytes);
-  });
-
-  it("returns AdvancedParamsSizeTrimmed fallback when every tier still overflows", () => {
-    const state = makeHeavyState();
-
-    // 200 bytes is far below the fully-stripped base object yet generous
-    // enough to hold the ~60-byte fallback. Guarantees tier-4 + flags still
-    // overflow and the fallback path executes.
-    const result = buildAdvancedParams(state, "converter", {
-      maxBytes: 200,
-    }) as AdvancedParamsSizeTrimmed;
-
-    expect(result).toEqual({
-      _size_trimmed: true,
-      _original_byte_length: expect.any(Number),
-    });
-
-    // Pre-trim length must be the untrimmed full object's UTF-8 byte count.
-    const full = buildAdvancedParams(state, "converter", {
-      maxBytes: 1_000_000,
-    });
-    expect(result._original_byte_length).toBe(byteLen(full));
-
-    // Fallback may exceed the tiny maxBytes (the minimal shape is ~80 bytes
-    // and is the lowest the builder will ever emit). That is acceptable
-    // because the fallback is the defined "cannot fit" state.
-    // No _dropped_tiers on the fallback shape.
-    expect(result).not.toHaveProperty("_dropped_tiers");
+    const full = buildAdvancedParams(state, "converter", { maxBytes: 1_000_000 });
+    for (const maxBytes of [1, 200, 4096, 8192]) {
+      expect(buildAdvancedParams(state, "converter", { maxBytes })).toEqual(full);
+    }
+    expect(full).not.toHaveProperty("_size_trimmed");
+    expect(full).not.toHaveProperty("_dropped_tiers");
   });
 });
 
@@ -945,67 +822,6 @@ describe("buildAdvancedParams — determinism", () => {
     const tA = buildAdvancedParams(state, "converter", { maxBytes: 4096 });
     const tB = buildAdvancedParams(state, "converter", { maxBytes: 4096 });
     expect(JSON.stringify(tA)).toBe(JSON.stringify(tB));
-  });
-});
-
-// ---------------------------------------------------------------------------
-// maxBytes 4096 vs 8192
-// ---------------------------------------------------------------------------
-
-describe("buildAdvancedParams — maxBytes 4096 vs 8192", () => {
-  it("produces identical output for both budgets when the state fits in 4096 bytes", () => {
-    // Light state — default + nothing heavy. Serialized size is well under 4096.
-    const state = makeState();
-
-    const at4k = buildAdvancedParams(state, "converter", { maxBytes: 4096 });
-    const at8k = buildAdvancedParams(state, "converter", { maxBytes: 8192 });
-
-    expect(byteLen(at4k)).toBeLessThanOrEqual(4096);
-    expect(JSON.stringify(at4k)).toBe(JSON.stringify(at8k));
-    // Neither budget needed trimming.
-    expect(at4k).not.toHaveProperty("_size_trimmed");
-    expect(at8k).not.toHaveProperty("_size_trimmed");
-  });
-
-  it("diverges only when state exceeds 4096 bytes but fits within 8192", () => {
-    // Build a state whose normalized serialized size sits in the 4k-8k window.
-    // Heavy fridge magnets + moderate replacement regions + modest height map
-    // yields roughly 5-6 KB.
-    const state = makeState({
-      enable_fridge_magnet: true,
-      fridge_magnets: Array.from({ length: 20 }, (_, i) => makeFridgeMagnet(i)),
-      selectedFridgeMagnetId: "fm-0",
-      enable_relief: true,
-      color_height_map: makeColorHeightMap(32),
-      replacement_regions: Array.from({ length: 16 }, (_, i) =>
-        makeReplacementRegion(i),
-      ),
-    });
-
-    const full = buildAdvancedParams(state, "converter", {
-      maxBytes: 1_000_000,
-    }) as AdvancedParamsFull;
-    const fullSize = byteLen(full);
-
-    // Precondition check — if this fires, adjust the moderate state above.
-    expect(fullSize).toBeGreaterThan(4096);
-    expect(fullSize).toBeLessThanOrEqual(8192);
-
-    const at4k = buildAdvancedParams(state, "converter", {
-      maxBytes: 4096,
-    }) as AdvancedParams;
-    const at8k = buildAdvancedParams(state, "converter", {
-      maxBytes: 8192,
-    }) as AdvancedParamsFull;
-
-    // 8192 fits the full object → no trim flags.
-    expect(at8k).not.toHaveProperty("_size_trimmed");
-    expect(byteLen(at8k)).toBeLessThanOrEqual(8192);
-
-    // 4096 trims → differs from the 8192 output.
-    expect((at4k as Partial<AdvancedParamsFull>)._size_trimmed).toBe(true);
-    expect(byteLen(at4k)).toBeLessThanOrEqual(4096);
-    expect(JSON.stringify(at4k)).not.toBe(JSON.stringify(at8k));
   });
 });
 
@@ -1275,31 +1091,14 @@ describe("Property P1: shared builder determinism (Validates: Requirements 2.7)"
   });
 });
 
-// ---------------------------------------------------------------------------
-// P4: Size limit enforcement
-// ---------------------------------------------------------------------------
-
-describe("Property P4: size limit enforcement (Validates: Requirements 9.1-9.5)", () => {
-  it("serialized length does not exceed maxBytes when the result is non-null", () => {
-    // maxBytes is drawn from realistic values (4096 / 8192) + the
-    // broader [1024, 65536] sweep. 1024 is comfortably above the
-    // AdvancedParamsSizeTrimmed fallback (~80 bytes), so every non-null
-    // result — full, tier-trimmed, or fallback — must respect the budget.
+describe("Property P4: preserve the complete snapshot", () => {
+  it("retains the same complete data for every legacy byte budget", () => {
     fc.assert(
-      fc.property(
-        arbConverterState,
-        fc.oneof(
-          fc.constantFrom(4096, 8192),
-          fc.integer({ min: 1024, max: 65536 }),
-        ),
-        (state, maxBytes) => {
-          const result = buildAdvancedParams(state, "converter", {
-            maxBytes,
-          });
-          if (result === null) return;
-          expect(byteLen(result)).toBeLessThanOrEqual(maxBytes);
-        },
-      ),
+      fc.property(arbConverterState, arbMaxBytes, (state, maxBytes) => {
+        const result = buildAdvancedParams(state, "converter", { maxBytes });
+        expect(result).toEqual(buildAdvancedParams(state, "converter", { maxBytes: Number.POSITIVE_INFINITY }));
+        expect(result).not.toHaveProperty("_size_trimmed");
+      }),
       { numRuns: 100 },
     );
   });

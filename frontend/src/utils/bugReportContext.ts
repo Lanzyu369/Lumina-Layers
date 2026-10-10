@@ -11,22 +11,35 @@ import {
 } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useSingleStageStore } from "../stores/singleStageStore";
+import { useExtractorStore } from "../stores/extractorStore";
+import { useCalibrationStore } from "../stores/calibrationStore";
+import { useVectorizerStore } from "../stores/vectorizerStore";
+import { useFiveColorStore } from "../stores/fiveColorStore";
+import { useLutManagerStore } from "../stores/lutManagerStore";
+import { useLutCompareStore } from "../stores/lutCompareStore";
+import { useLutDetailsStore } from "../stores/lutDetailsStore";
+import { useSlicerStore } from "../stores/slicerStore";
+import { useEyedropperStore } from "../stores/eyedropperStore";
+import { useAboutStore } from "../stores/aboutStore";
+import { useTutorialStore } from "../stores/tutorialStore";
+import { useErrorTicketPromptStore } from "../stores/errorTicketPromptStore";
 import { useWidgetStore } from "../stores/widgetStore";
 import { useWorkshopStore } from "../workshop/store";
 import { buildAdvancedParams } from "./advancedParamsBuilder";
-import { getRecentClientLogs } from "./clientLog";
+import { getRecentClientLogs, serializeDiagnosticValue } from "./clientLog";
 import { resolveVectorPreviewRenderer } from "./vectorPreviewRenderer";
+import { getFeedbackSources, resolveSourceFile } from "./sourceFileOrigins";
 
 declare const __LUMINA_VERSION__: string | undefined;
 
 /**
  * Best-effort shape of the converter generation artifact. The converter
  * store tracks ``downloadUrl`` (typically ``/api/files/<file_id>``) after a
- * successful ``convertGenerate``. Bug reports intentionally do not include
- * local/server disk paths; the backend resolves files through FileRegistry.
+ * successful ``convertGenerate``. The backend resolves this attachment
+ * through FileRegistry; paths in the full state are diagnostic metadata.
  *
  * 最近一次生成的产物引用：converter store 在生成成功后写入 downloadUrl。
- * Bug 报告不携带本机/服务器磁盘路径；后端通过 FileRegistry 解析文件。
+ * 后端通过 FileRegistry 解析附件；完整状态中的磁盘路径仅作为诊断信息。
  */
 function deriveFinalArtifact(isConverterActive: boolean): FinalArtifactRef | null {
   if (!isConverterActive) {
@@ -101,6 +114,26 @@ export function collectBugReportOriginalImage(): File | null {
     return null;
   }
   return resolveBugReportOriginalImageFile(converter.imageFile);
+}
+
+/** Collect every source still held by the workflow stores, before session cleanup.
+ * 在会话清理前收集工作流保留的全部源文件。
+ */
+export function collectBugReportSourceFiles(): File[] {
+  const converter = useConverterStore.getState();
+  const singleStage = useSingleStageStore.getState();
+  const files = [
+    ...getFeedbackSources(), converter.imageFile, converter.modelSurfaceFile,
+    converter.heightmapFile, ...converter.batchFiles,
+    singleStage.datasetFile, singleStage.whiteImageFile, singleStage.blackImageFile,
+    useExtractorStore.getState().imageFile, useVectorizerStore.getState().imageFile,
+  ];
+  const available = files.filter((file): file is File => file instanceof File);
+  return [...new Set(available.flatMap((file) => [resolveSourceFile(file)!, file]))];
+}
+
+function captureWorkflowState(state: object): unknown {
+  return serializeDiagnosticValue(Object.fromEntries(Object.entries(state).filter(([, value]) => typeof value !== "function")));
 }
 
 function deriveWorkshopContext(
@@ -197,6 +230,7 @@ export function collectBugReportContext(): BugReportContextPayload {
     active_session_ids: {
       converter: converter.sessionId ?? null,
       single_stage: singleStage.sessionId ?? null,
+      extractor: useExtractorStore.getState().session_id ?? null,
     },
     printer_id: settings.printerModel,
     slicer: settings.slicerSoftware,
@@ -244,11 +278,44 @@ export function collectBugReportContext(): BugReportContextPayload {
     ),
     active_final_artifact_ref: deriveFinalArtifact(isConverterActive),
     advanced_params: buildAdvancedParams(converter, widget.activeTab, {
-      maxBytes: 8192,
+      maxBytes: Number.POSITIVE_INFINITY,
       svgPixelsPerMm: settings.svgPixelsPerMm,
       materialDeltaE00Tolerance: settings.materialDeltaE00Tolerance,
       enableWipeTowerAutoPlacement: settings.enableWipeTowerAutoPlacement,
     }),
     workshop: deriveWorkshopContext(isWorkshopActive),
+    source_file_ids: [...new Set([
+      converter.modelSurfaceModelFileId,
+      useExtractorStore.getState().calibratedFullFileId,
+      useExtractorStore.getState().previousCalibratedFullFileId,
+      singleStage.whiteColorcheckerFileId, singleStage.blackColorcheckerFileId,
+      singleStage.pendingColorcheckerFileId,
+    ].filter((value): value is string => typeof value === "string" && value.length > 0))],
+    source_lut_names: [...new Set([
+      converter.lut_name, ...converter.lut_names, settings.lastLutName,
+      useFiveColorStore.getState().lutName,
+      useLutManagerStore.getState().primaryName, ...useLutManagerStore.getState().secondaryNames,
+      useLutCompareStore.getState().lutAName, useLutCompareStore.getState().lutBName,
+      useLutDetailsStore.getState().selectedLutName, useLutDetailsStore.getState().loadedLutName,
+    ].filter((value) => value.length > 0))],
+    source_material_dir_names: [...new Set([
+      ...converter.selectedMaterialDirNames, converter.materialBackingMaterialDirName,
+    ].filter((value): value is string => typeof value === "string" && value.length > 0))],
+    workflow_state: {
+      converter: captureWorkflowState(converter), single_stage: captureWorkflowState(singleStage),
+      settings: captureWorkflowState(settings), extractor: captureWorkflowState(useExtractorStore.getState()),
+      calibration: captureWorkflowState(useCalibrationStore.getState()), vectorizer: captureWorkflowState(useVectorizerStore.getState()),
+      workshop: captureWorkflowState(useWorkshopStore.getState()),
+      five_color: captureWorkflowState(useFiveColorStore.getState()),
+      lut_manager: captureWorkflowState(useLutManagerStore.getState()),
+      lut_compare: captureWorkflowState(useLutCompareStore.getState()),
+      lut_details: captureWorkflowState(useLutDetailsStore.getState()),
+      slicer: captureWorkflowState(useSlicerStore.getState()),
+      widget: captureWorkflowState(widget),
+      eyedropper: captureWorkflowState(useEyedropperStore.getState()),
+      about: captureWorkflowState(useAboutStore.getState()),
+      tutorial: captureWorkflowState(useTutorialStore.getState()),
+      error_prompt: captureWorkflowState(useErrorTicketPromptStore.getState()),
+    },
   };
 }

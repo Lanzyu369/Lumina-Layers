@@ -1,3 +1,5 @@
+import { installFeedbackSourceCapture } from "./sourceFileOrigins";
+
 export interface ClientLogOptions {
   startTime?: number | null;
   elapsedMs?: number | null;
@@ -24,30 +26,8 @@ export interface ClientLogEntry {
   details?: unknown;
 }
 
-const CLIENT_LOG_BUFFER_LIMIT = 500;
-const CLIENT_LOG_EXPORT_LIMIT = 500;
+const CLIENT_LOG_EXPORT_LIMIT = Number.POSITIVE_INFINITY;
 const CLIENT_LOG_RELAY_FAILURE_BACKOFF_MS = 10_000;
-const CLIENT_LOG_MAX_DEPTH = 4;
-const CLIENT_LOG_MAX_ARRAY_ITEMS = 20;
-const CLIENT_LOG_MAX_OBJECT_KEYS = 24;
-const CLIENT_LOG_MAX_STRING_LENGTH = 1200;
-const CLIENT_LOG_REDACTED_LOCAL_PATH = "<redacted:local-path>";
-const CLIENT_LOG_SENSITIVE_PATH_KEYS = new Set([
-  "absolutepath",
-  "diskpath",
-  "filepath",
-  "inputpath",
-  "localpath",
-  "modelpath",
-  "outputpath",
-  "previewpath",
-  "sourcepath",
-  "targetpath",
-  "threemfdiskpath",
-]);
-const CLIENT_LOG_WINDOWS_LOCAL_PATH_PATTERN = /\b[A-Za-z]:[\\/][^\s"'<>),:;]*/g;
-const CLIENT_LOG_POSIX_LOCAL_PATH_PATTERN =
-  /(^|[^A-Za-z0-9._~%-])(\/(?:Users|private|tmp|var|Volumes|home|opt|mnt|workspace|workspaces|app|data|output)(?:\/[^\s"'<>),:;]*)?)(?=$|[\s"'<>),:;])/g;
 
 /**
  * Session-storage key backing the optional persistence layer for the
@@ -109,7 +89,7 @@ function _shouldSkipForDedupe(key: string, dedupeMs?: number): boolean {
   return false;
 }
 
-function truncateString(value: string, limit: number = CLIENT_LOG_MAX_STRING_LENGTH): string {
+function truncateString(value: string, limit: number = 240): string {
   if (value.length <= limit) {
     return value;
   }
@@ -192,118 +172,34 @@ function buildClientLogConsoleSummary(details: unknown): string | null {
   return parts.length > 0 ? parts.join(" - ") : null;
 }
 
-function normalizeClientLogKey(key: string): string {
-  return key.replace(/[\s_-]/g, "").toLowerCase();
-}
-
-function isSensitiveClientPathKey(key: string | null | undefined): boolean {
-  return key != null && CLIENT_LOG_SENSITIVE_PATH_KEYS.has(normalizeClientLogKey(key));
-}
-
-function redactClientLogLocalPathFragments(value: string): string {
-  return value
-    .replace(CLIENT_LOG_WINDOWS_LOCAL_PATH_PATTERN, CLIENT_LOG_REDACTED_LOCAL_PATH)
-    .replace(CLIENT_LOG_POSIX_LOCAL_PATH_PATTERN, (_match, prefix: string) => (
-      `${prefix}${CLIENT_LOG_REDACTED_LOCAL_PATH}`
-    ));
-}
-
-function redactSensitiveClientPathValue(value: unknown): unknown {
-  if (value == null || typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string" && value.length === 0) {
-    return value;
-  }
-  return CLIENT_LOG_REDACTED_LOCAL_PATH;
-}
-
-function sanitizeClientLogValue(
-  value: unknown,
-  depth: number = 0,
-  seen: WeakSet<object> = new WeakSet(),
-  key?: string,
-): unknown {
-  if (value == null || typeof value === "boolean") {
-    return value;
-  }
-  if (isSensitiveClientPathKey(key)) {
-    return redactSensitiveClientPathValue(value);
-  }
-  if (typeof value === "string") {
-    return truncateString(redactClientLogLocalPathFragments(value));
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : String(value);
-  }
-  if (typeof value === "bigint") {
-    return value.toString();
-  }
-  if (typeof value === "symbol") {
-    return value.toString();
-  }
-  if (typeof value === "function") {
-    return `[function ${value.name || "anonymous"}]`;
-  }
-  if (value instanceof Error) {
-    return sanitizeClientLogValue(summarizeErrorForLog(value), depth + 1, seen);
-  }
-  if (value instanceof Date) {
-    return value.toISOString();
-  }
-  if (typeof File !== "undefined" && value instanceof File) {
-    return summarizeFileForLog(value);
-  }
-  if (typeof Blob !== "undefined" && value instanceof Blob) {
-    return {
-      type: value.type || null,
-      size_bytes: value.size,
-      size_mb: roundNumber(value.size / (1024 * 1024)),
-    };
-  }
-  if (depth >= CLIENT_LOG_MAX_DEPTH) {
-    return "<truncated:depth>";
-  }
-  if (typeof value !== "object") {
-    return String(value);
-  }
-  if (seen.has(value)) {
-    return "<circular>";
-  }
+/** Serialize diagnostics without removing paths, stacks, or data.
+ * 序列化完整诊断内容，不删除路径、堆栈或数据。
+ */
+export function serializeDiagnosticValue(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value == null || typeof value === "boolean" || typeof value === "string") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : String(value);
+  if (typeof value !== "object") return String(value);
+  if (value instanceof Date) return value.toISOString();
+  if (typeof File !== "undefined" && value instanceof File) return summarizeFileForLog(value);
+  if (typeof Blob !== "undefined" && value instanceof Blob) return { type: value.type, size_bytes: value.size };
+  if (seen.has(value)) return "<circular>";
   seen.add(value);
-
-  if (Array.isArray(value)) {
-    const items = value
-      .slice(0, CLIENT_LOG_MAX_ARRAY_ITEMS)
-      .map((item) => sanitizeClientLogValue(item, depth + 1, seen));
-    if (value.length > CLIENT_LOG_MAX_ARRAY_ITEMS) {
-      items.push(`<truncated:${value.length - CLIENT_LOG_MAX_ARRAY_ITEMS}>`);
-    }
-    return items;
+  try {
+    if (value instanceof Error) return serializeDiagnosticValue({
+      ...value, ...summarizeErrorForLog(value), ...(value.cause === undefined ? {} : { cause: value.cause }),
+    }, seen);
+    if (value instanceof Map) return serializeDiagnosticValue(Object.fromEntries(value), seen);
+    if (value instanceof Set) return serializeDiagnosticValue([...value], seen);
+    if (ArrayBuffer.isView(value)) return serializeDiagnosticValue(Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)), seen);
+    if (Array.isArray(value)) return value.map((item) => serializeDiagnosticValue(item, seen));
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, serializeDiagnosticValue(item, seen)]));
+  } finally {
+    seen.delete(value);
   }
-
-  const entries = Object.entries(value as Record<string, unknown>);
-  const sanitized: Record<string, unknown> = {};
-  for (const [rawKey, rawValue] of entries.slice(0, CLIENT_LOG_MAX_OBJECT_KEYS)) {
-    const sanitizedKey = truncateString(redactClientLogLocalPathFragments(rawKey), 120);
-    sanitized[sanitizedKey] = sanitizeClientLogValue(
-      rawValue,
-      depth + 1,
-      seen,
-      rawKey,
-    );
-  }
-  if (entries.length > CLIENT_LOG_MAX_OBJECT_KEYS) {
-    sanitized.__truncated_keys = entries.length - CLIENT_LOG_MAX_OBJECT_KEYS;
-  }
-  return sanitized;
 }
 
 function pushRecentClientLog(entry: ClientLogEntry): void {
   _recentClientLogs.push(entry);
-  if (_recentClientLogs.length > CLIENT_LOG_BUFFER_LIMIT) {
-    _recentClientLogs.splice(0, _recentClientLogs.length - CLIENT_LOG_BUFFER_LIMIT);
-  }
   _pendingFlushCount += 1;
   if (_pendingFlushCount >= CLIENT_LOG_FLUSH_PUSH_THRESHOLD) {
     // Threshold breach: flush immediately instead of waiting for the timer.
@@ -391,47 +287,33 @@ function _flushToSessionStorage(): void {
     }
   }
 
-  // Quota exhaustion: drop the oldest half and retry once. If retry still
-  // fails, give up on persistence for the rest of the session so we never
-  // spin on a doomed write.
-  // 配额不足：丢弃最老的一半再试一次；仍失败则停用持久化。
-  const halfIdx = Math.floor(_recentClientLogs.length / 2);
-  if (halfIdx > 0) {
-    _recentClientLogs.splice(0, halfIdx);
-  }
-  try {
-    storage.setItem(
-      CLIENT_LOG_SESSION_STORAGE_KEY,
-      JSON.stringify(_recentClientLogs),
-    );
-  } catch {
-    _sessionStorageDisabled = true;
-  }
+  // Keep the complete in-memory report if browser storage is full.
+  _sessionStorageDisabled = true;
 }
 
-function sanitizeClientLogEntry(entry: Partial<ClientLogEntry>): ClientLogEntry {
+function serializeClientLogEntry(entry: Partial<ClientLogEntry>): ClientLogEntry {
   const method = entry.method === "warn" || entry.method === "error"
     ? entry.method
     : "log";
   const elapsedMs = typeof entry.elapsed_ms === "number" && Number.isFinite(entry.elapsed_ms)
     ? roundNumber(entry.elapsed_ms, 2)
     : null;
-  const sanitized: ClientLogEntry = {
+  const serialized: ClientLogEntry = {
     timestamp: entry.timestamp ?? new Date().toISOString(),
     method,
-    label: truncateString(entry.label ?? "", 256),
+    label: entry.label ?? "",
     elapsed_ms: elapsedMs,
   };
   if (typeof entry.scope === "string") {
-    sanitized.scope = truncateString(entry.scope, 80);
+    serialized.scope = entry.scope;
   }
   if (typeof entry.phase === "string") {
-    sanitized.phase = truncateString(entry.phase, 120);
+    serialized.phase = entry.phase;
   }
   if (entry.details != null) {
-    sanitized.details = sanitizeClientLogValue(entry.details);
+    serialized.details = serializeDiagnosticValue(entry.details);
   }
-  return sanitized;
+  return serialized;
 }
 
 /**
@@ -462,31 +344,32 @@ export function loadPersistedLogs(): void {
   }
   if (!Array.isArray(parsed)) return;
 
-  // Merge persisted + live, dedupe by (timestamp, label, scope, phase),
-  // sort ascending by timestamp, cap to the buffer limit.
-  // 合并持久化 + 内存；按 (timestamp, label, scope, phase) 去重后按时间
-  // 升序排序，最后裁剪到容量上限。
-  const merged = new Map<string, ClientLogEntry>();
-  for (const candidate of [...(parsed as unknown[]), ..._recentClientLogs]) {
+  // Preserve every persisted occurrence; avoid replaying matching live entries.
+  const merged: ClientLogEntry[] = [];
+  const persistedCounts = new Map<string, number>();
+  const liveCounts = new Map<string, number>();
+  for (const candidate of parsed as unknown[]) {
     if (!candidate || typeof candidate !== "object") continue;
     const entry = candidate as Partial<ClientLogEntry>;
     if (typeof entry.timestamp !== "string" || typeof entry.label !== "string") {
       continue;
     }
-    const sanitizedEntry = sanitizeClientLogEntry(entry);
-    const scope = sanitizedEntry.scope ?? "";
-    const phase = sanitizedEntry.phase ?? "";
-    const key = `${sanitizedEntry.timestamp}|${sanitizedEntry.label}|${scope}|${phase}`;
-    merged.set(key, sanitizedEntry);
+    const serialized = serializeClientLogEntry(entry);
+    const key = JSON.stringify(serialized);
+    persistedCounts.set(key, (persistedCounts.get(key) ?? 0) + 1);
+    merged.push(serialized);
   }
-  const sorted = [...merged.values()].sort((a, b) =>
+  for (const entry of _recentClientLogs) {
+    const key = JSON.stringify(entry);
+    const count = (liveCounts.get(key) ?? 0) + 1;
+    liveCounts.set(key, count);
+    if (count > (persistedCounts.get(key) ?? 0)) merged.push(entry);
+  }
+  merged.sort((a, b) =>
     a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0,
   );
-  const capped = sorted.length > CLIENT_LOG_BUFFER_LIMIT
-    ? sorted.slice(sorted.length - CLIENT_LOG_BUFFER_LIMIT)
-    : sorted;
   _recentClientLogs.length = 0;
-  _recentClientLogs.push(...capped);
+  for (const entry of merged) _recentClientLogs.push(entry);
 }
 
 export function resolveClientElapsedMs(startTime?: number | null): number | null {
@@ -564,37 +447,36 @@ export function postClientLog(
   options: ClientLogOptions = {},
 ): void {
   const dedupeKey = `${options.scope ?? ""}:${options.phase ?? label}`;
-  if (_shouldSkipForDedupe(dedupeKey, options.dedupeMs)) {
-    return;
-  }
+  const skipRelay = _shouldSkipForDedupe(dedupeKey, options.dedupeMs);
 
   const elapsedMs = options.elapsedMs ?? resolveClientElapsedMs(options.startTime);
-  const sanitizedDetails =
+  const serializedDetails =
     options.details != null && Object.keys(options.details).length > 0
-      ? sanitizeClientLogValue(options.details)
+      ? serializeDiagnosticValue(options.details)
       : undefined;
   const entry: ClientLogEntry = {
     timestamp: new Date().toISOString(),
     method: options.method ?? "log",
-    label: truncateString(label, 256),
+    label: label,
     elapsed_ms: elapsedMs == null ? null : roundNumber(elapsedMs, 2),
   };
 
   if (options.scope) {
-    entry.scope = truncateString(options.scope, 80);
+    entry.scope = options.scope;
   }
   if (options.phase) {
-    entry.phase = truncateString(options.phase, 120);
+    entry.phase = options.phase;
   }
-  if (sanitizedDetails != null) {
-    entry.details = sanitizedDetails;
+  if (serializedDetails != null) {
+    entry.details = serializedDetails;
   }
   pushRecentClientLog(entry);
+  if (skipRelay) return;
 
   const message = elapsedMs != null
     ? `${label} (+${elapsedMs.toFixed(0)}ms)`
     : label;
-  const consoleSummary = buildClientLogConsoleSummary(sanitizedDetails);
+  const consoleSummary = buildClientLogConsoleSummary(serializedDetails);
   const consoleMessage = consoleSummary == null
     ? message
     : `${message} - ${consoleSummary}`;
@@ -668,6 +550,7 @@ export function installGlobalClientLogCapture(): () => void {
       dedupeMs: 500,
       details: {
         ...summarizeErrorForLog(event.error ?? event.message),
+        error: event.error ?? event.message,
         filename: event.filename || null,
         lineno: event.lineno || null,
         colno: event.colno || null,
@@ -683,15 +566,18 @@ export function installGlobalClientLogCapture(): () => void {
       dedupeMs: 500,
       details: {
         ...summarizeErrorForLog(event.reason),
+        reason: event.reason,
       },
     });
   };
 
+  const stopSourceCapture = installFeedbackSourceCapture();
   window.addEventListener("error", handleError);
   window.addEventListener("unhandledrejection", handleUnhandledRejection);
   _globalCaptureInstalled = true;
 
   return () => {
+    stopSourceCapture();
     window.removeEventListener("error", handleError);
     window.removeEventListener("unhandledrejection", handleUnhandledRejection);
     _globalCaptureInstalled = false;

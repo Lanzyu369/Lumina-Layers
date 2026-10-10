@@ -160,6 +160,8 @@ def _format_attachments_table(attachments: Any) -> str:
         "lut",
         "materials_bundle",
         "screenshot",
+        "session_data",
+        "backend_logs",
     )
     for kind in known:
         entry = attachments.get(kind) if isinstance(attachments, dict) else None
@@ -194,6 +196,12 @@ def _format_attachments_table(attachments: Any) -> str:
         detail = ", ".join(detail_parts) if detail_parts else _MISSING
         lines.append(
             f"| {kind} | {status} | {filename} | {_safe_str(size)} | {detail} |"
+        )
+    for entry in attachments.get("source_files") or []:
+        lines.append(
+            f"| source_file | {_safe_str(entry.get('status'))} | "
+            f"{_safe_str(entry.get('filename'))} | {_safe_str(entry.get('size_bytes'))} | "
+            f"{_safe_str(entry.get('original_filename'))} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -731,7 +739,7 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
 
     attachments = payload.get("attachments") or {}
     attachment_lines: list[str] = []
-    for kind in ("original_image", "final_artifact", "lut", "materials_bundle"):
+    for kind in ("original_image", "final_artifact", "lut", "materials_bundle", "session_data", "backend_logs"):
         entry = attachments.get(kind)
         if not isinstance(entry, dict):
             continue
@@ -743,6 +751,11 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
             direct_status = entry.get("direct_upload_status") or "(未知)"
             detail = f"（来源={capture_source}，直接上传={direct_status}）"
         attachment_lines.append(f"- {kind}: {status} → {filename}{detail}")
+    for entry in attachments.get("source_files") or []:
+        attachment_lines.append(
+            f"- source_file: {entry.get('status')} → {entry.get('filename')} "
+            f"（原名={entry.get('original_filename')}）"
+        )
 
     material_block = ""
     if source_version == "material":

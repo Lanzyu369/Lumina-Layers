@@ -95,5 +95,5 @@ def test_rejected_payloads_do_not_emit_feedback_canary(
 
     response = client.post("/api/feedback/bug-report", json=payload)
 
-    assert response.status_code in {413, 422}
+    assert response.status_code in {400, 422}
     assert _records_for_event(caplog, "feedback_bug_report_submitted") == []

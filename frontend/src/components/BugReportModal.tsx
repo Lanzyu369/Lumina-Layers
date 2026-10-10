@@ -10,6 +10,7 @@ import { useI18n } from "../i18n/context";
 import {
   collectBugReportContext,
   collectBugReportOriginalImage,
+  collectBugReportSourceFiles,
 } from "../utils/bugReportContext";
 import { loadPersistedLogs } from "../utils/clientLog";
 import { isUnsafeVisibleErrorText } from "../utils/visibleErrorText";
@@ -17,8 +18,6 @@ import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import Button from "./ui/Button";
 import { StatusBanner, workstationInputClass } from "./ui/panelPrimitives";
 
-const MAX_DESCRIPTION_LENGTH = 10_000;
-const MAX_SCREENSHOT_BYTES = 5_000_000;
 
 /**
  * Schedule ``callback`` on the idle-callback queue, falling back to
@@ -180,103 +179,16 @@ interface FailedReportState {
 }
 
 
-const LOCAL_PATH_PLACEHOLDER = "<local-path>";
-const STACK_TRACE_PLACEHOLDER = "<stack-trace omitted>";
-const GENERIC_HTTP_FAILURE_MESSAGE = "Request failed. Please try again.";
-
-const SENSITIVE_STACK_KEYS = new Set([
-  "error_stack",
-  "stack",
-  "trace",
-  "traceback",
-  "stacktrace",
-  "stack_trace",
-]);
-
-const USER_AUTHORED_TEXT_KEYS = new Set(["description"]);
-
-const LOCAL_FILE_URL_PATTERN = /\bfile:\/\/(?:localhost\/|\/)(?:[A-Za-z]:\/|(?:Users|home|private|tmp|var|Volumes|mnt|opt|etc)\/)[^\s"',)]+/gi;
-const POSIX_LOCAL_PATH_PATTERN = /(^|[\s("'=:])((?:\/Users|\/home|\/private|\/tmp|\/var|\/Volumes|\/mnt|\/opt|\/etc)\/[^\s"',)]+)/g;
-const WINDOWS_LOCAL_PATH_PATTERN = /\b[A-Za-z]:[\\/][^\s"'<>|?*]+/g;
-const UNC_LOCAL_PATH_PATTERN = /\\\\[A-Za-z0-9_.-]+\\[^\s"'<>|]+(?:\\[^\s"'<>|]+)*/g;
-const GENERIC_HTTP_STATUS_PATTERN = /\b(?:request failed with status code|http(?:\s+error)?|status(?:\s+code)?|error)\s+\d{3}\b/i;
-const STACK_FRAME_PATTERN = /^\s*at\s+.+$/gm;
-const HTTP_STATUS_KEY_PATTERN = /^(?:status|status_code|http_status|response_status)$/i;
-
-function redactManualFallbackString(value: string, key: string | null = null): string {
-  let redacted = value.replace(LOCAL_FILE_URL_PATTERN, LOCAL_PATH_PLACEHOLDER);
-  redacted = redacted.replace(UNC_LOCAL_PATH_PATTERN, LOCAL_PATH_PLACEHOLDER);
-  redacted = redacted.replace(WINDOWS_LOCAL_PATH_PATTERN, LOCAL_PATH_PLACEHOLDER);
-  redacted = redacted.replace(
-    POSIX_LOCAL_PATH_PATTERN,
-    (_match, prefix: string) => `${prefix}${LOCAL_PATH_PLACEHOLDER}`,
-  );
-  redacted = redacted.replace(STACK_FRAME_PATTERN, `    at ${STACK_TRACE_PLACEHOLDER}`);
-  if (key && USER_AUTHORED_TEXT_KEYS.has(key.toLowerCase())) {
-    return redacted;
-  }
-  if (GENERIC_HTTP_STATUS_PATTERN.test(redacted)) {
-    return GENERIC_HTTP_FAILURE_MESSAGE;
-  }
-  return redacted;
-}
-
-function shouldOmitManualFallbackValue(key: string | null, value: unknown): boolean {
-  if (key && SENSITIVE_STACK_KEYS.has(key.toLowerCase())) {
-    return true;
-  }
-  if (!key || !HTTP_STATUS_KEY_PATTERN.test(key)) {
-    return false;
-  }
-  if (typeof value === "number") {
-    return value >= 100 && value <= 599;
-  }
-  return typeof value === "string" && /^\d\d\d$/.test(value);
-}
-
-function sanitizeManualFallbackValue(
-  value: unknown,
-  key: string | null = null,
-): unknown {
-  if (shouldOmitManualFallbackValue(key, value)) {
-    return undefined;
-  }
-  if (typeof value === "string") {
-    return redactManualFallbackString(value, key);
-  }
-  if (value == null || typeof value === "boolean" || typeof value === "number") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => sanitizeManualFallbackValue(item))
-      .filter((item) => item !== undefined);
-  }
-  if (typeof value !== "object") {
-    return String(value);
-  }
-
-  const sanitized: Record<string, unknown> = {};
-  for (const [entryKey, entryValue] of Object.entries(value)) {
-    const sanitizedKey = redactManualFallbackString(entryKey, entryKey);
-    const sanitizedValue = sanitizeManualFallbackValue(entryValue, entryKey);
-    if (sanitizedValue !== undefined) {
-      sanitized[sanitizedKey] = sanitizedValue;
-    }
-  }
-  return sanitized;
-}
-
 function stringifyManualFallbackReport(
   payload: BugReportRequestPayload,
 ): string {
-  return JSON.stringify(sanitizeManualFallbackValue(payload), null, 2);
+  return JSON.stringify(payload, null, 2);
 }
 
 function stringifyUserVisibleBugReportContext(
   context: ReturnType<typeof collectBugReportContext>,
 ): string {
-  return JSON.stringify(sanitizeManualFallbackValue(context), null, 2);
+  return JSON.stringify(context, null, 2);
 }
 
 function interpolateTicket(template: string, ticket: string): string {
@@ -426,18 +338,16 @@ export function BugReportModal({
     };
   }, [open, onClose, resetForm]);
 
-  // Context is expensive to collect (it pulls from four stores + logs).
-  // Memoize the rendered-shallow copy across re-renders within the same
-  // modal session; we only re-collect when the modal opens or the user
-  // attaches/removes a screenshot (both are coarse signals that any cached
-  // context is stale). Must run before any early-return so React Hook
-  // ordering stays stable across open/closed states.
-  // 采集一次上下文：modal 期间通常不会变动剧烈，避免每次输入触发全量重算。
-  // 必须放在任何 early-return 之前，保证 Hook 顺序稳定。
+  // Freeze sources and context together when opening the report. A later
+  // workflow/session cleanup must not change the data being reported.
+  // 打开工单时固定源文件和上下文，避免后续会话清理改变报错现场。
+  const sources = useMemo(
+    () => open ? { original: collectBugReportOriginalImage(), files: collectBugReportSourceFiles() } : null,
+    [open],
+  );
   const context = useMemo(
     () => (open ? collectBugReportContext() : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [open, screenshotDataUrl],
+    [open],
   );
 
   // Kick off the expensive full-context serialization lazily when the
@@ -478,14 +388,6 @@ export function BugReportModal({
   const canSubmit = trimmedDescription.length > 0 && !submitting;
 
   const handleDescriptionChange = (value: string) => {
-    if (value.length > MAX_DESCRIPTION_LENGTH) {
-      setDescription(value.slice(0, MAX_DESCRIPTION_LENGTH));
-      setNotice({
-        tone: "warning",
-        message: t("bug_report_validation_description_truncated"),
-      });
-      return;
-    }
     setDescription(value);
     if (descriptionError) {
       setDescriptionError(null);
@@ -509,11 +411,6 @@ export function BugReportModal({
     }
     if (!file.type.startsWith("image/")) {
       setScreenshotError(t("bug_report_validation_screenshot_type"));
-      event.target.value = "";
-      return;
-    }
-    if (file.size > MAX_SCREENSHOT_BYTES) {
-      setScreenshotError(t("bug_report_validation_screenshot_size"));
       event.target.value = "";
       return;
     }
@@ -552,12 +449,6 @@ export function BugReportModal({
     setNotice(null);
     setFailedReport(null);
 
-    const currentOriginalImage = collectBugReportOriginalImage();
-    const expectedOriginalName = context.active_original_image_ref?.filename ?? null;
-    const originalImage =
-      currentOriginalImage && currentOriginalImage.name === expectedOriginalName
-        ? currentOriginalImage
-        : null;
     const reportPayload: BugReportRequestPayload = {
       description: trimmedDescription,
       user_email: email.trim() ? email.trim() : null,
@@ -565,8 +456,8 @@ export function BugReportModal({
       screenshot_data_url: screenshotDataUrl,
     };
     try {
-      const response = originalImage
-        ? await submitBugReport(reportPayload, originalImage)
+      const response = sources?.files.length || sources?.original
+        ? await submitBugReport(reportPayload, sources.original, sources.files)
         : await submitBugReport(reportPayload);
       setSubmittedTicket(response);
       setSubmittedPayload(reportPayload);
@@ -622,6 +513,27 @@ export function BugReportModal({
     setNotice(null);
     await upload.retry();
   };
+
+  const handleRecaptureReport = async () => {
+    if (!submittedPayload || submitting) return;
+    setSubmitting(true);
+    setNotice(null);
+    try {
+      const response = sources?.files.length || sources?.original
+        ? await submitBugReport(submittedPayload, sources.original, sources.files)
+        : await submitBugReport(submittedPayload);
+      setSubmittedTicket(response);
+      setCopied(false);
+    } catch {
+      setNotice({ tone: "error", message: t("bug_report_toast_error") });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const collectionIncomplete = (
+    upload.details?.assembly_status ?? submittedTicket?.assembly_status
+  ) === "partial_failed";
 
   const handleCopySubmittedReport = async () => {
     if (!submittedReportText) {
@@ -730,7 +642,7 @@ export function BugReportModal({
             <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
               <StatusBanner
                 tone={
-                  upload.status === "failed" || upload.status === "disabled"
+                  collectionIncomplete || upload.status === "failed" || upload.status === "disabled"
                     ? "warning"
                     : "success"
                 }
@@ -743,6 +655,18 @@ export function BugReportModal({
                   submittedTicket.ticket_id,
                 )}
               </StatusBanner>
+              {collectionIncomplete && (
+                <StatusBanner tone="warning" role="alert">
+                  <p data-testid="bug-report-collection-incomplete">{t("bug_report_collection_incomplete")}</p>
+                  <Button
+                    label={submitting ? t("bug_report_upload_retrying") : t("bug_report_recapture")}
+                    variant="secondary"
+                    onClick={handleRecaptureReport}
+                    disabled={submitting}
+                    className="mt-2"
+                  />
+                </StatusBanner>
+              )}
               {notice && (
                 <StatusBanner
                   tone={notice.tone}

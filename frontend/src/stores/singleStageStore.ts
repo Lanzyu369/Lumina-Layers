@@ -10,7 +10,7 @@ import {
   type ColorcheckerDisplaySummary,
   type ExtractorRotationDirection,
 } from "../api/extractor";
-import { downloadResourceBlob } from "../api/client";
+import { apiErrorToVisibleMessage, downloadResourceBlob } from "../api/client";
 import { uploadImagePreview } from "../api/system";
 import type {
   GradientCardMaterialSummary,
@@ -24,6 +24,7 @@ import {
   type GradientCardAnchorCorner,
 } from "../utils/gradientCardAnchor";
 import { normalizeResourceUrl } from "../utils/resourceUrl";
+import { rememberDerivedImageSource } from "../utils/sourceFileOrigins";
 
 export type ExtractorWorkflow = "legacy" | "single-stage";
 
@@ -276,7 +277,7 @@ function extractErrorDetail(err: unknown): string | null {
   const detail = (err as ErrorWithResponseDetail | null)?.response?.data
     ?.detail;
   return typeof detail === "string" && detail.trim().length > 0
-    ? detail.trim()
+    ? apiErrorToVisibleMessage(err, detail.trim())
     : null;
 }
 
@@ -737,6 +738,7 @@ export const useSingleStageStore = create<
       const rotatedFile = new File([blob], `${baseName}.png`, {
         type: "image/png",
       });
+      rememberDerivedImageSource(rotatedFile, whiteImageFile);
       revokePreviewUrl(whiteImagePreviewUrl);
       set({
         whiteImageFile: rotatedFile,
@@ -817,6 +819,7 @@ export const useSingleStageStore = create<
       const rotatedFile = new File([blob], `${baseName}.png`, {
         type: "image/png",
       });
+      rememberDerivedImageSource(rotatedFile, blackImageFile);
       revokePreviewUrl(blackImagePreviewUrl);
       set({
         blackImageFile: rotatedFile,

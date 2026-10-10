@@ -14,7 +14,6 @@ import type {
   AdvancedParamsOutline,
   AdvancedParamsPuzzle,
   AdvancedParamsRelief,
-  AdvancedParamsSizeTrimmed,
   ColorReplacementScalarItem,
   FileMetadata,
   FridgeMagnetScalarItem,
@@ -32,24 +31,11 @@ import { colorRemapToReplacementRegions } from "./colorUtils";
 import { svgHoleCompensationOptions } from "../constants/svgHoleCompensation";
 
 /**
- * Hard limits enforced on the advanced_params payload before size
- * measurement. Keep these in sync with the backend sanitizer
- * (_sanitize_advanced_params) and the requirements document.
- * 在测量字节前对 advanced_params 应用的硬上限；需与后端 sanitizer 及需求文档保持一致。
- */
-const MAX_COLOR_HEIGHT_MAP_ENTRIES = 64;
-const MAX_FRIDGE_MAGNETS = 20;
-const MAX_REPLACEMENT_REGIONS = 32;
-const MAX_FREE_COLOR_SET_ENTRIES = 64;
-const MAX_RECIPE_OVERRIDES = 32;
-
-/**
- * Options controlling the serialized byte budget for the built object.
- * maxBytes is 8192 for the bug-report context payload and 4096 for each
- * action-history snapshot.
- * 构建选项：maxBytes 用于限制序列化后的字节预算；反馈上下文 8192、快照 4096。
+ * Options for generation settings captured in the snapshot.
+ * 构建选项：传入生成设置以补齐快照。
  */
 export interface BuildAdvancedParamsOptions {
+  /** Legacy option retained for callers; snapshots are never size-trimmed. */
   maxBytes: number;
   svgPixelsPerMm?: number;
   materialDeltaE00Tolerance?: number;
@@ -68,19 +54,12 @@ export interface BuildAdvancedParamsOptions {
  *      fridge_magnet, puzzle, large_format).
  *   2. File → FileMetadata conversion (`name`, `size`, `type` only; never
  *      Blob or data URL).
- *   3. Truncation caps: color_height_map ≤ 64, fridge_magnets ≤ 20,
- *      replacement_regions ≤ 32 — each sets its corresponding
- *      `_truncated: true` flag when trimmed.
- *   4. Four-tier byte-limit trimming when the serialized object exceeds
- *      `options.maxBytes`; falls back to `AdvancedParamsSizeTrimmed`
- *      carrying the pre-trim UTF-8 byte count when every tier still
- *      overflows.
+ * All parameter collections are preserved without count or byte truncation.
  *
  * 根据 converter store 状态构建分组化的 AdvancedParams 快照；非 converter Tab
  * 时返回 null。对于相同的 (state, activeTab, maxBytes) 组合，输出是字节级确定的。
- * 依次执行：各功能组"关闭即置 null"规则 → File 转 FileMetadata → 长度上限
- * 截断（并置 _truncated: true）→ 四层字节裁剪；全部裁剪后仍超限时回落到
- * AdvancedParamsSizeTrimmed（记录裁剪前的 UTF-8 字节数）。
+ * 依次执行：各功能组"关闭即置 null"规则 → File 转 FileMetadata。
+ * 参数集合完整保留，不再按数量或字节裁剪。
  */
 export function buildAdvancedParams(
   state: ConverterState,
@@ -91,8 +70,7 @@ export function buildAdvancedParams(
     return null;
   }
 
-  const full = buildFullParams(state, options);
-  return applyByteLimitTrimming(full, options.maxBytes);
+  return buildFullParams(state, options);
 }
 
 // ---------------------------------------------------------------------------
@@ -136,13 +114,7 @@ function buildGeneration(
   options: BuildAdvancedParamsOptions,
 ): AdvancedParamsGeneration {
   const isMaterialSource = state.source_version === "material";
-  const wipeTowerWarningCodes = Array.from(
-    new Set(
-      state.generateWarnings
-        .filter((value) => typeof value === "string" && value.length <= 128)
-        .slice(0, 8),
-    ),
-  );
+  const wipeTowerWarningCodes = [...state.generateWarnings];
   return {
     structure_mode: state.structure_mode,
     modeling_mode: state.modeling_mode,
@@ -204,19 +176,14 @@ function buildRelief(state: ConverterState): AdvancedParamsRelief {
     };
   }
 
-  const { map, truncated } = trimColorHeightMap(state.color_height_map);
-  const result: AdvancedParamsRelief = {
+  return {
     enable_relief: true,
-    color_height_map: map,
+    color_height_map: Object.keys(state.color_height_map).length > 0 ? { ...state.color_height_map } : null,
     heightmap_max_height: state.heightmap_max_height,
     autoHeightMode: state.autoHeightMode ?? null,
     heightmapFile: serializeFileMetadata(state.heightmapFile),
     hasHeightmapThumbnail,
   };
-  if (truncated) {
-    result.color_height_map_truncated = true;
-  }
-  return result;
 }
 
 function buildOutline(state: ConverterState): AdvancedParamsOutline {
@@ -287,16 +254,11 @@ function buildFridgeMagnet(state: ConverterState): AdvancedParamsFridgeMagnet {
       fridge_magnets: null,
     };
   }
-  const { magnets, truncated } = serializeFridgeMagnets(state.fridge_magnets);
-  const result: AdvancedParamsFridgeMagnet = {
+  return {
     enable_fridge_magnet: true,
     selectedFridgeMagnetId: state.selectedFridgeMagnetId ?? null,
-    fridge_magnets: magnets,
+    fridge_magnets: serializeFridgeMagnets(state.fridge_magnets),
   };
-  if (truncated) {
-    result.fridge_magnets_truncated = true;
-  }
-  return result;
 }
 
 function buildPuzzle(state: ConverterState): AdvancedParamsPuzzle {
@@ -419,32 +381,14 @@ function buildColorReplacement(
     state.replacement_regions,
     liveReplacementRegions,
   );
-  const { regions, truncated } = serializeReplacementRegions(
-    globalReplacementRegions,
-  );
-  const { colors, truncated: freeColorsTruncated } = serializeFreeColorSet(
-    state.free_color_set,
-  );
-  const { overrides, truncated: overridesTruncated } =
-    serializeRecipeOverrides(state.recipe_overrides);
-  const result: AdvancedParamsColorReplacement = {
-    replacement_regions: regions,
+  return {
+    replacement_regions: serializeReplacementRegions(globalReplacementRegions),
     spatial_edit_count: Number.isFinite(state.regionReplacementCount)
       ? Math.max(0, Math.trunc(state.regionReplacementCount))
       : 0,
-    free_color_set: colors,
-    recipe_overrides: overrides,
+    free_color_set: state.free_color_set.size > 0 ? Array.from(state.free_color_set, ensureHash) : null,
+    recipe_overrides: serializeRecipeOverrides(state.recipe_overrides),
   };
-  if (truncated) {
-    result.replacement_regions_truncated = true;
-  }
-  if (freeColorsTruncated) {
-    result.free_color_set_truncated = true;
-  }
-  if (overridesTruncated) {
-    result.recipe_overrides_truncated = true;
-  }
-  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -494,7 +438,7 @@ function normalizeReplacementSource(hex: string): string {
  * consuming the 32-item telemetry allowance.
  *
  * 按下游实际使用的源色合并持久化与实时全局映射。实时映射代表用户最新选择，
- * 因此覆盖旧记录；在序列化前去重，避免陈旧重复项占用 32 条遥测上限。
+ * 因此覆盖旧记录，保证快照反映实际使用的替换规则。
  */
 function mergeGlobalReplacementRegions(
   persisted: ColorReplacementItem[],
@@ -510,39 +454,11 @@ function mergeGlobalReplacementRegions(
   return Array.from(bySource.values());
 }
 
-function trimColorHeightMap(map: Record<string, number>): {
-  map: Record<string, number> | null;
-  truncated: boolean;
-} {
-  const entries = Object.entries(map);
-  if (entries.length === 0) {
-    return { map: null, truncated: false };
-  }
-  if (entries.length <= MAX_COLOR_HEIGHT_MAP_ENTRIES) {
-    // Preserve insertion order.
-    const out: Record<string, number> = {};
-    for (const [key, value] of entries) {
-      out[key] = value;
-    }
-    return { map: out, truncated: false };
-  }
-  const out: Record<string, number> = {};
-  for (const [key, value] of entries.slice(0, MAX_COLOR_HEIGHT_MAP_ENTRIES)) {
-    out[key] = value;
-  }
-  return { map: out, truncated: true };
-}
-
-function serializeFridgeMagnets(magnets: FridgeMagnetItem[]): {
-  magnets: FridgeMagnetScalarItem[] | null;
-  truncated: boolean;
-} {
+function serializeFridgeMagnets(magnets: FridgeMagnetItem[]): FridgeMagnetScalarItem[] | null {
   if (magnets.length === 0) {
-    return { magnets: null, truncated: false };
+    return null;
   }
-  const truncated = magnets.length > MAX_FRIDGE_MAGNETS;
-  const source = truncated ? magnets.slice(0, MAX_FRIDGE_MAGNETS) : magnets;
-  const out: FridgeMagnetScalarItem[] = source.map((item) => ({
+  return magnets.map((item) => ({
     id: item.id,
     shape: item.shape,
     preset_key: item.preset_key,
@@ -553,55 +469,24 @@ function serializeFridgeMagnets(magnets: FridgeMagnetItem[]): {
     center_x_mm: item.center_x_mm,
     center_y_mm: item.center_y_mm,
   }));
-  return { magnets: out, truncated };
 }
 
-function serializeReplacementRegions(regions: ColorReplacementItem[]): {
-  regions: ColorReplacementScalarItem[] | null;
-  truncated: boolean;
-} {
+function serializeReplacementRegions(regions: ColorReplacementItem[]): ColorReplacementScalarItem[] | null {
   if (regions.length === 0) {
-    return { regions: null, truncated: false };
+    return null;
   }
-  const truncated = regions.length > MAX_REPLACEMENT_REGIONS;
-  const source = truncated
-    ? regions.slice(0, MAX_REPLACEMENT_REGIONS)
-    : regions;
-  const out: ColorReplacementScalarItem[] = source.map((item) => ({
+  return regions.map((item) => ({
     quantized_hex: item.quantized_hex,
     matched_hex: item.matched_hex,
     replacement_hex: item.replacement_hex,
   }));
-  return { regions: out, truncated };
 }
 
-function serializeFreeColorSet(colors: Set<string>): {
-  colors: string[] | null;
-  truncated: boolean;
-} {
-  if (colors.size === 0) {
-    return { colors: null, truncated: false };
-  }
-  const source = Array.from(colors);
-  const truncated = source.length > MAX_FREE_COLOR_SET_ENTRIES;
-  const out = source
-    .slice(0, MAX_FREE_COLOR_SET_ENTRIES)
-    .map(ensureHash);
-  return { colors: out, truncated };
-}
-
-function serializeRecipeOverrides(overrides: RecipeOverrideItem[]): {
-  overrides: AdvancedParamsColorReplacement["recipe_overrides"];
-  truncated: boolean;
-} {
+function serializeRecipeOverrides(overrides: RecipeOverrideItem[]): AdvancedParamsColorReplacement["recipe_overrides"] {
   if (overrides.length === 0) {
-    return { overrides: null, truncated: false };
+    return null;
   }
-  const truncated = overrides.length > MAX_RECIPE_OVERRIDES;
-  const source = truncated
-    ? overrides.slice(0, MAX_RECIPE_OVERRIDES)
-    : overrides;
-  const out = source.map((item) => ({
+  return overrides.map((item) => ({
     region_id: item.region_id,
     recipe: [...item.recipe],
     layer_order: item.layer_order,
@@ -614,123 +499,4 @@ function serializeRecipeOverrides(overrides: RecipeOverrideItem[]): {
         }
       : {}),
   }));
-  return { overrides: out, truncated };
-}
-
-// ---------------------------------------------------------------------------
-// Byte measurement and tiered trimming
-// 字节测量与分层裁剪
-// ---------------------------------------------------------------------------
-
-const _textEncoder = new TextEncoder();
-
-function serializedByteLength(obj: unknown): number {
-  return _textEncoder.encode(JSON.stringify(obj)).length;
-}
-
-/**
- * Mutate `full` in place to null out the Tier-N payload.
- * 按层级就地清空对应字段。
- */
-function applyTier(full: AdvancedParamsFull, tier: number): void {
-  switch (tier) {
-    case 1:
-      full.fridge_magnet = {
-        ...full.fridge_magnet,
-        fridge_magnets: null,
-      };
-      return;
-    case 2:
-      full.relief = {
-        ...full.relief,
-        color_height_map: null,
-      };
-      return;
-    case 3:
-      full.color_replacement = {
-        ...full.color_replacement,
-        replacement_regions: null,
-        free_color_set: null,
-        recipe_overrides: null,
-      };
-      return;
-    case 4:
-      full.puzzle = {
-        ...full.puzzle,
-        puzzleStyle: null,
-        puzzleSizingMode: null,
-        pieceWidthMm: null,
-        pieceHeightMm: null,
-        puzzleRows: null,
-        puzzleCols: null,
-        targetPieceCount: null,
-        connectorStyle: null,
-        labelsEnabled: null,
-        engraveBackLabels: null,
-        irregularityStrength: null,
-        minNeckWidthMm: null,
-      };
-      full.large_format = {
-        ...full.large_format,
-        tileWidthMm: null,
-        tileHeightMm: null,
-      };
-      return;
-    default:
-      return;
-  }
-}
-
-/**
- * Build a trimmed view with bookkeeping flags, so we can measure the
- * final size including `_size_trimmed` and `_dropped_tiers`.
- * 组装带裁剪标记的对象，便于把裁剪记录也纳入字节测量。
- */
-function withTrimFlags(
-  full: AdvancedParamsFull,
-  droppedTiers: number[],
-): AdvancedParamsFull {
-  return {
-    ...full,
-    _size_trimmed: true,
-    _dropped_tiers: [...droppedTiers],
-  };
-}
-
-function applyByteLimitTrimming(
-  full: AdvancedParamsFull,
-  maxBytes: number,
-): AdvancedParams {
-  // Capture the pre-trim byte length exactly once. This is the only value
-  // permitted to populate `_original_byte_length` in the fallback.
-  // 仅在此处采样一次裁剪前的字节长度；fallback 只能使用该值。
-  const originalByteLength = serializedByteLength(full);
-
-  if (originalByteLength <= maxBytes) {
-    return full;
-  }
-
-  const working: AdvancedParamsFull = { ...full };
-  const droppedTiers: number[] = [];
-
-  for (let tier = 1; tier <= 4; tier += 1) {
-    applyTier(working, tier);
-    droppedTiers.push(tier);
-
-    // Measure with bookkeeping flags included so the post-flag size still
-    // respects `maxBytes`. If it does not, drop another tier and repeat.
-    // 测量时把裁剪标记也一起算入；标记推过上限时继续下一层。
-    const candidate = withTrimFlags(working, droppedTiers);
-    if (serializedByteLength(candidate) <= maxBytes) {
-      return candidate;
-    }
-  }
-
-  // Every tier + the trim flags still overflow; emit the minimal fallback.
-  // 所有层级加上标记仍超限，返回最小回落对象。
-  const fallback: AdvancedParamsSizeTrimmed = {
-    _size_trimmed: true,
-    _original_byte_length: originalByteLength,
-  };
-  return fallback;
 }
