@@ -1,5 +1,5 @@
 ﻿import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 // Mock the API client module — default to rejecting so unexpected calls don't crash
@@ -72,7 +72,10 @@ vi.mock("../components/VectorizerPanel", () => ({ default: () => null }));
 vi.mock("../components/LanguageToggle", () => ({ LanguageToggle: () => null }));
 vi.mock("../components/ThemeToggle", () => ({ ThemeToggle: () => null }));
 vi.mock("../components/BugReportButton", () => ({ BugReportButton: () => null }));
-vi.mock("../components/BugReportModal", () => ({ BugReportModal: () => null }));
+vi.mock("../components/BugReportModal", () => ({
+  BugReportModal: ({ open, presetDescription }: { open: boolean; presetDescription?: string }) =>
+    open ? <div data-testid="bug-report-modal-stub">{presetDescription}</div> : null,
+}));
 vi.mock("../components/tutorial/TutorialHost", () => ({ TutorialHost: () => null }));
 vi.mock("../components/tutorial/TutorialLauncherButton", () => ({
   TutorialLauncherButton: () => null,
@@ -90,6 +93,7 @@ vi.mock("../components/widget/SubTabBar", () => ({ default: () => null }));
 import App from "../App";
 import apiClient from "../api/client";
 import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
+import { useErrorTicketPromptStore } from "../stores/errorTicketPromptStore";
 
 describe("App component", () => {
   beforeEach(() => {
@@ -97,7 +101,31 @@ describe("App component", () => {
     // Restore default rejection for unmocked calls
     vi.mocked(apiClient.get).mockRejectedValue(new Error("unmocked"));
     useSettingsStore.setState({ ...DEFAULT_SETTINGS });
+    useErrorTicketPromptStore.getState()._resetForTests();
     localStorage.clear();
+  });
+
+  it("offers a ticket after a server error and pre-fills the bug report", async () => {
+    render(<App />);
+
+    act(() => {
+      useErrorTicketPromptStore.getState().reportApiError({
+        statusCode: 500,
+        path: "/api/convert/preview",
+        requestId: "req-9",
+        message: "preview exploded",
+      });
+    });
+
+    expect(await screen.findByTestId("error-ticket-prompt")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "提交工单" }));
+
+    const modal = await screen.findByTestId("bug-report-modal-stub");
+    expect(modal).toHaveTextContent("/api/convert/preview");
+    expect(modal).toHaveTextContent("req-9");
+    expect(modal).toHaveTextContent("preview exploded");
+    expect(screen.queryByTestId("error-ticket-prompt")).toBeNull();
+    expect(useErrorTicketPromptStore.getState().pending).toBeNull();
   });
 
   it('renders green badge when API returns status "ok"', async () => {

@@ -20,6 +20,10 @@ import AnnouncementDialog from "./components/ui/AnnouncementDialog";
 import { I18nProvider, useI18n } from "./i18n/context";
 import { BugReportButton } from "./components/BugReportButton";
 import { BugReportModal } from "./components/BugReportModal";
+import { ErrorTicketPrompt } from "./components/ErrorTicketPrompt";
+import { buildErrorTicketDescription } from "./utils/errorTicketDescription";
+import { useErrorTicketPromptCapture } from "./hooks/useErrorTicketPromptCapture";
+import { useErrorTicketPromptStore } from "./stores/errorTicketPromptStore";
 import { TutorialHost } from "./components/tutorial/TutorialHost";
 import { TutorialLauncherButton } from "./components/tutorial/TutorialLauncherButton";
 import { LanguageToggle } from "./components/LanguageToggle";
@@ -244,6 +248,26 @@ function AppContent() {
   const [connected, setConnected] = useState<boolean | null>(null);
   const [announcementReady, setAnnouncementReady] = useState(false);
   const [bugReportOpen, setBugReportOpen] = useState(false);
+  const [bugReportPreset, setBugReportPreset] = useState("");
+  const errorTicketPrompt = useErrorTicketPromptStore((s) => s.pending);
+  const dismissErrorTicketPrompt = useErrorTicketPromptStore((s) => s.dismiss);
+  const suppressErrorTicketPrompt = useErrorTicketPromptStore((s) => s.suppressForSession);
+  useErrorTicketPromptCapture(!reproMode.enabled);
+  const openBugReport = useCallback(
+    (preset: string) => {
+      dismissErrorTicketPrompt();
+      setBugReportPreset(preset);
+      setBugReportOpen(true);
+    },
+    [dismissErrorTicketPrompt],
+  );
+  const closeBugReport = useCallback(() => {
+    // Errors raised while the report form was open are already covered by it.
+    // 填写工单期间产生的错误已包含在本次工单中，关闭时一并清除提示。
+    dismissErrorTicketPrompt();
+    setBugReportOpen(false);
+    setBugReportPreset("");
+  }, [dismissErrorTicketPrompt]);
   const activeTab = useWidgetStore((s) => s.activeTab);
   const activeConverterSubTab = useWidgetStore((s) => s.activeConverterSubTab);
   const setActiveTab = useWidgetStore((s) => s.setActiveTab);
@@ -372,7 +396,7 @@ function AppContent() {
           <LanguageToggle />
           <ThemeToggle />
           <TutorialLauncherButton />
-          <BugReportButton onClick={() => setBugReportOpen(true)} />
+          <BugReportButton onClick={() => openBugReport("")} />
           {reproMode.enabled && (
             <span
               data-testid="repro-mode-badge"
@@ -493,7 +517,20 @@ function AppContent() {
       />
       <BugReportModal
         open={bugReportOpen}
-        onClose={() => setBugReportOpen(false)}
+        onClose={closeBugReport}
+        presetDescription={bugReportPreset}
+      />
+      {/* Ask whether to file a ticket after an unexpected error; hidden while
+          the report form is open and during bug-report reproduction runs. */}
+      <ErrorTicketPrompt
+        info={bugReportOpen || reproMode.enabled ? null : errorTicketPrompt}
+        onReport={() => {
+          if (errorTicketPrompt) {
+            openBugReport(buildErrorTicketDescription(errorTicketPrompt, t));
+          }
+        }}
+        onDismiss={dismissErrorTicketPrompt}
+        onSuppress={suppressErrorTicketPrompt}
       />
       {/* Beginner tutorial: offered once after the release announcement is
           gone, and never during bug-report reproduction sessions. */}
