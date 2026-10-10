@@ -99,6 +99,11 @@ async function fixture(t, mode = "healthy", platform = "win32", environment = {}
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "lumina-main-startup-"));
   const windows = [], children = [], commands = [], streams = [], requests = [], timers = [], dialogs = [];
   const signals = [], errorBoxes = [];
+  const stages = [], selections = [];
+  const needsHandover = ["handover-wait", "handover-failed", "commit-failed"].includes(mode);
+  const portFile = path.join(root, "backend-port.json");
+  if (needsHandover) fs.writeFileSync(portFile, JSON.stringify({ schemaVersion: 1, port: 8000 }));
+  let releaseTransfer;
   const event = () => ({ defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } });
   const app = new EventEmitter();
   Object.assign(app, {
@@ -122,6 +127,7 @@ async function fixture(t, mode = "healthy", platform = "win32", environment = {}
       super(); this.options = options; this.visible = false;
       this.webContents = new EventEmitter();
       this.webContents.setWindowOpenHandler = () => {};
+      if (options.title === "Lumina Studio 2") stages.push("main-window");
       windows.push(this);
     }
     loadURL(url) { this.loadedUrl = url; return Promise.resolve(); }
@@ -152,9 +158,34 @@ async function fixture(t, mode = "healthy", platform = "win32", environment = {}
   const modules = {
     "./backend-endpoint.cjs": {
       ...(fs.existsSync(path.join(__dirname, "../backend-endpoint.cjs")) ? nativeRequire("./backend-endpoint.cjs") : {}),
-      selectBackendEndpoint: async () => {
+      selectBackendEndpoint: async options => {
+        selections.push(options);
         if (mode === "port-busy") throw new Error("port_in_use");
-        return { port: 8001, origin: "http://127.0.0.1:8001", healthUrl: "http://127.0.0.1:8001/api/health", instanceId: "fixture-instance" };
+        if (["state-invalid", "state-io"].includes(mode)) {
+          const error = new Error("private/path/secret-token");
+          error.code = mode === "state-invalid" ? "backend_port_state_invalid" : "backend_port_state_read_failed";
+          throw error;
+        }
+        stages.push("selection");
+        return { port: 8001, origin: "http://127.0.0.1:8001", healthUrl: "http://127.0.0.1:8001/api/health", instanceId: "fixture-instance",
+          previousPort: needsHandover ? 8000 : null, previousOrigin: needsHandover ? "http://127.0.0.1:8000" : null };
+      },
+      commitBackendEndpoint: options => {
+        if (mode === "commit-failed") { const error = new Error("private/path/secret-token"); error.code = "backend_port_state_write_failed"; throw error; }
+        nativeRequire("./backend-endpoint.cjs").commitBackendEndpoint(options);
+        stages.push("commit");
+      },
+    },
+    "./storage-migration.cjs": {
+      migrateLegacyStorage: async () => { stages.push("legacy"); return "no-index"; },
+      handoverBackendStorage: async options => {
+        assert.equal(options.sourceOrigin, "http://127.0.0.1:8000");
+        assert.equal(options.targetOrigin, "http://127.0.0.1:8001");
+        assert.equal(options.storageSession, session);
+        stages.push("handover");
+        if (mode === "handover-failed") { const error = new Error("private/path/secret-token"); error.code = "storage_handover_failed"; error.stage = "storage_target_import"; throw error; }
+        if (mode === "handover-wait") await new Promise(resolve => { releaseTransfer = resolve; });
+        return "transferred";
       },
     },
     electron,
@@ -204,8 +235,10 @@ async function fixture(t, mode = "healthy", platform = "win32", environment = {}
   }, { filename: mainPath });
   await until(() => healthCallback || app.quitted);
   return {
-    root, windows, children, commands, requests, app, read, dialogs, signals, errorBoxes,
-    healthy() { respondHealthy(healthCallback); },
+    root, windows, children, commands, requests, app, read, dialogs, signals, errorBoxes, stages, selections,
+    portState: () => fs.existsSync(portFile) ? JSON.parse(fs.readFileSync(portFile, "utf8")) : null,
+    releaseTransfer: () => releaseTransfer(),
+    healthy() { stages.push("health"); respondHealthy(healthCallback); },
     expireHealth() { timers.find(timer => timer.delay >= 30000).callback(); },
     passOldDeadline() { for (const timer of timers.filter(timer => timer.delay >= 30000 && timer.delay <= 45000)) timer.callback(); },
     healthBudget: () => timers.find(timer => timer.delay >= 30000).delay,
@@ -229,6 +262,70 @@ test("main passes selected endpoint and private identity to backend and frontend
   assert.ok(f.children[0].spawnOptions.env.LUMINA_CLEAR_CACHE_ALLOWED_LOCAL_PORTS?.split(",").includes("8001"));
   f.healthy(); await until(() => f.mainWindow());
   assert.equal(f.mainWindow().loadedUrl, "http://127.0.0.1:8001/");
+});
+
+test("desktop startup opts into bounded OS fallback and commits only after health before opening UI", async t => {
+  const f = await fixture(t);
+  assert.equal(f.selections[0].allowEphemeralFallback, true);
+  assert.equal(f.portState(), null);
+  f.healthy(); await until(() => f.mainWindow());
+  assert.equal(f.portState().port, 8001);
+  assert.deepEqual(f.stages, ["selection", "health", "legacy", "commit", "main-window"]);
+});
+
+test("handover gates both committed data origin and usable window until transfer completes", async t => {
+  const f = await fixture(t, "handover-wait");
+  f.healthy(); await until(() => f.stages.includes("handover") || f.mainWindow() || f.app.quitted);
+  assert.equal(f.stages.includes("handover"), true);
+  assert.equal(f.mainWindow(), undefined);
+  assert.equal(f.portState().port, 8000);
+  f.releaseTransfer(); await until(() => f.mainWindow());
+  assert.equal(f.portState().port, 8001);
+  assert.deepEqual(f.stages, ["selection", "health", "legacy", "handover", "commit", "main-window"]);
+});
+
+for (const [mode, safeCode, safeStage] of [
+  ["state-invalid", "backend_port_state_invalid", "backend_port_state"],
+  ["state-io", "backend_port_state_read_failed", "backend_port_state"],
+  ["handover-failed", "storage_handover_failed", "storage_target_import"],
+  ["commit-failed", "backend_port_state_write_failed", "backend_port_commit"],
+]) {
+  test(`main classifies ${mode} as compatible startup_failed without exposing private diagnostics`, async t => {
+    const f = await fixture(t, mode);
+    if (f.requests.length) f.healthy();
+    await until(() => f.app.quitted || f.mainWindow());
+    assert.equal(f.app.quitted, true);
+    assert.equal(f.mainWindow(), undefined);
+    assert.equal(f.read().errorCode, "startup_failed");
+    if (["handover-failed", "commit-failed"].includes(mode)) assert.equal(f.portState().port, 8000);
+    const text = f.errorBoxes.flat().join(" ");
+    assert.match(text, new RegExp(safeCode));
+    assert.match(text, new RegExp(safeStage));
+    assert.doesNotMatch(text, /private\/path|secret-token/);
+  });
+}
+
+test("backend health failure never hands over data or commits a candidate endpoint", async t => {
+  const f = await fixture(t, "handover-wait");
+  f.expireHealth(); await until(() => f.app.quitted);
+  assert.equal(f.portState().port, 8000);
+  assert.equal(f.stages.includes("handover"), false);
+  assert.equal(f.stages.includes("commit"), false);
+  assert.equal(f.mainWindow(), undefined);
+});
+
+test("backend exit during handover retains the old origin and cannot open a usable main window", async t => {
+  const f = await fixture(t, "handover-wait");
+  f.healthy(); await until(() => f.stages.includes("handover"));
+  const child = f.children[0];
+  child.exitCode = 1;
+  child.emit("exit", 1, null);
+  f.releaseTransfer();
+  await until(() => f.app.quitted || f.mainWindow());
+  assert.equal(f.mainWindow(), undefined);
+  assert.equal(f.app.quitted, true);
+  assert.equal(f.portState().port, 8000);
+  assert.equal(f.read().errorCode, "startup_backend_exited");
 });
 
 test("main rejects another launch identity even with HTTP 200", async t => {

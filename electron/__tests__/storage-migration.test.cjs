@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const vm = require("node:vm");
 
 const migration = require("../storage-migration.cjs");
 
@@ -291,4 +292,69 @@ test("import failure does not create a completion marker", async () => {
     markerPath,
   }), "failed");
   assert.equal(fs.existsSync(markerPath), false);
+});
+
+test("dedicated handover replaces settings, including source deletions and an empty source", async () => {
+  for (const source of [{ theme: "latest" }, {}]) {
+    const values = new Map([["theme", "stale"], ["removed", "obsolete"]]);
+    const result = await vm.runInNewContext(migration.buildImportScript({ replace: true }), {
+      globalThis: { __luminaMigrationReceive: () => Promise.resolve({ localStorage: source, indexedDB: [] }) },
+      localStorage: {
+        getItem: key => values.has(key) ? values.get(key) : null,
+        setItem: (key, value) => values.set(key, value),
+        clear: () => values.clear(),
+      },
+      Blob, RegExp, ArrayBuffer, Map, Set, Date,
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(Object.fromEntries(values), source, "the committed source is authoritative, not a fill-missing import");
+  }
+});
+
+test("default legacy settings import still fills gaps without overwriting user edits", async () => {
+  const values = new Map([["theme", "edited"]]);
+  const result = await vm.runInNewContext(migration.buildImportScript(), {
+    globalThis: { __luminaMigrationReceive: () => Promise.resolve({ localStorage: { theme: "old", extra: "new" }, indexedDB: [] }) },
+    localStorage: { getItem: key => values.has(key) ? values.get(key) : null, setItem: (key, value) => values.set(key, value) },
+    Blob, RegExp, ArrayBuffer, Map, Set, Date,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(Object.fromEntries(values), { theme: "edited", extra: "new" });
+});
+
+test("handover source failure closes its window and removes all temporary HTTP interception", async () => {
+  assert.equal(typeof migration.handoverBackendStorage, "function", "dedicated handover must fail closed instead of opening an empty UI");
+  const windows = [];
+  let handler;
+  let unhandled = 0;
+  const storageSession = { protocol: {
+    handle: async (scheme, callback) => { assert.equal(scheme, "http"); handler = callback; },
+    unhandle: async scheme => { assert.equal(scheme, "http"); handler = null; unhandled++; },
+  } };
+  class FailedSourceWindow {
+    constructor(options) {
+      this.options = options;
+      this.webContents = { executeJavaScript: async () => ({ ok: false, error: "legacy_indexeddb_read_failed" }) };
+      windows.push(this);
+    }
+    async loadURL(url) {
+      assert.ok(handler, "interception must be registered before any old-origin navigation");
+      const inert = await handler({ url, method: "GET" });
+      assert.equal(inert.status, 200);
+      assert.doesNotMatch(await inert.text(), /<script|src=/);
+      assert.equal((await handler({ url: "http://127.0.0.1:8100/foreign", method: "GET" })).status, 403);
+    }
+    isDestroyed() { return Boolean(this.destroyed); }
+    destroy() { this.destroyed = true; }
+  }
+  await assert.rejects(migration.handoverBackendStorage({
+    BrowserWindow: FailedSourceWindow, storageSession,
+    sourceOrigin: "http://127.0.0.1:8100", targetOrigin: "http://127.0.0.1:8101",
+  }), error => error.code === "storage_handover_failed" && error.stage === "storage_source_read");
+  assert.equal(unhandled, 1);
+  assert.equal(handler, null);
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].destroyed, true);
+  assert.equal(windows[0].options.webPreferences.session, storageSession);
+  assert.equal(windows[0].options.webPreferences.webSecurity, true);
 });

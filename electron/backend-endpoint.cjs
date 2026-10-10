@@ -10,20 +10,30 @@ function validatePort(value) {
   return Number.isInteger(value) && value >= 1024 && value <= 65535;
 }
 
+function portError(code, cause) {
+  const error = new Error(code === "backend_port_unavailable" ? "port_in_use:no_available_backend_port" : code);
+  error.code = code;
+  if (cause) error.cause = cause;
+  return error;
+}
+
 function readStablePort(portFile) {
   if (portFile === undefined) return null;
   if (typeof portFile !== "string" || !path.isAbsolute(portFile)) {
     throw new TypeError("Stable backend port file must be an absolute path.");
   }
-  if (!fs.existsSync(portFile)) return null;
-  let parsed;
+  let contents;
   try {
-    parsed = JSON.parse(fs.readFileSync(portFile, "utf8"));
+    contents = fs.readFileSync(portFile, "utf8");
   } catch (error) {
-    throw new Error(`invalid_backend_port_state:${error.code || error.name}`);
+    if (error.code === "ENOENT") return null;
+    throw portError("backend_port_state_read_failed", error);
   }
+  let parsed;
+  try { parsed = JSON.parse(contents); }
+  catch (error) { throw portError("backend_port_state_invalid", error); }
   if (parsed?.schemaVersion !== PORT_STATE_VERSION || !validatePort(parsed.port)) {
-    throw new Error("invalid_backend_port_state:unsupported");
+    throw portError("backend_port_state_invalid");
   }
   return parsed.port;
 }
@@ -31,48 +41,74 @@ function readStablePort(portFile) {
 function writeStablePort(portFile, port) {
   if (portFile === undefined) return;
   const temporary = `${portFile}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-  fs.mkdirSync(path.dirname(portFile), { recursive: true });
-  fs.writeFileSync(temporary, `${JSON.stringify({ schemaVersion: PORT_STATE_VERSION, port })}\n`, { mode: 0o600 });
-  fs.renameSync(temporary, portFile);
+  try {
+    fs.mkdirSync(path.dirname(portFile), { recursive: true });
+    fs.writeFileSync(temporary, `${JSON.stringify({ schemaVersion: PORT_STATE_VERSION, port })}\n`, { mode: 0o600, flag: "wx" });
+    fs.renameSync(temporary, portFile);
+  } catch (error) {
+    throw portError("backend_port_state_write_failed", error);
+  } finally {
+    try { fs.unlinkSync(temporary); } catch (_) { /* Best-effort cleanup of this launch's temporary file only. */ }
+  }
 }
 
-async function canListen(port) {
+async function availablePort(port) {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once("error", error => {
-      if (["EADDRINUSE", "EACCES"].includes(error.code)) resolve(false);
-      else reject(error);
+      if (["EADDRINUSE", "EACCES"].includes(error.code)) resolve(null);
+      else reject(portError("backend_port_probe_failed", error));
     });
-    server.listen({ port, host: "127.0.0.1", exclusive: true }, () =>
-      server.close(error => error ? reject(error) : resolve(true)));
+    server.listen({ port, host: "127.0.0.1", exclusive: true }, () => {
+      const selected = server.address().port;
+      server.close(error => error ? reject(portError("backend_port_probe_failed", error)) : resolve(selected));
+    });
   });
 }
 
-/** Pick a bounded loopback endpoint and persist it for a stable desktop origin. */
-async function selectBackendEndpoint({ preferredPort = 8000, maxAttempts = 100, portFile } = {}) {
+/** Select without committing: health and storage handover must succeed first. */
+async function selectBackendEndpoint({ preferredPort = 8000, maxAttempts = 100, portFile, allowEphemeralFallback = false } = {}) {
   if (!Number.isInteger(preferredPort) || preferredPort < 1024 || preferredPort > 65535 ||
-      !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 100) {
+      !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 100 || typeof allowEphemeralFallback !== "boolean") {
     throw new TypeError("Invalid backend port range.");
   }
   const stablePort = readStablePort(portFile);
-  if (stablePort !== null) {
-    if (!(await canListen(stablePort))) {
-      throw new Error(`port_in_use:stable_backend_port:${stablePort}`);
-    }
-    return makeEndpoint(stablePort);
+  if (stablePort !== null && await availablePort(stablePort)) {
+    return makeEndpoint(stablePort, stablePort);
   }
   for (let port = preferredPort; port < Math.min(preferredPort + maxAttempts, 65536); port++) {
-    if (await canListen(port)) {
-      writeStablePort(portFile, port);
-      return makeEndpoint(port);
+    if (port !== stablePort && await availablePort(port)) {
+      return makeEndpoint(port, stablePort);
     }
   }
-  throw new Error("port_in_use:no_available_backend_port");
+  // Windows may reserve the whole preferred range. The OS chooses a loopback
+  // port; this opt-in remains bounded and never changes firewall/owner state.
+  if (allowEphemeralFallback) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const port = await availablePort(0);
+      if (validatePort(port)) return makeEndpoint(port, stablePort);
+    }
+  }
+  throw portError("backend_port_unavailable");
 }
 
-function makeEndpoint(port) {
+/** Commit only after owned health and storage transfer succeed. 后端健康及存储迁移成功后才提交数据来源。 */
+function commitBackendEndpoint({ portFile, endpoint }) {
+  if (!endpoint || !validatePort(endpoint.port) || endpoint.origin !== `http://127.0.0.1:${endpoint.port}` ||
+      !(endpoint.previousPort === null || validatePort(endpoint.previousPort))) {
+    throw new TypeError("Invalid selected backend endpoint.");
+  }
+  const previousPort = readStablePort(portFile);
+  if (previousPort !== endpoint.previousPort) throw portError("backend_port_state_changed");
+  writeStablePort(portFile, endpoint.port);
+}
+
+function makeEndpoint(port, previousPort) {
   const origin = `http://127.0.0.1:${port}`;
-  return { port, origin, healthUrl: `${origin}/api/health`, instanceId: randomBytes(32).toString("hex") };
+  return {
+    port, origin, healthUrl: `${origin}/api/health`, instanceId: randomBytes(32).toString("hex"), previousPort,
+    previousOrigin: previousPort !== null && previousPort !== port ? `http://127.0.0.1:${previousPort}` : null,
+  };
 }
 
 /** Read only a small JSON health document and verify this launch, not just HTTP success. */
@@ -109,4 +145,4 @@ function validateHealthResponse(response, instanceId, done) {
   });
 }
 
-module.exports = { selectBackendEndpoint, validateHealthResponse };
+module.exports = { selectBackendEndpoint, commitBackendEndpoint, validateHealthResponse };
