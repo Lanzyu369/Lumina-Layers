@@ -1,17 +1,17 @@
 /**
- * Action History Store — bounded in-memory ring of recent user actions and
+ * Action History Store — complete in-memory history of user actions and
  * session ids that feed the reproducible bug-report bundle.
- * 操作历史 Store：用户近期动作与会话的有界环形缓存，供反馈复现包使用。
+ * 操作历史 Store：保留用户动作与会话的完整历史，供反馈复现包使用。
  *
  * Design constraints (see `.kiro/specs/reproducible-bug-reports/design.md`):
  *   - Store creation MUST NOT touch `sessionStorage` (SLO 7, no startup I/O).
- *   - `pushAction` MUST be O(1) and stay under 0.5ms p95 (SLO 1).
+ *   - `pushAction` stays synchronous; persistence is deferred.
  *   - sessionStorage writes MUST be debounced 100ms (SLO 9) and wrapped in
  *     try/catch so the UI never sees an exception (SLO 3).
  *   - To avoid circular imports back into `converterStore` / `widgetStore`,
  *     the current workflow snapshot is pulled through an injectable reader.
  *
- * 创建 store 时不得访问 sessionStorage、pushAction 保持常数时间、
+ * 创建 store 时不得访问 sessionStorage、pushAction 同步记录、
  * sessionStorage 写入 100ms 合并 + try/catch 兜底，并使用快照读取器
  * 注入模式避免与其他 store 的循环引用。
  */
@@ -30,10 +30,7 @@ import type {
 } from "../types/actionHistory";
 
 export const ACTION_HISTORY_STORAGE_KEY = "lumina-action-history-v1";
-export const ACTION_HISTORY_MAX_ENTRIES = 100;
-export const ACTION_HISTORY_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes.
 export const ACTION_HISTORY_FLUSH_DEBOUNCE_MS = 100;
-export const SESSION_RING_MAX_ENTRIES = 5;
 
 /**
  * Default snapshot returned before a real reader is installed. Keeping it
@@ -85,72 +82,42 @@ interface ActionHistoryState {
 }
 
 /**
- * Drop oldest entries until both limits hold:
- *   - history length <= MAX_ENTRIES
- *   - oldest entry is within MAX_AGE_MS of `now`
- * Pure / O(N) at worst, N = history length.
- * 丢弃最老的条目直到条数与时间窗都满足限制。
- */
-function trimHistory(history: ActionEntry[], now: number): ActionEntry[] {
-  let start = 0;
-  const excess = history.length - ACTION_HISTORY_MAX_ENTRIES;
-  if (excess > 0) {
-    start = excess;
-  }
-  while (
-    start < history.length &&
-    now - history[start].timestamp > ACTION_HISTORY_MAX_AGE_MS
-  ) {
-    start += 1;
-  }
-  return start === 0 ? history : history.slice(start);
-}
-
-/**
- * Heuristic test for storage quota exhaustion across browser variants.
- * 跨浏览器检测配额耗尽错误。
- */
-function isQuotaError(e: unknown): boolean {
-  if (e == null) return false;
-  const name = typeof (e as { name?: unknown }).name === "string" ? (e as { name: string }).name : "";
-  const message = typeof (e as { message?: unknown }).message === "string"
-    ? (e as { message: string }).message
-    : String(e);
-  return name.includes("Quota") || /quota/i.test(message);
-}
-
-/**
- * Merge persisted entries into the current history, dedupe by
- * (timestamp, action_type), sort ascending by timestamp, cap to MAX_ENTRIES.
+ * Merge complete persisted history without replaying cached occurrences.
+ * Keep different actions in the same millisecond and repeated identical actions.
  * Never throws; returns the current history on any failure.
- * 合并持久化历史，去重并保留最近 MAX_ENTRIES 条，异常时返回原 history。
+ * 合并完整持久化历史，保留同毫秒的不同动作与重复动作，避免重复加载。
  */
 function mergeHistory(
   current: ActionEntry[],
   persisted: unknown,
 ): ActionEntry[] {
   if (!Array.isArray(persisted)) return current;
-  const merged = new Map<string, ActionEntry>();
-  for (const entry of [...persisted, ...current]) {
+  const merged: ActionEntry[] = [];
+  const persistedCounts = new Map<string, number>();
+  const currentCounts = new Map<string, number>();
+  for (const entry of persisted) {
     if (!entry || typeof entry !== "object") continue;
     const e = entry as Partial<ActionEntry>;
     if (typeof e.timestamp !== "number" || typeof e.action_type !== "string") {
       continue;
     }
-    const key = `${e.timestamp}:${e.action_type}`;
-    merged.set(key, entry as ActionEntry);
+    const key = JSON.stringify(entry);
+    persistedCounts.set(key, (persistedCounts.get(key) ?? 0) + 1);
+    merged.push(entry as ActionEntry);
   }
-  const sorted = [...merged.values()].sort(
-    (a, b) => a.timestamp - b.timestamp,
-  );
-  if (sorted.length <= ACTION_HISTORY_MAX_ENTRIES) return sorted;
-  return sorted.slice(sorted.length - ACTION_HISTORY_MAX_ENTRIES);
+  for (const entry of current) {
+    const key = JSON.stringify(entry);
+    const count = (currentCounts.get(key) ?? 0) + 1;
+    currentCounts.set(key, count);
+    if (count > (persistedCounts.get(key) ?? 0)) merged.push(entry);
+  }
+  return merged.sort((a, b) => a.timestamp - b.timestamp);
 }
 
 /**
  * Merge persisted session ring entries with the current ring. Dedupe by
  * (workstream, session_id) keeping the latest `last_seen_at`, sort by
- * `last_seen_at` descending, cap to `SESSION_RING_MAX_ENTRIES`.
+ * `last_seen_at` descending, retaining every session.
  * 合并持久化的会话环，按最后观察时间保留最新版本。
  */
 function mergeSessionRing(
@@ -179,7 +146,7 @@ function mergeSessionRing(
   const sorted = [...merged.values()].sort(
     (a, b) => b.last_seen_at - a.last_seen_at,
   );
-  return sorted.slice(0, SESSION_RING_MAX_ENTRIES);
+  return sorted;
 }
 
 export const useActionHistoryStore = create<ActionHistoryState>((set, get) => ({
@@ -208,7 +175,7 @@ export const useActionHistoryStore = create<ActionHistoryState>((set, get) => ({
       if (entry.error) {
         full.error = entry.error;
       }
-      const next = trimHistory([...get().history, full], now);
+      const next = [...get().history, full];
       set({ history: next });
       get().scheduleFlush();
     } catch {
@@ -229,26 +196,14 @@ export const useActionHistoryStore = create<ActionHistoryState>((set, get) => ({
         next = existing.slice();
         next[idx] = { ...next[idx], last_seen_at: now };
       } else {
-        // Append to the tail; the head of the array is the oldest entry by
-        // insertion order. This gives a stable FIFO eviction policy even
-        // when multiple synchronous observeSession calls land in the same
-        // millisecond (first_seen_at would be equal, so timestamps alone
-        // cannot discriminate).
-        // 追加到尾部；当多次同步调用落在同一毫秒时，插入顺序作为稳定的
-        // 二级排序键，保证 FIFO 淘汰。
         const entry: SessionRingEntry = {
           workstream,
           session_id: sessionId,
           first_seen_at: now,
           last_seen_at: now,
         };
-        // Prepend so the newest observation sits at index 0; then drop
-        // anything past the ring cap (oldest entries fall off the tail).
-        // 新观察置顶；超过容量时从末尾（最老）淘汰。
+        // Keep every session, with the newest observation first.
         next = [entry, ...existing];
-        if (next.length > SESSION_RING_MAX_ENTRIES) {
-          next = next.slice(0, SESSION_RING_MAX_ENTRIES);
-        }
       }
       set({ sessionRing: next });
       get().scheduleFlush();
@@ -335,10 +290,9 @@ export const useActionHistoryStore = create<ActionHistoryState>((set, get) => ({
 
 /**
  * Persist the current history + session ring to sessionStorage. On quota
- * overflow, trim the history to half and retry once; after a final failure,
- * flip `_persistDisabled` to stop hammering the API for the rest of the
+ * overflow, retain all in-memory history and disable persistence for the
  * session and emit a single client_log warning.
- * 把历史+会话环落盘；配额满时砍一半重试，仍失败则停用持久化并记一条警告。
+ * 把历史与会话落盘；配额满时保留全部内存历史，停用持久化并记一条警告。
  */
 function flushToSessionStorage(
   get: () => ActionHistoryState,
@@ -370,30 +324,11 @@ function flushToSessionStorage(
       storage.setItem(ACTION_HISTORY_STORAGE_KEY, payload);
       return;
     } catch (e) {
-      if (!isQuotaError(e)) {
-        set({ _persistDisabled: true });
-        postClientLog("actionHistoryStore: sessionStorage flush failed", {
-          method: "warn",
-          details: { error_message: String(e) },
-        });
-        return;
-      }
-      // Quota overflow: keep the newest half and retry once.
-      const trimmed = history.slice(Math.floor(history.length / 2));
-      set({ history: trimmed });
-      try {
-        const retryPayload = JSON.stringify({
-          history: trimmed,
-          sessionRing: get().sessionRing,
-        });
-        storage.setItem(ACTION_HISTORY_STORAGE_KEY, retryPayload);
-      } catch (retryErr) {
-        set({ _persistDisabled: true });
-        postClientLog("actionHistoryStore: sessionStorage flush failed", {
-          method: "warn",
-          details: { error_message: String(retryErr) },
-        });
-      }
+      set({ _persistDisabled: true });
+      postClientLog("actionHistoryStore: sessionStorage flush failed", {
+        method: "warn",
+        details: { error_message: String(e) },
+      });
     }
   } catch (e) {
     // Outermost safety net.

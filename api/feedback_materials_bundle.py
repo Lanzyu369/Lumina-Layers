@@ -4,19 +4,17 @@
 
 Design constraints (`.kiro/specs/reproducible-bug-reports/design.md` §5):
 
-* ``_solver_cache`` sub-directories are deliberately excluded. The solver cache
-  is a precomputed lookup table that the developer can rebuild from the raw
-  material files in seconds, so shipping it inflates the zip by hundreds of
-  megabytes for no real benefit.
-* A wall-clock timeout (default ``LUMINA_FEEDBACK_MATERIALS_BUNDLE_TIMEOUT_S``
-  = 30 s) caps packing time. On timeout we delete the partial zip and return
+* Every file in selected material directories is preserved, including
+  ``_solver_cache`` sub-directories needed to reproduce the original state.
+* An optional positive ``LUMINA_FEEDBACK_MATERIALS_BUNDLE_TIMEOUT_S`` caps
+  packing time; zero disables the timeout. On timeout we delete the partial zip and return
   ``status='packaging_timeout'`` so the assembler can continue with other
   attachments instead of failing the whole ticket.
 * The function never raises for recoverable issues (missing dir, empty
   selection). It raises ``PackagingTimeoutError`` internally but catches it
   itself before returning.
 
-设计约束：``_solver_cache`` 目录被跳过（可本地重建，避免 zip 膨胀）；超时
+设计约束：所选耗材目录的全部文件都会保留，包括 ``_solver_cache``；超时
 后删除部分 zip 并返回 ``packaging_timeout`` 状态，让工单装配流程继续处理
 其他附件。
 """
@@ -39,9 +37,6 @@ __all__ = [
 
 
 log = get_logger(__name__)
-
-
-_SOLVER_CACHE_DIRNAME = "_solver_cache"
 
 
 class PackagingTimeoutError(Exception):
@@ -67,13 +62,12 @@ class MaterialsBundleResult:
         path: Path to the produced zip or ``None`` when not ``attached``.
             (产物路径；非 attached 时为 None。)
         compressed_size_bytes: Size of the produced zip in bytes.
-        entry_count: Number of files actually written into the zip (excludes
-            skipped ``_solver_cache`` entries).
+        entry_count: Number of files written into the zip, including caches.
         included_dirs: Material directory names that contributed at least one
             file to the zip. Directories that were requested but missing on
             disk are NOT listed here.
-        excluded_cache_keys: Deduplicated cache-directory names that were
-            skipped (currently always ``["_solver_cache"]`` when applicable).
+        excluded_cache_keys: Legacy result field; always empty because caches
+            are preserved. / 兼容旧返回结构，缓存不再排除，因此始终为空。
     """
 
     status: Literal["attached", "packaging_timeout", "not_applicable"]
@@ -82,14 +76,6 @@ class MaterialsBundleResult:
     entry_count: int
     included_dirs: list[str] = field(default_factory=list)
     excluded_cache_keys: list[str] = field(default_factory=list)
-
-
-def _is_inside_solver_cache(relative: Path) -> bool:
-    """Return True when any component of ``relative`` equals ``_solver_cache``.
-
-    判断相对路径的任意一段是否为 ``_solver_cache``。
-    """
-    return _SOLVER_CACHE_DIRNAME in relative.parts
 
 
 def _resolve_material_dir(
@@ -135,7 +121,7 @@ def pack_materials(
     materials_root: Path,
     selected_dirs: list[str],
     output_zip: Path,
-    timeout_s: int = 30,
+    timeout_s: int = 0,
     *,
     now_fn=time.monotonic,
 ) -> MaterialsBundleResult:
@@ -152,8 +138,8 @@ def pack_materials(
         output_zip: Destination path for the produced zip.
             (产物 zip 的落盘路径。)
         timeout_s: Wall-clock budget in seconds before the packer bails out
-            and deletes the partial zip. Must be positive.
-            (墙钟预算，单位秒；必须为正整数。)
+            and deletes the partial zip; zero disables it.
+            (墙钟预算，单位秒；零表示不限制打包耗时。)
         now_fn: Monotonic clock hook for tests (defaults to
             :func:`time.monotonic`).
             (测试用单调时钟；默认为 :func:`time.monotonic`。)
@@ -173,7 +159,6 @@ def pack_materials(
 
     start = now_fn()
     included_dirs: list[str] = []
-    excluded_cache_seen = False
     entry_count = 0
 
     # Pre-validate which requested dirs actually exist so we can log missing
@@ -271,10 +256,7 @@ def pack_materials(
                     arcname = rel.as_posix()
                     if arcname.startswith("/") or ".." in rel.parts:
                         continue
-                    if _is_inside_solver_cache(rel):
-                        excluded_cache_seen = True
-                        continue
-                    if (now_fn() - start) >= timeout_s:
+                    if timeout_s > 0 and (now_fn() - start) >= timeout_s:
                         raise PackagingTimeoutError(
                             f"packing exceeded {timeout_s}s budget"
                         )
@@ -305,9 +287,7 @@ def pack_materials(
             compressed_size_bytes=None,
             entry_count=0,
             included_dirs=[],
-            excluded_cache_keys=[_SOLVER_CACHE_DIRNAME]
-            if excluded_cache_seen
-            else [],
+            excluded_cache_keys=[],
         )
 
     size = output_zip.stat().st_size
@@ -318,5 +298,5 @@ def pack_materials(
         compressed_size_bytes=size,
         entry_count=entry_count,
         included_dirs=included_dirs,
-        excluded_cache_keys=[_SOLVER_CACHE_DIRNAME] if excluded_cache_seen else [],
+        excluded_cache_keys=[],
     )

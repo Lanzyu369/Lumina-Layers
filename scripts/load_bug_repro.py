@@ -107,19 +107,11 @@ def _copy_attachments(
 ) -> tuple[list[str], list[str]]:
     """Copy bulky attachments from ``source_dir`` into ``repro_dir``.
 
-    按照 design §5 列表，把 original/final/lut/materials.zip/screenshot 复制
-    到复现目录；同时把 ticket.json / index.md / summary.txt 也复制一份。
+    把工单中的全部文件复制到复现目录，包括源文件、后端日志与会话数据。
     """
     wanted_patterns = (
-        "original.*",
-        "final.*",
-        "lut.*",
-        "materials.zip",
-        "screenshot.*",
-        "ticket.json",
-        "index.md",
-        "summary.txt",
-        "client_logs.jsonl",
+        "original.*", "final.*", "lut.*", "materials.zip", "screenshot.*",
+        "ticket.json", "index.md", "summary.txt", "client_logs.jsonl", "*",
     )
     copied: list[str] = []
     missing: list[str] = []
@@ -130,6 +122,8 @@ def _copy_attachments(
             missing.append(pattern)
             continue
         for match in matches:
+            if not match.is_file() or match.is_symlink():
+                continue
             if match.name in seen:
                 continue
             seen.add(match.name)

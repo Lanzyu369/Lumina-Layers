@@ -1,23 +1,6 @@
-"""Unit tests for the dedicated advanced_params sanitizer.
+"""Verify complete advanced parameters survive public feedback validation.
 
-``advanced_params`` 专用 sanitizer 的单元测试。
-
-These tests pin down the observable contract of
-:func:`api.routers.feedback._sanitize_advanced_params`:
-
-- Preserve up to 64 keys under ``relief.color_height_map`` (path-level
-  exception raising the default 25-key cap).
-- Truncate ``relief.color_height_map`` beyond 64 keys with the shared
-  ``__truncated_keys`` marker.
-- Keep arrays with up to 64 items untouched (``color_replacement.replacement_regions``
-  at 32 and ``fridge_magnet.fridge_magnets`` at 20 both sit below the 64
-  cap).
-- Preserve nesting up to depth 6 (the generic sanitizer would cut at
-  depth 4).
-- Fall back to the default 25-key object cap on sibling groups that are
-  not ``relief.color_height_map``.
-
-Covers requirements 6.4, 6.5, 10.7.
+验证完整高级参数通过公开工单校验后仍保持原样，不再按长度或层级截断。
 """
 
 from __future__ import annotations
@@ -25,7 +8,14 @@ from __future__ import annotations
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from api.routers.feedback import _sanitize_advanced_params
+from api.routers.feedback import BugReportRequest
+from tests.test_feedback_router_unit import _payload
+
+
+def _validate_advanced_params(value):
+    payload = _payload()
+    payload["context"]["advanced_params"] = value
+    return BugReportRequest.model_validate(payload).context.advanced_params
 
 
 def _color_height_map(count: int) -> dict[str, float]:
@@ -44,7 +34,7 @@ def test_sanitizer_preserves_color_height_map_with_64_entries() -> None:
     chm = _color_height_map(64)
     payload = {"relief": {"enable_relief": True, "color_height_map": chm}}
 
-    result = _sanitize_advanced_params(payload)
+    result = _validate_advanced_params(payload)
 
     relief = result["relief"]
     assert relief["enable_relief"] is True
@@ -53,25 +43,10 @@ def test_sanitizer_preserves_color_height_map_with_64_entries() -> None:
     assert relief["color_height_map"] == chm
 
 
-def test_sanitizer_truncates_color_height_map_beyond_64_entries() -> None:
-    """100-entry color_height_map trims to 64 with ``__truncated_keys == 36``.
+def test_report_preserves_color_height_map_beyond_64_entries() -> None:
+    payload = {"relief": {"enable_relief": True, "color_height_map": _color_height_map(100)}}
+    assert _validate_advanced_params(payload) == payload
 
-    100 项的 ``color_height_map`` 会裁剪到 64 并设置 ``__truncated_keys = 36``。
-    """
-    chm = _color_height_map(100)
-    payload = {"relief": {"enable_relief": True, "color_height_map": chm}}
-
-    result = _sanitize_advanced_params(payload)
-
-    sanitized_chm = result["relief"]["color_height_map"]
-    # 64 preserved keys + 1 meta marker key.
-    assert len(sanitized_chm) == 65
-    assert sanitized_chm["__truncated_keys"] == 36
-
-    # The first 64 keys (insertion order) are the ones preserved.
-    preserved_keys = [k for k in sanitized_chm.keys() if k != "__truncated_keys"]
-    expected_keys = [f"#{i:06x}" for i in range(64)]
-    assert preserved_keys == expected_keys
 
 
 def test_sanitizer_preserves_replacement_regions_with_32_items() -> None:
@@ -89,7 +64,7 @@ def test_sanitizer_preserves_replacement_regions_with_32_items() -> None:
     ]
     payload = {"color_replacement": {"replacement_regions": regions}}
 
-    result = _sanitize_advanced_params(payload)
+    result = _validate_advanced_params(payload)
 
     sanitized_regions = result["color_replacement"]["replacement_regions"]
     assert len(sanitized_regions) == 32
@@ -125,7 +100,7 @@ def test_sanitizer_preserves_fridge_magnets_with_20_items() -> None:
         }
     }
 
-    result = _sanitize_advanced_params(payload)
+    result = _validate_advanced_params(payload)
 
     sanitized = result["fridge_magnet"]["fridge_magnets"]
     assert len(sanitized) == 20
@@ -151,40 +126,16 @@ def test_sanitizer_preserves_depth_6_nesting() -> None:
         },
     }
 
-    result = _sanitize_advanced_params(payload)
+    result = _validate_advanced_params(payload)
 
     leaf = result["l1"]["l2"]["l3"]["l4"]["l5"]["l6"]
     assert leaf == "deep-leaf"
 
 
-def test_sanitizer_applies_default_25_key_cap_on_sibling_groups() -> None:
-    """Default 25-key cap still applies on a group other than relief.color_height_map.
+def test_report_preserves_large_sibling_groups() -> None:
+    payload = {"generation": {f"field_{i:02d}": i for i in range(100)}}
+    assert _validate_advanced_params(payload) == payload
 
-    除 ``relief.color_height_map`` 以外的 sibling 分组仍然遵守 25 个 key 上限。
-    """
-    generation = {f"field_{i:02d}": i for i in range(30)}
-    payload = {
-        "relief": {
-            "enable_relief": True,
-            "color_height_map": _color_height_map(64),
-        },
-        "generation": generation,
-    }
-
-    result = _sanitize_advanced_params(payload)
-
-    # relief.color_height_map keeps all 64 entries (path exception).
-    assert "__truncated_keys" not in result["relief"]["color_height_map"]
-    assert len(result["relief"]["color_height_map"]) == 64
-
-    # generation is capped at 25 keys + the truncation marker.
-    sanitized_generation = result["generation"]
-    assert sanitized_generation["__truncated_keys"] == 5
-    preserved_keys = [
-        k for k in sanitized_generation.keys() if k != "__truncated_keys"
-    ]
-    assert len(preserved_keys) == 25
-    assert preserved_keys == [f"field_{i:02d}" for i in range(25)]
 
 
 def test_sanitizer_preserves_complete_generation_with_wipe_tower_warning() -> None:
@@ -221,7 +172,7 @@ def test_sanitizer_preserves_complete_generation_with_wipe_tower_warning() -> No
     }
     assert len(generation) == 25
 
-    result = _sanitize_advanced_params({"generation": generation})
+    result = _validate_advanced_params({"generation": generation})
 
     sanitized_generation = result["generation"]
     assert sanitized_generation["enable_wipe_tower_auto_placement"] is False
@@ -290,7 +241,7 @@ def test_sanitizer_preserves_color_height_map_within_cap_property(
         }
     }
 
-    result = _sanitize_advanced_params(payload)
+    result = _validate_advanced_params(payload)
 
     sanitized_chm = result["relief"]["color_height_map"]
     assert "__truncated_keys" not in sanitized_chm

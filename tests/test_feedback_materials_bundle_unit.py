@@ -1,6 +1,6 @@
 """Unit tests for ``api.feedback_materials_bundle``.
 
-验证耗材档案打包器：空选择、单目录、多目录、_solver_cache 排除、
+验证耗材档案打包器：空选择、单目录、多目录、_solver_cache 保留、
 缺失目录、超时降级。
 """
 
@@ -58,7 +58,7 @@ def test_single_dir_packs_all_files(tmp_path: Path) -> None:
     assert names == {"BrandA/profile.json", "BrandA/notes.txt"}
 
 
-def test_excludes_solver_cache_subtree(tmp_path: Path) -> None:
+def test_preserves_solver_cache_subtree(tmp_path: Path) -> None:
     materials = tmp_path / "materials"
     _make_material(
         materials,
@@ -74,11 +74,24 @@ def test_excludes_solver_cache_subtree(tmp_path: Path) -> None:
     result = pack_materials(materials, ["BrandA"], out)
 
     assert result.status == "attached"
-    assert result.entry_count == 1
-    assert result.excluded_cache_keys == ["_solver_cache"]
+    assert result.entry_count == 3
+    assert result.excluded_cache_keys == []
     with zipfile.ZipFile(out) as zf:
         names = set(zf.namelist())
-    assert names == {"BrandA/profile.json"}
+    assert names == {"BrandA/profile.json", "BrandA/_solver_cache/cache1.pkl", "BrandA/_solver_cache/cache2.pkl"}
+
+
+def test_zero_timeout_preserves_every_file_even_after_the_old_time_budget(tmp_path: Path) -> None:
+    materials = tmp_path / "materials"
+    source = materials / "BrandA"
+    source.mkdir(parents=True)
+    (source / "profile.json").write_bytes(b"profile")
+    (source / "cache.bin").write_bytes(b"cache")
+    clock = iter([0.0, 60.0, 120.0, 180.0])
+    output = tmp_path / "materials.zip"
+    result = pack_materials(materials, ["BrandA"], output, timeout_s=0, now_fn=lambda: next(clock))
+    assert result.status == "attached"
+    assert result.entry_count == 2
 
 
 def test_missing_dir_logged_but_still_produces_zip_for_others(

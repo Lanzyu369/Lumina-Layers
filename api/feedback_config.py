@@ -20,9 +20,9 @@ Default values (默认值):
   has not been implemented yet. The value is accessible for future use.
   单个工单目录在触发裁剪前的磁盘上限（兆字节）。**当前仅解析，未实际
   执行裁剪**：超限自动裁剪逻辑尚未实现，值仅供未来使用。
-* ``LUMINA_FEEDBACK_MATERIALS_BUNDLE_TIMEOUT_S`` — 30 seconds, hard wall-clock
-  budget for packing the ``materials/`` bundle zip during ticket assembly.
-  工单装配阶段打包 ``materials/`` zip 的超时（秒）。
+* ``LUMINA_FEEDBACK_MATERIALS_BUNDLE_TIMEOUT_S`` — 0 seconds, no timeout for
+  packing the complete ``materials/`` bundle. A positive override enables a timeout.
+  工单装配默认完整打包耗材档案，不限制耗时；正数覆盖值启用超时。
 * ``LUMINA_FEEDBACK_TICKET_TTL_DAYS`` — 30 days, retention for the bulky
   attachments of a ticket (original image / final artifact / LUT / materials
   zip / screenshot) before they are purged by the startup cleanup task.
@@ -39,13 +39,13 @@ Parsing rules (解析规则):
 
 All four accessors delegate to :func:`_parse_nonnegative_int`. If an
 environment variable is present but not a valid integer, or is negative (or
-zero when the caller requires strict positivity, e.g. timeouts), the helper
+zero when the caller requires strict positivity), the helper
 emits a structured WARNING log and falls back to the documented default
 instead of raising. This keeps misconfigured deployments running with safe
 defaults while still surfacing the problem via the standard log pipeline.
 
 四个访问函数统一委托给 :func:`_parse_nonnegative_int` 解析。若环境变量
-存在但不是合法整数，或者取到了负值（以及超时等字段不允许的 0），辅助
+存在但不是合法整数，或者取到了负值（以及部分字段不允许的 0），辅助
 函数会记录结构化 WARNING 日志，然后回退到对应的默认值，而不再抛出
 异常。这样即便部署侧配置错误，系统也能以安全默认值继续运行，同时
 通过标准日志通道可观察到问题。
@@ -121,10 +121,10 @@ DEFAULT_MAX_LOCAL_TICKET_MB: int = 1024
 默认值：单工单目录 1024 MB（1 GiB）。
 """
 
-DEFAULT_MATERIALS_BUNDLE_TIMEOUT_S: int = 30
-"""Default: 30 seconds to pack the materials bundle zip.
+DEFAULT_MATERIALS_BUNDLE_TIMEOUT_S: int = 0
+"""Default: preserve the complete materials bundle without a packing timeout.
 
-默认值：耗材档案 zip 打包 30 秒超时。
+默认值：完整打包耗材档案，不限制打包耗时。
 """
 
 DEFAULT_TICKET_TTL_DAYS: int = 30
@@ -350,24 +350,22 @@ def materials_bundle_timeout_s() -> int:
     返回耗材档案打包超时（秒）。
 
     Reads :data:`ENV_MATERIALS_BUNDLE_TIMEOUT_S` as an integer number of
-    seconds. Defaults to :data:`DEFAULT_MATERIALS_BUNDLE_TIMEOUT_S` (30 s)
-    when the env var is unset. Zero is disallowed because a timeout of zero
-    would make the packing step fail instantly; invalid, negative, or zero
-    values silently fall back to the default with a WARNING log (see
+    seconds. Defaults to zero, which disables the timeout and preserves
+    every selected material file. Invalid or negative values fall back to
+    the default with a WARNING log (see
     :func:`_parse_nonnegative_int`).
 
     以秒为单位读取环境变量 :data:`ENV_MATERIALS_BUNDLE_TIMEOUT_S`。未
-    设置时回退到 :data:`DEFAULT_MATERIALS_BUNDLE_TIMEOUT_S`（30 秒）。超时
-    为 0 会让打包步骤立刻失败，因此禁用 0；非法值、负数或 0 都会静默
+    设置时默认为零，不限制打包耗时并保留所有所选耗材文件。非法值或负数
     回退到默认值，并通过 :func:`_parse_nonnegative_int` 记录 WARNING 日志。
 
     Returns:
-        int: Packing timeout in seconds (strictly positive).
+        int: Packing timeout in seconds; zero disables it. / 超时秒数，零表示禁用。
     """
     return _parse_nonnegative_int(
         ENV_MATERIALS_BUNDLE_TIMEOUT_S,
         DEFAULT_MATERIALS_BUNDLE_TIMEOUT_S,
-        allow_zero=False,
+        allow_zero=True,
         purpose="materials bundle timeout (s)",
     )
 

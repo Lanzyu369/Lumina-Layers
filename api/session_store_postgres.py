@@ -167,6 +167,13 @@ class PostgresSessionBackend(SessionStore):
                 .values(data=encode_session_value(data), last_seen_at=now, expires_at=self._expiry_from(now))
             )
 
+    def get_snapshot(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Return the independently decoded session state from one database read.
+
+        通过一次数据库读取返回独立解码的会话状态快照。
+        """
+        return self.get(session_id)
+
     def compare_and_set(
         self,
         session_id: str,

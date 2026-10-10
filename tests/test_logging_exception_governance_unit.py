@@ -319,7 +319,6 @@ FEEDBACK_STRUCTURED_EVENTS = {
     "feedback_materials_bundle_timeout",
     "feedback_materials_dir_missing",
     "feedback_materials_dir_invalid",
-    "feedback_screenshot_too_large",
     "feedback_screenshot_invalid",
     "feedback_dump_failed",
     "feedback_ticket_assembly_interrupted",

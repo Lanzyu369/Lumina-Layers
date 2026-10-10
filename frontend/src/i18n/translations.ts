@@ -67,8 +67,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Screenshot (optional)",
   },
   bug_report_modal_screenshot_hint: {
-    zh: "支持 PNG、JPG、WebP 或 GIF，最大 5 MB。",
-    en: "PNG, JPG, WebP, or GIF up to 5 MB.",
+    zh: "支持 PNG、JPG、WebP 或 GIF。",
+    en: "PNG, JPG, WebP, or GIF.",
   },
   bug_report_modal_screenshot_attached_label: {
     zh: "已附加截图",
@@ -247,8 +247,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "{message} Request ID: {requestId}.",
   },
   bug_report_modal_privacy_note: {
-    zh: "发送后，问题描述、可选邮箱、截图、自动收集的环境信息和操作记录，以及当前单图转换的原图、最近生成的 3MF、所用 LUT 和材料档案（单个文件最大 40 MiB），会先保存在本机，再上传到 Lumina Studio 官方问题收集服务，仅用于定位和回复问题。",
-    en: "When you send, your description, optional email, screenshot, automatically collected diagnostics and recent actions, plus the current single-image conversion source, latest generated 3MF, the LUT, and material archive in use (up to 40 MiB per file) are saved on this device and then uploaded to the Lumina Studio official bug collection service, used only to diagnose and reply to the issue.",
+    zh: "发送工单会上传完整诊断信息、错误记录、软件设置和工作流数据，以及已导入的原图、SVG、模型、批量文件、LUT、材料档案、生成文件和截图。数据会按原样保存并提交到 Lumina Studio 官方问题收集服务，用于复现和处理问题。",
+    en: "Sending a ticket uploads complete diagnostics, error logs, settings and workflow data, together with imported images, SVGs, models, batch files, LUTs, material archives, generated files and screenshots. The data is saved and sent unchanged to the official Lumina Studio bug collection service to reproduce and resolve the issue.",
   },
   bug_report_modal_submit: {
     zh: "发送",
@@ -1126,6 +1126,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "重试上传",
     en: "Retry upload",
   },
+  bug_report_collection_incomplete: {
+    zh: "资料采集不完整：部分源文件或诊断数据未能保存。请检查本机文件和可用磁盘空间，再重新采集提交。",
+    en: "Data collection is incomplete: some source files or diagnostics could not be saved. Check the local files and available disk space, then collect and submit again.",
+  },
+  bug_report_recapture: {
+    zh: "重新采集并提交全部资料",
+    en: "Collect and submit all data again",
+  },
   bug_report_upload_retrying: {
     zh: "正在重试…",
     en: "Retrying…",
@@ -1159,12 +1167,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "The converter source image was recovered from the current session and saved with the ticket.",
   },
   bug_report_success_original_not_applicable: {
-    zh: "本次未附带转换原图；仅当前单图转换会自动附带。",
-    en: "No converter source image was attached; automatic capture applies only to the active single-image conversion.",
+    zh: "本次没有单独的转换原图；其他已上传源文件会随工单保存。",
+    en: "There is no separate converter image; other uploaded source files are saved with the report.",
   },
   bug_report_success_original_too_large: {
-    zh: "原图超过 100 MiB，未随工单保存；问题描述和其他诊断信息已提交。",
-    en: "The source image exceeded 100 MiB and was not saved; the description and other diagnostics were submitted.",
+    zh: "旧版本客户端因大小限制省略了原图；请更新后重新提交以附带完整源文件。",
+    en: "An older client omitted the original image because of its size limit. Update and resubmit to include every source file.",
   },
   bug_report_success_original_failed: {
     zh: "原图保存失败；问题描述和其他诊断信息已提交。",

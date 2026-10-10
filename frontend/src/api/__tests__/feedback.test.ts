@@ -102,7 +102,7 @@ describe("submitBugReport", () => {
     expect(form.has("original_image_omission_reason")).toBe(false);
   });
 
-  it("omits a source image over 100 MiB but keeps the report payload", async () => {
+  it("uploads a source image over the former 100 MiB limit", async () => {
     vi.mocked(apiClient.post).mockResolvedValueOnce({
       data: {
         ticket_id: "LUM-202608-deadbeef",
@@ -122,8 +122,8 @@ describe("submitBugReport", () => {
 
     const form = vi.mocked(apiClient.post).mock.calls[0][1] as FormData;
     expect(form.get("request_payload")).not.toBeNull();
-    expect(form.has("original_image")).toBe(false);
-    expect(form.get("original_image_omission_reason")).toBe("too_large");
+    expect(form.has("original_image")).toBe(true);
+    expect(form.get("original_image_omission_reason")).toBeNull();
   });
 
   it("reads upload status for a ticket", async () => {

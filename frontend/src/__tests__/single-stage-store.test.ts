@@ -641,7 +641,7 @@ describe("useSingleStageStore ColorChecker flow", () => {
     await useSingleStageStore.getState().submitExtract();
 
     expect(useSingleStageStore.getState().extractError).toBe(
-      "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
+      tRuntime("api_error_http_500"),
     );
   });
 
