@@ -8,7 +8,7 @@ import { LuminaBoxSerialTimeout, serialDeadline } from "../api/luminaBoxSerialDe
 
 export type LuminaBoxSerialIssue = Exclude<LuminaBoxCaptureResult, "applied">
   | "unsupported" | "connection_failed" | "connection_lost" | "invalid_measurement" | "material_changed"
-  | "operation_timeout" | "delivery_overflow" | "wrong_device";
+  | "operation_timeout" | "delivery_overflow" | "wrong_device" | "device_not_functioning";
 type Receiver = (measurement: LuminaBoxMeasurement) => LuminaBoxCaptureResult | Promise<LuminaBoxCaptureResult>;
 export interface LuminaBoxSerialStoreOptions {
   storageNamespace?: string;
@@ -323,6 +323,7 @@ export function createLuminaBoxSerialStore(
           const name = error instanceof Error ? error.name : "";
           const issue = active.fault ?? (error instanceof LuminaBoxSerialTimeout ? "operation_timeout"
             : name === "SecurityError" || name === "NotSupportedError" ? "unsupported"
+            : error instanceof Error && error.message === "serial_device_not_functioning" ? "device_not_functioning"
             : opened ? "connection_lost" : "connection_failed");
           const message = active.faultMessage ?? (error instanceof Error ? error.message : String(error));
           if (name !== "NotFoundError" && !active.fault) {

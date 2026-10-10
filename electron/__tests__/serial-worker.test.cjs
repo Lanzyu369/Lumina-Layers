@@ -51,4 +51,17 @@ describe("isolated SerialPort worker", () => {
     await flush();
     assert.deepEqual(messages, [{ requestId: 1, ok: false, error: "serial_open_failed" }]);
   });
+
+  it("identifies Windows device initialization error 31 without exposing native error text", async () => {
+    const messages = [];
+    const parent = new EventEmitter();
+    parent.postMessage = (message) => messages.push(message);
+    class Port extends EventEmitter {
+      open(callback) { callback(new Error("Open (SetCommState): Unknown error code 31")); }
+    }
+    installSerialWorker(parent, Port);
+    parent.emit("message", { data: { requestId: 1, command: "open", path: "COM25" } });
+    await flush();
+    assert.deepEqual(messages, [{ requestId: 1, ok: false, error: "serial_device_not_functioning" }]);
+  });
 });

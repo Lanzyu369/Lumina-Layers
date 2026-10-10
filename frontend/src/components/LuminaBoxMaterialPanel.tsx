@@ -14,6 +14,7 @@ import { useLuminaBoxMaterialNavigation } from "../stores/luminaBoxMaterialNavig
 import { savedBackedGradientMaterialSymbols } from "../utils/luminaBoxBackedGradientCapture";
 import LuminaBoxMaterialCapture, { boxMaterialInputClass, luminaBoxMaterialProgress } from "./LuminaBoxMaterialCapture";
 import LuminaBoxBackingSetup from "./LuminaBoxBackingSetup";
+import LuminaBoxConnectionDiagnostics from "./LuminaBoxConnectionDiagnostics";
 import Button from "./ui/Button";
 import Dropdown from "./ui/Dropdown";
 import { cardClass, cardDividerClass, resolvePanelSurfaceClass, StatusBanner, wellClass } from "./ui/panelPrimitives";
@@ -195,8 +196,9 @@ export default function LuminaBoxMaterialPanel() {
             {dataset ? <Button variant="secondary" label={t("lumina_box_material_cancel")} onClick={() => setCreating(null)} /> : null}</div>
         </form> : null}
         {capture.error && !capture.failedPending.length ? <StatusBanner tone="error">{capture.error}</StatusBanner> : null}
-        {capture.serial.issue && ["connection_failed", "connection_lost", "operation_timeout", "wrong_device"].includes(capture.serial.issue)
-          ? <StatusBanner tone="error">{t("lumina_box_material_connection_failed")}</StatusBanner> : null}
+        {capture.serial.issue && ["connection_failed", "connection_lost", "operation_timeout", "wrong_device", "device_not_functioning"].includes(capture.serial.issue)
+          ? <><StatusBanner tone="error">{t(`lumina_box_serial_${capture.serial.issue}`)}</StatusBanner>
+            <LuminaBoxConnectionDiagnostics snapshot={capture.serial} /></> : null}
         {referenceError ? <StatusBanner tone="error" action={<Button size="sm" variant="secondary" label={t("lumina_box_material_retry")} onClick={() => setReferenceAttempt((value) => value + 1)} />}>
           {t("lumina_box_material_load_failed")}</StatusBanner> : null}
         {capture.captureNotice ? <StatusBanner tone="warning">{t(capture.captureNotice)}</StatusBanner> : null}

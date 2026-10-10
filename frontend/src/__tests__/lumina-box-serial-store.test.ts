@@ -31,6 +31,22 @@ afterEach(async () => {
 });
 
 describe("Lumina Box serial connection", () => {
+  it("reports native device initialization failure without treating it as a protocol fault", async () => {
+    const device = createPort();
+    device.port.open.mockRejectedValue(new Error("serial_device_not_functioning"));
+    const store = makeStore(() => ({ requestPort: async () => device.port }));
+    const receive = vi.fn();
+    store.getState().connect(receive);
+    await waitFor(() => expect(store.getState().status).toBe("disconnected"));
+    expect(store.getState().issue).toBe("device_not_functioning");
+    expect(store.getState().lastError).toBe("serial_device_not_functioning");
+    expect(store.getState().receivedBytes).toBe(0);
+    expect(receive).not.toHaveBeenCalled();
+    expect(store.getState().trace).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: "connection_failed", detail: "serial_device_not_functioning" }),
+    ]));
+  });
+
   it("opens 115200 baud and delivers each measurement only once", async () => {
     const device = createPort();
     const store = makeStore(() => ({ requestPort: async () => device.port }));

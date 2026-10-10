@@ -12,7 +12,12 @@ function installSerialWorker(parentPort, SerialPort) {
   const callbackOperation = (start) => new Promise((resolve, reject) => {
     start((error) => error ? reject(error) : resolve());
   });
-  const failure = (command) => `serial_${command}_failed`;
+  const failure = (command, error) => {
+    if (command === "open" && error?.message === "Open (SetCommState): Unknown error code 31") {
+      return "serial_device_not_functioning";
+    }
+    return `serial_${command}_failed`;
+  };
   const run = async (message) => {
     const { requestId, command } = message;
     try {
@@ -44,8 +49,8 @@ function installSerialWorker(parentPort, SerialPort) {
         if (port?.isOpen) await callbackOperation((callback) => port.close(callback));
       } else throw new Error("invalid_command");
       send({ requestId, ok: true, value });
-    } catch {
-      send({ requestId, ok: false, error: failure(command) });
+    } catch (error) {
+      send({ requestId, ok: false, error: failure(command, error) });
     }
   };
   parentPort.on("message", ({ data }) => {

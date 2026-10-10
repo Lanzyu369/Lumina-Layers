@@ -8,6 +8,7 @@ const resultError = (error) => ({ status: "error", error });
 const knownErrors = new Set([
   "serial_operation_timeout", "serial_worker_exited", "serial_worker_failed", "serial_queue_full",
   "serial_open_failed", "serial_write_failed", "serial_close_failed", "serial_list_failed", "serial_data_overflow",
+  "serial_device_not_functioning",
 ]);
 const errorCode = (error, fallback) => knownErrors.has(error?.message) ? error.message : fallback;
 

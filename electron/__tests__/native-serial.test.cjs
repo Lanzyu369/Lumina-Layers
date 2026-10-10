@@ -55,6 +55,22 @@ function fixture({ hold = [], holdExit = false, operationMs = 2000 } = {}) {
 }
 
 describe("native serial desktop bridge", () => {
+  it("preserves a recognized device initialization error until the failed worker exits", async () => {
+    const f = fixture({ hold: ["open"], holdExit: true });
+    const id = await f.select();
+    let settled = false;
+    const opening = f.bridge.open(f.event, id).then((value) => { settled = true; return value; });
+    const child = f.children[1];
+    child.emit("message", { requestId: child.sent[0].requestId, ok: false, error: "serial_device_not_functioning" });
+    await flush();
+    assert.equal(settled, false);
+    assert.equal(child.kills, 1);
+    child.exit();
+    assert.deepEqual(await opening, { status: "error", error: "serial_device_not_functioning" });
+    assert.equal(f.events.find((event) => event.type === "error").error, "serial_device_not_functioning");
+    await f.bridge.dispose();
+  });
+
   it("rejects untrusted child frames before selection, process creation or byte handling", async () => {
     const f = fixture();
     const childEvent = { sender: f.owner, senderFrame: { parent: f.owner.mainFrame, url: f.owner.mainFrame.url } };

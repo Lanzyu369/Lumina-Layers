@@ -8,6 +8,7 @@ import { useLuminaBoxBackedGradientSerialStore } from "../stores/luminaBoxBacked
 import { createLuminaBoxSerialStore } from "../stores/luminaBoxSerialStore";
 import { useLuminaBoxMaterialNavigation } from "../stores/luminaBoxMaterialNavigation";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
+import { translations } from "../i18n/translations";
 import { BACKED_GRADIENT_DRAFT_KEY } from "../utils/luminaBoxBackedGradientCapture";
 import { appendGradientCapture, completeGradientDataset, gradientDataset, gradientRun } from "./fixtures/backedGradient";
 import wire from "./fixtures/lumina-box-seven-thickness-v3.jsonl?raw";
@@ -62,6 +63,7 @@ beforeEach(() => {
   useLuminaBoxMaterialNavigation.setState({ captureRequest: { datasetId: dataset.dataset_id, materialSymbol: "R" }, lastCaptureArchive: null, libraryProfileKind: "stage_a" });
   Object.defineProperty(navigator, "serial", { configurable: true, value: { requestPort: vi.fn() } });
   useLuminaBoxBackedGradientSerialStore.setState({ status: "disconnected", mode: "unknown", issue: null, captureId: "scope-0", pendingCount: 0,
+    lastError: null, trace: [],
     connect: vi.fn((callback: Receiver) => { receiver = callback; useLuminaBoxBackedGradientSerialStore.setState({ status: "connected", mode: "reliable" }); }),
     disconnect: vi.fn(async () => undefined), replay: vi.fn(),
     resetCapture: vi.fn(() => useLuminaBoxBackedGradientSerialStore.setState({ captureId: `scope-${++scope}`, pendingCount: 0 })),
@@ -161,7 +163,7 @@ describe("Lumina Box material workflow", () => {
     expect(screen.getByTestId("box-material-progress")).toHaveTextContent("14 / 14");
     expect(within(screen.getByTestId("box-material-measurements")).getAllByRole("button")).toHaveLength(14);
     expect(screen.queryByText("补收未确认数据")).not.toBeInTheDocument();
-    expect(screen.queryByText("查看连接诊断")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("lumina-box-connection-diagnostics")).not.toBeInTheDocument();
     expect(screen.queryByText("内部验证档")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "生成耗材档案" }));
     await screen.findByRole("button", { name: "保存到耗材库" });
@@ -172,6 +174,34 @@ describe("Lumina Box material workflow", () => {
     await screen.findByText("已保存到耗材库");
     expect(materialApi.saveLuminaBoxMaterialArchive).toHaveBeenCalledWith(gradientRun.fit_id, expect.objectContaining({ name: "PETG Red", overwrite: false }));
   });
+
+  it.each(["connection_failed", "connection_lost", "operation_timeout", "wrong_device", "device_not_functioning"] as const)(
+    "shows the specific connection error and its diagnostics for %s", async (issue) => {
+      render(<LuminaBoxMaterialPanel />);
+      await screen.findByTestId("box-material-measurements");
+      const lastError = `Native serial failure: ${issue}`;
+      const trace = [{ at: 100, event: "open_failed", detail: lastError }];
+      act(() => useLuminaBoxBackedGradientSerialStore.setState({ issue, lastError, trace }));
+      expect(screen.getByText(translations[`lumina_box_serial_${issue}`].zh)).toBeInTheDocument();
+      expect(screen.getByTestId("lumina-box-connection-diagnostics")).toBeInTheDocument();
+      expect(screen.queryByTestId("lumina-box-diagnostics-text")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: translations.lumina_box_serial_diagnostics_view.zh }));
+      const diagnostics = JSON.parse((screen.getByTestId("lumina-box-diagnostics-text") as HTMLTextAreaElement).value);
+      expect(diagnostics).toEqual(expect.objectContaining({ issue, lastError, trace }));
+      expect(screen.getByRole("button", { name: translations.lumina_box_serial_connect.zh })).not.toBeDisabled();
+      act(() => useLuminaBoxBackedGradientSerialStore.setState({ issue: null }));
+      expect(screen.queryByTestId("lumina-box-connection-diagnostics")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([null, "invalid_measurement", "storage_unavailable"] as const)(
+    "keeps connection diagnostics hidden without a connection error: %s", async (issue) => {
+      useLuminaBoxBackedGradientSerialStore.setState({ issue });
+      render(<LuminaBoxMaterialPanel />);
+      await screen.findByTestId("box-material-measurements");
+      expect(screen.queryByTestId("lumina-box-connection-diagnostics")).not.toBeInTheDocument();
+    },
+  );
 
   it("does not flash a failed-save alert while a manual reading is being saved", async () => {
     let finish!: (response: Awaited<ReturnType<typeof captureApi.saveBackedGradientCapture>>) => void;
