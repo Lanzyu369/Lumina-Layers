@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
+const { randomBytes } = require("node:crypto");
 const { isDeepStrictEqual } = require("node:util");
 const { fileURLToPath, pathToFileURL } = require("node:url");
 
@@ -32,7 +33,8 @@ const MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024;
 const MIGRATION_CHANNEL = "lumina-migration-payload";
 const MIGRATION_PRELOAD_PATH = path.join(__dirname, "storage-migration-preload.cjs");
 
-const EXPORT_SCRIPT = `
+function buildExportScript({ applicationOnly = false } = {}) {
+  return `
 (async () => {
   const result = { schemaVersion: 1, ok: true, localStorage: {}, indexedDB: [] };
   const encodeTransferValue = async (value, seen = new WeakMap()) => {
@@ -91,6 +93,7 @@ const EXPORT_SCRIPT = `
   }
   for (const info of databases) {
     if (!info || typeof info.name !== "string" || !info.name) continue;
+    if (${applicationOnly} && info.name !== "${APPLICATION_DATABASE_NAME}") continue;
     let database = null;
     try {
       database = await new Promise((resolve, reject) => {
@@ -140,6 +143,7 @@ const EXPORT_SCRIPT = `
   return result;
 })()
 `;
+}
 
 function hasSnapshotData(snapshot) {
   return Boolean(
@@ -287,13 +291,14 @@ function mergeSnapshots(snapshots) {
   return { snapshot: merged, conflictCount };
 }
 
-function buildImportScript() {
+function buildImportScript({ replace = false } = {}) {
   return `
 (async () => {
   const snapshot = await globalThis.__luminaMigrationReceive();
   if (!snapshot || typeof snapshot !== "object") return { ok: false, error: "legacy_snapshot_missing" };
   const applicationDatabaseVersion = 2;
   const applicationDatabaseName = "lumina-workshop";
+  const replace = ${replace};
   const applicationDatabaseSchema = ${JSON.stringify(APPLICATION_DATABASE_STORES)};
   const sameKeyPath = (left, right) => JSON.stringify(left) === JSON.stringify(right);
   const reviveTransferValue = value => {
@@ -321,9 +326,11 @@ function buildImportScript() {
         actual.unique === index.unique && actual.multiEntry === index.multiEntry;
     });
   });
+  try { if (replace) localStorage.clear(); }
+  catch (_) { return { ok: false, error: "legacy_local_storage_write_failed" }; }
   for (const [key, value] of Object.entries(snapshot.localStorage || {})) {
     try {
-      if (localStorage.getItem(key) !== null) continue;
+      if (!replace && localStorage.getItem(key) !== null) continue;
       localStorage.setItem(key, value == null ? "" : String(value));
     } catch (_) {
       return { ok: false, error: "legacy_local_storage_write_failed" };
@@ -380,6 +387,9 @@ function buildImportScript() {
       const recordsByStore = new Map((database.stores || []).map(schema => [schema.name, schema.records || []]));
       await new Promise((resolve, reject) => {
         const transaction = writable.transaction(applicationDatabaseSchema.map(schema => schema.name), "readwrite");
+        // Dedicated port handover is authoritative, unlike legacy gap filling.
+        // Clears and record imports share one atomic IndexedDB transaction.
+        if (replace) for (const schema of applicationDatabaseSchema) transaction.objectStore(schema.name).clear();
         const queue = applicationDatabaseSchema.flatMap(schema =>
           (recordsByStore.get(schema.name) || []).map(record => ({ schema, record })),
         );
@@ -460,8 +470,8 @@ async function destroyWindow(window) {
   });
 }
 
-async function readSnapshot(BrowserWindow, url, load) {
-  const window = new BrowserWindow({
+function migrationWindow(BrowserWindow, storageSession) {
+  return new BrowserWindow({
     show: false,
     width: 1,
     height: 1,
@@ -469,16 +479,100 @@ async function readSnapshot(BrowserWindow, url, load) {
       contextIsolation: false,
       nodeIntegration: false,
       sandbox: false,
+      webSecurity: true,
       preload: MIGRATION_PRELOAD_PATH,
+      ...(storageSession ? { session: storageSession } : {}),
     },
   });
+}
+
+async function boundedTransfer(operation, timeoutMs) {
+  if (timeoutMs === undefined) return operation;
+  let timer;
   try {
-    await load(window, url);
-    const snapshot = await window.webContents.executeJavaScript(EXPORT_SCRIPT, true);
+    return await Promise.race([
+      operation,
+      new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error("storage_transfer_timeout")), timeoutMs); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readSnapshot(BrowserWindow, url, load, { storageSession, applicationOnly = false, timeoutMs } = {}) {
+  const window = migrationWindow(BrowserWindow, storageSession);
+  try {
+    await boundedTransfer(load(window, url), timeoutMs);
+    const snapshot = await boundedTransfer(window.webContents.executeJavaScript(buildExportScript({ applicationOnly }), true), timeoutMs);
     if (!snapshot || snapshot.ok === false) throw new Error(snapshot?.error || "legacy_storage_read_failed");
     return snapshot;
   } finally {
     await destroyWindow(window);
+  }
+}
+
+/**
+ * Move the committed desktop origin without fetching an old port owner's page.
+ * Only this transfer replaces target data; legacy imports remain non-overwriting.
+ * 不访问旧端口占用者的页面；以已提交来源覆盖目标数据，普通旧版导入仍不覆盖已有值。
+ */
+async function handoverBackendStorage({ BrowserWindow, storageSession, sourceOrigin, targetOrigin, timeoutMs = 60000 }) {
+  let stage = "storage_validation";
+  let intercepted = false;
+  let target = null;
+  try {
+    const loopbackOrigin = origin => {
+      const match = typeof origin === "string" && /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(origin);
+      return Boolean(match && Number(match[1]) >= 1024 && Number(match[1]) <= 65535);
+    };
+    if (!loopbackOrigin(sourceOrigin) || !loopbackOrigin(targetOrigin) ||
+        !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 180000) throw new Error("invalid_storage_handover");
+    if (sourceOrigin === targetOrigin) return "unchanged";
+    const token = randomBytes(24).toString("hex");
+    const sourceUrl = `${sourceOrigin}/__lumina_storage_handover__/${token}/source`;
+    const targetUrl = `${targetOrigin}/__lumina_storage_handover__/${token}/target`;
+    stage = "storage_protocol_setup";
+    // The default session owns the existing profile. A new partition would read
+    // empty storage. Interception is temporary and denies ALL other HTTP URLs;
+    // there is deliberately no network proxy or net.fetch fallback here.
+    await storageSession.protocol.handle("http", request => {
+      if (request.method !== "GET" || ![sourceUrl, targetUrl].includes(request.url)) {
+        return new Response("", { status: 403 });
+      }
+      return new Response("<!doctype html><title>Lumina storage handover</title>", { headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "x-content-type-options": "nosniff",
+      } });
+    });
+    intercepted = true;
+    stage = "storage_source_read";
+    const source = await readSnapshot(BrowserWindow, sourceUrl, (window, url) => window.loadURL(url), {
+      storageSession, applicationOnly: true, timeoutMs,
+    });
+    const normalized = mergeSnapshots([source]);
+    if (normalized.conflictCount !== 0) throw new Error("storage_source_schema_unsupported");
+    // Empty or absent source databases are authoritative too; they must erase
+    // previously used target projects, snapshots and usage metadata together.
+    if (normalized.snapshot.indexedDB.length === 0) normalized.snapshot.indexedDB.push(databaseTemplate());
+    const payload = cloneSnapshotForTransfer(normalized.snapshot);
+    stage = "storage_target_import";
+    target = migrationWindow(BrowserWindow, storageSession);
+    await boundedTransfer(target.loadURL(targetUrl), timeoutMs);
+    target.webContents.send(MIGRATION_CHANNEL, payload);
+    const result = await boundedTransfer(target.webContents.executeJavaScript(buildImportScript({ replace: true }), true), timeoutMs);
+    if (result?.ok !== true) throw new Error(result?.error || "storage_target_import_failed");
+    return "transferred";
+  } catch (cause) {
+    const error = new Error("storage_handover_failed");
+    error.code = "storage_handover_failed";
+    error.stage = stage;
+    error.cause = cause;
+    throw error;
+  } finally {
+    await destroyWindow(target);
+    if (intercepted) await storageSession.protocol.unhandle("http");
   }
 }
 
@@ -547,17 +641,7 @@ async function migrateLegacyStorage({
     writeMarker(markerPath, "no-data");
     return "no-data";
   }
-  const target = new BrowserWindow({
-    show: false,
-    width: 1,
-    height: 1,
-    webPreferences: {
-      contextIsolation: false,
-      nodeIntegration: false,
-      sandbox: false,
-      preload: MIGRATION_PRELOAD_PATH,
-    },
-  });
+  const target = migrationWindow(BrowserWindow);
   try {
     if (targetUrl.startsWith("file://") && target.loadFile) {
       await target.loadFile(fileURLToPath(targetUrl));
@@ -591,4 +675,5 @@ module.exports = {
   hasSnapshotData,
   mergeSnapshots,
   migrateLegacyStorage,
+  handoverBackendStorage,
 };

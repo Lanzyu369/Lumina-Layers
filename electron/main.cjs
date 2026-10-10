@@ -22,9 +22,9 @@ const {
   resolveDefaultSavePath,
   setGeneratedFileDirectory,
 } = require("./generated-file-directory.cjs");
-const { migrateLegacyStorage } = require("./storage-migration.cjs");
+const { migrateLegacyStorage, handoverBackendStorage } = require("./storage-migration.cjs");
 const { managedRuntime, assertPortsAvailable } = require("./managed-runtime.cjs");
-const { selectBackendEndpoint, validateHealthResponse } = require("./backend-endpoint.cjs");
+const { selectBackendEndpoint, commitBackendEndpoint, validateHealthResponse } = require("./backend-endpoint.cjs");
 const { createManagedStartup } = require("./managed-startup.cjs");
 const {
   fetchNativeBedModel,
@@ -55,6 +55,43 @@ const {
 // ═══════════════════════════════════════════════════════════
 
 let backendEndpoint;
+
+// Keep protocol-1 launcher statuses compatible, but describe the actual failed
+// stage using safe codes only. Error messages/causes can contain private paths.
+function failLocalStartup(error, stage) {
+  const portUnavailable = error.code === "backend_port_unavailable" || /^port_in_use(?::|$)/.test(error.message || "");
+  const allowedCodes = [
+    "backend_port_unavailable", "backend_port_probe_failed", "backend_port_state_invalid",
+    "backend_port_state_read_failed", "backend_port_state_write_failed", "backend_port_state_changed",
+    "storage_handover_failed",
+  ];
+  const code = portUnavailable ? "backend_port_unavailable"
+    : allowedCodes.includes(error.code) ? error.code : "desktop_local_startup_failed";
+  const storageStages = ["storage_validation", "storage_protocol_setup", "storage_source_read", "storage_target_import"];
+  if (storageStages.includes(error.stage)) stage = error.stage;
+  if (stage === "backend_port_selection" && code.startsWith("backend_port_state_")) stage = "backend_port_state";
+  managedStartup?.fail(portUnavailable ? "startup_port_in_use" : "startup_failed");
+  logErr(`Desktop local startup failed: stage=${stage}; code=${code}`);
+  closeSplash();
+  const message = portUnavailable
+    ? currentLang === "zh"
+      ? "没有可用的本地启动端口。请重试或查看此版本日志；软件不会终止其它进程。"
+      : "No local startup port is available. Retry or check this version's logs. Other processes will not be terminated."
+    : code === "storage_handover_failed"
+      ? currentLang === "zh"
+        ? "切换本地端口时未能完成设置和项目迁移，软件已停止启动，仍保留原数据来源。请重试或查看此版本日志后联系支持。"
+        : "Settings and project transfer could not finish after a port change. Startup stopped and the original data source was retained. Retry or check this version's logs and contact support."
+      : code.startsWith("backend_port_state_")
+        ? currentLang === "zh"
+          ? "本地启动记录无法读取或保存，软件已停止启动，原有设置和项目不会被重置。请检查数据目录权限和此版本日志后重试。"
+          : "Local startup state could not be read or saved. Startup stopped without resetting settings or projects. Check data-directory permissions and this version's logs, then retry."
+        : currentLang === "zh"
+          ? "未能准备本地启动环境，软件已停止启动，原数据来源未改变。请重试或查看此版本日志后联系支持。"
+          : "The local startup environment could not be prepared. Startup stopped and the original data source was retained. Retry or check this version's logs and contact support.";
+  dialog.showErrorBox("Lumina Studio", `${message}\n\nstage=${stage}; code=${code}`);
+  app.quit();
+}
+
 const FRONTEND_PORT = 4174;
 const FRONTEND_URL = `http://127.0.0.1:${FRONTEND_PORT}`;
 // Cold native dependency loading can exceed 30 seconds on a clean Windows guest.
@@ -962,6 +999,7 @@ app.whenReady().then(async () => {
   try {
     backendEndpoint = await selectBackendEndpoint({
       portFile: path.join(app.getPath("userData"), "backend-port.json"),
+      allowEphemeralFallback: true,
     });
     if (managed) {
       const selected = managedRuntime(process.env, backendEndpoint.port);
@@ -971,12 +1009,7 @@ app.whenReady().then(async () => {
     enableManagedDesktopHost(backendEndpoint.port);
     if (isDev) await assertPortsAvailable([FRONTEND_PORT]);
   } catch (error) {
-    managedStartup?.fail("startup_port_in_use");
-    closeSplash();
-    dialog.showErrorBox("Lumina Studio", currentLang === "zh"
-      ? "没有可用的本地启动端口。请关闭多余的本地服务后重试；启动器不会终止其它进程。"
-      : "No local startup port is available. Close unused local services and retry. Other processes will not be terminated.");
-    app.quit();
+    failLocalStartup(error, "backend_port_selection");
     return;
   }
 
@@ -1097,6 +1130,39 @@ app.whenReady().then(async () => {
     } catch (error) {
       logErr(`Legacy renderer storage migration failed: ${error.code || error.name}`);
     }
+  }
+
+  // The old committed origin remains authoritative until health AND transfer
+  // succeed. Run this after legacy gap filling so it cannot resurrect deletions.
+  let endpointStage = "storage_source_read";
+  try {
+    if (!isDev && backendEndpoint.previousOrigin) {
+      await handoverBackendStorage({
+        BrowserWindow,
+        storageSession: session.defaultSession,
+        sourceOrigin: backendEndpoint.previousOrigin,
+        targetOrigin: backendEndpoint.origin,
+      });
+      logSys("Desktop storage origin handover completed");
+    }
+    if (backendProc.exitCode !== null || backendProc.signalCode !== null || backendProc.killed) {
+      managedStartup?.fail("startup_backend_exited");
+      logErr("Desktop local startup failed: stage=backend_before_port_commit; code=startup_backend_exited");
+      closeSplash();
+      if (!managedStartup) dialog.showErrorBox("Lumina Studio", currentLang === "zh"
+        ? "后端在完成启动前退出，原数据来源未改变。请重试或查看此版本日志。"
+        : "The backend exited before startup completed. The original data source was retained. Retry or check this version's logs.");
+      app.quit();
+      return;
+    }
+    endpointStage = "backend_port_commit";
+    commitBackendEndpoint({
+      portFile: path.join(app.getPath("userData"), "backend-port.json"),
+      endpoint: backendEndpoint,
+    });
+  } catch (error) {
+    failLocalStartup(error, endpointStage);
+    return;
   }
 
   installWorkshopSessionSecurity();
