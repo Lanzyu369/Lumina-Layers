@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-12",
+    title: {
+      zh: "Lumina Layers — 10 月更新速览",
+      en: "Lumina Layers — October updates",
+    },
+    sections: [{
+      category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+      items: [{
+        zh: "优化颜色调整中的选区描边，选中数千个区域后，二维预览的缩放和拖拽更流畅，保留黑白虚线和选区闪烁。",
+        en: "Zooming and panning the 2D preview is smoother with thousands of regions selected in color adjustment, while keeping the black-and-white dashed outlines and selection blink.",
+      }],
+    }],
+  },
+  {
     version: "2026-10-10",
     title: {
       zh: "Lumina Layers — 10 月更新速览",

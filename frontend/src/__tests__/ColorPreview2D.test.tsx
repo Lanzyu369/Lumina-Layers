@@ -1344,14 +1344,11 @@ describe('ColorPreview2D hover inspector', () => {
 
     flushPendingImages('/preview.png');
 
-    const compatPolygon = screen.getByTestId('selection-contour-compat');
-    expect(compatPolygon).toHaveAttribute('points', '50,300 110,300 110,240');
-
-    // 轮廓已迁移到 imageRect 投影：viewBox 为容器尺寸，坐标按图像 fit 矩形
-    // 换算，与画布绘制严格对齐（renderMarchingAntsScreenOverlay）。
+    // Image-pixel geometry is projected through the fitted canvas rectangle.
     const whiteAnts = screen.getByTestId('selection-marching-ants-white');
     const blackAnts = screen.getByTestId('selection-marching-ants-black');
-    expect(whiteAnts).toHaveAttribute('d', 'M 50 300 L 110 300 L 110 240 Z');
+    expect(whiteAnts).toHaveAttribute('d', 'M 0 100 L 20 100 L 20 80 Z');
+    expect(whiteAnts.parentElement).toHaveAttribute('transform', 'translate(50 0) scale(3 3)');
     expect(blackAnts).toHaveAttribute('d', whiteAnts.getAttribute('d'));
     expect(whiteAnts).toHaveAttribute('stroke', '#ffffff');
     expect(blackAnts).toHaveAttribute('stroke', '#1a1a1a');
@@ -1415,7 +1412,7 @@ describe('ColorPreview2D hover inspector', () => {
     mockPreviewRect(screen.getByTestId('color-preview-2d-container'));
     flushPendingImages('/preview.png');
 
-    expect(container.querySelector('polygon')).not.toBeNull();
+    expect(container.querySelector('[data-testid="selection-marching-ants-white"]')).not.toBeNull();
     const blinkCanvas = screen.getByTestId('selection-blink-canvas');
     expect(blinkCanvas).toBeInTheDocument();
     expect(blinkCanvas).toHaveStyle({ zIndex: '6' });
@@ -1462,9 +1459,9 @@ describe('ColorPreview2D hover inspector', () => {
 
     flushPendingImages('/preview.png');
 
-    const polygon = container.querySelector('polygon');
-    expect(polygon).not.toBeNull();
-    expect(polygon).toHaveAttribute('points', '50,300 110,300 110,240');
+    const path = container.querySelector('[data-testid="selection-marching-ants-white"]');
+    expect(path).toHaveAttribute('d', 'M 0 100 L 20 100 L 20 80 Z');
+    expect(path?.parentElement).toHaveAttribute('transform', 'translate(50 0) scale(3 3)');
   });
 
   it('renders same-colour contours even when contour keys include a hash or different case', async () => {
@@ -1503,9 +1500,100 @@ describe('ColorPreview2D hover inspector', () => {
 
     flushPendingImages('/preview.png');
 
-    const polygon = container.querySelector('polygon');
-    expect(polygon).not.toBeNull();
-    expect(polygon).toHaveAttribute('points', '50,300 110,300 110,240');
+    const path = container.querySelector('[data-testid="selection-marching-ants-white"]');
+    expect(path).toHaveAttribute('d', 'M 0 100 L 20 100 L 20 80 Z');
+    expect(path?.parentElement).toHaveAttribute('transform', 'translate(50 0) scale(3 3)');
+  });
+
+  it.each(['same-color', 'regions', 'document'] as const)(
+    'keeps thousands of %s contours cached while zooming and panning',
+    (source) => {
+      const polygons = Array.from({ length: 3000 }, (_, index) => {
+        const x = index % 100;
+        const y = Math.floor(index / 100);
+        return [[x, y], [x + 0.5, y], [x + 0.5, y + 0.5]];
+      });
+      const mapPolygon = vi.spyOn(polygons[0], 'map');
+      const selectionState = {
+        selectionMode: 'select-all',
+        selectedColor: '112233',
+        selectedColors: new Set(['112233']),
+        colorContours: { '112233': polygons },
+        selectionBlinkEnabled: false,
+      } as const;
+      useConverterStore.setState(selectionState);
+      if (source === 'regions') {
+        useConverterStore.setState({
+          selectionMode: 'multi-select',
+          selectedRegions: polygons.map((polygon, index) => ({
+            regionId: `region-${index}`, colorHex: '112233', pixelCount: 1,
+            previewUrl: '/preview.png', contours: [polygon],
+          })),
+        });
+      } else if (source === 'document') {
+        useConverterStore.setState({
+          selectionDocument: {
+            selection_revision: 1, content_revision: 1,
+            selected_pixel_count: 3000, selected_component_count: 3000,
+            selected_color_hexes: ['#112233'], region_ids: [], components: [],
+            contours: polygons, can_undo: false, can_redo: false,
+          },
+        });
+      }
+      render(<ColorPreview2D />);
+      const surface = screen.getByTestId('color-preview-2d-container');
+      mockPreviewRect(surface);
+      flushPendingImages('/preview.png');
+
+      const path = screen.getAllByTestId('selection-marching-ants-white')[0];
+      const initialGeometry = path.getAttribute('d');
+      const initialTransform = path.parentElement?.getAttribute('transform');
+      mapPolygon.mockClear();
+
+      fireEvent.wheel(surface, { deltaY: -100, clientX: 200, clientY: 150 });
+      expect(path.parentElement?.getAttribute('transform')).not.toBe(initialTransform);
+      const zoomTransform = path.parentElement?.getAttribute('transform');
+      fireEvent.pointerDown(surface, { button: 2, pointerId: 1, clientX: 200, clientY: 150 });
+      fireEvent.pointerMove(surface, { pointerId: 1, clientX: 220, clientY: 180 });
+      fireEvent.pointerUp(surface, { button: 2, pointerId: 1, clientX: 220, clientY: 180 });
+
+      expect(path.parentElement?.getAttribute('transform')).not.toBe(zoomTransform);
+      expect(path).toHaveAttribute('d', initialGeometry);
+      expect(mapPolygon).not.toHaveBeenCalled();
+      expect(screen.getAllByTestId('selection-marching-ants-white')).toHaveLength(1);
+      expect(screen.getAllByTestId('selection-marching-ants-black')).toHaveLength(1);
+      expect(surface.querySelectorAll('polygon')).toHaveLength(0);
+      expect(initialGeometry?.match(/ Z/g)).toHaveLength(3000);
+    },
+  );
+
+  it('refreshes the cached union outline when selection or dimensions change and removes it on clear', () => {
+    const selectionDocument = {
+      selection_revision: 1, content_revision: 1,
+      selected_pixel_count: 20, selected_component_count: 2,
+      selected_color_hexes: ['#112233'], region_ids: [], components: [],
+      contours: [
+        [[0, 0], [20, 0], [20, 20]],
+        [[30, 30], [40, 30], [40, 40]],
+        [[50, 50], [60, 60]],
+      ],
+      can_undo: false, can_redo: false,
+    };
+    useConverterStore.setState({ selectionDocument, preview_width_mm: 100 });
+    render(<ColorPreview2D />);
+    mockPreviewRect(screen.getByTestId('color-preview-2d-container'));
+    flushPendingImages('/preview.png');
+    const path = screen.getByTestId('selection-marching-ants-white');
+    expect(path).toHaveAttribute('d', 'M 0 100 L 20 100 L 20 80 Z M 30 70 L 40 70 L 40 60 Z');
+
+    act(() => useConverterStore.setState({ preview_width_mm: 200 }));
+    expect(path).toHaveAttribute('d', 'M 0 100 L 10 100 L 10 90 Z M 15 85 L 20 85 L 20 80 Z');
+    act(() => useConverterStore.setState({
+      selectionDocument: { ...selectionDocument, selection_revision: 2, contours: [[[0, 0], [4, 0], [4, 4]]] },
+    }));
+    expect(path).toHaveAttribute('d', 'M 0 100 L 2 100 L 2 98 Z');
+    act(() => useConverterStore.setState({ selectionDocument: null }));
+    expect(screen.queryByTestId('selection-marching-ants-overlay')).not.toBeInTheDocument();
   });
 
   it('blocks hover and wheel interactions while replacePreviewLoading is active', () => {

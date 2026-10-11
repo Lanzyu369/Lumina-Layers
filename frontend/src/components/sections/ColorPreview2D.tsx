@@ -40,6 +40,7 @@ import { resolvePreviewHoverPixel } from './actionBarHoverUtils';
 import { readPixelColor } from './colorPreview2DUtils';
 import { detectLocalRegionContours } from './localRegionDetect';
 import { BRUSH_STROKE_OPACITY, drawBrushStrokes } from './brushDraftComposite';
+import SelectionOutlineOverlay from './SelectionOutlineOverlay';
 
 /**
  * Find the closest palette entry to a given hex color.
@@ -1667,89 +1668,87 @@ export default function ColorPreview2D({
     );
   }, [brushHoverSample, brushSizePx, selectionTool]);
 
+  // Cache geometry in image pixels. Navigation changes only the enclosing
+  // transform, so neither vertex projection nor SVG node count grows per frame.
+  const marchingAntsPaths = useMemo(() => {
+    const contourWidth = resolvePreviewWidthForContours(previewWidthMm, previewPixelWidth);
+    if (!previewPixelWidth || !previewPixelHeight || !contourWidth) return null;
+    const pixelScale = contourWidth / previewPixelWidth;
+    const subpaths: string[] = [];
+    for (const { polygons } of svgContours) {
+      for (const polygon of polygons) {
+        if (polygon.length < 3) continue;
+        subpaths.push(`${polygon.map(([xMm, yMm], index) =>
+          `${index === 0 ? 'M' : 'L'} ${xMm / pixelScale} ${previewPixelHeight - yMm / pixelScale}`,
+        ).join(' ')} Z`);
+      }
+    }
+    if (subpaths.length === 0) return null;
+    const path = subpaths.join(' ');
+    return (
+      <>
+        <path
+          data-testid="selection-marching-ants-white"
+          d={path}
+          fill="none"
+          stroke="#ffffff"
+          strokeWidth={1}
+          strokeDasharray="4 4"
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+          className="selection-marching-ants selection-marching-ants--white"
+        />
+        <path
+          data-testid="selection-marching-ants-black"
+          d={path}
+          fill="none"
+          stroke="#1a1a1a"
+          strokeWidth={1}
+          strokeDasharray="4 4"
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+          className="selection-marching-ants selection-marching-ants--black"
+        />
+      </>
+    );
+  }, [previewPixelHeight, previewPixelWidth, previewWidthMm, svgContours]);
+
   const renderMarchingAntsScreenOverlay = useCallback((viewport: CanvasPreviewSurfaceViewport) => {
     if (
       !previewPixelWidth ||
       !previewPixelHeight ||
       viewport.containerSize.width <= 0 ||
       viewport.containerSize.height <= 0 ||
-      svgContours.length === 0
+      !marchingAntsPaths
     ) {
       return null;
     }
 
+    const { x, y, width, height } = viewport.imageScreenRect;
     const contourWidth = resolvePreviewWidthForContours(previewWidthMm, previewPixelWidth);
-    if (!contourWidth || contourWidth <= 0) return null;
-
-    const pixelScale = contourWidth / previewPixelWidth;
-    const strokeWidth = 1;
-
-    // 选区轮廓的屏幕投影约定（勿改动）：轮廓值域为图像像素 [0, previewPixel]，
-    // 按图像 fit 矩形精确投影到屏幕，与画布绘制严格对齐。
+    if (!contourWidth) return null;
     return (
-      <svg
-        data-testid="selection-marching-ants-overlay"
-        viewBox={`0 0 ${viewport.containerSize.width} ${viewport.containerSize.height}`}
-        className="pointer-events-none absolute inset-0 h-full w-full"
-        aria-hidden="true"
-      >
-        {svgContours.map(({ hex, polygons }, ti) =>
-          polygons.map((polygon, pi) => {
-            if (polygon.length < 3) return null;
-            const screenPoints = polygon.map(([xMm, yMm]) => {
-              const px = xMm / pixelScale;
-              const py = previewPixelHeight - yMm / pixelScale;
-              const sx =
-                viewport.imageScreenRect.x +
-                (px / previewPixelWidth) * viewport.imageScreenRect.width;
-              const sy =
-                viewport.imageScreenRect.y +
-                (py / previewPixelHeight) * viewport.imageScreenRect.height;
-              return [sx, sy] as const;
-            });
-            const path = screenPoints
-              .map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`)
-              .join(' ');
-            const points = screenPoints.map(([x, y]) => `${x},${y}`).join(' ');
-            const key = `${hex}-${ti}-${pi}`;
-            return (
-              <g key={key}>
-                <polygon
-                  data-testid="selection-contour-compat"
-                  points={points}
-                  fill="none"
-                  stroke="transparent"
-                  aria-hidden="true"
-                />
-                <path
-                  data-testid="selection-marching-ants-white"
-                  d={`${path} Z`}
-                  fill="none"
-                  stroke="#ffffff"
-                  strokeWidth={strokeWidth}
-                  strokeDasharray="4 4"
-                  strokeLinejoin="round"
-                  vectorEffect="non-scaling-stroke"
-                  className="selection-marching-ants selection-marching-ants--white"
-                />
-                <path
-                  data-testid="selection-marching-ants-black"
-                  d={`${path} Z`}
-                  fill="none"
-                  stroke="#1a1a1a"
-                  strokeWidth={strokeWidth}
-                  strokeDasharray="4 4"
-                  strokeLinejoin="round"
-                  vectorEffect="non-scaling-stroke"
-                  className="selection-marching-ants selection-marching-ants--black"
-                />
-              </g>
-            );
-          }),
+      <SelectionOutlineOverlay
+        contours={svgContours}
+        pixelWidth={previewPixelWidth}
+        pixelHeight={previewPixelHeight}
+        contourWidth={contourWidth}
+        viewport={viewport}
+        fallback={(
+          <svg
+            data-testid="selection-marching-ants-overlay"
+            viewBox={`0 0 ${viewport.containerSize.width} ${viewport.containerSize.height}`}
+            className="pointer-events-none absolute inset-0 h-full w-full"
+            aria-hidden="true"
+          >
+            <g transform={`translate(${x} ${y}) scale(${width / previewPixelWidth} ${height / previewPixelHeight})`}>
+              {marchingAntsPaths}
+            </g>
+          </svg>
         )}
-      </svg>
+      />
     );
-  }, [previewPixelHeight, previewPixelWidth, previewWidthMm, svgContours, brushHoverSample, selectionTool]);
+  }, [previewPixelHeight, previewPixelWidth, previewWidthMm, svgContours, marchingAntsPaths]);
 
   const renderSelectionScreenOverlay = useCallback((viewport: CanvasPreviewSurfaceViewport) => (
     <>
