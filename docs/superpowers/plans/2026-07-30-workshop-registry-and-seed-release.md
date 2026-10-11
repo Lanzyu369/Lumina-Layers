@@ -4,9 +4,9 @@
 
 **Goal:** Publish a signed, auditable GitHub Registry for installable Workshop modules, register the real `lumina.bead-pattern` release, embed that exact package as Lumina's official seed, and remove the obsolete in-tree bead implementation after cross-repository acceptance.
 
-**Architecture:** `Lumina-Workshop-Registry` stores reviewed source entries, schemas, and deterministic build tools; GitHub Actions validates immutable release assets, builds exact index bytes, signs them with an Ed25519 key held outside Git, and deploys the index and detached signature to GitHub Pages. `Lumina-studio` pins the actual bead Release asset and SHA-256 in a seed lock, downloads it during desktop packaging, verifies it through the same package installer used for community modules, and respects a persistent user-uninstalled tombstone.
+**Architecture:** `Lumina-Workshop-Registry` stores reviewed source entries, schemas, and deterministic build tools; GitHub Actions validates immutable release assets, builds exact index bytes, signs them with an Ed25519 key held outside Git, and deploys the index and detached signature to GitHub Pages. `Lumina-studio` pins the actual bead Release asset and SHA-256 in a seed lock, downloads it to a local seed directory, verifies it through the same package installer used for community modules, and respects a persistent user-uninstalled tombstone.
 
-**Tech Stack:** Python 3.12, Pydantic, `cryptography` Ed25519, `httpx`, pytest, JSON Schema, GitHub Actions, GitHub Releases, GitHub Pages, Electron Builder, PyInstaller, React/Vitest
+**Tech Stack:** Python 3.12, Pydantic, `cryptography` Ed25519, `httpx`, pytest, JSON Schema, GitHub Actions, GitHub Releases, GitHub Pages, React/Vitest
 
 ---
 
@@ -27,10 +27,10 @@ The release order is strict:
 3. create and sign the Registry index containing the real module bytes and hashes;
 4. update the host's embedded verification key and offline Registry snapshot;
 5. generate the seed lock from the same real Release asset;
-6. pass cross-repository, packaged-Electron, offline, rollback, and uninstall tests;
+6. pass cross-repository, source Electron, offline, rollback, and uninstall tests;
 7. remove the in-tree bead source and publish the user-visible announcement.
 
-Before execution, register the Registry and seed work in the online tracking spreadsheet. Never commit a private signing key, GitHub token, fabricated digest, downloaded credential, or mutable `latest` URL.
+Never commit a private signing key, GitHub token, fabricated digest, downloaded credential, or mutable `latest` URL.
 
 ## Registry trust invariants
 
@@ -805,7 +805,7 @@ decoded length, and atomically writes the host `schemaVersion: 1` key set. Run:
 ./.venv/bin/python scripts/sync_workshop_registry_key.py \
   --public-key /Users/min/CascadeProjects/Lumina-Workshop-Registry/keys/registry-2026-01.public.json \
   --output assets/workshop-registry/keys.json
-./.venv/bin/python -m pytest tests/test_workshop_registry_key_sync_unit.py tests/test_workshop_registry_unit.py tests/test_desktop_build_contract_unit.py -v
+./.venv/bin/python -m pytest tests/test_workshop_registry_key_sync_unit.py tests/test_workshop_registry_unit.py -v
 git diff --check
 git add scripts/sync_workshop_registry_key.py assets/workshop-registry/keys.json tests/test_workshop_registry_key_sync_unit.py tests/test_workshop_registry_unit.py
 git commit -m "feat(workshop): trust the production Registry key"
@@ -1046,7 +1046,7 @@ popd
   "$WORKSHOP_SEED_CACHE/lumina.bead-pattern-1.0.0.lumina-workshop"
 ```
 
-The cache directory is outside Git and may be deleted after the desktop build copies and verifies it. Do not commit the binary package unless a later distribution requirement explicitly changes this design.
+The cache directory is outside Git and may be deleted after the module has been verified and copied to the local seed directory. Do not commit the downloaded module package.
 
 - [ ] **Step 5: Run tests and commit real public metadata**
 
@@ -1055,114 +1055,6 @@ The cache directory is outside Git and may be deleted after the desktop build co
 git diff --check
 git add scripts/sync_workshop_registry.py scripts/sync_workshop_seed.py assets/workshop-registry assets/workshop-seed/seed-lock.json tests/test_workshop_seed_sync_unit.py .gitignore
 git commit -m "build(workshop): pin official bead seed release"
-```
-
-## Task 9: Bundle the seed in desktop installers without a parallel install path
-
-**Files in `Lumina-studio`:**
-
-- Modify: `scripts/build_desktop.py`
-- Modify: `electron/package.json`
-- Create: `electron/resources/workshop-seed/.gitignore`
-- Modify: `electron/main.cjs`
-- Modify: `tests/test_desktop_build_contract_unit.py`
-- Create: `tests/test_workshop_seed_bundle_unit.py`
-
-- [ ] **Step 1: Write failing build-contract tests**
-
-```python
-def test_desktop_builder_requires_a_verified_workshop_seed() -> None:
-    source = Path("scripts/build_desktop.py").read_text(encoding="utf-8")
-    assert "--workshop-seed-path" in source
-    assert "verify_workshop_seed" in source
-
-
-def test_electron_bundles_workshop_seed_as_extra_resource() -> None:
-    package = json.loads(Path("electron/package.json").read_text(encoding="utf-8"))
-    assert {
-        "from": "resources/workshop-seed",
-        "to": "workshop-seed",
-    } in package["build"]["extraResources"]
-```
-
-Test that a wrong hash stops before Electron Builder, stale seed assets are removed when no path is supplied, and only the lock-named asset is copied.
-
-- [ ] **Step 2: Run the focused tests**
-
-```bash
-./.venv/bin/python -m pytest tests/test_workshop_seed_bundle_unit.py tests/test_desktop_build_contract_unit.py -v
-```
-
-Expected: FAIL because the desktop build does not know about Workshop seed packages.
-
-- [ ] **Step 3: Add an explicit build input and verification function**
-
-Extend `parse_args()`:
-
-```python
-parser.add_argument(
-    "--workshop-seed-path",
-    default=os.environ.get("WORKSHOP_SEED_PATH", ""),
-    help="Required official .lumina-workshop seed for release desktop builds.",
-)
-```
-
-Add:
-
-```python
-def verify_workshop_seed(seed_path: Path, lock_path: Path) -> dict[str, object]:
-    """Verify one seed asset against its committed lock.
-    对照已提交的锁文件校验一个预装模块安装包。
-    """
-    lock = json.loads(lock_path.read_text(encoding="utf-8"))
-    if seed_path.name != lock["releaseAsset"]:
-        raise ValueError("Workshop seed asset name does not match lock")
-    digest = hashlib.sha256(seed_path.read_bytes()).hexdigest()
-    if not hmac.compare_digest(digest, lock["sha256"]):
-        raise ValueError("Workshop seed SHA-256 does not match lock")
-    inspect_workshop_package(seed_path)
-    return lock
-```
-
-Use streaming hash calculation in the final implementation. Copy the verified asset plus `seed-lock.json` into `electron/resources/workshop-seed/`. A release build without `--workshop-seed-path` fails; an explicit development-only flag may omit it, but release CI must never use that flag.
-
-- [ ] **Step 4: Pass the packaged seed directory to the backend**
-
-In packaged mode, `electron/main.cjs` sets:
-
-```js
-LUMINA_WORKSHOP_SEED_DIR: path.join(process.resourcesPath, "workshop-seed")
-```
-
-In development, set it only when a verified resource directory exists. Do not pass the package bytes or path through `preload.cjs` to the renderer.
-
-Add to `electron/package.json`:
-
-```json
-{
-  "from": "resources/workshop-seed",
-  "to": "workshop-seed"
-}
-```
-
-- [ ] **Step 5: Run build-contract tests and a dry-run copy**
-
-```bash
-WORKSHOP_SEED_CACHE="/Users/min/.cache/lumina-workshop-release/bead-v1.0.0"
-test -f "$WORKSHOP_SEED_CACHE/lumina.bead-pattern-1.0.0.lumina-workshop"
-./.venv/bin/python -m pytest tests/test_workshop_seed_bundle_unit.py tests/test_desktop_build_contract_unit.py -v
-./.venv/bin/python scripts/build_desktop.py \
-  --workshop-seed-path "$WORKSHOP_SEED_CACHE/lumina.bead-pattern-1.0.0.lumina-workshop" \
-  --materials-seed-path ""
-```
-
-Expected: the exact locked asset and lock appear under the built `workshop-seed` resource and Electron packaging starts only after verification. Do not leave generated installer resources staged.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add scripts/build_desktop.py electron/package.json electron/main.cjs electron/resources/workshop-seed/.gitignore tests
-git commit -m "build(workshop): bundle verified official seed"
 ```
 
 ## Task 10: Install, update, restore, and tombstone the official seed
@@ -1211,12 +1103,12 @@ def test_user_uninstall_tombstone_prevents_resurrection(
 Also test:
 
 - missing seed directory is non-fatal in source development;
-- release desktop mode treats missing/invalid seed as a packaging fault;
+- a configured seed must pass package validation before installation;
 - same installed version is a no-op;
 - a newer bundled seed becomes a candidate but does not replace active before ready;
 - an older seed never downgrades a newer active version;
 - a blocked cached Registry version cannot be restored;
-- “从安装包恢复” clears the tombstone only after explicit user action;
+- “从预装模块恢复” clears the tombstone only after explicit user action;
 - project data survives uninstall/reinstall;
 - first handshake failure keeps the previous active version;
 - three consecutive failures disable the bad candidate and enter module safe mode.
@@ -1518,7 +1410,7 @@ git add frontend docs
 git commit -m "refactor(workshop): remove in-tree bead module"
 ```
 
-## Task 13: Announce the installable Workshop and run packaged acceptance
+## Task 13: Announce and validate the installable Workshop
 
 **Files in `Lumina-studio`:**
 
@@ -1554,7 +1446,6 @@ Do not mention RPC, iframe, registry schema, seed lock, reducer, endpoint, or in
 - module Release URL and SHA-256;
 - Registry commit, key ID, deployed URL, and verified signature result;
 - seed-lock hash equality;
-- Windows/macOS packaged build identifiers;
 - light/dark and Chinese/English screenshots;
 - offline start;
 - update/rollback;
@@ -1578,10 +1469,8 @@ pnpm --dir frontend exec tsc --noEmit
   tests/test_workshop_installer_unit.py \
   tests/test_workshop_api_unit.py \
   tests/test_workshop_seed_sync_unit.py \
-  tests/test_workshop_seed_bundle_unit.py \
   tests/test_workshop_seed_lifecycle_unit.py \
   tests/test_workshop_release_chain_unit.py \
-  tests/test_desktop_build_contract_unit.py \
   tests/test_logging_exception_governance_unit.py \
   tests/test_structured_logging_unit.py \
   tests/test_logger_unit.py -v
@@ -1593,18 +1482,9 @@ git diff --check
 
 Expected: every command PASS.
 
-- [ ] **Step 4: Build and test real packaged applications**
+- [ ] **Step 4: Check the source application workflows**
 
-Build with the already verified seed asset:
-
-```bash
-WORKSHOP_SEED_CACHE="/Users/min/.cache/lumina-workshop-release/bead-v1.0.0"
-test -f "$WORKSHOP_SEED_CACHE/lumina.bead-pattern-1.0.0.lumina-workshop"
-./.venv/bin/python scripts/build_desktop.py \
-  --workshop-seed-path "$WORKSHOP_SEED_CACHE/lumina.bead-pattern-1.0.0.lumina-workshop"
-```
-
-On both a signed/notarized macOS build and a signed Windows build, verify:
+Start the source desktop client with the verified module seed available, then verify:
 
 1. first launch shows the official module installed from seed;
 2. first open performs sandbox handshake and activation;
@@ -1615,7 +1495,7 @@ On both a signed/notarized macOS build and a signed Windows build, verify:
 7. a broken candidate rolls back to 1.0.0 with projects intact;
 8. uninstall retains projects by default;
 9. app restart does not reinstall an explicitly uninstalled official module;
-10. “从安装包恢复” reinstalls it offline only after explicit confirmation;
+10. “从预装模块恢复” reinstalls it offline only after explicit confirmation;
 11. three start failures enter safe mode without breaking Settings, image conversion, or vectorization;
 12. 1280×720 keeps Installed/Discover cards and permission controls visible and clickable;
 13. Chinese/English and light/dark content has no clipping, duplicate selection signals, or persistent mouse focus ring.
@@ -1639,7 +1519,7 @@ gh pr create \
   --body-file /tmp/workshop-registry-seed-pr.md
 ```
 
-The PR body is English first and Chinese second. It links all three repository PRs/releases, distinguishes automated from packaged-human evidence, lists signing/notarization status, and marks any untested platform as `partial`, `fix_not_verified`, or `regression_risk`.
+The PR description links all three repository PRs/releases, distinguishes automated and manual evidence, and states which platforms were tested.
 
 ## Final release checkpoint
 
@@ -1654,5 +1534,5 @@ Release only when:
 - the external module owns every bead-specific source and test;
 - the main repository has no direct bead implementation import;
 - source-color PNG handoff and existing Lumina conversion/share-card round-trip pass;
-- packaged Electron isolation and network-blocking acceptance pass on every claimed platform;
+- source Electron isolation and network-blocking acceptance pass on every claimed platform;
 - the release checklist contains fresh command and human-flow evidence.

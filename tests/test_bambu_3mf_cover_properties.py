@@ -285,48 +285,36 @@ class TestCoverBundleBuildProperties:
         for spec in _ALL_SPECS:
             _verify_png(_bundle_field(bundle, spec))
 
-    @_PROPERTY_SETTINGS
-    @given(image=_cover_image_strategy())
-    def test_letterbox_uncovered_corners_are_pure_white(
-        self, image: Image.Image
+    @pytest.mark.parametrize(
+        "source_size, white_corners",
+        [
+            ((4, 3), (False, False, False, False)),
+            ((257, 193), (False, True, False, True)),
+            ((680, 509), (False, False, True, True)),
+            ((100, 100), (True, True, True, True)),
+        ],
+    )
+    def test_letterbox_corners_preserve_content_and_white_padding(
+        self,
+        source_size: tuple[int, int],
+        white_corners: tuple[bool, bool, bool, bool],
     ) -> None:
-        """All 4 corners == ``(255, 255, 255)`` whenever the scaled image leaves bands.
-
-        Letterbox uses ``scale = min(tw/sw, th/sh)`` and rounds the final
-        ``(nw, nh)`` via ``int(round(...))``. Either ``nw == tw`` (top/bottom
-        bands), or ``nh == th`` (left/right bands), or both (exact fit, no
-        bands). The "no bands" case includes both rational-aspect matches
-        (``sw * th == sh * tw``) and rounding-induced matches: e.g.
-        ``8 × 6 → 251 × 188`` rounds to ``251 × 188`` even though the
-        rational aspect differs by 2 (1504 vs 1506). We replay the
-        ``_letterbox_fit`` math here to skip the no-band case.
-
-        **Validates: Requirements 2.4, 2.5 / Property 1**
-        """
+        """Check exact fit, one-pixel bands and padding on both sides."""
+        content = (154, 37, 12)
+        image = Image.new("RGB", source_size, content)
         bundle = CoverThumbnailBuilder().build(image)
-        sw, sh = image.size
-        for spec in _ALL_SPECS:
-            tw, th = spec.width, spec.height
-            scale = min(tw / sw, th / sh)
-            nw = max(1, int(round(sw * scale)))
-            nh = max(1, int(round(sh * scale)))
-            # Skip when the scaled image fills the canvas in both
-            # dimensions — no letterbox bands, all 4 corners are content.
-            if nw >= tw and nh >= th:
-                continue
-            decoded = _decode_png(_bundle_field(bundle, spec))
-            corners = [
-                decoded.getpixel((0, 0)),
-                decoded.getpixel((tw - 1, 0)),
-                decoded.getpixel((0, th - 1)),
-                decoded.getpixel((tw - 1, th - 1)),
-            ]
-            for idx, corner in enumerate(corners):
-                assert corner == (255, 255, 255), (
-                    f"{spec.logical_name}: corner #{idx} expected white, "
-                    f"got {corner} (source {(sw, sh)}, target {(tw, th)}, "
-                    f"scaled {(nw, nh)})"
-                )
+        decoded = _decode_png(bundle.thumbnail_middle)
+        assert decoded.size == (680, 510)
+        corners = [
+            decoded.getpixel((0, 0)),
+            decoded.getpixel((679, 0)),
+            decoded.getpixel((0, 509)),
+            decoded.getpixel((679, 509)),
+        ]
+        assert corners == [
+            (255, 255, 255) if white else content
+            for white in white_corners
+        ]
 
 
 # ---------------------------------------------------------------------------

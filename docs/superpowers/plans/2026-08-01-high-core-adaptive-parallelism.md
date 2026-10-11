@@ -198,7 +198,7 @@ else:
 
 Replace the fixed headroom subtraction with
 `task_memory_headroom_bytes(memory_available)`, pass the new keyword through
-the integer wrapper, and update both bilingual public docstrings.
+the integer wrapper, and update the affected public API documentation.
 
 - [x] **Step 4: Run the complete planner suite and confirm GREEN**
 
@@ -572,7 +572,7 @@ Expected: push succeeds without force and the remote head matches local HEAD.
 
 - [x] **Step 5: Update Draft PR #544**
 
-Add an English-first/Chinese-second PR section containing:
+Add a PR section containing:
 
 ```text
 - continuous formula and removal of fixed low stage caps;

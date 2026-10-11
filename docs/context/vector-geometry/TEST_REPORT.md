@@ -1,5 +1,7 @@
 # 0928 coordinate handoff validation
 
+> Historical validation record. The former logging source inventory has since been retired. Current logging checks use `tests/test_api_errors_unit.py`, `tests/test_structured_logging_unit.py`, and `tests/test_logger_unit.py`; see `docs/logging-guide.md`.
+
 ## Identity and scope
 
 - Base: `cf3700307894e277d431ae28a3b3ecd10c483fcb` (`dev-refactor`).
@@ -282,7 +284,7 @@ R1/R2/native/adapter/workflow/tiling/material/packaging set passed **214 tests**
 against the isolated installed wheel:
 
 ```text
-python -m pytest tests/test_native_svg_self_test_control_flow_unit.py native/lumina-svg-core/tests/test_coordinate_projection.py tests/test_native_canonical_preservation.py tests/test_svg_coordinate_domain_unit.py tests/test_native_svg_adapter_unit.py tests/test_native_svg_workflow_integration.py tests/test_native_svg_fallback_properties.py tests/test_vector_large_format_unit.py tests/test_vector_layer_geometry_unit.py tests/test_vector_material_parallelism_unit.py tests/test_native_svg_packaging_contract_unit.py tests/test_desktop_build_contract_unit.py -q
+python -m pytest tests/test_native_svg_self_test_control_flow_unit.py native/lumina-svg-core/tests/test_coordinate_projection.py tests/test_native_canonical_preservation.py tests/test_svg_coordinate_domain_unit.py tests/test_native_svg_adapter_unit.py tests/test_native_svg_workflow_integration.py tests/test_native_svg_fallback_properties.py tests/test_vector_large_format_unit.py tests/test_vector_layer_geometry_unit.py tests/test_vector_material_parallelism_unit.py tests/test_native_svg_packaging_contract_unit.py -q
 214 passed in 32.41s
 python api_server.py --native-svg-self-test tests/fixtures/native_svg/clip_inherited_fill.svg
 python native/lumina-svg-core/tools/verify_wheel.py --installed
@@ -413,5 +415,4 @@ does not establish the cause on this host.
 
 Therefore **actual slicing/printing acceptance remains unverified**. No printer
 command was sent. A rebuilt Windows wheel and real spawned workers were tested;
-the user's installed desktop package was not replaced, and no application
-installer was deployed. The PR must not be described as full release acceptance.
+the user's local environment was not changed. The PR must not be described as full release acceptance.

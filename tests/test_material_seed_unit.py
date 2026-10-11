@@ -10,8 +10,10 @@ from pathlib import Path
 import pytest
 
 from api.material_seed import install_material_seed_if_needed
-from core.single_stage import materials as materials_module
-from core.single_stage.materials import _verify_material_bundle_package
+from core.single_stage import material_files, material_library, material_package
+from core.single_stage.material_package import (
+    _verify_material_bundle_package,
+)
 
 
 def _write_seed_archive(zip_path: Path) -> str:
@@ -202,7 +204,7 @@ def test_material_seed_full_install_and_export_with_temp_directory_alias(
         alias.symlink_to(canonical, target_is_directory=True)
     except OSError:
         pytest.skip("Directory symlink creation is unavailable")
-    monkeypatch.setattr(materials_module, "TEMP_DIR", str(alias))
+    monkeypatch.setattr(material_files, "TEMP_DIR", str(alias))
     seed_path = tmp_path / "seed.zip"
     seed_sha256 = _write_seed_archive(seed_path)
     monkeypatch.setenv("LUMINA_MATERIALS_SEED_PATH", str(seed_path))
@@ -222,11 +224,11 @@ def test_material_seed_full_install_and_export_with_temp_directory_alias(
     sync_index = json.loads((library_root / "_sync" / "index.json").read_text(encoding="utf-8"))
     assert sync_index["installed"]["mat_seed"]["revision_id"] == "rev_seed"
     assert install_material_seed_if_needed(materials_dir=str(library_root)) is None
-    exported = materials_module.export_saved_stage_a_material_archives(
+    exported = material_library.export_saved_stage_a_material_archives(
         directory_names=["SeedBrand/seed-pla"], materials_dir=str(library_root),
     )
     reimported_root = tmp_path / "reimported"
-    imported = materials_module.import_saved_stage_a_material_archives(
+    imported = material_library.import_saved_stage_a_material_archives(
         archive_path=exported.archive_path, materials_dir=str(reimported_root),
     )
     assert len(imported.imported_materials) == 1
@@ -261,7 +263,7 @@ def test_material_bundle_copy_rejects_files_outside_canonical_material(
             relative_path += "/secret.json"
     destination = tmp_path / "destination"
     with pytest.raises(ValueError, match="outside material directory"):
-        materials_module._copy_material_bundle_package_files(
+        material_package._copy_material_bundle_package_files(
             manifest_root=manifest_root, staged_material_dir=material_dir,
             destination_dir=destination, package={"files": [{"path": relative_path}]},
         )

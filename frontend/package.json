@@ -9,7 +9,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "lint:debt": "node scripts/token-debt-report.mjs",
-    "test:watch:core": "vitest --watch src/__tests__/api-client.property.test.ts src/__tests__/theme.property.test.ts src/components/__tests__/BatchResultSummary.test.tsx src/__tests__/resource-url.test.ts src/__tests__/url-localhost-guard.test.ts",
+    "test:watch:core": "vitest --watch src/__tests__/api-client.property.test.ts src/__tests__/theme.property.test.ts src/components/__tests__/BatchResultSummary.test.tsx src/__tests__/resource-url.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

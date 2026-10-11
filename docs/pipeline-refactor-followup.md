@@ -211,9 +211,8 @@ new method (NOT in this PR)", Phase 4 was supposed to:
 > - A **multi-renderer feature** ships (e.g. PNG preview, large-format
 >   tiled SVG) that materially benefits from a `BoardLayout` IR and
 >   would otherwise duplicate code across renderers.
-> - The 30-day "drop unused utilities" clock (per `AGENTS.md` L42)
->   expires for the Phase 2/3 sketches without an adoption site, and
->   the team chooses **delete** over **fold + adopt**.
+> - A relevant code audit finds sketches without real callers and chooses
+>   to delete them or fold them into existing code.
 
 Without one of these triggers, Phase 4 is over-engineering for current
 product needs. The project posture is **desktop-first** (per memory
@@ -371,12 +370,8 @@ for the future restart.
 
 ### 9.5 Why not delete the un-migrated Phase 2/3 sketches now?
 
-They satisfy `AGENTS.md` L42 ("New utilities … must land with at least
-one adoption site"). Deleting them is a separate audit (per
-`AGENTS.md` "Drop or fold utilities with zero adoption after 30 days").
-Phase 0-3 merged on `2026-04-30`; the 30-day clock ends on
-`2026-05-30`. If 30 days pass with no Phase 4 trigger, audit + delete
-is appropriate.
+Keep shared helpers only while they have real callers. Assess unused code
+during a relevant audit; there is no scheduled 30-day cleanup requirement.
 
 ### 9.6 Why is gradient_card simulated as a 4-Color RYBW LUT in tests?
 
@@ -440,10 +435,9 @@ If you (a future AI agent) are dropped into this guide and asked to
 "continue the pipeline refactor", read these steps **in order** before
 touching any production code:
 
-1. **Read §3 + §5** — confirm the wake trigger (team's new calibration
-   method, multi-renderer feature, or 30-day audit window). If no
-   trigger, **stop**: tell the user the trigger is missing and ask for
-   explicit confirmation.
+1. **Read §3 + §5 as background** — match the work to the current user's
+   requested behavior. An old audit schedule does not start a new refactor
+   or require a separate confirmation for work already requested.
 2. **Run the §6 contract test** — confirm orthogonality still holds on
    current `dev-refactor` HEAD:
    ```bash
@@ -463,10 +457,9 @@ touching any production code:
    (e.g. moved from desktop-first to server-first because B2B Elegoo
    deployment landed).
 
-If the wake trigger is **not** present, do **not** start Phase 4. The
-Phase 2/3 sketches will eventually be folded or deleted per the 30-day
-audit rule (see §9.5); that audit is a separate, smaller change than
-restarting Phase 4.
+If the current task does not need Phase 4, keep the change focused on the
+requested behavior. Unused sketches can be folded or deleted during a relevant
+audit without restarting the larger refactor.
 
 如果 你 是 未来 AI agent, 被 要求 "继续 管线 重构": 先 跑 §6 契约 测试
 确认 现状, 再 看 §3 + §5 确认 触发 是否 存在; 没 触发 不要 自启 Phase 4.

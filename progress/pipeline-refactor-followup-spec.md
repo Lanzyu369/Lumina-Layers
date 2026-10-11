@@ -164,7 +164,7 @@ End-to-end tests are brittle (depend on heavy fixtures, fonts, system libs). Sch
 
 **Why not delete the un-migrated Phase 2/3 sketches now?**
 
-They satisfy AGENTS.md L42 ("New utilities … must land with at least one adoption site"). Deleting them is a separate audit (per AGENTS.md "Drop or fold utilities with zero adoption after 30 days"). Phase 0-3 merged on `f666612` (date X); the 30-day clock starts there. If 30 days pass with no Phase 4 trigger, audit + delete is appropriate.
+Keep shared helpers only while they have real callers. Assess unused code during a relevant audit; there is no scheduled 30-day cleanup requirement.
 
 ### §10 — References + AI agent quick exit guide
 
@@ -407,11 +407,9 @@ cat docs/pipeline-refactor-followup.md | head -80
 
 Pass criteria:
 
-- ✅ `tests/test_lut_pipeline_orthogonality_unit.py` collects exactly 6 tests; ≥5 pass; ≤1 xfail.
-- ✅ Total test count grew by exactly 6 (or 6 minus xfails) — no other tests added or removed.
+- ✅ Orthogonality regressions pass for the supported LUT readers and renderer paths.
 - ✅ `--mode fast` log-quality gate stays at PASS (canonical INFO budget unchanged).
-- ✅ `docs/pipeline-refactor-followup.md` exists with all 10 sections + AI quick-exit guide.
-- ✅ Both files contain bilingual docstrings/headers per AGENTS.md.
+- ✅ `docs/pipeline-refactor-followup.md` documents the affected workflow contracts.
 - ✅ All non-ASCII text saved as UTF-8 (verify by re-reading the file with explicit UTF-8 encoding after save; check for `锟`, `鎷`, `鍙`, `涓` mojibake markers).
 - ✅ No edits to `core/`, `api/`, `frontend/`, `config.py`, `requirements.txt`.
 
@@ -444,8 +442,7 @@ The full `AGENTS.md` is the source of truth. Highlights for this PR:
 - Prefer `apply_patch` over PowerShell `Set-Content`/`Out-File`/`>`/`>>`.
 
 **Docstrings**:
-- Bilingual Google-style on the test module + each LUT factory + each renderer wrapper + the test function.
-- Doc headings use bilingual section titles where natural (mirror `docs/server-mode-scaffold.md` style).
+- Document non-obvious fixture or renderer assumptions in the language appropriate to the task.
 
 **Tests**:
 - File naming: `test_*_unit.py` ✅ (the spec dictates `test_lut_pipeline_orthogonality_unit.py`).

@@ -22,10 +22,7 @@ const {
   resolveDefaultSavePath,
   setGeneratedFileDirectory,
 } = require("./generated-file-directory.cjs");
-const { migrateLegacyStorage } = require("./storage-migration.cjs");
-const { managedRuntime, assertPortsAvailable } = require("./managed-runtime.cjs");
-const { selectBackendEndpoint, validateHealthResponse } = require("./backend-endpoint.cjs");
-const { createManagedStartup } = require("./managed-startup.cjs");
+const { assertPortsAvailable, selectBackendEndpoint, validateHealthResponse } = require("./backend-endpoint.cjs");
 const {
   fetchNativeBedModel,
   isAllowedBedModelIpcSender,
@@ -72,28 +69,11 @@ const WORKSHOP_RUNTIME_HEADER_NAMES = [
   "x-content-type-options",
 ];
 
-const isDev = !app.isPackaged;
 const ROOT_DIR = path.join(__dirname, "..");
 const IS_WIN = process.platform === "win32";
 const IS_MAC = process.platform === "darwin";
-const MATERIALS_SEED_RESOURCE = path.join(
-  process.resourcesPath || ROOT_DIR,
-  "materials",
-  "lumina-materials-seed.zip",
-);
-const WORKSHOP_SEED_RESOURCE_DIR = isDev
-  ? path.join(__dirname, "resources", "workshop-seed")
-  : path.join(process.resourcesPath, "workshop-seed");
 const workshopSessionToken = createWorkshopSessionToken();
 let workshopSafeMode = false;
-const managed = managedRuntime(process.env);
-if (managed) {
-  fs.mkdirSync(managed.userData, { recursive: true });
-  fs.mkdirSync(managed.chromiumCache, { recursive: true });
-  fs.mkdirSync(managed.backendCwd, { recursive: true });
-  app.setPath("userData", managed.userData);
-  app.commandLine.appendSwitch("disk-cache-dir", managed.chromiumCache);
-}
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -109,15 +89,11 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-// Platform-aware icon paths.
-//   - Windows: 仍用仓库根目录的 icon.ico（任务栏 / 安装包用）
-//   - macOS:   用 electron/build 下生成的 icns（包内）+ png（运行时窗口 + Dock）
-//   - Linux:   复用 mac 的 png
+// Window and Dock icons.
 const ICON_PATH = (() => {
   if (IS_WIN) return path.join(ROOT_DIR, "icon.ico");
-  return path.join(__dirname, "build", "icon.png");
+  return path.join(__dirname, "assets", "icon.png");
 })();
-const ICON_ICNS_PATH = path.join(__dirname, "build", "icon.icns");
 
 // ═══════════════════════════════════════════════════════════
 //  Quit dialog i18n
@@ -149,7 +125,7 @@ let currentLang = "zh";
 let logStream = null;
 
 function initLog() {
-  const logDir = managed?.backendEnv.LUMINA_LOG_DIR || app.getPath("logs");
+  const logDir = app.getPath("logs");
   try {
     fs.mkdirSync(logDir, { recursive: true });
   } catch (_) {}
@@ -163,9 +139,7 @@ function log(tag, msg) {
   if (logStream) {
     logStream.write(line + "\n");
   }
-  if (isDev) {
-    console.log(line);
-  }
+  console.log(line);
 }
 
 function logSys(m) { log("SYS", m); }
@@ -381,42 +355,12 @@ function backendRuntimeEnv() {
       "workshop",
     ),
     LUMINA_WORKSHOP_DESKTOP_TOKEN: workshopSessionToken,
-    ...(managed?.backendEnv || {}),
     LUMINA_API_HOST: "127.0.0.1",
     LUMINA_API_PORT: String(backendEndpoint.port),
     LUMINA_DESKTOP_INSTANCE_ID: backendEndpoint.instanceId,
     LUMINA_CLEAR_CACHE_ALLOWED_LOCAL_PORTS: [process.env.LUMINA_CLEAR_CACHE_ALLOWED_LOCAL_PORTS, backendEndpoint.port].filter(Boolean).join(","),
     LUMINA_MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS: [process.env.LUMINA_MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS, backendEndpoint.port].filter(Boolean).join(","),
   };
-  // Public read-only catalog defaults belong to packaged desktop launches only.
-  // Explicit environment values (including an empty opt-out) remain authoritative.
-  if (!isDev && process.env.LUMINA_MATERIAL_REGISTRY_URL === undefined) {
-    env.LUMINA_MATERIAL_REGISTRY_URL = "https://materials.luminastudio.com.cn/api/material-registry/v1";
-    if (process.env.LUMINA_MATERIAL_REGISTRY_FALLBACK_URL === undefined) {
-      env.LUMINA_MATERIAL_REGISTRY_FALLBACK_URL = "https://dan5.shmx.top/api/material-registry/v1";
-    }
-    if (process.env.LUMINA_MATERIAL_REGISTRY_CHANNELS === undefined) {
-      env.LUMINA_MATERIAL_REGISTRY_CHANNELS = "official,community";
-    }
-    // The existing refresh job installs the entire catalog, not just its index.
-    // Desktop users browse first and explicitly download the materials they need.
-    for (const key of ["LUMINA_MATERIAL_SYNC_STARTUP_REFRESH", "LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S"]) {
-      if (process.env[key] === undefined) env[key] = "0";
-    }
-  }
-  if (!isDev) {
-    env.LUMINA_SERVE_FRONTEND_DIST = "1";
-    env.LUMINA_FRONTEND_DIST_DIR = path.join(process.resourcesPath, "app", "dist");
-  }
-  if (fs.existsSync(MATERIALS_SEED_RESOURCE)) {
-    env.LUMINA_MATERIALS_SEED_PATH = MATERIALS_SEED_RESOURCE;
-  }
-  if (
-    !isDev ||
-    fs.existsSync(path.join(WORKSHOP_SEED_RESOURCE_DIR, "seed-lock.json"))
-  ) {
-    env.LUMINA_WORKSHOP_SEED_DIR = WORKSHOP_SEED_RESOURCE_DIR;
-  }
   return env;
 }
 
@@ -424,16 +368,8 @@ function backendRuntimeEnv() {
 //  Single instance lock
 // ═══════════════════════════════════════════════════════════
 
-let managedStartup = null;
-let startupInitializationError = null;
-try {
-  managedStartup = createManagedStartup(process.env, error => logErr(`Startup status write failed: ${error.code || error.name}`));
-} catch (error) {
-  startupInitializationError = error;
-}
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
-  managedStartup?.fail("app_already_running");
   app.quit();
 } else {
   app.on("second-instance", () => {
@@ -636,7 +572,6 @@ function createWindow() {
   };
 
   win = new BrowserWindow(windowOptions);
-  managedStartup?.watchWindow(win);
   win.once("ready-to-show", () => {
     closeSplash();
     win.show();
@@ -747,46 +682,37 @@ function createWindow() {
     void confirmQuit();
   });
 
-  let initialLoad;
-  if (isDev) {
-    trustedMainFrameUrl = new URL(FRONTEND_URL).href;
-    initialLoad = win.loadURL(FRONTEND_URL);
-  } else {
-    trustedMainFrameUrl = managed?.frontendUrl || `${backendEndpoint.origin}/`;
-    initialLoad = win.loadURL(trustedMainFrameUrl);
-  }
+  trustedMainFrameUrl = new URL(FRONTEND_URL).href;
+  const initialLoad = win.loadURL(FRONTEND_URL);
   void initialLoad.catch(error => {
     logErr(`Main window load failed: ${error.code || error.name}`);
-    managedStartup?.fail("startup_frontend_failed");
   });
 
-  if (isDev) {
-    win.webContents.on(
-      "did-fail-load",
-      (
-        _event,
-        _errorCode,
-        _errorDescription,
-        validatedUrl,
-        isMainFrame,
-      ) => {
-        if (
-          !shouldRetryFrontendLoad({
-            isMainFrame,
-            validatedUrl,
-          })
-        ) {
-          return;
+  win.webContents.on(
+    "did-fail-load",
+    (
+      _event,
+      _errorCode,
+      _errorDescription,
+      validatedUrl,
+      isMainFrame,
+    ) => {
+      if (
+        !shouldRetryFrontendLoad({
+          isMainFrame,
+          validatedUrl,
+        })
+      ) {
+        return;
+      }
+      logErr("Frontend failed to load, retrying in 2s...");
+      setTimeout(() => {
+        if (win && !win.isDestroyed()) {
+          win.loadURL(FRONTEND_URL);
         }
-        logErr("Frontend failed to load, retrying in 2s...");
-        setTimeout(() => {
-          if (win && !win.isDestroyed()) {
-            win.loadURL(FRONTEND_URL);
-          }
-        }, 2000);
-      },
-    );
-  }
+      }, 2000);
+    },
+  );
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -916,7 +842,7 @@ app.on("before-quit", (event) => {
   }
 });
 
-  app.on("will-quit", () => {
+app.on("will-quit", () => {
   killAllChildren();
 });
 
@@ -930,13 +856,8 @@ app.on("window-all-closed", () => {
 app.whenReady().then(async () => {
   if (!gotLock) return;
   initLog();
-  if (startupInitializationError) throw startupInitializationError;
   logSys("Lumina Studio Electron starting...");
-  logSys(`Mode: ${isDev ? "development" : "production"}`);
   // 让 about 面板 / app.getName() / 部分 macOS 系统提示显示正确的名字。
-  // 注意:dev 模式下 macOS 顶部菜单栏左上角的加粗应用名由 Electron.app 的
-  // Info.plist::CFBundleName 决定,无法在运行期改写;打包后(productName 写进
-  // Info.plist)就会自动变成 "Lumina Studio"。
   app.setName("Lumina Studio 2");
   if (IS_MAC) {
     app.setAboutPanelOptions({
@@ -948,7 +869,6 @@ app.whenReady().then(async () => {
   }
 
   // macOS: 让 Dock 显示 Lumina 自己的图标而不是默认 Electron 图标。
-  // 仅在 dev/未签名运行时需要;打包后由 .app 包内的 Contents/Resources/icon.icns 接管。
   if (IS_MAC && app.dock && fs.existsSync(ICON_PATH)) {
     try {
       app.dock.setIcon(ICON_PATH);
@@ -963,15 +883,9 @@ app.whenReady().then(async () => {
     backendEndpoint = await selectBackendEndpoint({
       portFile: path.join(app.getPath("userData"), "backend-port.json"),
     });
-    if (managed) {
-      const selected = managedRuntime(process.env, backendEndpoint.port);
-      managed.frontendUrl = selected.frontendUrl;
-      managed.backendEnv.LUMINA_API_PORT = selected.backendEnv.LUMINA_API_PORT;
-    }
     enableManagedDesktopHost(backendEndpoint.port);
-    if (isDev) await assertPortsAvailable([FRONTEND_PORT]);
+    await assertPortsAvailable([FRONTEND_PORT]);
   } catch (error) {
-    managedStartup?.fail("startup_port_in_use");
     closeSplash();
     dialog.showErrorBox("Lumina Studio", currentLang === "zh"
       ? "没有可用的本地启动端口。请关闭多余的本地服务后重试；启动器不会终止其它进程。"
@@ -982,121 +896,67 @@ app.whenReady().then(async () => {
 
   // ── Start backend ──
   let backendProc;
-  if (isDev) {
-    const python = findPython();
-    const apiServer = path.join(ROOT_DIR, "api_server.py");
-    logSys(`Starting backend: ${python} ${apiServer}`);
-    try {
-      backendProc = await spawnChild(
-        "Backend",
-        python,
-        [apiServer],
-        ROOT_DIR,
-        backendRuntimeEnv(),
-      );
-    } catch (err) {
-      managedStartup?.fail("startup_backend_spawn_failed");
-      dialog.showErrorBox(
-        "Backend Start Failed",
-        `Failed to start backend: ${err.message}`,
-      );
-      app.quit();
-      return;
-    }
-  } else {
-    // 生产模式下后端可执行文件按平台命名:
-    //   - Windows: lumina-backend.exe (PyInstaller --onefile)
-    //   - macOS:   lumina-backend (无后缀)
-    //   - Linux:   lumina-backend
-    // mac/linux 的打包脚本目前还没就绪,这里先做好分流,后续接打包不用再动 main.cjs。
-    const backendExe = path.join(
-      process.resourcesPath,
-      "backend",
-      IS_WIN ? "lumina-backend.exe" : "lumina-backend",
+  const python = findPython();
+  const apiServer = path.join(ROOT_DIR, "api_server.py");
+  logSys(`Starting backend: ${python} ${apiServer}`);
+  try {
+    backendProc = await spawnChild(
+      "Backend",
+      python,
+      [apiServer],
+      ROOT_DIR,
+      backendRuntimeEnv(),
     );
-    logSys(`Starting backend: ${backendExe}`);
-    try {
-      backendProc = await spawnChild("Backend", backendExe, [], managed?.backendCwd || ROOT_DIR, backendRuntimeEnv());
-    } catch (err) {
-      managedStartup?.fail("startup_backend_spawn_failed");
-      dialog.showErrorBox(
-        "Backend Start Failed",
-        `Failed to start backend: ${err.message}`,
-      );
-      app.quit();
-      return;
-    }
+  } catch (err) {
+    dialog.showErrorBox(
+      "Backend Start Failed",
+      `Failed to start backend: ${err.message}`,
+    );
+    app.quit();
+    return;
   }
-
-  managedStartup?.watchBackend(backendProc);
 
   // ── Wait for backend health ──
   logSys("Waiting for backend health...");
   try {
     await waitForHealth(backendEndpoint.healthUrl, HEALTH_TIMEOUT_MS, backendProc);
-    managedStartup?.backendHealthy();
     logOk("Backend is healthy");
   } catch (err) {
     const failureCode = ["startup_backend_timeout", "startup_backend_exited"].includes(err.message)
       ? err.message : "startup_failed";
-    managedStartup?.fail(failureCode);
     logErr(`Backend health check failed: ${err.message}`);
-    if (!managedStartup) {
-      dialog.showErrorBox("Backend Unavailable",
-        failureCode === "startup_backend_timeout"
-          ? `Backend did not respond within ${HEALTH_TIMEOUT_MS / 1000}s. Please check logs.`
-          : `Backend startup failed: ${failureCode}. Please check logs.`);
-    }
+    dialog.showErrorBox("Backend Unavailable",
+      failureCode === "startup_backend_timeout"
+        ? `Backend did not respond within ${HEALTH_TIMEOUT_MS / 1000}s. Please check logs.`
+        : `Backend startup failed: ${failureCode}. Please check logs.`);
     app.quit();
     return;
   }
 
-  // ── Start Vite dev server (dev mode only) ──
-  if (isDev) {
-    const node = findNode();
-    const viteJs = path.join(
-      ROOT_DIR,
-      "frontend",
-      "node_modules",
-      "vite",
-      "bin",
-      "vite.js",
-    );
-    const frontendDir = path.join(ROOT_DIR, "frontend");
-    logSys(`Starting Vite: ${node} ${viteJs}`);
-    try {
-      await spawnChild("Frontend", node, [viteJs], frontendDir, { VITE_API_PROXY_TARGET: backendEndpoint.origin });
-    } catch (err) {
-      logErr(`Vite start failed: ${err.message}`);
-    }
-
-    logSys("Waiting for Vite dev server...");
-    try {
-      await waitForPort(FRONTEND_PORT, PORT_TIMEOUT_MS);
-      logOk("Vite dev server is ready");
-    } catch (err) {
-      logErr(`Vite port check failed: ${err.message}`);
-    }
+  // ── Start Vite dev server ──
+  const node = findNode();
+  const viteJs = path.join(
+    ROOT_DIR,
+    "frontend",
+    "node_modules",
+    "vite",
+    "bin",
+    "vite.js",
+  );
+  const frontendDir = path.join(ROOT_DIR, "frontend");
+  logSys(`Starting Vite: ${node} ${viteJs}`);
+  try {
+    await spawnChild("Frontend", node, [viteJs], frontendDir, { VITE_API_PROXY_TARGET: backendEndpoint.origin });
+  } catch (err) {
+    logErr(`Vite start failed: ${err.message}`);
   }
 
-  // Upgrade old standalone file:// and fixed :8000 profiles before the
-  // first new-origin window is created. The migration is best effort and
-  // never deletes or rewrites the legacy profile when it cannot complete.
-  if (!isDev && process.resourcesPath) {
-    try {
-      const migrationStatus = await migrateLegacyStorage({
-        BrowserWindow,
-        indexPath: path.join(process.resourcesPath, "app", "dist", "index.html"),
-        // Load the health document on the new origin, not the full UI, so
-        // migration does not start a second renderer application instance.
-        targetUrl: `${backendEndpoint.origin}/api/health`,
-        markerPath: path.join(app.getPath("userData"), "legacy-storage-migration.json"),
-        logger: message => logErr(message),
-      });
-      logSys(`Legacy renderer storage migration: ${migrationStatus}`);
-    } catch (error) {
-      logErr(`Legacy renderer storage migration failed: ${error.code || error.name}`);
-    }
+  logSys("Waiting for Vite dev server...");
+  try {
+    await waitForPort(FRONTEND_PORT, PORT_TIMEOUT_MS);
+    logOk("Vite dev server is ready");
+  } catch (err) {
+    logErr(`Vite port check failed: ${err.message}`);
   }
 
   installWorkshopSessionSecurity();
@@ -1104,7 +964,6 @@ app.whenReady().then(async () => {
   // ── Create main window ──
   createWindow();
 }).catch(error => {
-  managedStartup?.fail("startup_failed");
   logErr(`Desktop startup failed: ${error.code || error.message}`);
   closeSplash();
   dialog.showErrorBox("Lumina Studio", currentLang === "zh"

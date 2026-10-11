@@ -280,15 +280,14 @@ presented as a private production source. If a private or large regression
 input is not supplied, the benchmark records it as unavailable instead of
 reusing an older parser result or substituting another file.
 
-## Packaging and hosted validation
+## Native wheels and hosted validation
 
 The standalone source tree contains the Apache-2.0 project license and complete
 third-party notices for LunaSVG, PlutoVG, Clipper2, FreeType, stb, and pybind11.
 Release wheels target CPython 3.12 on Windows amd64, macOS arm64, macOS x86_64,
 and Linux x86_64. Linux wheels are built directly on Ubuntu 24.04 with its
 system ABI; older glibc compatibility requires a source build. The production
-workflow verifies host Linux product artifacts and a Windows PyInstaller
-onefile native self-test.
+workflow verifies host Linux product artifacts and the native SVG self-test.
 
 The previous published PR head completed all configured hosted checks. A fresh
 workflow run is required after this parser update; its final state belongs in

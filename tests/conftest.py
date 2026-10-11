@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -12,7 +15,7 @@ SMOKE_TEST_FILES = {
     "test_api_errors_unit.py",
     "test_converter_puzzle_unit.py",
     "test_converter_structure_contract_unit.py",
-    "test_logging_exception_governance_unit.py",
+    "test_structured_logging_unit.py",
     "test_heightmap_upload_unit.py",
     "test_converter_preview_unit.py",
     "test_puzzle_3mf_unit.py",
@@ -57,6 +60,22 @@ SVG_DIAGNOSIS_ASSET_TESTS = {
     "test_fill_eq_stroke_legacy_mode_matches_b2_baseline_bounds",
     "test_local_svg_without_stroke_keeps_shape_count",
 }
+
+
+@pytest.fixture(autouse=True)
+def _finish_preview_jobs_before_capture_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    """Keep actual preview tasks within the test that owns their resources."""
+    async_glb = sys.modules.get("api.routers.converter.async_glb")
+    if async_glb is None:
+        yield
+        return
+    with ThreadPoolExecutor(
+        max_workers=2, thread_name_prefix="test-glb-build",
+    ) as executor:
+        monkeypatch.setattr(async_glb, "_GLB_EXECUTOR", executor)
+        yield
 
 
 def pytest_configure(config: pytest.Config) -> None:

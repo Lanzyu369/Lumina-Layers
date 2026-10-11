@@ -5,8 +5,9 @@ import httpx
 import pytest
 
 from api.services import lut_registry_sync as lut
-from core.single_stage import materials
 from core.registry_transport import fallback_base, fetch_catalog, map_package_url
+from core.single_stage import material_files, material_registry_client
+
 
 PRIMARY = "https://primary.test/api/material-registry/v1"
 BACKUP = "https://backup.test/api/material-registry/v1"
@@ -19,7 +20,7 @@ def registry_env(monkeypatch):
         monkeypatch.setenv(f"LUMINA_{family}_REGISTRY_FALLBACK_URL", BACKUP)
         monkeypatch.delenv(f"LUMINA_{family}_REGISTRY_TOKEN", raising=False)
         monkeypatch.setenv(f"LUMINA_{family}_REGISTRY_CHANNELS", "official")
-    materials.invalidate_material_registry_remote_catalog_cache()
+    material_registry_client.invalidate_material_registry_remote_catalog_cache()
 
 
 @pytest.mark.parametrize("family", ["material", "lut"])
@@ -38,7 +39,7 @@ def test_catalog_fails_over_and_canonicalizes_package_identity(family, status):
         return httpx.Response(200, json={"materials" if family == "material" else "items": [entry]})
     transport = httpx.MockTransport(handle)
     if family == "material":
-        result = materials.list_material_registry_catalog(transport=transport, use_cache=False)
+        result = material_registry_client.list_material_registry_catalog(transport=transport, use_cache=False)
         entries = result["materials"]
     else:
         with httpx.Client(transport=transport) as client:
@@ -58,7 +59,7 @@ def test_catalog_does_not_retry_success_or_permanent_failure(family, status):
     transport = httpx.MockTransport(handle)
     try:
         if family == "material":
-            materials.list_material_registry_catalog(transport=transport, use_cache=False)
+            material_registry_client.list_material_registry_catalog(transport=transport, use_cache=False)
         else:
             with httpx.Client(transport=transport) as client:
                 lut.fetch_remote_catalog(client=client)
@@ -68,7 +69,7 @@ def test_catalog_does_not_retry_success_or_permanent_failure(family, status):
 
 
 def test_material_stream_failure_discards_partial_before_fallback(tmp_path, monkeypatch):
-    monkeypatch.setattr(materials, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(material_files, "TEMP_DIR", str(tmp_path))
     data = b"complete package"
     class Broken(httpx.SyncByteStream):
         def __iter__(self):
@@ -82,7 +83,7 @@ def test_material_stream_failure_discards_partial_before_fallback(tmp_path, monk
         assert list(tmp_path.iterdir()) == []
         return httpx.Response(200, content=data)
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
-        path = materials._download_material_registry_package_to_tempfile(
+        path = material_registry_client._download_material_registry_package_to_tempfile(
             client=client, package_url=PRIMARY + "/packages/a.zip", headers={},
             expected_package_sha256=hashlib.sha256(data).hexdigest(), identity_label="m/r")
     assert path.read_bytes() == data
@@ -140,12 +141,12 @@ def test_private_credentials_never_reach_backup(monkeypatch, family, guard):
                           auth=("user", "secret") if guard == "auth" else None,
                           headers={"Authorization": "secret"} if guard == "header" else None) as client:
             with pytest.raises(httpx.HTTPError):
-                materials._download_material_registry_package_to_tempfile(
+                material_registry_client._download_material_registry_package_to_tempfile(
                     client=client, package_url=PRIMARY + "/packages/a.zip", headers={},
                     expected_package_sha256="a" * 64, identity_label="m/r")
     elif family == "material":
         with pytest.raises(RuntimeError):
-            materials.list_material_registry_catalog(transport=httpx.MockTransport(handle), use_cache=False)
+            material_registry_client.list_material_registry_catalog(transport=httpx.MockTransport(handle), use_cache=False)
     else:
         with httpx.Client(transport=httpx.MockTransport(handle),
                           cookies={"session": "secret"} if guard == "cookie" else None,
@@ -173,7 +174,7 @@ def test_invalid_json_does_not_fallback(family):
         return httpx.Response(200, text="invalid JSON")
     with pytest.raises((ValueError, lut.LutRegistryRemoteError)):
         if family == "material":
-            materials.list_material_registry_catalog(transport=httpx.MockTransport(handle), use_cache=False)
+            material_registry_client.list_material_registry_catalog(transport=httpx.MockTransport(handle), use_cache=False)
         else:
             with httpx.Client(transport=httpx.MockTransport(handle)) as client:
                 lut.fetch_remote_catalog(client=client)
@@ -188,7 +189,7 @@ def test_all_sources_fail_after_two_requests(family):
         raise httpx.ConnectError("offline", request=request)
     with pytest.raises(RuntimeError):
         if family == "material":
-            materials.list_material_registry_catalog(transport=httpx.MockTransport(handle), use_cache=False)
+            material_registry_client.list_material_registry_catalog(transport=httpx.MockTransport(handle), use_cache=False)
         else:
             with httpx.Client(transport=httpx.MockTransport(handle)) as client:
                 lut.fetch_remote_catalog(client=client)
@@ -196,14 +197,14 @@ def test_all_sources_fail_after_two_requests(family):
 
 
 def test_material_sha_mismatch_does_not_fallback(tmp_path, monkeypatch):
-    monkeypatch.setattr(materials, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(material_files, "TEMP_DIR", str(tmp_path))
     calls = []
     def handle(request):
         calls.append(request)
         return httpx.Response(200, content=b"tampered")
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         with pytest.raises(ValueError, match="sha256 mismatch"):
-            materials._download_material_registry_package_to_tempfile(
+            material_registry_client._download_material_registry_package_to_tempfile(
                 client=client, package_url=PRIMARY + "/packages/a.zip", headers={},
                 expected_package_sha256="a" * 64, identity_label="m/r")
     assert len(calls) == 1
@@ -268,7 +269,7 @@ def test_refresh_fallback_does_not_reuse_primary_etag():
         assert "if-none-match" not in request.headers
         return httpx.Response(200, headers={"etag": '"backup-etag"'}, json={"materials": []})
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
-        response = materials._request_material_registry_refresh_catalog(
+        response = material_registry_client._request_material_registry_refresh_catalog(
             client=client, registry_url=PRIMARY, channels=["official"], headers={}, etag='"primary-etag"')
     assert "etag" not in response.headers
     assert len(calls) == 2

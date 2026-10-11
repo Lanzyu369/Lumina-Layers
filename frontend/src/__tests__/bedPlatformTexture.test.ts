@@ -38,7 +38,7 @@ function hexToRgb(hex: string): { red: number; green: number; blue: number } {
 }
 
 describe("virtual build plate texture", () => {
-  it("uses a file-relative Lumina mark in packaged desktop builds", () => {
+  it("uses a file-relative Lumina mark", () => {
     expect(bedPlatformTextureModule.LUMINA_BED_MARK_URL).toBe("./favicon.ico");
   });
 

@@ -39,9 +39,6 @@ def teardown_module(module) -> None:
     app.dependency_overrides.pop(get_file_registry, None)
 
 
-# Apply overrides immediately for module-level client creation
-setup_module(None)
-
 client: TestClient = TestClient(app)
 
 

@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from api.app import create_app
 import core.material_registry as material_registry_module
-import core.single_stage.materials as single_stage_materials_module
+from core.single_stage import material_files
 
 MATERIAL_REGISTRY_STORAGE_UNAVAILABLE_DETAIL = (
     "Material Registry storage is not available. Check the Registry service configuration."
@@ -880,7 +880,7 @@ def test_material_registry_upload_local_material_exports_and_stores_pending_pack
     packages_dir = tmp_path / "registry-packages"
     _write_saved_material(materials_root, "BrandA/pla-basic")
     monkeypatch.setattr(
-        single_stage_materials_module,
+        material_files,
         "MATERIALS_DIR",
         str(materials_root),
     )
@@ -922,7 +922,7 @@ def test_material_registry_upload_local_material_rejects_duplicate_content(
     packages_dir = tmp_path / "registry-packages"
     _write_saved_material(materials_root, "BrandA/pla-basic")
     monkeypatch.setattr(
-        single_stage_materials_module,
+        material_files,
         "MATERIALS_DIR",
         str(materials_root),
     )

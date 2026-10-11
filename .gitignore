@@ -27,21 +27,6 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-# Keep our custom spec file
-# *.spec
-
-# PyInstaller build outputs
-build/
-dist/
-LuminaStudio_v*/
-
-# PyInstaller test script
-test_paths.py
-
 # Debug and test files
 run_debug.bat
 test.png
@@ -246,8 +231,6 @@ output/*
 output/temp/
 output/models/
 
-# Gradio cache directory
-output/.gradio_cache/
 # ==========================================
 # Lumina Studio Specific
 # ==========================================
@@ -280,7 +263,9 @@ lut-npy预设/Custom/*.npy
 # Reference projects (for development reference only)
 LD_ColorLayering-main/
 ChromaStack-main/
-reference/
+reference/*
+!reference/fatcat-patches/
+!reference/neroued-patches/
 
 # 3MF metadata analysis files (local testing only)
 元数据分析/
@@ -366,15 +351,8 @@ progress/archive/
 repro_sessions/
 
 # ==========================================
-# electron 套壳:必要资源入库,中间产物排除
+# Electron development dependencies
 # ==========================================
-# 上面 PyInstaller 的 build/ 规则会顺带把 electron/build/ 也屏蔽掉,
-# 但 electron 的 build 里放的是 mac 图标资源和生成脚本,需要随仓库分发。
-!electron/build/
-!electron/build/**
-# 但中间 iconset 目录不入库(每次跑脚本都会重新生成)
-electron/build/icon.iconset/
-electron/dist_electron/
 electron/node_modules/
 
 # ==========================================

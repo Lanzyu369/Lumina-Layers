@@ -82,7 +82,6 @@ def populated_client(
     """
     from api.app import create_app
     from api.dependencies import get_file_registry
-    import api.routers.feedback as feedback_router
 
     feedback_root = tmp_path / "feedback_root"
     feedback_root.mkdir()
@@ -100,7 +99,6 @@ def populated_client(
     monkeypatch.setenv("LUMINA_FEEDBACK_DUMP_DIR", str(feedback_root))
     monkeypatch.setenv("LUMINA_FEEDBACK_STARTUP_CLEANUP", "false")
     monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "off")
-    feedback_router._clear_feedback_rate_limit_state()
 
     app = create_app()
     registry = get_file_registry()

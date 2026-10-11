@@ -2,23 +2,23 @@
 
 ## Status
 Accepted (2026-04-01)
+Updated (2026-10-11): retired the test-source literal allowlist.
 
 ## Context
 - URL drift previously caused grouped frontend test failures (`absolute` vs `relative` mismatch).
 - Current frontend behavior stores resource links in state and passes them across components, making contract consistency mandatory.
 
 ## Decision
-- Canonical form for frontend state and business logic is **relative URL**.
+- Canonical form for backend resource links in frontend state and business logic is **relative URL**.
   - Examples: `/api/files/<id>`, `/output/<name>.zip`
-- Absolute URL input is treated as compatibility input and must be normalized before state write/assertion.
-- Allowed exception:
-  - `frontend/src/__tests__/resource-url.test.ts` may keep absolute URL input samples to verify normalization.
+- Absolute backend URL input is treated as compatibility input and must be normalized before writing it to state.
+- Tests may supply absolute URLs to exercise normalization, compatibility and failure paths. Assertions on stored backend resource links follow the relative URL contract.
 
 ## Consequences
 - Prevents environment-coupled test assertions (e.g. `localhost:8000`).
 - Keeps frontend behavior stable across local/dev/proxy deployment topologies.
-- Any new code asserting absolute backend host literals in tests (outside the allowlisted file) is a contract violation.
+- Test fixtures can describe external inputs without imposing a filename allowlist.
 
-## Enforcement
-- Guard test: `frontend/src/__tests__/url-localhost-guard.test.ts`
-- Normalization tests: `frontend/src/__tests__/resource-url.test.ts`
+## Verification
+- [Normalization tests](../../frontend/src/__tests__/resource-url.test.ts) exercise actual URL conversion.
+- Relevant API and store tests check the resource links produced by the affected workflow.

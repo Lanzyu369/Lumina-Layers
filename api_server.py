@@ -1,116 +1,20 @@
-"""Lumina Studio API server and frozen-runtime diagnostic entry point.
+"""Lumina Studio API server and native geometry diagnostic entry point.
 
-Lumina Studio API 服务与冻结运行时诊断入口。
+Lumina Studio API 服务与原生几何诊断入口。
 """
 
 from __future__ import annotations
 
 import argparse
-import faulthandler
 import hashlib
 import json
-import multiprocessing
 import os
 import re
 import struct
 import sys
-import traceback
 from collections.abc import Mapping, Sequence
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, TextIO
-
-
-@contextmanager
-def _startup_diagnostics(env: Mapping[str, str]) -> Iterator[None]:
-    """Capture a frozen-startup hang or uncaught exception when requested.
-
-    按需捕获冻结版启动卡死时的线程堆栈或未处理异常。
-
-    This diagnostic path is opt-in and intended for native packaging CI. A
-    failure to prepare diagnostics never changes normal server startup.
-    该诊断仅在原生打包 CI 显式启用；诊断自身失败不会影响正常启动。
-    """
-
-    raw_path = env.get("LUMINA_STARTUP_DIAGNOSTIC_PATH")
-    if not raw_path:
-        yield
-        return
-
-    stream: TextIO | None = None
-    watchdog_started = False
-    try:
-        diagnostic_path = Path(raw_path).expanduser().resolve()
-        diagnostic_path.parent.mkdir(parents=True, exist_ok=True)
-        stream = diagnostic_path.open(
-            "a",
-            encoding="utf-8",
-            buffering=1,
-        )
-    except OSError:
-        yield
-        return
-
-    try:
-        try:
-            faulthandler.dump_traceback_later(
-                30,
-                repeat=True,
-                file=stream,
-            )
-            watchdog_started = True
-        except (OSError, RuntimeError, ValueError):
-            pass
-
-        try:
-            yield
-        except BaseException:
-            try:
-                traceback.print_exc(file=stream)
-                stream.flush()
-            except OSError:
-                pass
-            raise
-    finally:
-        if watchdog_started:
-            try:
-                faulthandler.cancel_dump_traceback_later()
-            except RuntimeError:
-                pass
-        stream.close()
-
-
-def _prepare_frozen_multiprocessing() -> None:
-    """Divert PyInstaller multiprocessing helper processes.
-
-    分流 PyInstaller 打包环境中的 multiprocessing 辅助进程。
-    """
-
-    multiprocessing.freeze_support()
-
-
-def _open_null_stream() -> TextIO:
-    """Open a process-lifetime text sink for a windowed executable."""
-
-    return open(
-        os.devnull,
-        "w",
-        encoding="utf-8",
-        errors="replace",
-        buffering=1,
-    )
-
-
-def _prepare_windowed_stdio() -> None:
-    """Provide real streams when PyInstaller ``noconsole`` sets them to None.
-
-    为 PyInstaller 无控制台进程补充可用的标准输出流。
-    """
-
-    if sys.stdout is None:
-        sys.stdout = _open_null_stream()
-    if sys.stderr is None:
-        sys.stderr = _open_null_stream()
+from typing import Any
 
 
 def _resolve_server_bind(env: Mapping[str, str]) -> tuple[str, int]:
@@ -143,51 +47,18 @@ def _resolve_server_bind(env: Mapping[str, str]) -> tuple[str, int]:
 
 
 def _run_server(env: Mapping[str, str]) -> None:
-    """Start the API after initializing frozen multiprocessing safely.
+    """Load local environment settings and start the API.
 
-    安全初始化冻结版多进程支持后启动 API。
+    加载本地环境配置后启动 API。
     """
 
-    _prepare_frozen_multiprocessing()
-    _prepare_windowed_stdio()
+    import uvicorn
 
-    with _startup_diagnostics(env):
-        # Keep heavyweight imports after freeze_support(). PyInstaller reuses
-        # this entry point for workers and resource trackers.
-        import uvicorn
+    # Import before resolving the bind so .env.local values take effect.
+    from api.app import app
 
-        # ``api.app`` is the canonical place that calls
-        # ``load_env_local()`` at module scope; importing it here populates
-        # ``.env.local`` values into ``os.environ`` before uvicorn boots.
-        # ``api.app`` 在模块级调用 ``load_env_local()`` 是规范入口；在这里导入
-        # 它会先把 ``.env.local`` 写入 ``os.environ``，再启动 uvicorn。
-        from api.app import app
-
-        bind_host, bind_port = _resolve_server_bind(env)
-        uvicorn.run(app, host=bind_host, port=bind_port)
-
-
-def _run_frozen_worker_smoke() -> None:
-    """Start one real process-pool worker and require a child result.
-
-    启动一个真实进程池工作进程，并要求子进程返回结果。
-    """
-
-    _prepare_frozen_multiprocessing()
-
-    from concurrent.futures import ProcessPoolExecutor
-
-    from api.logger import setup_file_logging
-    from api.structured_logging import configure_structured_logging
-    from api.worker_pool import _worker_init, _worker_smoke_task
-
-    if log_path := os.environ.get("LUMINA_LOG_PATH"):
-        setup_file_logging(log_path=log_path)
-    configure_structured_logging()
-    with ProcessPoolExecutor(max_workers=1, initializer=_worker_init) as pool:
-        worker_pid = pool.submit(_worker_smoke_task).result(timeout=60)
-    if worker_pid == os.getpid():
-        raise RuntimeError("worker smoke did not execute in a child process")
+    bind_host, bind_port = _resolve_server_bind(env)
+    uvicorn.run(app, host=bind_host, port=bind_port)
 
 
 class NativeSvgSelfTestError(RuntimeError):
@@ -332,8 +203,8 @@ def _native_svg_self_test_payload(svg_path: str) -> dict[str, Any]:
 
 
 def _svg_hole_compensation_self_test_payload() -> dict[str, Any]:
-    """Exercise packaged SVG compensation without a server or user material.
-    无需启动服务或读取用户素材，验证安装包内的 SVG 补偿功能。
+    """Exercise native SVG compensation without a server or user material.
+    无需启动服务或读取用户素材，验证原生 SVG 补偿功能。
     """
     from math import isclose
 
@@ -410,16 +281,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--svg-hole-compensation-self-test", action="store_true",
-        help="Exercise packaged SVG hole compensation without starting a server.",
-    )
-    parser.add_argument(
-        "--worker-smoke", action="store_true",
-        help="Exercise one real packaged process-pool worker.",
+        help="Exercise native SVG hole compensation without starting a server.",
     )
     args = parser.parse_args(argv)
-    if args.worker_smoke:
-        _run_frozen_worker_smoke()
-        return 0
     if args.native_svg_self_test or args.svg_hole_compensation_self_test:
         from api.structured_logging import configure_structured_logging
 
@@ -439,7 +303,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 }
             )
             return 1
-        except Exception as exc:  # Boundary guard for the frozen probe.
+        except Exception as exc:  # Boundary guard for the native probe.
             _print_json(
                 {
                     "status": "error",
@@ -458,6 +322,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    # Frozen children reuse this executable with multiprocessing-only arguments.
-    _prepare_frozen_multiprocessing()
     raise SystemExit(main())

@@ -808,7 +808,7 @@ git commit -m "fix(converter): externalize preview cache arrays"
 git push -u origin Min/fix/preview-cache-memory
 ```
 
-Open a PR to `dev-refactor` with English first, Chinese second, and include:
+When opening a PR to `dev-refactor`, include:
 
 - Issue: `Fixes #233`
 - Tests run

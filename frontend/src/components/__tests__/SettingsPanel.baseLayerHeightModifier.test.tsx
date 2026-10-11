@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-vi.mock("../../api/system", () => ({
-  clearCache: vi.fn(),
-  getMachineRegistryAssetUrl: (path: string) => `/api/system/machine-registry/assets/${path}`,
-  getPrinters: vi.fn(),
-  getSlicers: vi.fn(),
-  saveSettings: vi.fn(),
-}));
+vi.mock("../../api/system", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/system")>();
+  return {
+    ...actual,
+    clearCache: vi.fn(),
+    getPrinters: vi.fn(),
+    getCustom3mfTemplates: vi.fn().mockResolvedValue([]),
+    getSlicers: vi.fn(),
+    saveSettings: vi.fn(),
+  };
+});
 
 import { I18nProvider } from "../../i18n/context";
 import * as i18nContext from "../../i18n/context";
@@ -21,6 +25,7 @@ import * as systemApi from "../../api/system";
 const SLICERS: SlicerOption[] = [
   { id: "BambuStudio", display_name: "Bambu Studio" },
   { id: "PrusaSlicer", display_name: "PrusaSlicer" },
+  { id: "Cura", display_name: "Ultimaker Cura" },
 ];
 
 const PRINTERS: PrinterInfo[] = [
@@ -42,7 +47,7 @@ const PRINTERS: PrinterInfo[] = [
     bed_depth: 210,
     bed_height: 220,
     supported_nozzle_sizes: ["0.4"],
-    supported_slicers: ["PrusaSlicer"],
+    supported_slicers: ["PrusaSlicer", "Cura"],
   },
 ];
 
@@ -96,7 +101,11 @@ describe("SettingsPanel base-layer-height modifier", () => {
     });
   });
 
-  it("renders switch when slicerSoftware is BambuStudio", async () => {
+  it.each(["BambuStudio", "PrusaSlicer"])("renders switch for %s", async (slicerSoftware) => {
+    useSettingsStore.setState({
+      slicerSoftware,
+      printerModel: slicerSoftware === "PrusaSlicer" ? "prusamk4" : "bambu-h2d",
+    });
     renderPanel();
 
     await waitFor(() => {
@@ -106,9 +115,9 @@ describe("SettingsPanel base-layer-height modifier", () => {
     });
   });
 
-  it("hides switch when slicerSoftware is PrusaSlicer", async () => {
+  it("hides switch when slicerSoftware is Cura", async () => {
     useSettingsStore.setState({
-      slicerSoftware: "PrusaSlicer",
+      slicerSoftware: "Cura",
       printerModel: "prusamk4",
     });
 

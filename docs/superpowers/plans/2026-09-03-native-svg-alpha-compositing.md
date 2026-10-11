@@ -236,7 +236,7 @@ Rerun `test_corpus_audit.py` and `test_native_svg_benchmark_contract_unit.py` an
 
 - [ ] **Step 6: Run product packaging gates without changing 3D code**
 
-Run smoke/logging-fast, wheel verification, PyInstaller onefile probe, and the existing GLB/3MF product regression tests only as consumers. A downstream physicalization failure must be reported under its owning layer and must not be “fixed” in this parser PR.
+Run smoke/logging-fast, wheel verification, native CLI probes, and the existing GLB/3MF product regression tests only as consumers. A downstream physicalization failure must be reported under its owning layer and must not be “fixed” in this parser PR.
 
 ### Task 6: Independent review, commit, push, and CI
 

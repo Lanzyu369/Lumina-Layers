@@ -44,6 +44,7 @@ function resetStore(): void {
     buildPlateId: "textured-pei-plate",
     enableBaseLayerHeightModifier: false,
     enableWipeTowerAutoPlacement: false,
+    custom3mfTemplateId: null,
     svgPixelsPerMm: 10,
     enableCompletionNotifications: false,
     language: "zh",
@@ -166,6 +167,7 @@ describe("submitBatch API 调用和状态管理", () => {
       build_plate_id: "textured-pei-plate",
       enable_base_layer_height_modifier: false,
       enable_wipe_tower_auto_placement: false,
+      custom_3mf_template_id: null,
     });
     expect(
       notificationMocks.showBrowserCompletionNotification,

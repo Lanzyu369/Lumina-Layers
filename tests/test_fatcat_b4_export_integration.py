@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import os
 from pathlib import Path
 import zipfile
 import xml.etree.ElementTree as ET
@@ -13,10 +12,6 @@ import trimesh
 from utils.bambu_3mf_writer import BambuStudio3MFWriter
 
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("FATCAT_B4_INTEGRATION") != "1",
-    reason="requires the installed Fat Cat C++ wheel and patched neroued writer",
-)
 
 
 def _target_writer(path: Path, slicer: str = "BambuStudio") -> BambuStudio3MFWriter:

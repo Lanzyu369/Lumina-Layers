@@ -33,7 +33,7 @@ Implementation starts from these exact repository revisions:
 | Lumina Material Registry | `master` | `ba6e642b4a9565f66363951bcceef095eb8081da` |
 | Lumina Materials | `master` | `163103130c531260bc58ba5c913cc856f1808dea` |
 
-Before implementation, register the workstream and its PR train in the online tracking spreadsheet. Use new `codex/feat/...` or `codex/chore/...` branches; never append work to a merged branch and never push directly to a protected branch.
+When publishing this workstream, use fresh topic branches and PRs; never push directly to a protected branch.
 
 ## Plans In This Program
 

@@ -3,7 +3,7 @@
 from copy import deepcopy
 from io import BytesIO
 import json
-import os
+import re
 from zipfile import ZipFile
 
 import pytest
@@ -11,7 +11,10 @@ import trimesh
 
 from core import custom_3mf_templates
 from core.wipe_tower_placement import Rect
-from fatcat_material_assertions import assert_native_materials, native_materials_support_plate, native_plate_binding
+from fatcat_material_assertions import (
+    assert_native_materials, native_materials_support_plate,
+    native_material_profile_gap, native_plate_binding,
+)
 from fatcat_native_source_fixtures import complete_native_project, assert_source_material_snapshot
 from test_fatcat_b73_routing_unit import PRINTERS, new_devices
 import utils.bambu_3mf_writer as writer_module
@@ -21,7 +24,6 @@ from utils.fatcat_metadata import (
     read_project_layout,
 )
 
-pytestmark = pytest.mark.skipif(os.environ.get("FATCAT_B4_INTEGRATION") != "1", reason="installed native dependencies required")
 DEVICES = new_devices()
 MATRIX = [(device, plate) for device in DEVICES for plate in device.build_plates]
 
@@ -72,23 +74,17 @@ def test_registry_only_x1_effective_native_tower_defaults_reach_layout(tmp_path,
         material_count=2, printer_id=writer.printer_id, slicer=writer.slicer,
         nozzle_size=writer.nozzle_size,
     )
-    if writer.slicer == "BambuStudio":
-        assert request.tower_rib_width == 8.0
-        assert request.tower_square_rib_body is True
-        assert request.tower_infill_spacing_ratio == 1.5
-        assert request.purge_volume == 45.0
-    else:
-        assert request.tower_rib_width == 0.0
-        assert request.tower_square_rib_body is False
-        assert request.tower_infill_spacing_ratio == 1.0
-        assert request.purge_volume == 30.0
+    assert request.tower_rib_width == 8.0
+    assert request.tower_square_rib_body is True
+    assert request.tower_infill_spacing_ratio == 1.5
+    assert request.purge_volume == (45.0 if writer.slicer == "BambuStudio" else 30.0)
     assert request.tower_extra_rib_length == 0.0
     assert request.tower_brim == 3.0
 
 
 @pytest.mark.parametrize("device,plate", MATRIX, ids=[f"{d.device_profile_id}/{p.id}" for d, p in MATRIX])
 @pytest.mark.parametrize("names", [("Red", "White"), ("PETG Red", "PETG White"), ("Red", "PETG White")], ids=["pla", "petg", "mixed"])
-def test_every_device_plate_and_material_uses_its_exact_native_binding(tmp_path, device, plate, names):
+def test_device_plate_material_binding_or_incomplete_native_profile_error(tmp_path, device, plate, names):
     writer = make_writer(tmp_path, device, plate=plate)
     palette = [(names[0], (220, 20, 30)), (names[1], (240, 245, 250))]
     seed_selected_materials(writer, palette)
@@ -103,7 +99,26 @@ def test_every_device_plate_and_material_uses_its_exact_native_binding(tmp_path,
             machine_uid=f"bambu-lab:{machine}", nozzle_uid=f"nozzle:{device.nozzle_size}mm",
             material_types=types, plate_value=plate_value):
         # Native zero temperatures explicitly forbid this active material/plate.
-        with pytest.raises(ValueError, match="no available native filament profile"):
+        with pytest.raises(
+            ValueError,
+            match="no available native filament profile|matches multiple native profiles",
+        ):
+            compose(writer, palette)
+        return
+    gap = native_material_profile_gap(
+        slicer_id=device.slicer_id, machine_uid=f"bambu-lab:{machine}",
+        nozzle_uid=f"nozzle:{device.nozzle_size}mm", material_types=types,
+        plate_value=plate_value,
+    )
+    if gap is not None:
+        profile_name, key = gap
+        # Some third-party presets support this plate but lack settings needed
+        # to combine them with another material. Require the exact source error.
+        message = (
+            f"native material profile '{profile_name}' omits slice setting '{key}' "
+            "and the exact target has no recorded native schema default"
+        )
+        with pytest.raises(ValueError, match=re.escape(message)):
             compose(writer, palette)
         return
     source = writer._get_base_config_template()

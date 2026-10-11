@@ -233,4 +233,4 @@ Check for leftover `api_server.py`, `start_all.py`, Vite, Vitest, and project-sc
 
 - [ ] **Step 17: Commit, push, and open the PR**
 
-Stage only intended files. Use a Conventional Commit title and English-then-Chinese body, push `shmx/feat/browser-completion-notifications`, and create a ready PR targeting `dev-refactor` with an English-then-Chinese description covering purpose, implementation, tests, browser proof, and residual limitations.
+Stage only intended files. When publishing, use a Conventional Commit title and a PR targeting `dev-refactor`, describing purpose, implementation, tests, browser proof, and residual limitations.

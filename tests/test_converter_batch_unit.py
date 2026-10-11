@@ -1460,7 +1460,11 @@ class TestBatchMergeFlow:
             response = client.post(
                 "/api/convert/batch",
                 files=[("images", _make_test_image_buf("img.png"))],
-                data={"lut_name": "test_lut", "printer_id": "snapmaker-u1"},
+                data={
+                    "lut_name": "test_lut",
+                    "printer_id": "snapmaker-u1",
+                    "slicer": "SnapmakerOrca",
+                },
             )
 
         assert response.status_code == 200

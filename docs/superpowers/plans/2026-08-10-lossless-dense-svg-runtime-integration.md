@@ -14,8 +14,7 @@ with verified capability loading and stock fallback.
 **Architecture:** A new WKB-only core adapter owns the isolated GEOS C API,
 manifest validation, dense eligibility, and inward-component helper. The vector
 engine adopts it only for contour normalization. Docker builds the pinned
-modified shared library and supplies its verified manifest; desktop packaging
-does not enable it.
+modified shared library and supplies its verified manifest.
 
 **Tech stack:** Python 3.12/3.13, Shapely 2.1.2, GEOS 3.13.1 C API, `ctypes`,
 CMake, Docker, pytest, existing real SVG proof corpus.

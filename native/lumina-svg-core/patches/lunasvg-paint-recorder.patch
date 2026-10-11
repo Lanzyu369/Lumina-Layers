@@ -1,5 +1,5 @@
 diff --git a/include/lunasvg.h b/include/lunasvg.h
-index 74f43bb..7f54465 100644
+index 74f43bb..3dcafe1 100644
 --- a/include/lunasvg.h
 +++ b/include/lunasvg.h
 @@ -23,6 +23,8 @@
@@ -108,7 +108,7 @@ index 74f43bb..7f54465 100644
  class SVGNode;
  class SVGTextNode;
  class SVGElement;
-@@ -816,6 +908,40 @@ public:
+@@ -816,6 +908,19 @@ public:
     */
    Element documentElement() const;
  
@@ -122,34 +122,13 @@ index 74f43bb..7f54465 100644
 +  /** @internal Records one deduplicated fail-closed capability reason. */
 +  void addCapabilityIssue(const std::string &reason);
 +
-+  /** @internal Accounts one recursive local <use> expansion. */
-+  bool beginUseExpansion();
-+
-+  /** @internal Leaves one recursive local <use> expansion. */
-+  void endUseExpansion();
-+
-+  /** @internal Accounts attribute bytes reparsed while cloning <use>. */
-+  bool consumeUseCloneWork(size_t count);
-+
 +  /** @internal Preflights inevitable aggregate <use> clone work. */
 +  bool preflightUseCloneWork();
-+
-+  /** @internal Accounts path verbs and points before PlutoVG allocation. */
-+  bool consumePathParseWork(size_t verbs, size_t points);
-+
-+  /** @internal Accounts transform text scanned by precision bookkeeping. */
-+  bool consumeTransformParseWork(size_t bytes);
-+
-+  /** @internal Accounts XML attributes before parser container allocation. */
-+  bool consumeXmlAttribute(size_t nameBytes, size_t valueBytes);
-+
-+  /** @internal Accounts retained per-element CSS capability state. */
-+  bool consumeDeferredCapabilityStorage(size_t objects, size_t bytes);
 +
    Document(Document &&);
    Document &operator=(Document &&);
    ~Document();
-@@ -826,9 +952,26 @@ private:
+@@ -826,9 +931,16 @@ private:
    Document &operator=(const Document &) = delete;
    SVGRootElement *rootElement(bool layoutIfNeeded = false) const;
    bool parse(const char *data, size_t length);
@@ -158,17 +137,7 @@ index 74f43bb..7f54465 100644
 +  std::vector<std::string> m_capabilityIssues;
 +  bool m_imageVectorizerOrigin{false};
 +  int32_t m_nextSourceIndex{0};
-+  size_t m_useExpansionDepth{0};
-+  size_t m_useExpansionWork{0};
-+  size_t m_useCloneWork{0};
 +  uint8_t m_useClonePreflightState{0};
-+  size_t m_parsedPathVerbCount{0};
-+  size_t m_parsedPathPointCount{0};
-+  size_t m_transformParseWork{0};
-+  size_t m_xmlAttributeCount{0};
-+  size_t m_xmlAttributeBytes{0};
-+  size_t m_deferredCapabilityObjects{0};
-+  size_t m_deferredCapabilityBytes{0};
    friend class SVGURIReference;
    friend class SVGNode;
 +  friend class SVGElement;
@@ -722,7 +691,7 @@ index 7e6bc12..e41bab8 100644
      const int m_y;
  };
 diff --git a/source/lunasvg.cpp b/source/lunasvg.cpp
-index 0a4399f..7902aec 100644
+index 0a4399f..2b29883 100644
 --- a/source/lunasvg.cpp
 +++ b/source/lunasvg.cpp
 @@ -5,6 +5,9 @@
@@ -735,7 +704,7 @@ index 0a4399f..7902aec 100644
  
  int lunasvg_version()
  {
-@@ -520,6 +523,126 @@ Element Document::documentElement() const
+@@ -520,6 +523,54 @@ Element Document::documentElement() const
      return m_rootElement.get();
  }
  
@@ -776,10 +745,6 @@ index 0a4399f..7902aec 100644
 +{
 +    if(m_nextSourceIndex == std::numeric_limits<int32_t>::max())
 +        throw std::length_error("svg_element_capacity");
-+    if(m_nextSourceIndex == std::numeric_limits<int32_t>::max()) {
-+        addCapabilityIssue("numeric_range_error");
-+        return -1;
-+    }
 +    return m_nextSourceIndex++;
 +}
 +
@@ -791,79 +756,11 @@ index 0a4399f..7902aec 100644
 +    }
 +}
 +
-+bool Document::beginUseExpansion()
-+{
-+    if(m_useExpansionDepth == std::numeric_limits<size_t>::max()
-+            || m_useExpansionWork == std::numeric_limits<size_t>::max())
-+        return false;
-+    ++m_useExpansionDepth;
-+    ++m_useExpansionWork;
-+    return true;
-+}
-+
-+void Document::endUseExpansion()
-+{
-+    if(m_useExpansionDepth > 0)
-+        --m_useExpansionDepth;
-+}
-+
-+bool Document::consumeUseCloneWork(size_t count)
-+{
-+    if(count > std::numeric_limits<size_t>::max() - m_useCloneWork)
-+        return false;
-+    m_useCloneWork += count;
-+    return true;
-+}
-+
-+bool Document::consumePathParseWork(size_t verbs, size_t points)
-+{
-+    if(verbs > std::numeric_limits<size_t>::max() - m_parsedPathVerbCount
-+            || points > std::numeric_limits<size_t>::max()
-+                - m_parsedPathPointCount)
-+        return false;
-+    m_parsedPathVerbCount += verbs;
-+    m_parsedPathPointCount += points;
-+    return true;
-+}
-+
-+bool Document::consumeTransformParseWork(size_t bytes)
-+{
-+    if(bytes > std::numeric_limits<size_t>::max() - m_transformParseWork)
-+        return false;
-+    m_transformParseWork += bytes;
-+    return true;
-+}
-+
-+bool Document::consumeXmlAttribute(size_t nameBytes, size_t valueBytes)
-+{
-+    if(m_xmlAttributeCount == std::numeric_limits<size_t>::max()
-+            || nameBytes > std::numeric_limits<size_t>::max()
-+                - m_xmlAttributeBytes
-+            || valueBytes > std::numeric_limits<size_t>::max()
-+                - m_xmlAttributeBytes - nameBytes)
-+        return false;
-+    ++m_xmlAttributeCount;
-+    m_xmlAttributeBytes += nameBytes + valueBytes;
-+    return true;
-+}
-+
-+bool Document::consumeDeferredCapabilityStorage(size_t objects, size_t bytes)
-+{
-+    if(objects > std::numeric_limits<size_t>::max()
-+            - m_deferredCapabilityObjects
-+            || bytes > std::numeric_limits<size_t>::max()
-+                - m_deferredCapabilityBytes)
-+        return false;
-+    m_deferredCapabilityObjects += objects;
-+    m_deferredCapabilityBytes += bytes;
-+    return true;
-+}
-+
  SVGRootElement* Document::rootElement(bool layoutIfNeeded) const
  {
      if(layoutIfNeeded)
 diff --git a/source/svgelement.cpp b/source/svgelement.cpp
-index 7d62cc6..90a5554 100644
+index 7d62cc6..7f923c7 100644
 --- a/source/svgelement.cpp
 +++ b/source/svgelement.cpp
 @@ -3,13 +3,1419 @@
@@ -2294,7 +2191,7 @@ index 7d62cc6..90a5554 100644
  {
  }
  
-@@ -215,59 +1622,132 @@ bool SVGElement::setAttribute(const Attribute& attribute)
+@@ -215,59 +1622,109 @@ bool SVGElement::setAttribute(const Attribute& attribute)
      return setAttribute(attribute.specificity(), attribute.id(), attribute.value());
  }
  
@@ -2305,14 +2202,6 @@ index 7d62cc6..90a5554 100644
 +    if(!m_deferredCapabilities) {
 +        m_deferredCapabilities = std::make_shared<DeferredCapabilityMap>();
 +    } else if(m_deferredCapabilities.use_count() != 1) {
-+        size_t retainedBytes = 0;
-+        for(const auto& item : *m_deferredCapabilities) {
-+            retainedBytes += sizeof(DeferredCapabilityMap::value_type)
-+                + 64 + item.first.size() + item.second.reason.size();
-+        }
-+        if(!document()->consumeDeferredCapabilityStorage(
-+                m_deferredCapabilities->size(), retainedBytes))
-+            return false;
 +        m_deferredCapabilities =
 +            std::make_shared<DeferredCapabilityMap>(
 +                *m_deferredCapabilities);
@@ -2322,19 +2211,11 @@ index 7d62cc6..90a5554 100644
 +    if(existing != m_deferredCapabilities->end()) {
 +        if(specificity < existing->second.specificity)
 +            return false;
-+        if(reason.size() > existing->second.reason.size()
-+                && !document()->consumeDeferredCapabilityStorage(
-+                    0, reason.size() - existing->second.reason.size()))
-+            return false;
 +        existing->second.specificity = specificity;
 +        existing->second.reason.assign(reason);
 +        return true;
 +    }
 +
-+    const size_t retainedBytes = sizeof(DeferredCapabilityMap::value_type)
-+        + 64 + propertyName.size() + reason.size();
-+    if(!document()->consumeDeferredCapabilityStorage(1, retainedBytes))
-+        return false;
 +    m_deferredCapabilities->emplace(
 +        std::string(propertyName), DeferredCapability{specificity,
 +                                                      std::string(reason)});
@@ -2360,8 +2241,6 @@ index 7d62cc6..90a5554 100644
 +            document()->addCapabilityIssue("unsupported_attribute_value");
 +            return;
 +        }
-+        if(!document()->consumePathParseWork(work.verbs, work.points))
-+            return;
 +    } else if(id == PropertyID::Points) {
 +        const auto work = computePointListParseWork(value);
 +        if(work.exceeded) {
@@ -2372,11 +2251,6 @@ index 7d62cc6..90a5554 100644
 +            document()->addCapabilityIssue("unsupported_attribute_value");
 +            return;
 +        }
-+        if(!document()->consumePathParseWork(work.points, work.points))
-+            return;
-+    } else if(id == PropertyID::Transform
-+            && !document()->consumeTransformParseWork(value.size())) {
-+        return;
 +    }
 +
      if(auto property = getProperty(id)) {
@@ -2462,7 +2336,7 @@ index 7d62cc6..90a5554 100644
      m_children.push_back(std::move(child));
      return &*m_children.back();
  }
-@@ -428,14 +1908,32 @@ Size SVGElement::currentViewportSize() const
+@@ -428,6 +1885,11 @@ Size SVGElement::currentViewportSize() const
  void SVGElement::cloneChildren(SVGElement* parentElement) const
  {
      for(const auto& child : m_children) {
@@ -2474,28 +2348,15 @@ index 7d62cc6..90a5554 100644
          parentElement->addChild(child->clone(true));
      }
  }
- 
-+static bool consumeCloneAttributeWork(Document* document,
-+                                      const AttributeList& attributes)
-+{
-+    for(const auto& attribute : attributes) {
-+        if(!document->consumeUseCloneWork(attribute.value().size() + 1))
-+            return false;
-+    }
-+    return true;
-+}
-+
- std::unique_ptr<SVGNode> SVGElement::clone(bool deep) const
+@@ -436,6 +1898,7 @@ std::unique_ptr<SVGNode> SVGElement::clone(bool deep) const
  {
      auto element = SVGElement::create(document(), m_id);
-+    if(!consumeCloneAttributeWork(document(), m_attributes))
-+        return element;
      element->setAttributes(m_attributes);
 +    copyDeferredCapabilitiesTo(element.get());
      if(deep) { cloneChildren(element.get()); }
      return element;
  }
-@@ -455,6 +1953,13 @@ void SVGElement::layoutElement(const SVGLayoutState& state)
+@@ -455,6 +1918,13 @@ void SVGElement::layoutElement(const SVGLayoutState& state)
      m_clipper = getClipper(state.clip_path());
      m_masker = getMasker(state.mask());
      m_opacity = state.opacity();
@@ -2509,7 +2370,7 @@ index 7d62cc6..90a5554 100644
  
      m_font_size = state.font_size();
      m_display = state.display();
-@@ -596,28 +2101,56 @@ SVGGraphicsElement::SVGGraphicsElement(Document* document, ElementID id)
+@@ -596,28 +2066,56 @@ SVGGraphicsElement::SVGGraphicsElement(Document* document, ElementID id)
      addProperty(m_transform);
  }
  
@@ -2574,7 +2435,7 @@ index 7d62cc6..90a5554 100644
      return strokeData;
  }
  
-@@ -646,7 +2179,8 @@ Transform SVGSVGElement::localTransform() const
+@@ -646,7 +2144,8 @@ Transform SVGSVGElement::localTransform() const
      };
  
      if(isRootElement())
@@ -2584,7 +2445,7 @@ index 7d62cc6..90a5554 100644
      return SVGGraphicsElement::localTransform() * Transform::translated(viewportRect.x, viewportRect.y) * viewBoxToViewTransform(viewportRect.size());
  }
  
-@@ -665,9 +2199,22 @@ void SVGSVGElement::render(SVGRenderState& state) const
+@@ -665,9 +2164,22 @@ void SVGSVGElement::render(SVGRenderState& state) const
      SVGBlendInfo blendInfo(this);
      SVGRenderState newState(this, state, localTransform());
      newState.beginGroup(blendInfo);
@@ -2609,7 +2470,7 @@ index 7d62cc6..90a5554 100644
      newState.endGroup(blendInfo);
  }
  
-@@ -691,9 +2238,9 @@ SVGElement* SVGRootElement::getElementById(std::string_view id) const
+@@ -691,9 +2203,9 @@ SVGElement* SVGRootElement::getElementById(std::string_view id) const
      return it->second;
  }
  
@@ -2621,11 +2482,11 @@ index 7d62cc6..90a5554 100644
  }
  
  void SVGRootElement::layout(SVGLayoutState& state)
-@@ -782,13 +2329,16 @@ void SVGUseElement::render(SVGRenderState& state) const
+@@ -782,9 +2294,11 @@ void SVGUseElement::render(SVGRenderState& state) const
  
  void SVGUseElement::build()
  {
-+    if(!document()->preflightUseCloneWork() || !document()->beginUseExpansion())
++    if(!document()->preflightUseCloneWork())
 +        return;
      if(auto targetElement = getTargetElement(document())) {
          if(auto newElement = cloneTargetElement(targetElement)) {
@@ -2634,29 +2495,15 @@ index 7d62cc6..90a5554 100644
          }
      }
  
-     SVGGraphicsElement::build();
-+    document()->endUseExpansion();
- }
- 
- inline bool isDisallowedElement(const SVGElement* element)
-@@ -833,10 +2383,16 @@ std::unique_ptr<SVGElement> SVGUseElement::cloneTargetElement(SVGElement* target
-     }
+@@ -834,6 +2348,7 @@ std::unique_ptr<SVGElement> SVGUseElement::cloneTargetElement(SVGElement* target
  
      auto newElement = SVGElement::create(document(), tagId);
-+    if(!consumeCloneAttributeWork(document(), targetElement->attributes()))
-+        return newElement;
      newElement->setAttributes(targetElement->attributes());
 +    targetElement->copyDeferredCapabilitiesTo(newElement.get());
      if(newElement->id() == ElementID::Svg) {
          for(const auto& attribute : attributes()) {
              if(attribute.id() == PropertyID::Width || attribute.id() == PropertyID::Height) {
-+                if(!document()->consumeUseCloneWork(
-+                        attribute.value().size() + 1))
-+                    return newElement;
-                 newElement->setAttribute(attribute);
-             }
-         }
-@@ -1016,9 +2572,22 @@ void SVGMarkerElement::renderMarker(SVGRenderState& state, const Point& origin,
+@@ -1016,9 +2531,22 @@ void SVGMarkerElement::renderMarker(SVGRenderState& state, const Point& origin,
      SVGBlendInfo blendInfo(this);
      SVGRenderState newState(this, state, markerTransform(origin, angle, strokeWidth));
      newState.beginGroup(blendInfo);
@@ -2681,7 +2528,7 @@ index 7d62cc6..90a5554 100644
      newState.endGroup(blendInfo);
  }
  
-@@ -1078,29 +2647,66 @@ inline const SVGGeometryElement* toSVGGeometryElement(const SVGNode* node)
+@@ -1078,29 +2606,66 @@ inline const SVGGeometryElement* toSVGGeometryElement(const SVGNode* node)
  
  void SVGClipPathElement::applyClipPath(SVGRenderState& state) const
  {
@@ -2766,7 +2613,7 @@ index 7d62cc6..90a5554 100644
          return;
      }
  
-@@ -1222,4 +2828,247 @@ void SVGMaskElement::layoutElement(const SVGLayoutState& state)
+@@ -1222,4 +2787,247 @@ void SVGMaskElement::layoutElement(const SVGLayoutState& state)
      SVGElement::layoutElement(state);
  }
  
@@ -3760,7 +3607,7 @@ index 4d08ad9..d8caeb5 100644
      LineCap m_stroke_linecap = LineCap::Butt;
      LineJoin m_stroke_linejoin = LineJoin::Miter;
 diff --git a/source/svgparser.cpp b/source/svgparser.cpp
-index 183937c..94f0f49 100644
+index 183937c..f7f1222 100644
 --- a/source/svgparser.cpp
 +++ b/source/svgparser.cpp
 @@ -3,9 +3,464 @@
@@ -4287,8 +4134,7 @@ index 183937c..94f0f49 100644
 +    CssSpecificity specificity() const { return m_specificity; }
      size_t position() const { return m_position; }
  
--    bool match(const SVGElement* element) const;
-+    bool match(const SVGElement* element, class CssMatchBudget* budget) const;
+     bool match(const SVGElement* element) const;
  
  private:
      Selector m_selector;
@@ -4299,67 +4145,7 @@ index 183937c..94f0f49 100644
      size_t m_position;
  };
  
-@@ -102,14 +579,94 @@ inline bool operator<(const RuleData& a, const RuleData& b) { return a.isLessTha
- 
- using RuleDataList = std::vector<RuleData>;
- 
-+class CssParseBudget {
-+public:
-+    bool consumeRule()
-+    {
-+        return consume(m_ruleCount);
-+    }
-+
-+    bool consumeSelectorNode()
-+    {
-+        return consume(m_selectorNodeCount);
-+    }
-+
-+    bool consumeDeclaration()
-+    {
-+        return consume(m_declarationCount);
-+    }
-+
-+    bool exceeded() const { return m_exceeded; }
-+
-+private:
-+    bool consume(size_t& value)
-+    {
-+        if(value == std::numeric_limits<size_t>::max()) {
-+            m_exceeded = true;
-+            return false;
-+        }
-+        ++value;
-+        return true;
-+    }
-+
-+    size_t m_ruleCount{0};
-+    size_t m_selectorNodeCount{0};
-+    size_t m_declarationCount{0};
-+    bool m_exceeded{false};
-+};
-+
-+class CssMatchBudget {
-+public:
-+    bool consume(size_t count = 1)
-+    {
-+        if(count > std::numeric_limits<size_t>::max() - m_work) {
-+            m_exceeded = true;
-+            return false;
-+        }
-+        m_work += count;
-+        return true;
-+    }
-+
-+    bool exceeded() const { return m_exceeded; }
-+
-+private:
-+    size_t m_work{0};
-+    bool m_exceeded{false};
-+};
-+
- constexpr bool equals(std::string_view value, std::string_view subvalue)
- {
+@@ -107,9 +584,33 @@ constexpr bool equals(std::string_view value, std::string_view subvalue)
      return value.compare(subvalue) == 0;
  }
  
@@ -4373,8 +4159,7 @@ index 183937c..94f0f49 100644
 +        return false;
 +
 +    // libc++'s string_view::find is quadratic for repeated-prefix inputs.
-+    // KMP keeps CSS substring matching linear in the bytes already charged
-+    // to CssMatchBudget.
++    // KMP keeps CSS substring matching linear in the input length.
 +    std::vector<uint32_t> prefix(subvalue.size(), 0);
 +    for(size_t index = 1, matched = 0; index < subvalue.size(); ++index) {
 +        while(matched > 0 && subvalue[index] != subvalue[matched])
@@ -4396,7 +4181,7 @@ index 183937c..94f0f49 100644
  }
  
  constexpr bool includes(std::string_view value, std::string_view subvalue)
-@@ -155,7 +712,7 @@ static bool matchAttributeSelector(const AttributeSelector& selector, const SVGE
+@@ -155,7 +656,7 @@ static bool matchAttributeSelector(const AttributeSelector& selector, const SVGE
  {
      const auto& value = element->getAttribute(selector.id);
      if(selector.matchType == AttributeSelector::MatchType::None)
@@ -4405,22 +4190,18 @@ index 183937c..94f0f49 100644
      if(selector.matchType == AttributeSelector::MatchType::Equals)
          return equals(value, selector.value);
      if(selector.matchType == AttributeSelector::MatchType::Contains)
-@@ -171,18 +728,25 @@ static bool matchAttributeSelector(const AttributeSelector& selector, const SVGE
+@@ -171,12 +672,15 @@ static bool matchAttributeSelector(const AttributeSelector& selector, const SVGE
      return false;
  }
  
 -static bool matchSimpleSelector(const SimpleSelector& selector, const SVGElement* element);
 +static bool matchSimpleSelector(const SimpleSelector& selector,
-+                                const SVGElement* element,
-+                                CssMatchBudget* budget);
++                                const SVGElement* element);
  
 -static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const SVGElement* element)
 +static bool matchPseudoClassSelector(const PseudoClassSelector& selector,
-+                                     const SVGElement* element,
-+                                     CssMatchBudget* budget)
++                                     const SVGElement* element)
  {
-+    if(budget != nullptr && !budget->consume())
-+        return false;
      if(selector.type == PseudoClassSelector::Type::Empty)
 -        return element->children().empty();
 +        return element->children().empty()
@@ -4428,61 +4209,19 @@ index 183937c..94f0f49 100644
      if(selector.type == PseudoClassSelector::Type::Root)
          return element->isRootElement();
      if(selector.type == PseudoClassSelector::Type::Is) {
-         for(const auto& subSelector : selector.subSelectors) {
-             for(const auto& simpleSelector : subSelector) {
--                if(!matchSimpleSelector(simpleSelector, element)) {
-+                if(!matchSimpleSelector(simpleSelector, element, budget)) {
-                     return false;
-                 }
-             }
-@@ -194,9 +758,11 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
-     if(selector.type == PseudoClassSelector::Type::Not) {
-         for(const auto& subSelector : selector.subSelectors) {
-             for(const auto& simpleSelector : subSelector) {
--                if(matchSimpleSelector(simpleSelector, element)) {
-+                if(matchSimpleSelector(simpleSelector, element, budget)) {
-                     return false;
-                 }
-+                if(budget != nullptr && budget->exceeded())
-+                    return false;
-             }
-         }
- 
-@@ -212,6 +778,8 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
-     if(selector.type == PseudoClassSelector::Type::FirstOfType) {
-         auto sibling = element->previousElement();
-         while(sibling) {
-+            if(budget != nullptr && !budget->consume())
-+                return false;
-             if(sibling->id() == element->id())
-                 return false;
-             sibling = sibling->previousElement();
-@@ -223,6 +791,8 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
-     if(selector.type == PseudoClassSelector::Type::LastOfType) {
-         auto sibling = element->nextElement();
-         while(sibling) {
-+            if(budget != nullptr && !budget->consume())
-+                return false;
-             if(sibling->id() == element->id())
-                 return false;
-             sibling = sibling->nextElement();
-@@ -231,21 +801,51 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
+@@ -231,10 +735,27 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
          return true;
      }
  
 +    if(selector.type == PseudoClassSelector::Type::OnlyOfType) {
 +        auto sibling = element->previousElement();
 +        while(sibling) {
-+            if(budget != nullptr && !budget->consume())
-+                return false;
 +            if(sibling->id() == element->id())
 +                return false;
 +            sibling = sibling->previousElement();
 +        }
 +        sibling = element->nextElement();
 +        while(sibling) {
-+            if(budget != nullptr && !budget->consume())
-+                return false;
 +            if(sibling->id() == element->id())
 +                return false;
 +            sibling = sibling->nextElement();
@@ -4495,79 +4234,11 @@ index 183937c..94f0f49 100644
  
 -static bool matchSimpleSelector(const SimpleSelector& selector, const SVGElement* element)
 +static bool matchSimpleSelector(const SimpleSelector& selector,
-+                                const SVGElement* element,
-+                                CssMatchBudget* budget)
++                                const SVGElement* element)
  {
-+    if(budget != nullptr && !budget->consume())
-+        return false;
      if(selector.id != ElementID::Star && selector.id != element->id())
          return false;
-     for(const auto& sel : selector.attributeSelectors) {
-+        if(budget != nullptr) {
-+            const auto& attributeValue = element->getAttribute(sel.id);
-+            if(!budget->consume(sel.value.size())
-+                    || !budget->consume(attributeValue.size()))
-+                return false;
-+        }
-         if(!matchAttributeSelector(sel, element)) {
-             return false;
-         }
-     }
- 
-     for(const auto& sel : selector.pseudoClassSelectors) {
--        if(!matchPseudoClassSelector(sel, element)) {
-+        if(!matchPseudoClassSelector(sel, element, budget)) {
-             return false;
-         }
-     }
-@@ -253,13 +853,14 @@ static bool matchSimpleSelector(const SimpleSelector& selector, const SVGElement
-     return true;
- }
- 
--static bool matchSelector(const Selector& selector, const SVGElement* element)
-+static bool matchSelector(const Selector& selector, const SVGElement* element,
-+                          CssMatchBudget* budget = nullptr)
- {
-     if(selector.empty())
-         return false;
-     auto it = selector.rbegin();
-     auto end = selector.rend();
--    if(!matchSimpleSelector(*it, element)) {
-+    if(!matchSimpleSelector(*it, element, budget)) {
-         return false;
-     }
- 
-@@ -267,6 +868,8 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
-     ++it;
- 
-     while(it != end) {
-+        if(budget != nullptr && !budget->consume())
-+            return false;
-         switch(combinator) {
-         case SimpleSelector::Combinator::Child:
-         case SimpleSelector::Combinator::Descendant:
-@@ -282,7 +885,7 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
- 
-         if(element == nullptr)
-             return false;
--        if(matchSimpleSelector(*it, element)) {
-+        if(matchSimpleSelector(*it, element, budget)) {
-             combinator = it->combinator;
-             ++it;
-         } else if(combinator != SimpleSelector::Combinator::Descendant
-@@ -294,9 +897,9 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
-     return true;
- }
- 
--bool RuleData::match(const SVGElement* element) const
-+bool RuleData::match(const SVGElement* element, CssMatchBudget* budget) const
- {
--    return matchSelector(m_selector, element);
-+    return matchSelector(m_selector, element, budget);
- }
- 
- constexpr bool IS_CSS_STARTNAMECHAR(int c) { return IS_ALPHA(c) || c == '_' || c == '-'; }
-@@ -331,6 +934,7 @@ static bool parseIdSelector(std::string_view& input, SimpleSelector& simpleSelec
+@@ -331,6 +852,7 @@ static bool parseIdSelector(std::string_view& input, SimpleSelector& simpleSelec
      AttributeSelector a;
      a.id = PropertyID::Id;
      a.matchType = AttributeSelector::MatchType::Equals;
@@ -4575,25 +4246,17 @@ index 183937c..94f0f49 100644
      if(!readCSSIdentifier(input, a.value))
          return false;
      simpleSelector.attributeSelectors.push_back(std::move(a));
-@@ -391,9 +995,15 @@ static bool parseAttributeSelector(std::string_view& input, SimpleSelector& simp
-     return true;
- }
+@@ -393,7 +915,8 @@ static bool parseAttributeSelector(std::string_view& input, SimpleSelector& simp
  
--static bool parseSelectors(std::string_view& input, SelectorList& selectors);
-+static bool parseSelectors(std::string_view& input, SelectorList& selectors,
-+                           CssParseBudget* budget = nullptr,
-+                           bool countRules = true);
+ static bool parseSelectors(std::string_view& input, SelectorList& selectors);
  
 -static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& simpleSelector)
-+static thread_local size_t selectorParseDepth = 0;
-+
 +static bool parsePseudoClassSelector(std::string_view& input,
-+                                     SimpleSelector& simpleSelector,
-+                                     CssParseBudget* budget)
++                                     SimpleSelector& simpleSelector)
  {
      std::string name;
      if(!readCSSIdentifier(input, name))
-@@ -403,6 +1013,8 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
+@@ -403,6 +926,8 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
          selector.type = PseudoClassSelector::Type::Empty;
      else if(name.compare("root") == 0)
          selector.type = PseudoClassSelector::Type::Root;
@@ -4602,86 +4265,48 @@ index 183937c..94f0f49 100644
      else if(name.compare("not") == 0)
          selector.type = PseudoClassSelector::Type::Not;
      else if(name.compare("first-child") == 0)
-@@ -422,7 +1034,11 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
+@@ -422,7 +947,9 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
          if(!skipDelimiter(input, '('))
              return false;
          skipOptionalSpaces(input);
 -        if(!parseSelectors(input, selector.subSelectors))
-+        ++selectorParseDepth;
 +        const bool parsed = parseSelectors(
-+            input, selector.subSelectors, budget, false);
-+        --selectorParseDepth;
++            input, selector.subSelectors);
 +        if(!parsed)
              return false;
          skipOptionalSpaces(input);
          if(!skipDelimiter(input, ')')) {
-@@ -434,7 +1050,9 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
+@@ -434,7 +961,8 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
      return true;
  }
  
 -static bool parseSimpleSelector(std::string_view& input, SimpleSelector& simpleSelector, bool& failed)
 +static bool parseSimpleSelector(std::string_view& input,
-+                                SimpleSelector& simpleSelector, bool& failed,
-+                                CssParseBudget* budget)
++                                SimpleSelector& simpleSelector, bool& failed)
  {
      auto consumed = parseTagSelector(input, simpleSelector);
      do {
-@@ -445,7 +1063,8 @@ static bool parseSimpleSelector(std::string_view& input, SimpleSelector& simpleS
+@@ -445,7 +973,8 @@ static bool parseSimpleSelector(std::string_view& input, SimpleSelector& simpleS
          else if(skipDelimiter(input, '['))
              failed = !parseAttributeSelector(input, simpleSelector);
          else if(skipDelimiter(input, ':'))
 -            failed = !parsePseudoClassSelector(input, simpleSelector);
 +            failed = !parsePseudoClassSelector(
-+                input, simpleSelector, budget);
++                input, simpleSelector);
          else
              break;
          consumed = true;
-@@ -470,31 +1089,39 @@ static bool parseCombinator(std::string_view& input, SimpleSelector::Combinator&
-     return combinator != SimpleSelector::Combinator::None;
- }
- 
--static bool parseSelector(std::string_view& input, Selector& selector)
-+static bool parseSelector(std::string_view& input, Selector& selector,
-+                          CssParseBudget* budget)
- {
-     auto combinator = SimpleSelector::Combinator::None;
-     do {
-         bool failed = false;
-         SimpleSelector simpleSelector(combinator);
--        if(!parseSimpleSelector(input, simpleSelector, failed))
-+        if(!parseSimpleSelector(input, simpleSelector, failed, budget))
-             return !failed && (combinator == SimpleSelector::Combinator::Descendant);
-+        if(budget != nullptr && !budget->consumeSelectorNode())
-+            return false;
-         selector.push_back(std::move(simpleSelector));
-     } while(parseCombinator(input, combinator));
-     return true;
- }
- 
--static bool parseSelectors(std::string_view& input, SelectorList& selectors)
-+static bool parseSelectors(std::string_view& input, SelectorList& selectors,
-+                           CssParseBudget* budget, bool countRules)
- {
-     do {
-         Selector selector;
--        if(!parseSelector(input, selector))
-+        if(!parseSelector(input, selector, budget))
-+            return false;
-+        if(countRules && budget != nullptr && !budget->consumeRule())
-             return false;
-         selectors.push_back(std::move(selector));
-     } while(skipDelimiterAndOptionalSpaces(input, ','));
+@@ -494,7 +1023,8 @@ static bool parseSelectors(std::string_view& input, SelectorList& selectors)
      return true;
  }
  
 -static bool parseDeclarations(std::string_view& input, DeclarationList& declarations)
 +static bool parseDeclarations(std::string_view& input,
-+                              DeclarationList& declarations,
-+                              Document* document, CssParseBudget* budget)
++                              DeclarationList& declarations)
  {
      if(!skipDelimiter(input, '{'))
          return false;
-@@ -503,6 +1130,8 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+@@ -503,6 +1033,8 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
          std::string name;
          if(!readCSSIdentifier(input, name))
              return false;
@@ -4690,12 +4315,7 @@ index 183937c..94f0f49 100644
          skipOptionalSpaces(input);
          if(!skipDelimiter(input, ':'))
              return false;
-@@ -513,37 +1142,134 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
-         value.remove_suffix(input.length());
-         stripTrailingSpaces(value);
- 
-+        if(budget != nullptr && !budget->consumeDeclaration())
-+            return false;
+@@ -516,15 +1048,24 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
          Declaration declaration;
          declaration.specificity = 0x10;
          declaration.id = csspropertyid(name);
@@ -4722,18 +4342,8 @@ index 183937c..94f0f49 100644
              declarations.push_back(std::move(declaration));
          skipOptionalSpacesOrDelimiter(input, ';');
      } while(!input.empty() && input.front() != '}');
-     return skipDelimiter(input, '}');
- }
- 
--static bool parseRule(std::string_view& input, Rule& rule)
-+static bool parseRule(std::string_view& input, Rule& rule, Document* document,
-+                      CssParseBudget* budget)
- {
--    if(!parseSelectors(input, rule.selectors))
-+    if(!parseSelectors(input, rule.selectors, budget))
-         return false;
--    return parseDeclarations(input, rule.declarations);
-+    return parseDeclarations(input, rule.declarations, document, budget);
+@@ -538,12 +1079,96 @@ static bool parseRule(std::string_view& input, Rule& rule)
+     return parseDeclarations(input, rule.declarations);
  }
  
 -static RuleDataList parseStyleSheet(std::string_view input)
@@ -4821,7 +4431,6 @@ index 183937c..94f0f49 100644
 +static RuleDataList parseStyleSheet(std::string_view input, Document* document)
  {
      RuleDataList rules;
-+    CssParseBudget parseBudget;
      while(!input.empty()) {
          skipOptionalSpaces(input);
 +        if(input.empty())
@@ -4831,15 +4440,13 @@ index 183937c..94f0f49 100644
              int depth = 0;
              while(!input.empty()) {
                  auto ch = input.front();
-@@ -562,27 +1288,134 @@ static RuleDataList parseStyleSheet(std::string_view input)
+@@ -562,27 +1187,104 @@ static RuleDataList parseStyleSheet(std::string_view input)
          }
  
          Rule rule;
 -        if(!parseRule(input, rule))
-+        if(!parseRule(input, rule, document, &parseBudget)) {
-+            document->addCapabilityIssue(
-+                parseBudget.exceeded()
-+                    ? "unsupported_complexity" : "unsupported_css_rule");
++        if(!parseRule(input, rule)) {
++            document->addCapabilityIssue("unsupported_css_rule");
              break;
 -        for(const auto& selector : rule.selectors) {
 -            size_t specificity = 0;
@@ -4890,8 +4497,7 @@ index 183937c..94f0f49 100644
 +}
 +
 +static bool applySimpleClassRules(const RuleDataList& rules,
-+                                  SVGElement* root,
-+                                  Document* document)
++                                  SVGElement* root)
 +{
 +    std::unordered_map<
 +        std::string_view, std::vector<const RuleData*>> rulesByClass;
@@ -4903,19 +4509,10 @@ index 183937c..94f0f49 100644
 +        rulesByClass[*className].push_back(&rule);
 +    }
 +
-+    CssMatchBudget matchBudget;
-+    bool complexityExceeded = false;
 +    root->transverse([&](SVGElement* element) {
-+        if(complexityExceeded)
-+            return;
 +        std::unordered_set<const RuleData*> uniqueCandidates;
 +        auto classes = std::string_view(
 +            element->getAttribute(PropertyID::Class));
-+        if(!matchBudget.consume(classes.size())) {
-+            complexityExceeded = true;
-+            document->addCapabilityIssue("unsupported_complexity");
-+            return;
-+        }
 +        while(!classes.empty()) {
 +            while(!classes.empty() && IS_WS(classes.front()))
 +                classes.remove_prefix(1);
@@ -4924,12 +4521,6 @@ index 183937c..94f0f49 100644
 +            if(!token.empty()) {
 +                const auto match = rulesByClass.find(token);
 +                if(match != rulesByClass.end()) {
-+                    if(!matchBudget.consume(match->second.size())) {
-+                        complexityExceeded = true;
-+                        document->addCapabilityIssue(
-+                            "unsupported_complexity");
-+                        return;
-+                    }
 +                    uniqueCandidates.insert(
 +                        match->second.begin(), match->second.end());
 +                }
@@ -4949,19 +4540,7 @@ index 183937c..94f0f49 100644
 +            std::unique(candidates.begin(), candidates.end()),
 +            candidates.end());
 +        for(const auto* rule : candidates) {
-+            if(!matchBudget.consume()) {
-+                complexityExceeded = true;
-+                document->addCapabilityIssue("unsupported_complexity");
-+                return;
-+            }
 +            for(const auto& declaration : rule->declarations()) {
-+                if(!matchBudget.consume()
-+                        || !matchBudget.consume(declaration.value.size())) {
-+                    complexityExceeded = true;
-+                    document->addCapabilityIssue(
-+                        "unsupported_complexity");
-+                    return;
-+                }
 +                if(element->setDeferredCapability(
 +                        declaration.specificity, declaration.name,
 +                        declaration.capabilityReason)
@@ -4980,7 +4559,7 @@ index 183937c..94f0f49 100644
  static SelectorList parseQuerySelectors(std::string_view input)
  {
      SelectorList selectors;
-@@ -595,25 +1428,60 @@ static SelectorList parseQuerySelectors(std::string_view input)
+@@ -595,25 +1297,60 @@ static SelectorList parseQuerySelectors(std::string_view input)
      return selectors;
  }
  
@@ -5048,7 +4627,7 @@ index 183937c..94f0f49 100644
  }
  
  inline void removeStyleComments(std::string& value)
-@@ -626,7 +1494,83 @@ inline void removeStyleComments(std::string& value)
+@@ -626,7 +1363,83 @@ inline void removeStyleComments(std::string& value)
      }
  }
  
@@ -5133,7 +4712,7 @@ index 183937c..94f0f49 100644
  {
      output.clear();
      while(!input.empty()) {
-@@ -644,34 +1588,8 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -644,34 +1457,8 @@ inline bool decodeText(std::string_view input, std::string& output)
              unsigned int cp;
              if(!parseInteger(input, cp, base))
                  return false;
@@ -5170,7 +4749,7 @@ index 183937c..94f0f49 100644
          } else {
              if(skipString(input, "amp")) {
                  output.push_back('&');
-@@ -683,6 +1601,20 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -683,6 +1470,20 @@ inline bool decodeText(std::string_view input, std::string& output)
                  output.push_back('\"');
              } else if(skipString(input, "apos")) {
                  output.push_back('\'');
@@ -5191,7 +4770,7 @@ index 183937c..94f0f49 100644
              } else {
                  return false;
              }
-@@ -699,35 +1631,166 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -699,35 +1500,166 @@ inline bool decodeText(std::string_view input, std::string& output)
  constexpr bool IS_STARTNAMECHAR(int c) { return IS_ALPHA(c) ||  c == '_' || c == ':'; }
  constexpr bool IS_NAMECHAR(int c) { return IS_STARTNAMECHAR(c) || IS_NUM(c) || c == '-' || c == '.'; }
  
@@ -5371,7 +4950,7 @@ index 183937c..94f0f49 100644
          }
  
          if(currentElement->id() == ElementID::Style) {
-@@ -738,9 +1801,12 @@ bool Document::parse(const char* data, size_t length)
+@@ -738,9 +1670,12 @@ bool Document::parse(const char* data, size_t length)
              node->setData(buffer);
              currentElement->addChild(std::move(node));
          }
@@ -5384,7 +4963,7 @@ index 183937c..94f0f49 100644
      if(length >= 3) {
          auto buffer = (const uint8_t*)(data);
  
-@@ -755,12 +1821,16 @@ bool Document::parse(const char* data, size_t length)
+@@ -755,12 +1690,16 @@ bool Document::parse(const char* data, size_t length)
      while(!input.empty()) {
          if(currentElement) {
              auto text = input.substr(0, input.find('<'));
@@ -5402,7 +4981,7 @@ index 183937c..94f0f49 100644
          }
  
          if(!skipDelimiter(input, '<'))
-@@ -771,6 +1841,18 @@ bool Document::parse(const char* data, size_t length)
+@@ -771,6 +1710,18 @@ bool Document::parse(const char* data, size_t length)
              auto n = input.find("?>");
              if(n == std::string_view::npos)
                  return false;
@@ -5421,7 +5000,7 @@ index 183937c..94f0f49 100644
              input.remove_prefix(n + 2);
              continue;
          }
-@@ -780,21 +1862,36 @@ bool Document::parse(const char* data, size_t length)
+@@ -780,21 +1731,36 @@ bool Document::parse(const char* data, size_t length)
                  auto n = input.find("-->");
                  if(n == std::string_view::npos)
                      return false;
@@ -5461,7 +5040,7 @@ index 183937c..94f0f49 100644
                  while(!input.empty() && input.front() != '>') {
                      if(input.front() == '[') {
                          int depth = 1;
-@@ -818,13 +1915,15 @@ bool Document::parse(const char* data, size_t length)
+@@ -818,13 +1784,15 @@ bool Document::parse(const char* data, size_t length)
          }
  
          if(skipDelimiter(input, '/')) {
@@ -5480,7 +5059,7 @@ index 183937c..94f0f49 100644
                      return false;
                  currentElement = currentElement->parentElement();
              } else {
-@@ -839,11 +1938,20 @@ bool Document::parse(const char* data, size_t length)
+@@ -839,11 +1807,20 @@ bool Document::parse(const char* data, size_t length)
  
          if(!readIdentifier(input, buffer))
              return false;
@@ -5502,7 +5081,7 @@ index 183937c..94f0f49 100644
              if(id == ElementID::Unknown) {
                  ignoring = 1;
              } else {
-@@ -863,7 +1971,16 @@ bool Document::parse(const char* data, size_t length)
+@@ -863,7 +1840,16 @@ bool Document::parse(const char* data, size_t length)
          }
  
          skipOptionalSpaces(input);
@@ -5519,14 +5098,12 @@ index 183937c..94f0f49 100644
              skipOptionalSpaces(input);
              if(!skipDelimiter(input, '='))
                  return false;
-@@ -875,17 +1992,49 @@ bool Document::parse(const char* data, size_t length)
+@@ -875,17 +1861,47 @@ bool Document::parse(const char* data, size_t length)
              auto n = input.find(quote);
              if(n == std::string_view::npos)
                  return false;
 +            if(input.substr(0, n).find('<') != std::string_view::npos)
 +                return false;
-+            if(!consumeXmlAttribute(attributeName.size(), n))
-+                throw std::length_error("svg_attribute_capacity");
 +            if(!decodeText(input.substr(0, n), buffer, hasDoctype))
 +                return false;
 +            const bool shadowedXlinkHref =
@@ -5575,7 +5152,7 @@ index 183937c..94f0f49 100644
                      element->setAttribute(0x1, id, buffer);
                  }
              }
-@@ -895,12 +2044,15 @@ bool Document::parse(const char* data, size_t length)
+@@ -895,12 +1911,15 @@ bool Document::parse(const char* data, size_t length)
          }
  
          if(skipDelimiter(input, '>')) {
@@ -5591,7 +5168,7 @@ index 183937c..94f0f49 100644
              if(!skipDelimiter(input, '>'))
                  return false;
              if(ignoring > 0)
-@@ -911,7 +2063,9 @@ bool Document::parse(const char* data, size_t length)
+@@ -911,7 +1930,9 @@ bool Document::parse(const char* data, size_t length)
          return false;
      }
  
@@ -5602,7 +5179,7 @@ index 183937c..94f0f49 100644
          return false;
      applyStyleSheet(styleSheet);
      m_rootElement->build();
-@@ -920,14 +2074,41 @@ bool Document::parse(const char* data, size_t length)
+@@ -920,14 +1941,25 @@ bool Document::parse(const char* data, size_t length)
  
  void Document::applyStyleSheet(const std::string& content)
  {
@@ -5611,31 +5188,15 @@ index 183937c..94f0f49 100644
      if(!rules.empty()) {
          std::sort(rules.begin(), rules.end());
 -        m_rootElement->transverse([&rules](SVGElement* element) {
-+        if(applySimpleClassRules(rules, m_rootElement.get(), this))
++        if(applySimpleClassRules(rules, m_rootElement.get()))
 +            return;
-+        CssMatchBudget matchBudget;
-+        bool complexityExceeded = false;
 +        m_rootElement->transverse([&](SVGElement* element) {
-+            if(complexityExceeded)
-+                return;
              for(const auto& rule : rules) {
 -                if(rule.match(element)) {
-+                const bool matches = rule.match(element, &matchBudget);
-+                if(matchBudget.exceeded()) {
-+                    addCapabilityIssue("unsupported_complexity");
-+                    complexityExceeded = true;
-+                    return;
-+                }
++                const bool matches = rule.match(element);
 +                if(matches) {
                      for(const auto& declaration : rule.declarations()) {
 -                        element->setAttribute(declaration.specificity, declaration.id, declaration.value);
-+                        if(!matchBudget.consume()
-+                                || !matchBudget.consume(
-+                                    declaration.value.size())) {
-+                            addCapabilityIssue("unsupported_complexity");
-+                            complexityExceeded = true;
-+                            return;
-+                        }
 +                        if(element->setDeferredCapability(
 +                                declaration.specificity, declaration.name,
 +                                declaration.capabilityReason)

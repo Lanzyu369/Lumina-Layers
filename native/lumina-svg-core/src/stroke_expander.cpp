@@ -1,6 +1,6 @@
 #include "lumina_svg_core/stroke_expander.h"
 
-#include "complexity_budget.h"
+#include "geometry_limits.h"
 #include "clipper_safety.h"
 
 #include <clipper2/clipper.h>
@@ -48,8 +48,7 @@ double pointSegmentDistance(const LocalPoint& point,
 void flattenCubic(const LocalPoint& start, const LocalPoint& control1,
                   const LocalPoint& control2, const LocalPoint& end,
                   double tolerance, double arcLengthErrorBudget,
-                  unsigned depth, LocalPath& output,
-                  ComplexityBudget& complexityBudget)
+                  unsigned depth, LocalPath& output)
 {
     const double chordLength = std::hypot(
         end.x - start.x, end.y - start.y);
@@ -67,7 +66,6 @@ void flattenCubic(const LocalPoint& start, const LocalPoint& control1,
         && pointSegmentDistance(control2, start, end) <= tolerance;
     if(withinGeometricTolerance
             && arcLengthUncertainty <= arcLengthErrorBudget) {
-        complexityBudget.consumeGeneratedPoints();
         output.push_back(end);
         return;
     }
@@ -88,17 +86,16 @@ void flattenCubic(const LocalPoint& start, const LocalPoint& control1,
     flattenCubic(
         start, p01, p012, midpoint, tolerance,
         arcLengthErrorBudget * 0.5, depth + 1,
-        output, complexityBudget);
+        output);
     flattenCubic(
         midpoint, p123, p23, end, tolerance,
         arcLengthErrorBudget * 0.5, depth + 1,
-        output, complexityBudget);
+        output);
 }
 
 std::vector<LocalSubpath> flattenPath(const lunasvg::PaintCommand& command,
                                       double tolerance,
-                                      double cubicArcLengthErrorBudget,
-                                      ComplexityBudget& complexityBudget)
+                                      double cubicArcLengthErrorBudget)
 {
     std::vector<LocalSubpath> output;
     LocalSubpath currentSubpath;
@@ -130,7 +127,6 @@ std::vector<LocalSubpath> flattenPath(const lunasvg::PaintCommand& command,
             currentPoint = {point.x, point.y};
             subpathStart = currentPoint;
             hasCurrentPoint = true;
-            complexityBudget.consumeGeneratedPoints();
             currentSubpath.points.push_back(currentPoint);
             break;
         }
@@ -138,11 +134,9 @@ std::vector<LocalSubpath> flattenPath(const lunasvg::PaintCommand& command,
             currentSubpath.has_draw_segment = true;
             const auto& point = command.path_points.at(pointIndex++);
             if(currentSubpath.points.empty() && hasCurrentPoint) {
-                complexityBudget.consumeGeneratedPoints();
                 currentSubpath.points.push_back(currentPoint);
             }
             currentPoint = {point.x, point.y};
-            complexityBudget.consumeGeneratedPoints();
             currentSubpath.points.push_back(currentPoint);
             break;
         }
@@ -155,13 +149,11 @@ std::vector<LocalSubpath> flattenPath(const lunasvg::PaintCommand& command,
             const LocalPoint control2{second.x, second.y};
             const LocalPoint end{last.x, last.y};
             if(currentSubpath.points.empty() && hasCurrentPoint) {
-                complexityBudget.consumeGeneratedPoints();
                 currentSubpath.points.push_back(currentPoint);
             }
             flattenCubic(currentPoint, control1, control2, end,
                          tolerance, cubicArcLengthErrorBudget, 0,
-                         currentSubpath.points,
-                         complexityBudget);
+                         currentSubpath.points);
             currentPoint = end;
             break;
         }
@@ -261,12 +253,9 @@ void validateDashExpansion(
 
 std::vector<LocalSubpath> dashSubpath(const LocalSubpath& subpath,
                                       const std::vector<double>& dashArray,
-                                      double dashOffset,
-                                      ComplexityBudget& complexityBudget)
+                                      double dashOffset)
 {
     if(dashArray.empty()) {
-        complexityBudget.consumeGeneratedPoints(subpath.points.size());
-        complexityBudget.consumeGeneratedRings();
         return {subpath};
     }
 
@@ -291,8 +280,6 @@ std::vector<LocalSubpath> dashSubpath(const LocalSubpath& subpath,
         // side of the boundary can contribute a cap.
         if(dashIndex % 2 != 0 && dashRemaining != 0.0)
             return {};
-        complexityBudget.consumeGeneratedPoints();
-        complexityBudget.consumeGeneratedRings();
         return {subpath};
     }
 
@@ -310,7 +297,6 @@ std::vector<LocalSubpath> dashSubpath(const LocalSubpath& subpath,
     };
     auto finishActive = [&]() {
         if(active.points.size() >= 2) {
-            complexityBudget.consumeGeneratedRings();
             output.emplace_back(std::move(active));
         }
         active = {};
@@ -322,8 +308,6 @@ std::vector<LocalSubpath> dashSubpath(const LocalSubpath& subpath,
     // subpath so round/square caps survive before advancing into the gap.
     if(dashRemaining == 0.0) {
         if(dashIndex % 2 == 0) {
-            complexityBudget.consumeGeneratedPoints();
-            complexityBudget.consumeGeneratedRings();
             LocalSubpath pointSubpath;
             pointSubpath.source_subpath_index = subpath.source_subpath_index;
             pointSubpath.points.push_back(subpath.points.front());
@@ -377,10 +361,7 @@ std::vector<LocalSubpath> dashSubpath(const LocalSubpath& subpath,
                 throw StrokeInputPrecisionError("dash_pattern_progress");
             if(isPainted) {
                 if(active.points.empty())
-                    complexityBudget.consumeGeneratedPoints();
-                if(active.points.empty())
                     active.points.push_back(cursor);
-                complexityBudget.consumeGeneratedPoints();
                 active.points.push_back(next);
             }
             cursor = next;
@@ -426,8 +407,7 @@ std::vector<LocalSubpath> dashSubpath(const LocalSubpath& subpath,
     return output;
 }
 
-void simplifyOpenSubpath(LocalSubpath& subpath, double tolerance,
-                         ComplexityBudget& complexityBudget)
+void simplifyOpenSubpath(LocalSubpath& subpath, double tolerance)
 {
     if(subpath.points.size() <= 2 || !(tolerance > 0.0))
         return;
@@ -441,8 +421,6 @@ void simplifyOpenSubpath(LocalSubpath& subpath, double tolerance,
         ranges.pop_back();
         size_t splitIndex = begin;
         double maximumDistance = 0.0;
-        complexityBudget.consumeStrokeSimplificationComparisons(
-            end - begin - 1);
         for(size_t index = begin + 1; index < end; ++index) {
             const double distance = pointSegmentDistance(
                 subpath.points[index], subpath.points[begin],
@@ -465,7 +443,6 @@ void simplifyOpenSubpath(LocalSubpath& subpath, double tolerance,
         if(keep[index])
             simplified.push_back(subpath.points[index]);
     }
-    complexityBudget.consumeGeneratedPoints(simplified.size());
     subpath.points = std::move(simplified);
 }
 
@@ -704,15 +681,12 @@ LocalPath pointCap(const LocalPoint& point,
                    lunasvg::PaintLineCap cap,
                    double radius,
                    double flattenTolerance,
-                   ComplexityBudget& complexityBudget,
                    bool enforcePhysicalTolerance)
 {
     constexpr double PI = 3.141592653589793238462643383279502884;
     if(cap == lunasvg::PaintLineCap::Butt)
         return {};
     if(cap == lunasvg::PaintLineCap::Square) {
-        complexityBudget.consumeGeneratedPoints(4);
-        complexityBudget.consumeGeneratedRings();
         return {
             {point.x - radius, point.y - radius},
             {point.x + radius, point.y - radius},
@@ -733,8 +707,6 @@ LocalPath pointCap(const LocalPoint& point,
         throw ComplexityLimitError("stroke_point_cap_segments");
     const size_t segmentCount = std::max<size_t>(
         8, static_cast<size_t>(std::ceil(requiredSegments)));
-    complexityBudget.consumeGeneratedPoints(segmentCount);
-    complexityBudget.consumeGeneratedRings();
     LocalPath ring;
     ring.reserve(segmentCount);
     for(size_t index = 0; index < segmentCount; ++index) {
@@ -754,7 +726,6 @@ LocalPath pointCap(const LocalPoint& point,
 StrokeExpansion expandStrokeLocal(const lunasvg::PaintCommand& command,
                                   double localFlattenTolerance,
                                   double localGridStep,
-                                  ComplexityBudget& complexityBudget,
                                   bool enforcePhysicalTolerance)
 {
     if(!(std::isfinite(command.stroke.width) && command.stroke.width > 0)
@@ -783,16 +754,13 @@ StrokeExpansion expandStrokeLocal(const lunasvg::PaintCommand& command,
     const double dashedSimplificationTolerance = centerlineBudget * 0.4;
     std::vector<LocalSubpath> strokeSubpaths;
     for(const auto& subpath : flattenPath(
-            command, flattenTolerance, cubicArcLengthErrorBudget,
-            complexityBudget)) {
+            command, flattenTolerance, cubicArcLengthErrorBudget)) {
         auto dashed = dashSubpath(subpath, dashArray,
-                                  command.stroke.dash_offset,
-                                  complexityBudget);
+                                  command.stroke.dash_offset);
         if(requiresDashArcLengthBudget) {
             for(auto& dashedSubpath : dashed) {
                 simplifyOpenSubpath(
-                    dashedSubpath, dashedSimplificationTolerance,
-                    complexityBudget);
+                    dashedSubpath, dashedSimplificationTolerance);
             }
         }
         strokeSubpaths.insert(strokeSubpaths.end(),
@@ -809,7 +777,7 @@ StrokeExpansion expandStrokeLocal(const lunasvg::PaintCommand& command,
             auto cap = pointCap(
                 subpath.points.front(), command.stroke.line_cap,
                 command.stroke.width * 0.5, offsetArcTolerance,
-                complexityBudget, enforcePhysicalTolerance);
+                enforcePhysicalTolerance);
             if(!cap.empty())
                 output.paths.push_back({
                     std::move(cap), subpath.source_subpath_index,
@@ -874,13 +842,9 @@ StrokeExpansion expandStrokeLocal(const lunasvg::PaintCommand& command,
             ? checkedSizeSum(
                 offsetArcStepUpperBound(delta, arcTolerance), size_t{2})
             : 4;
-        const size_t outputPointUpperBound = checkedSizeProduct(
+        checkedSizeProduct(
             path.size(), worstCaseVerticesPerPoint);
-        complexityBudget.ensureGeneratedPointCapacity(
-            outputPointUpperBound);
-        // The point estimate bounds the transient allocation. It does not
-        // imply that every three possible points become a separate ring;
-        // charge the actual InflatePaths rings below.
+        // Keep the expansion size representable before Clipper allocates it.
         Clipper2Lib::Paths64 offsetPaths;
         offsetPaths.emplace_back(std::move(path));
         Clipper2Lib::ClipperOffset offset(
@@ -892,18 +856,10 @@ StrokeExpansion expandStrokeLocal(const lunasvg::PaintCommand& command,
             endType(command.stroke.line_cap, subpath.closed));
         Clipper2Lib::Paths64 expanded;
         offset.Execute(delta, expanded);
-        size_t expandedPointCount = 0;
-        for(const auto& ring : expanded)
-            expandedPointCount = checkedSizeSum(
-                expandedPointCount, ring.size());
-        complexityBudget.consumeClipperOutputPoints(expandedPointCount);
-        complexityBudget.consumeClipperOutputRings(expanded.size());
         const size_t outputSizeBefore = output.paths.size();
         for(const auto& ring : expanded) {
             if(ring.size() < 3)
                 continue;
-            complexityBudget.consumeGeneratedPoints(ring.size());
-            complexityBudget.consumeGeneratedRings();
             LocalPath localRing;
             localRing.reserve(ring.size());
             for(const auto& point : ring) {

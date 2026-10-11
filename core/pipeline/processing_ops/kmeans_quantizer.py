@@ -2,7 +2,7 @@
 K-Means 颜色量化模块（K-Means Color Quantizer）
 
 从 image_processing.py 的 _process_high_fidelity_mode Step 4 搬入。
-包含预缩放优化、K-Means++ 初始化、后量化去噪。
+包含预缩放优化、K-Means++ 初始化和 LUT 约束量化。
 
 K-Means color quantization with pre-scaling optimization.
 Extracted from _process_high_fidelity_mode Step 4.
@@ -139,9 +139,6 @@ def _lut_constrained_quantize(
     *,
     lut_lab: np.ndarray,
     lut_rgb: np.ndarray,
-    lut_tree: KDTree,
-    skip_post_blur: bool = False,  # Deprecated no-op; post-blur removed.
-    lut_fingerprint: str | None = None,
 ) -> np.ndarray:
     h, w = rgb.shape[:2]
     total_pixels = h * w
@@ -328,8 +325,8 @@ def quantize_colors(
             is always honoured; pre-quantization denoising is handled by
             the upstream bilateral filter and isolated-pixel cleanup by
             :func:`core.isolated_pixel_cleanup.cleanup_isolated_pixels`.
-            This kwarg is retained for backward compatibility with
-            scripts / tests that still pass it and will be removed later.
+            This kwarg remains accepted for caller compatibility; it does
+            not control any processing step.
             (**已废弃的空操作**。原来用于关闭破坏调色板契约的
             后量化 ``cv2.medianBlur``，该步骤已整块删除，契约总能满足。
             空间降噪由上游 bilateral 和下游孤立像素清理共同完成。)
@@ -376,7 +373,7 @@ def quantize_colors(
 
     # ``skip_post_blur`` is a deprecated no-op (the post-blur has been
     # removed). It is still accepted so legacy call sites keep working.
-    del skip_post_blur  # silence unused-arg warnings; kwarg kept for API parity
+    del skip_post_blur, lut_fingerprint  # Accepted legacy keywords have no effect.
 
     lut_constrained_active = (
         use_lut_constrained
@@ -389,8 +386,7 @@ def quantize_colors(
     if lut_constrained_active:
         return _lut_constrained_quantize(
             rgb, n_colors, seed,
-            lut_lab=lut_lab, lut_rgb=lut_rgb, lut_tree=lut_tree,
-            lut_fingerprint=lut_fingerprint,
+            lut_lab=lut_lab, lut_rgb=lut_rgb,
         )
 
     effective_n_colors = _resolve_cluster_count(n_colors, total_pixels)

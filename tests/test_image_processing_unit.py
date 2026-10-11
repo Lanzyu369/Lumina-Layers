@@ -22,10 +22,12 @@ def test_lut_constrained_disables_hue_protection_with_structured_event(
     caplog,
 ) -> None:
     target_logger = logging.getLogger(image_processing.log.name)
+    original_propagate = target_logger.propagate
     target_logger.addHandler(caplog.handler)
     caplog.set_level(logging.INFO, logger=target_logger.name)
 
     try:
+        target_logger.propagate = False
         with patch.object(
             image_processing.LuminaImageProcessor,
             "_load_lut_data",
@@ -39,6 +41,7 @@ def test_lut_constrained_disables_hue_protection_with_structured_event(
             )
     finally:
         target_logger.removeHandler(caplog.handler)
+        target_logger.propagate = original_propagate
 
     assert processor.use_lut_constrained is True
     assert processor.hue_weight == 0.0

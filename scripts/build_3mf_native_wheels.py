@@ -26,6 +26,7 @@ from scripts.fatcat_packaging_contract import (
     FATCAT_DISTRIBUTION,
     FATCAT_LEGACY_DISTRIBUTION,
     FATCAT_MODULE,
+    FATCAT_PATCH,
     FATCAT_SOURCE_COMMIT,
     FATCAT_VERSION,
     FATCAT_WRITER_DISTRIBUTION,
@@ -83,7 +84,7 @@ def _verify_patch_applied(source_root: Path, patch_path: Path) -> None:
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
         raise RuntimeError(
-            "patched neroued source does not match the required B7 cumulative patch"
+            f"native source does not match the required patch {patch_path.name}"
             + (f": {detail}" if detail else "")
         )
 
@@ -135,10 +136,12 @@ def build_native_wheels(
     neroued_source = neroued_source.resolve()
     output_dir = output_dir.resolve()
     patch_path = ROOT / WRITER_PATCH_RELATIVE
+    fatcat_patch_path = ROOT / FATCAT_PATCH
     for required in (
         fatcat_root / "pyproject.toml",
         neroued_source / "pyproject.toml",
         patch_path,
+        fatcat_patch_path,
     ):
         if not required.is_file():
             raise FileNotFoundError(f"native dependency input is missing: {required}")
@@ -155,6 +158,14 @@ def build_native_wheels(
         raise RuntimeError(
             f"Fat Cat source must be pinned to {FATCAT_SOURCE_COMMIT}, got {fatcat_commit}"
         )
+    patch_check = subprocess.run(
+        ["git", "apply", "--check", str(fatcat_patch_path)],
+        cwd=fatcat_root,
+        capture_output=True,
+    )
+    if patch_check.returncode == 0:
+        _run(["git", "apply", str(fatcat_patch_path)], cwd=fatcat_root)
+    _verify_patch_applied(fatcat_root, fatcat_patch_path)
     package = tomllib.loads(
         (fatcat_root / "pyproject.toml").read_text(encoding="utf-8")
     )["project"]
@@ -217,6 +228,8 @@ def build_native_wheels(
         )
         if (
             previous.get("fatcat_cpp", {}).get("source_commit") != fatcat_commit
+            or previous.get("fatcat_cpp", {}).get("version") != FATCAT_VERSION
+            or previous.get("fatcat_cpp", {}).get("patch_sha256") != _sha256(fatcat_patch_path)
             or previous.get("neroued_writer", {}).get("upstream_commit") != writer_commit
             or previous.get("neroued_writer", {}).get("patch_sha256") != patch_sha256
         ):
@@ -239,6 +252,8 @@ def build_native_wheels(
             "import": FATCAT_MODULE,
             "version": FATCAT_VERSION,
             "source_commit": fatcat_commit,
+            "patch": FATCAT_PATCH,
+            "patch_sha256": _sha256(fatcat_patch_path),
             "project_root": ".",
             "wheel": fatcat_destination.name,
             "sha256": _sha256(fatcat_destination),
@@ -273,6 +288,8 @@ def install_native_wheels(*, output_dir: Path, python_executable: Path) -> None:
 
     output_dir = output_dir.resolve()
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    if manifest["fatcat_cpp"].get("patch_sha256") != _sha256(ROOT / FATCAT_PATCH):
+        raise RuntimeError("Fat Cat wheel manifest does not match its source patch")
     expected = (
         ("fatcat_cpp", FATCAT_DISTRIBUTION, FATCAT_VERSION, "source_commit", FATCAT_SOURCE_COMMIT),
         ("neroued_writer", FATCAT_WRITER_DISTRIBUTION, WRITER_VERSION, "upstream_commit", WRITER_SOURCE_COMMIT),

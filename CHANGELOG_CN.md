@@ -92,28 +92,26 @@ Lumina Studio 所有重要变更记录。
 - 修复黑白校准板生成时缺少 safe_fix_3mf_names 导入
 - 修复同时开启镀层和外轮廓时的兼容性问题
 - 修复浮雕/掐丝珐琅互斥，带中英文提示信息
-- 修复预览图点击坐标变换（适配 Gradio 6.0）
+- 修复预览图点击坐标变换
 - 修复 5 色高保真顶底与左右朝向
 - 修复 5 色扩展模型方向与 SVG 层数
 - 禁用 5 色扩展模式的 2.5D 浮雕
 - 修复 2.5D 浮雕模式状态泄漏、hex key 不匹配和参数钳制
 - 修复 SVG subpath 处理
 - 修复 main 分支合并后 color_recipe_path 返回值不一致
-- 移除 svg_to_mesh 内部 progress 调用，避免 Gradio 事件循环唤醒干扰 GIL
+- 移除 svg_to_mesh 内部 progress 调用，避免 UI 事件循环唤醒干扰 GIL
 - 移除 generate_with_auto_preview 中的冗余预览预生成
 - 修复 HEIC 格式支持：前端显示、上传文件类型、回传转换
 - 修复参数变更时缓存 3MF 失效
 - 修复图片上传时 ModelingMode None 崩溃
-- 统一 8 色 stacks 资源路径解析（PyInstaller 兼容）
+- 统一 8 色 stacks 资源路径解析
 - 恢复 ZIP_DEFLATED 压缩和缩进对齐
 - 移除 bambu_3mf_writer.py 中残留的冲突标记
-- 移除 gr.Image 调用中的 file_types（与 Gradio 6.5.1 不兼容）
-- 修复 SVG 上传因 Gradio base64 预处理 bug 导致崩溃
+- 修复 SVG 上传在 base64 预处理时崩溃
 - 修复 SVG 几何裁剪：将基于像素的双通道裁剪替换为基于几何边界的裁剪
 - 修复 SVG 合并子路径时的奇偶填充规则
-- 修复 icon.ico 重新生成为正方形尺寸并打包到 PyInstaller
+- 修复 icon.ico 尺寸
 - 修复切片器启动返回值数量不匹配（5 个输出）
-- 修复 bambu_config_template.json 未打包到 PyInstaller 和构建产物；修复冻结路径解析
 - 移除 layout_new.py 中未使用的 create_5color_combination_tab 和重复辅助函数
 
 ### 新功能（发布后补充）
@@ -196,7 +194,7 @@ Lumina Studio 所有重要变更记录。
 
 ### Bug 修复
 - 修复矢量模式 2D 预览黑色背景
-- 修复预览点击坐标变换（Gradio 6.0）
+- 修复预览点击坐标变换
 - 向 requirements 文件中添加缺少的 colormath 库
 
 ### 其他
@@ -259,7 +257,6 @@ Lumina Studio 所有重要变更记录。
 - **建模模式整合** - 高保真模式取代矢量模式和版画模式；两种统一模式（高保真/像素艺术）
 - **动态语言切换** - 点击语言按钮即可在中英文之间切换；全界面翻译无需刷新页面
 - **输出目录** - 将输出文件保存到项目本地 output 目录，不再写入 C 盘临时目录
-- **Gradio 临时目录重定向** - 将 Gradio 临时目录重定向到项目目录
 
 ### Bug 修复
 - 修复颜色缺失时的 3MF 命名问题；使用本地输出目录
@@ -280,7 +277,6 @@ Lumina Studio 所有重要变更记录。
 - **自动端口选择** - 自动选择可用端口避免冲突
 
 ### Bug 修复
-- 修复 Gradio 6.0+ 兼容性
 - 修复 macOS 26812 trace trap 内存问题
 - 修复累计生成统计数字字体颜色
 - 修复语言切换按钮样式

@@ -1,8 +1,7 @@
 """Shared packaging contract for the Fat Cat C++ metadata runtime.
 
-This module is intentionally small so both the PyInstaller spec and the
-desktop build driver enforce the same native dependency identity, entry
-points, and bundled data files.
+Native wheel builders and CI use this contract to verify dependency identity,
+entry points, and metadata data files.
 """
 
 from __future__ import annotations
@@ -16,9 +15,10 @@ from typing import Any
 FATCAT_DISTRIBUTION = "fatcat-metadata"
 FATCAT_MODULE = "fatcat_metadata"
 FATCAT_ADAPTER_MODULE = "fatcat_metadata_neroued"
-FATCAT_VERSION = "0.1.0"
+FATCAT_VERSION = "0.1.0+lumina.1"
 FATCAT_REPOSITORY = "https://github.com/MOVIBALE/fatcat-metadata"
-FATCAT_SOURCE_COMMIT = "673b1b694dd7c3369f5094fb8ddbf77fdb869d90"
+FATCAT_SOURCE_COMMIT = "496902366387a044a020c740160c708569dd9982"
+FATCAT_PATCH = "reference/fatcat-patches/fatcat-native-export-compatibility.patch"
 FATCAT_LEGACY_DISTRIBUTION = "lumina-3mf-metadata-cpp"
 FATCAT_WRITER_DISTRIBUTION = "neroued-3mf"
 FATCAT_WRITER_VERSION = "0.4.0+fatcat.b7"
@@ -98,7 +98,7 @@ def validate_fatcat_packaging_contract(
         )
     if writer_version != FATCAT_WRITER_VERSION:
         raise RuntimeError(
-            "desktop packaging must use the patched neroued writer "
+            "native 3MF export requires the patched neroued writer "
             f"{FATCAT_WRITER_VERSION}, got {writer_version}"
         )
 

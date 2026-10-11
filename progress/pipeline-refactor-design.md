@@ -393,7 +393,7 @@ Introduce a single canonical `ColorMode` object that holds all the per-mode para
      - `ColorMode.from_lut_size(size: int) -> ColorMode | None` — replaces `_SIZE_TO_MODE`.
      - `ColorMode.from_lut_size_and_layers(size: int, layers: int | None) -> ColorMode | None` — covers the 5-Color Extended case where size + layer count both matter.
      - `iter_modes() -> Iterator[ColorMode]`.
-   - Bilingual Google-style docstrings on every public symbol per `AGENTS.md` L36.
+   - Document the behavior of the public symbols.
 
 2. Modified `config.py` (~50 LOC delta):
    - `ColorSystem` config dicts kept as-is (file-format compatibility for any code that imports them directly).
@@ -670,7 +670,7 @@ You are implementing **Phase 1 of 5** (the second of five phases — see §14 fo
 2. **Tests first**: §5.3 tests are added in commit 1, BEFORE any source-code changes.
 3. **Hash parity**: §5.3.4 hash-based test must pass for every existing color mode.
 4. **No new INFO bucket events**; canonical 14/30 budget unchanged.
-5. **Bilingual Google-style docstrings** for `ColorMode` and every new public function.
+5. **Public API documentation** for `ColorMode` and new public behavior.
 6. **UTF-8 encoding** on every modified file; mojibake check after each commit.
 7. **Single responsibility**: Phase 1 only unifies dispatch. Do not also extract the mesh generator (that is Phase 3) and do not introduce `CalibrationMethod` Protocol (that is Phase 2).
 
@@ -837,7 +837,7 @@ You are implementing **Phase 0 of 5** as specified in §14 of this document. Pha
 3. **No event-name drift**: every `s01_*` / `p01_*` / `pipeline_*` event still emitted post-refactor (Sub-PR C parity test).
 4. **No INFO budget regression**: canonical 14/30 budget unchanged.
 5. **No new abstractions**: Phase 0 only deletes / moves / inlines. Do NOT introduce `ColorMode`, `CalibrationMethod`, `BoardLayout`, or any other Phase 1-4 type.
-6. **Bilingual Google-style docstrings** for every new public symbol (e.g. `_input_validation_common.py` helpers if they become non-private).
+6. **Public API documentation** for any new public behavior.
 7. **UTF-8 encoding** on every modified file; mojibake check after each commit.
 
 **Branch**: cut from `dev-refactor` HEAD; one branch per sub-PR (`refactor/pipeline-hygiene-A-shims`, `-B-pipeline-utils-split`, `-C-input-validation-merge`, `-D-vector-branch-extract`).

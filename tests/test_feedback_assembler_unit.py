@@ -452,66 +452,6 @@ def test_collect_sync_attachments_marks_copy_failures_explicitly(
     image_path.write_bytes(b"PNGDATA")
     artifact_path = src_dir / "model.3mf"
     artifact_path.write_bytes(_project_bytes(b"3MFDATA"))
-
-    registry = _MockFileRegistry(
-        {
-            "sess-report": {
-                "img": _make_entry(str(image_path), "hello.png", created_at=1.0),
-                "final": _make_entry(str(artifact_path), "model.3mf", created_at=2.0),
-            },
-        }
-    )
-    ticket_dir = tmp_path / "LUM-20260619-001"
-    ticket_dir.mkdir()
-    payload = {
-        "ticket_id": "LUM-20260619-001",
-        "context": {
-            "active_original_image_ref": {"session_id": "sess-report"},
-            "active_final_artifact_ref": {
-                "session_id": "sess-report",
-                "artifact_type": "3mf",
-            },
-            "source_version": "legacy",
-            "lut_name": None,
-        },
-    }
-
-    def _fail_ticket_attachment_copy(
-        src: str | os.PathLike[str],
-        dst: str | os.PathLike[str],
-        *args: Any,
-        **kwargs: Any,
-    ) -> None:
-        del src, args, kwargs
-        if Path(dst).name in {"original.png", "final.3mf"}:
-            raise OSError("disk full")
-
-    monkeypatch.setattr("api.feedback_assembler.shutil.copy2", _fail_ticket_attachment_copy)
-
-    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
-
-    assert result.original_image["status"] == "failed"
-    assert result.original_image["filename"] is None
-    assert result.original_image["error_type"] == "OSError"
-    assert result.original_image["error_message"] == "Original image could not be saved."
-    assert result.final_artifact["status"] == "failed"
-    assert result.final_artifact["filename"] is None
-    assert result.final_artifact["error_type"] == "OSError"
-    assert result.final_artifact["error_message"] == "Final artifact could not be saved."
-    assert not (ticket_dir / "original.png").exists()
-    assert not (ticket_dir / "final.3mf").exists()
-
-
-def test_collect_sync_attachments_marks_copy_failures_explicitly(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    src_dir = tmp_path / "source"
-    src_dir.mkdir()
-    image_path = src_dir / "hello.png"
-    image_path.write_bytes(b"PNGDATA")
-    artifact_path = src_dir / "model.3mf"
-    artifact_path.write_bytes(_project_bytes(b"3MFDATA"))
     registry = _MockFileRegistry(
         {
             "sess-report": {
@@ -544,8 +484,12 @@ def test_collect_sync_attachments_marks_copy_failures_explicitly(
 
     assert result.original_image["status"] == "failed"
     assert result.original_image["error_type"] == "OSError"
+    assert result.original_image["filename"] is None
+    assert result.original_image["error_message"] == "Original image could not be saved."
     assert result.final_artifact["status"] == "failed"
     assert result.final_artifact["error_type"] == "OSError"
+    assert result.final_artifact["filename"] is None
+    assert result.final_artifact["error_message"] == "Final artifact could not be saved."
     assert not (ticket_dir / "original.png").exists()
     assert not (ticket_dir / "final.3mf").exists()
 
@@ -1460,57 +1404,6 @@ def test_collect_lut_marks_custom_copy_failure(
     repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
     safe_lut = repo_root / "lut-preset" / "Custom" / "safe.json"
     safe_lut.write_bytes(b"SAFE_CUSTOM_LUT")
-    ticket_dir = tmp_path / "LUM-20260619-004"
-    ticket_dir.mkdir()
-    payload = {
-        "ticket_id": "LUM-20260619-004",
-        "context": {
-            "active_original_image_ref": None,
-            "active_final_artifact_ref": None,
-            "active_tab": "converter",
-            "source_version": "legacy",
-            "lut_name": "Custom - safe",
-        },
-    }
-
-    def _fail_lut_copy(
-        src: str | os.PathLike[str],
-        dst: str | os.PathLike[str],
-        *args: Any,
-        **kwargs: Any,
-    ) -> None:
-        del src, args, kwargs
-        if Path(dst).name == "lut.json":
-            raise OSError("disk full")
-
-    monkeypatch.setattr("api.feedback_assembler.shutil.copy2", _fail_lut_copy)
-
-    try:
-        result = collect_sync_attachments(
-            ticket_dir,
-            payload,
-            _MockFileRegistry({}),
-            now_beijing(),
-        )
-    finally:
-        LUTManager.invalidate_preset_cache()
-
-    assert result.lut["status"] == "failed"
-    assert result.lut["kind"] == "custom"
-    assert result.lut["name"] == "Custom - safe"
-    assert result.lut["filename"] is None
-    assert result.lut["error_type"] == "OSError"
-    assert result.lut["error_message"] == "LUT could not be saved."
-    assert not (ticket_dir / "lut.json").exists()
-
-
-def test_collect_lut_marks_custom_copy_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
-    safe_lut = repo_root / "lut-preset" / "Custom" / "safe.json"
-    safe_lut.write_bytes(b"SAFE_CUSTOM_LUT")
     ticket_dir = tmp_path / "LUM-20260619-009"
     ticket_dir.mkdir()
     payload = {
@@ -1541,6 +1434,8 @@ def test_collect_lut_marks_custom_copy_failure(
 
     assert result.lut["status"] == "failed"
     assert result.lut["kind"] == "custom"
+    assert result.lut["name"] == "Custom - safe"
+    assert result.lut["filename"] is None
     assert result.lut["error_type"] == "OSError"
     assert result.lut["error_message"] == "LUT could not be saved."
     assert not (ticket_dir / "lut.json").exists()

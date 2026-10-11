@@ -88,10 +88,7 @@ def test_dual_kernel_equivalence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     cache_template = _build_synthetic_cache()
 
     def _run(kernel: str) -> tuple[Path, dict]:
-        if kernel == "shapely_v1":
-            monkeypatch.delenv("LUMINA_GLB_KERNEL", raising=False)
-        else:
-            monkeypatch.setenv("LUMINA_GLB_KERNEL", kernel)
+        monkeypatch.setenv("LUMINA_GLB_KERNEL", kernel)
         local_cache = copy.deepcopy(cache_template)
         out = tmp_path / f"dual_{kernel}.glb"
         path = generate_segmented_glb(local_cache, str(out))

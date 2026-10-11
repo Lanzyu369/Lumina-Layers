@@ -2,7 +2,6 @@
 
 from io import BytesIO
 import json
-import os
 from pathlib import Path
 import xml.etree.ElementTree as ET
 from zipfile import ZipFile
@@ -13,7 +12,6 @@ import trimesh
 from core import custom_3mf_templates
 import utils.bambu_3mf_writer as writer_module
 
-pytestmark = pytest.mark.skipif(os.environ.get("FATCAT_B4_INTEGRATION") != "1", reason="installed native dependencies required")
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "fatcat"
 SOURCE = FIXTURES / "bambu-p1s-02-user-tuned-native-template.3mf"
 

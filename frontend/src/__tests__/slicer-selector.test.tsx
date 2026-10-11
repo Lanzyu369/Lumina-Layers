@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { launchSlicer } from "../api/slicer";
@@ -75,6 +75,69 @@ describe("SlicerSelector settings linkage", () => {
       detectSlicers: vi.fn().mockResolvedValue(undefined),
     });
     assertResourceDownloadAvailableMock.mockReset();
+  });
+
+  it.each([
+    { state: "source not ready", canSubmit: false, isDetecting: false, isLaunching: false, disabled: true },
+    { state: "detecting slicers", canSubmit: true, isDetecting: true, isLaunching: false, disabled: true },
+    { state: "launching slicer", canSubmit: true, isDetecting: false, isLaunching: true, disabled: true },
+    { state: "ready", canSubmit: true, isDetecting: false, isLaunching: false, disabled: false },
+  ])("keeps the action visible while $state", ({ canSubmit, isDetecting, isLaunching, disabled }) => {
+    useSlicerStore.setState({ isDetecting, isLaunching });
+    render(
+      <I18nProvider>
+        <SlicerSelector
+          threemfDiskPath="/tmp/calibration.3mf"
+          downloadUrl="/api/files/calibration"
+          canSubmit={canSubmit}
+          onAutoGenerate={async () => "/tmp/calibration.3mf"}
+        />
+      </I18nProvider>,
+    );
+
+    const action = screen.getByRole("button", { name: "在 OrcaSlicer 中打开" });
+    const menu = screen.getByRole("button", { name: "切换切片软件列表" });
+    expect(action).toBeVisible();
+    if (disabled) {
+      expect(action).toBeDisabled();
+      expect(menu).toBeDisabled();
+      fireEvent.click(action);
+      expect(vi.mocked(launchSlicer)).not.toHaveBeenCalled();
+    } else {
+      expect(action).toBeEnabled();
+      expect(menu).toBeEnabled();
+    }
+  });
+
+  it("prevents a second generation while the first is pending", async () => {
+    let finishGeneration!: (value: string | null) => void;
+    const onAutoGenerate = vi.fn(() => new Promise<string | null>((resolve) => {
+      finishGeneration = resolve;
+    }));
+    render(
+      <I18nProvider>
+        <SlicerSelector
+          threemfDiskPath={null}
+          downloadUrl={null}
+          canSubmit
+          onAutoGenerate={onAutoGenerate}
+        />
+      </I18nProvider>,
+    );
+
+    const action = screen.getByRole("button", { name: "生成并在 OrcaSlicer 中打开" });
+    const menu = screen.getByRole("button", { name: "切换切片软件列表" });
+    expect(action).toBeEnabled();
+    fireEvent.click(action);
+    expect(action).toBeDisabled();
+    expect(menu).toBeDisabled();
+    fireEvent.click(action);
+    expect(onAutoGenerate).toHaveBeenCalledOnce();
+
+    await act(async () => finishGeneration(null));
+
+    expect(action).toBeEnabled();
+    expect(menu).toBeEnabled();
   });
 
   it("prefers the slicer selected in settings over stale selectedSlicerId", async () => {

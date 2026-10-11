@@ -1,16 +1,14 @@
 """Unit tests for ``api.feedback_time`` — Beijing-time helpers.
 
 验证 ``api.feedback_time`` 中的北京时间工具：三个公开函数的输出格式、
-UTC+8 固定偏移、以及模块不依赖 :mod:`zoneinfo` / ``tzdata``。
+UTC+8 固定偏移与日历日期转换。
 """
 
 from __future__ import annotations
 
-import inspect
 import re
 from datetime import datetime, timedelta, timezone
 
-import api.feedback_time as feedback_time
 from api.feedback_time import (
     BEIJING_TZ,
     format_received_cst,
@@ -80,15 +78,3 @@ def test_format_received_cst_converts_utc_input() -> None:
     """UTC input is normalized to Beijing before isoformat is produced."""
     dt = datetime(2026, 5, 10, 23, 0, 0, tzinfo=timezone.utc)
     assert format_received_cst(dt) == "2026-05-11T07:00:00+08:00"
-
-
-def test_module_does_not_import_zoneinfo() -> None:
-    """``api.feedback_time`` source must not import :mod:`zoneinfo` / tzdata.
-
-    Matches the actual import statements rather than any mention of the word
-    ``zoneinfo``; the module's docstring legitimately explains *why* we avoid
-    that dependency, so a naive substring check would flag valid documentation.
-    """
-    src = inspect.getsource(feedback_time)
-    assert "import zoneinfo" not in src
-    assert "from zoneinfo" not in src

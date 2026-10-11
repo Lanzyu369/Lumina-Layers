@@ -21,12 +21,14 @@ from api.routers.material_sync import (
     MATERIAL_SYNC_STATUS_UNAVAILABLE_DETAIL,
 )
 from core.single_stage import (
+    material_files,
+    material_library,
+    material_registry_client,
     install_material_registry_package,
     list_material_registry_catalog,
     refresh_material_sync_from_registry,
     rollback_material_sync_revision,
 )
-import core.single_stage.materials as materials_module
 
 _OFFICIAL_PASSWORD = "approve-secret"
 _AUTH_HEADERS = {
@@ -375,7 +377,7 @@ def test_material_sync_status_returns_empty_state_when_index_is_missing(
     tmp_path: Path,
 ) -> None:
     materials_root = tmp_path / "materials"
-    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    monkeypatch.setattr("core.single_stage.material_files.MATERIALS_DIR", str(materials_root))
 
     response = _client().get("/api/material-sync/status")
 
@@ -432,7 +434,7 @@ def test_material_sync_install_imports_v2_package_and_updates_status(
     tmp_path: Path,
 ) -> None:
     materials_root = tmp_path / "materials"
-    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    monkeypatch.setattr("core.single_stage.material_files.MATERIALS_DIR", str(materials_root))
     package_path = tmp_path / "material_package.zip"
     content_hash = _write_v2_material_package(package_path)
 
@@ -703,7 +705,7 @@ def test_material_sync_install_is_local_import_without_official_password(
     tmp_path: Path,
 ) -> None:
     materials_root = tmp_path / "materials"
-    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    monkeypatch.setattr("core.single_stage.material_files.MATERIALS_DIR", str(materials_root))
     package_path = tmp_path / "material_package.zip"
     _write_v2_material_package(package_path)
 
@@ -727,7 +729,7 @@ def test_material_sync_refresh_requires_registry_url(
     tmp_path: Path,
 ) -> None:
     materials_root = tmp_path / "materials"
-    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    monkeypatch.setattr("core.single_stage.material_files.MATERIALS_DIR", str(materials_root))
     monkeypatch.delenv("LUMINA_MATERIAL_REGISTRY_URL", raising=False)
 
     response = _client().post("/api/material-sync/refresh")
@@ -976,7 +978,7 @@ def test_material_sync_refresh_endpoint_hides_package_failure_paths(
     content_hash = _write_v2_material_package(package_path)
     package_bytes = package_path.read_bytes()
     package_sha256 = hashlib.sha256(package_bytes).hexdigest()
-    monkeypatch.setattr(materials_module, "TEMP_DIR", str(temp_root))
+    monkeypatch.setattr(material_files, "TEMP_DIR", str(temp_root))
     monkeypatch.setenv("LUMINA_MATERIAL_PACKAGE_MAX_UNCOMPRESSED_BYTES", "1")
 
     def _handler(request: httpx.Request) -> httpx.Response:
@@ -2396,7 +2398,7 @@ def test_material_package_import_rejects_zip_entry_count_limit(
     monkeypatch.setenv("LUMINA_MATERIAL_PACKAGE_MAX_ZIP_ENTRIES", "2")
 
     with pytest.raises(ValueError, match="too many entries"):
-        materials_module.import_saved_stage_a_material_archives(
+        material_library.import_saved_stage_a_material_archives(
             archive_path=str(package_path),
             materials_dir=str(tmp_path / "materials"),
         )
@@ -2607,7 +2609,7 @@ def test_refresh_material_sync_from_registry_persists_etag_and_reuses_it_after_r
     assert validator["channels"] == ["official"]
     assert set(json.loads(validator["local_state_hash"])) == {"materials", "bindings"}
 
-    monkeypatch.setattr(materials_module, "MATERIALS_DIR", str(materials_root))
+    monkeypatch.setattr(material_files, "MATERIALS_DIR", str(materials_root))
     status_response = _client().get("/api/material-sync/status")
     assert status_response.status_code == 200
     assert "catalog_validators" not in status_response.text
@@ -3136,7 +3138,7 @@ def test_material_sync_status_lists_installed_package_and_local_presence(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    monkeypatch.setattr("core.single_stage.material_files.MATERIALS_DIR", str(materials_root))
 
     response = _client().get("/api/material-sync/status")
 
@@ -3169,7 +3171,7 @@ def test_material_sync_status_handles_corrupt_index_without_traceback(
     materials_root = tmp_path / "materials"
     (materials_root / "_sync").mkdir(parents=True)
     (materials_root / "_sync" / "index.json").write_text("{not json", encoding="utf-8")
-    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    monkeypatch.setattr("core.single_stage.material_files.MATERIALS_DIR", str(materials_root))
 
     response = _client().get("/api/material-sync/status")
 
@@ -3223,7 +3225,7 @@ def test_material_library_api_marks_official_synced_material(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    monkeypatch.setattr("core.single_stage.material_files.MATERIALS_DIR", str(materials_root))
 
     response = _client().get("/api/extractor/gradient-card-materials")
 
@@ -3291,11 +3293,11 @@ def test_material_library_api_marks_cloud_official_matching_local_material(
         }
 
     monkeypatch.setattr(
-        materials_module,
+        material_registry_client,
         "list_material_registry_catalog",
         _fake_list_material_registry_catalog,
     )
-    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    monkeypatch.setattr("core.single_stage.material_files.MATERIALS_DIR", str(materials_root))
 
     response = _client().get("/api/extractor/gradient-card-materials")
 
@@ -3356,7 +3358,7 @@ def test_material_sync_rollback_switches_installed_revision(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    monkeypatch.setattr("core.single_stage.material_files.MATERIALS_DIR", str(materials_root))
 
     response = _client().post(
         "/api/material-sync/rollback",
@@ -3406,7 +3408,7 @@ def test_material_sync_rollback_is_local_without_official_password(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    monkeypatch.setattr("core.single_stage.material_files.MATERIALS_DIR", str(materials_root))
 
     response = _client().post(
         "/api/material-sync/rollback",

@@ -16,8 +16,7 @@ This plan applies to the `Lumina-studio` repository. It depends on the approved 
 
 - `docs/superpowers/specs/2026-07-30-installable-creative-workshop-design.md`
 
-Before execution, register the change in the online tracking spreadsheet. The
-current `MOVIBALE/feat/creative-workshop-bead-mode` branch contains the
+The current `MOVIBALE/feat/creative-workshop-bead-mode` branch contains the
 unmerged migration reference named throughout this plan, so create the host
 branch from the committed planning tip rather than silently dropping those
 files by branching from `origin/dev-refactor`:
@@ -744,7 +743,6 @@ git commit -m "feat(workshop): validate installable packages"
 - Create: `assets/workshop-registry/registry-v1.json`
 - Create: `tests/test_workshop_registry_unit.py`
 - Modify: `requirements.txt`
-- Modify: `lumina_studio.spec`
 
 - [ ] **Step 1: Write failing Registry tests**
 
@@ -829,14 +827,14 @@ Commit an empty bootstrap configuration:
 }
 ```
 
-Add both files to `backend_datas` in `lumina_studio.spec`.
+Read both files from `assets/workshop-registry/`.
 
 - [ ] **Step 4: Run Registry and frozen-resource tests**
 
 Run:
 
 ```bash
-./.venv/bin/python -m pytest tests/test_workshop_registry_unit.py tests/test_desktop_build_contract_unit.py -v
+./.venv/bin/python -m pytest tests/test_workshop_registry_unit.py -v
 ```
 
 Expected: PASS.
@@ -844,7 +842,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add requirements.txt lumina_studio.spec assets/workshop-registry core/workshop tests
+git add requirements.txt assets/workshop-registry core/workshop tests
 git commit -m "feat(workshop): verify signed registry indexes"
 ```
 
@@ -1633,8 +1631,6 @@ git commit -m "feat(workshop): add installable module manager"
 - Modify: `electron/main.cjs`
 - Modify: `electron/preload.cjs`
 - Modify: `electron/package.json`
-- Modify: `scripts/build_desktop.py`
-- Modify: `tests/test_desktop_build_contract_unit.py`
 
 - [ ] **Step 1: Write failing Electron security tests**
 
@@ -1814,26 +1810,25 @@ The result is:
 
 Never expose the desktop token or module filesystem path to the renderer.
 
-- [ ] **Step 4: Run Electron and desktop packaging tests**
+- [ ] **Step 4: Run Electron tests**
 
 Run:
 
 ```bash
 pnpm --dir electron test
-./.venv/bin/python -m pytest tests/test_desktop_build_contract_unit.py -v
 ```
 
 Expected: PASS. Add tests for opaque `initiator`, absent frame identity,
 `blob:` download denial, `data:` top-frame navigation denial, popup denial,
 permission denial, redirect denial, and host-frame requests remaining
-unaffected. Add a manual packaged smoke assertion that the module iframe’s
+unaffected. Add a source desktop smoke assertion that the module iframe’s
 `processId` differs from the top frame; if it does not, community module opening
 must fail closed with `runtime-isolation-unavailable`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add electron scripts/build_desktop.py tests/test_desktop_build_contract_unit.py
+git add electron
 git commit -m "feat(workshop): isolate desktop module runtimes"
 ```
 
@@ -1919,7 +1914,7 @@ Run:
 
 ```bash
 pnpm --dir workshop-sdk test
-./.venv/bin/python -m pytest tests/test_workshop_package_unit.py tests/test_workshop_registry_unit.py tests/test_workshop_installer_unit.py tests/test_workshop_api_unit.py tests/test_logging_exception_governance_unit.py tests/test_structured_logging_unit.py tests/test_logger_unit.py tests/test_desktop_build_contract_unit.py -v
+./.venv/bin/python -m pytest tests/test_workshop_package_unit.py tests/test_workshop_registry_unit.py tests/test_workshop_installer_unit.py tests/test_workshop_api_unit.py tests/test_logging_exception_governance_unit.py tests/test_structured_logging_unit.py tests/test_logger_unit.py -v
 ./.venv/bin/python scripts/run_vitest.py run frontend/src/__tests__/workshop-rpc-host.test.ts frontend/src/__tests__/workshop-runtime.test.tsx frontend/src/__tests__/workshop-manager.test.tsx frontend/src/__tests__/workshop-project-storage.test.ts frontend/src/__tests__/workshop-handoff.test.ts frontend/src/__tests__/workshop-source-banner.test.tsx frontend/src/__tests__/recipe-import.test.ts frontend/src/__tests__/recipe-export.test.ts frontend/src/utils/__tests__/bugReportContext.test.ts
 pnpm --dir electron test
 pnpm --dir frontend build
@@ -2051,7 +2046,7 @@ gh pr create \
   --body-file /tmp/installable-workshop-host-pr.md
 ```
 
-The PR body is English first and Chinese second. It includes package/RPC limits,
+The PR description includes package/RPC limits,
 Electron isolation evidence, browser restrictions, project quota, rollback,
 share-card compatibility, and 1280×720 human-flow evidence. Do not merge with a
 failed or missing host acceptance item.

@@ -102,8 +102,8 @@ log = get_logger("core.pipeline.coordinator")
 # Layer-0 (appearance face) diagnostics
 # 外观面层（layer 0）诊断埋点
 #
-# All diagnostic events are emitted at DEBUG level so they incur zero cost
-# in production / governance budgets. To consume them, run with
+# Detailed diagnostic events use DEBUG so ordinary runs stay readable.
+# To consume them, run with
 # ``LUMINA_LOG_LEVEL=DEBUG`` and grep the log file for ``vector_diag_*``.
 #
 # Coverage (8 instrumentation points spread across the vector pipeline):
@@ -1084,7 +1084,7 @@ def _log_vector_color_drift_diagnostics(analysis, raster_cache) -> None:
     - DEBUG per pair: shape count, total polygon area, Top2Bottom
       recipe, approximate Lab ΔE between source and matched.
     - One INFO line per preview run: worst offender's drift distance
-      so regressions become visible in the INFO-budgeted workflow.
+      so visible color drift can be diagnosed from ordinary logs.
 
     汇总每个唯一 (源填充色 -> matched RGB) 对，输出 DEBUG 明细和
     一条 INFO 汇总，帮助定位 "应该是橙色的地方冒出灰色像素" 这

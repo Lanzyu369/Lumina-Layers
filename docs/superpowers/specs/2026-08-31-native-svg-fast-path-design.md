@@ -384,10 +384,8 @@ packaging tests; it is not assumed from a source-only build.
 
 The wheel contains the native extension and complete Apache, MIT, Boost, and
 FreeType license texts. Lumina pins an exact released version in its dependency
-and desktop/PyInstaller inputs. Clean virtual environments install and execute
-the wheel before publication. The actual `lumina_studio.spec` one-file backend
-is then built on Windows and processes a real small SVG through the native path
-from its extracted `_MEIPASS` environment; a bare import is not sufficient.
+inputs. Clean virtual environments install and execute the wheel, then process
+a real small SVG through the native path; a bare import is not sufficient.
 
 ## Rollout sequence
 
@@ -395,7 +393,7 @@ from its extracted `_MEIPASS` environment; a bare import is not sufficient.
    contract, correctness corpus, benchmarks, and wheels.
 2. Integrate the pinned package into Lumina behind one internal adapter while
    retaining whole-document fallback.
-3. Run focused, smoke, full, logging, desktop packaging, and real slicer
+3. Run focused, smoke, full, logging, and real slicer
    validation; publish benchmark and parity evidence.
 4. Enable the native path as the default for supported documents without a
    production shadow audit.
@@ -414,7 +412,7 @@ from its extracted `_MEIPASS` environment; a bare import is not sufficient.
 - **False performance wins:** benchmarks retain region/hole/color fingerprints
   and physical error bounds.
 - **ABI and packaging drift:** exact dependency pins, platform wheels, and
-  frozen-runtime tests are release gates.
+  native-runtime tests are release gates.
 - **License drift:** pinned third-party revisions and generated notices are
   reviewed with every dependency update.
 - **Permanent duplicate implementations:** fallback reasons are measured and

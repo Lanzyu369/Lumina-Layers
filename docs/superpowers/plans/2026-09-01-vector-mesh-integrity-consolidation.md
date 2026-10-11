@@ -44,7 +44,7 @@ ends at GLB/3MF material meshes.
 - [x] Remove the unit-incorrect post-clip area threshold: physical-size
   filtering runs only where the SVG-to-mm scale is known.
 - [x] Require Shapely 2.1.0+, matching the constrained triangulation API used
-  for holed caps in source, Docker, and frozen desktop installs.
+  for holed caps in source workflows.
 - [x] Replace stale fallback tests with constructive invariants: edge incidence
   two, no float32-degenerate triangles, preserved islands, no internal caps for
   identical adjacent runs, deterministic object/material count.

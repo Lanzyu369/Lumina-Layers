@@ -39,13 +39,23 @@ test("selection prefers a free port, generates fresh identities, and fails at bo
   assert.notEqual(first.instanceId, second.instanceId);
 });
 
-test("persisted port keeps the packaged frontend origin stable across launches", async t => {
+test("persisted port keeps the backend endpoint stable across launches", async t => {
   const portFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "lumina-port-state-")), "backend-port.json");
   const first = await helper().selectBackendEndpoint({ portFile, preferredPort: 8100 });
   assert.equal(JSON.parse(fs.readFileSync(portFile, "utf8")).port, first.port);
   const second = await helper().selectBackendEndpoint({ portFile, preferredPort: 8100 });
   assert.equal(second.port, first.port);
   assert.notEqual(second.instanceId, first.instanceId);
+});
+
+test("required port check reports a collision and leaves its owner running", async t => {
+  const owner = await server(t, (_req, res) => res.end("owner"));
+  await assert.rejects(helper().assertPortsAvailable([owner.address().port]), /port_in_use/);
+  assert.equal(owner.listening, true);
+});
+
+test("required port check releases its probe listener", async () => {
+  await helper().assertPortsAvailable([0]);
 });
 
 test("a persisted port collision fails instead of silently changing the storage origin", async t => {

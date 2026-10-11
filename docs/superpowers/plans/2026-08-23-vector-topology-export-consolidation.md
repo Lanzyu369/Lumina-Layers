@@ -205,4 +205,4 @@
 
 - [ ] **Step 3: Commit and push normally**
 
-  Use an English-first/Chinese-second Conventional Commit message, push `MOVIBALE/fix/vector-outline-manifold` without force, update draft PR #570, and report the exact new head. Do not merge unless the user explicitly asks after reviewing the consolidated result.
+  Use a Conventional Commit message, push `MOVIBALE/fix/vector-outline-manifold` without force, update draft PR #570, and report the exact new head. Do not merge unless the user explicitly asks after reviewing the consolidated result.

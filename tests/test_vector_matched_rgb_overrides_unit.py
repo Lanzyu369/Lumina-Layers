@@ -1692,28 +1692,6 @@ class TestApplyMatchedRgbOverrides:
         assert changed == 0
 
 
-@pytest.mark.skipif(
-    apply_matched_rgb_overrides_to_analysis is not None,
-    reason=(
-        "Reproducer guard: only meaningful while the helper is missing. "
-        "Once apply_matched_rgb_overrides_to_analysis exists this test is "
-        "auto-skipped, leaving the behavioural suite above as the regression."
-    ),
-)
-def test_helper_must_be_exported_from_vector_engine():
-    """Red-light reproducer: documents the missing public surface.
-
-    红灯复现：在 helper 真正落地前，明确指出 ``vector_engine`` 缺少这
-    个公共函数；helper 一旦实现该测试自动跳过，让上面的行为测试接管
-    回归保护。
-    """
-    pytest.fail(
-        "core.vector_engine.apply_matched_rgb_overrides_to_analysis "
-        "is required so vector-mode region replacements survive "
-        "into the generated 3MF."
-    )
-
-
 # ---------------------------------------------------------------------------
 # Coordinator wiring: ensure ``_run_vector_branch`` reads the new ctx keys
 # (``matched_rgb_path`` / ``mask_solid_path``) and forwards them to the
@@ -2204,7 +2182,8 @@ class TestRunVectorBranchWiring:
         assert helper_calls[0]["kwargs"]["strict"] is True
         assert set(captured) == {"analysis_ref", "processor_ref"}
 
-    def test_recipe_helper_uses_preview_cache_grid_when_svg_density_differs(self, tmp_path):
+    @pytest.mark.parametrize("base_channel_idx", [0, 2])
+    def test_recipe_helper_uses_preview_cache_grid_when_svg_density_differs(self, tmp_path, base_channel_idx):
         """Recipe override masks are preview-cache artifacts, not generation rasters."""
         import pickle
         from unittest.mock import patch
@@ -2250,6 +2229,7 @@ class TestRunVectorBranchWiring:
                 ],
                 "recipe_override_masks_path": str(masks_path),
                 "color_layers": 5,
+                "material_base_channel_idx": base_channel_idx,
             }
 
             result = coordinator._run_vector_branch(ctx)
@@ -2258,6 +2238,7 @@ class TestRunVectorBranchWiring:
         assert helper_calls == []
         assert len(recipe_calls) == 1
         kwargs = recipe_calls[0]["kwargs"]
+        assert kwargs["base_channel_idx"] == base_channel_idx
         assert kwargs["pixels_per_mm"] == 10.0
         assert kwargs["region_masks"]["region-A"].shape == (4, 4)
         timings = result["vector_timing"]

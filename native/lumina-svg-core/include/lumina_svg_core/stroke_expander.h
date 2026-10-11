@@ -9,8 +9,6 @@
 
 namespace lumina_svg_core {
 
-class ComplexityBudget;
-
 struct LocalPoint {
     double x{0};
     double y{0};
@@ -42,7 +40,6 @@ StrokeExpansion expandStrokeLocal(
     const lunasvg::PaintCommand& command,
     double localFlattenTolerance,
     double localGridStep,
-    ComplexityBudget& complexityBudget,
     bool enforcePhysicalTolerance = true);
 
 } // namespace lumina_svg_core

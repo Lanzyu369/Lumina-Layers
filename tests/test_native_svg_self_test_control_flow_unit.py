@@ -139,6 +139,9 @@ def test_cli_reports_domain_self_test_failure_as_nonzero_json(
 ):
     import api_server
 
+    monkeypatch.setattr(
+        "api.structured_logging.configure_structured_logging", lambda: None,
+    )
     calls = _install_self_test_inputs(monkeypatch, include_canonicalizer=False)
     exit_code = api_server.main(["--native-svg-self-test", "fixture.svg"])
     payload = json.loads(capsys.readouterr().out)
@@ -157,6 +160,9 @@ def test_cli_reports_success_only_after_both_domain_checks_run(
 ):
     import api_server
 
+    monkeypatch.setattr(
+        "api.structured_logging.configure_structured_logging", lambda: None,
+    )
     calls = _install_self_test_inputs(monkeypatch)
     exit_code = api_server.main(["--native-svg-self-test", "fixture.svg"])
     payload = json.loads(capsys.readouterr().out)

@@ -1,0 +1,4 @@
+# Optional PostgreSQL storage backend and schema migrations.
+alembic>=1.14
+sqlalchemy>=2.0
+psycopg[binary]>=3.2

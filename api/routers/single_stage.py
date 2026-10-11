@@ -68,7 +68,6 @@ from api.schemas.lut import (
 )
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
-import core.single_stage.materials as single_stage_materials
 from core.material_cache import (
     ALLOWED_GRID_RESOLUTIONS,
     ALLOWED_LAYER_HEIGHTS_MM as _CACHE_ALLOWED_LAYER_HEIGHTS,  # noqa: N811
@@ -110,6 +109,7 @@ from core.material_color_solver import (
 from core.material_lut_synthesis import load_multiple_materials
 from core.lut_details.identity import canonicalize_lut_manufacturer
 from core.single_stage import (
+    material_files,
     delete_saved_stage_a_material_archive,
     export_saved_stage_a_material_archives,
     extract_single_stage_dataset,
@@ -181,17 +181,9 @@ MATERIAL_SWATCH_EXPORT_FAILED_DETAIL = (
     "Material swatch export failed. Check the selected material recipes and "
     "export settings, then try again."
 )
-MaterialCacheEvictor = Callable[[str], int]
 _RUNTIME_BUILD_LOCKS_GUARD = threading.Lock()
 _RUNTIME_BUILD_LOCKS: dict[tuple[str, int, str, str, int], threading.Lock] = {}
 _RUNTIME_BUILD_GLOBAL_SEMAPHORE = threading.BoundedSemaphore(1)
-
-
-def _noop_material_cache_evictor(_directory_name: str) -> int:
-    """Default material-cache eviction callback for the main app.
-    主应用默认的耗材缓存失效回调。
-    """
-    return 0
 
 
 def _is_missing_stage_json_path(path: str | None) -> bool:
@@ -283,23 +275,6 @@ def _raise_gradient_card_material_save_client_error(
         },
     )
     raise HTTPException(status_code=status_code, detail=detail) from exc
-
-
-def get_material_cache_evictor() -> MaterialCacheEvictor:
-    """Return the callback used after saved-material writes.
-    返回已保存耗材写入成功后使用的缓存失效回调。
-
-    The local main app does not keep a separate router-level material cache, so
-    this defaults to a no-op. The hook remains so tests and future local cache
-    layers can inject a targeted evictor without changing write endpoints.
-    本地主应用没有单独的路由级耗材缓存，因此默认 no-op；保留这个 hook 方便
-    测试或后续本地缓存层注入定向失效函数，而无需改写写入端点。
-
-    Returns:
-        MaterialCacheEvictor: Callback accepting a material directory name.
-            （接收耗材目录名的回调函数）
-    """
-    return _noop_material_cache_evictor
 
 
 def _normalize_host(value: str | None) -> str | None:
@@ -603,11 +578,11 @@ def _create_new_material_candidate_snapshot(
     material_name: str,
     brand: str | None,
 ) -> NewMaterialCandidateSnapshot:
-    materials_root = Path(single_stage_materials.MATERIALS_DIR)
-    stem = single_stage_materials._sanitize_material_dirname(material_name)
+    materials_root = Path(material_files.MATERIALS_DIR)
+    stem = material_files._sanitize_material_dirname(material_name)
     parent_dir = materials_root
     if brand is not None:
-        parent_dir = materials_root / single_stage_materials._sanitize_material_dirname(brand)
+        parent_dir = materials_root / material_files._sanitize_material_dirname(brand)
     existing_candidates: set[Path] = set()
     try:
         children = list(parent_dir.iterdir()) if parent_dir.exists() else []
@@ -623,8 +598,8 @@ def _create_new_material_candidate_snapshot(
 
 
 def _create_material_directory_backup(directory_name: str) -> MaterialDirectoryBackup:
-    materials_root = Path(single_stage_materials.MATERIALS_DIR)
-    material_dir = single_stage_materials.resolve_saved_material_dir(
+    materials_root = Path(material_files.MATERIALS_DIR)
+    material_dir = material_files.resolve_saved_material_dir(
         materials_root,
         directory_name,
     )
@@ -687,7 +662,7 @@ def _restore_material_directory_backup(
 def _path_is_inside_materials_root(path: Path) -> bool:
     try:
         resolved_path = path.resolve()
-        materials_root = Path(single_stage_materials.MATERIALS_DIR).resolve()
+        materials_root = Path(material_files.MATERIALS_DIR).resolve()
         resolved_path.relative_to(materials_root)
     except (OSError, ValueError):
         return False
@@ -696,7 +671,7 @@ def _path_is_inside_materials_root(path: Path) -> bool:
 
 def _prune_empty_material_parents(start_dir: Path) -> None:
     try:
-        materials_root = Path(single_stage_materials.MATERIALS_DIR).resolve()
+        materials_root = Path(material_files.MATERIALS_DIR).resolve()
         current = start_dir.resolve()
     except OSError:
         return
@@ -736,7 +711,6 @@ def _rollback_saved_material_write(
     directory_name: str,
     archive_path: str,
     backup: MaterialDirectoryBackup | None,
-    evict_material_cache: MaterialCacheEvictor,
 ) -> None:
     try:
         if backup is not None:
@@ -746,8 +720,7 @@ def _rollback_saved_material_write(
                 directory_name=directory_name,
                 archive_path=archive_path,
             )
-        single_stage_materials.invalidate_material_library_cache()
-        evict_material_cache(directory_name)
+        material_files.invalidate_material_library_cache()
     except (FileNotFoundError, ValueError, TypeError, OSError, RuntimeError) as exc:
         log.exception(
             "Gradient card material rollback failed",
@@ -764,7 +737,6 @@ def _rollback_existing_material_write(
     *,
     directory_name: str | None,
     backup: MaterialDirectoryBackup | None,
-    evict_material_cache: MaterialCacheEvictor,
 ) -> None:
     if backup is None:
         return
@@ -775,14 +747,12 @@ def _rollback_existing_material_write(
         directory_name=directory_name,
         archive_path=str(backup[0] / "material.json"),
         backup=backup,
-        evict_material_cache=evict_material_cache,
     )
 
 
 def _rollback_new_material_write(
     *,
     snapshot: NewMaterialCandidateSnapshot | None,
-    evict_material_cache: MaterialCacheEvictor,
 ) -> None:
     if snapshot is None:
         return
@@ -791,7 +761,6 @@ def _rollback_new_material_write(
         children = list(parent_dir.iterdir()) if parent_dir.exists() else []
     except OSError:
         return
-    materials_root = Path(single_stage_materials.MATERIALS_DIR)
     for child in children:
         if not child.is_dir() or not _candidate_material_dir_name_matches(child.name, stem):
             continue
@@ -803,12 +772,7 @@ def _rollback_new_material_write(
             continue
         if not _path_is_inside_materials_root(child):
             continue
-        try:
-            directory_name = resolved_child.relative_to(materials_root.resolve()).as_posix()
-        except (OSError, ValueError):
-            directory_name = child.name
         shutil.rmtree(child, ignore_errors=True)
-        evict_material_cache(directory_name)
     _prune_empty_material_parents(parent_dir)
 
 
@@ -1365,7 +1329,6 @@ async def extractor_save_gradient_card_material(
     brand: str | None = Form(None),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
-    evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialSaveResponse:
     """Persist a computed gradient-card Stage A material archive."""
     _enforce_material_library_request(request)
@@ -1424,11 +1387,9 @@ async def extractor_save_gradient_card_material(
         _rollback_existing_material_write(
             directory_name=existing_directory_name,
             backup=material_backup,
-            evict_material_cache=evict_material_cache,
         )
         _rollback_new_material_write(
             snapshot=new_material_snapshot,
-            evict_material_cache=evict_material_cache,
         )
         _discard_material_directory_backup(material_backup)
         _raise_gradient_card_material_save_client_error(
@@ -1440,11 +1401,9 @@ async def extractor_save_gradient_card_material(
         _rollback_existing_material_write(
             directory_name=existing_directory_name,
             backup=material_backup,
-            evict_material_cache=evict_material_cache,
         )
         _rollback_new_material_write(
             snapshot=new_material_snapshot,
-            evict_material_cache=evict_material_cache,
         )
         _discard_material_directory_backup(material_backup)
         _raise_gradient_card_material_save_client_error(
@@ -1456,11 +1415,9 @@ async def extractor_save_gradient_card_material(
         _rollback_existing_material_write(
             directory_name=existing_directory_name,
             backup=material_backup,
-            evict_material_cache=evict_material_cache,
         )
         _rollback_new_material_write(
             snapshot=new_material_snapshot,
-            evict_material_cache=evict_material_cache,
         )
         _discard_material_directory_backup(material_backup)
         _raise_internal_route_error(
@@ -1486,7 +1443,6 @@ async def extractor_save_gradient_card_material(
                 directory_name=directory_name,
                 archive_path=result.archive_path,
                 backup=material_backup,
-                evict_material_cache=evict_material_cache,
             ),
             event="extractor_save_gradient_card_material_registration_failed",
             session_id=session_id,
@@ -1494,7 +1450,6 @@ async def extractor_save_gradient_card_material(
     finally:
         _discard_material_directory_backup(material_backup)
 
-    evict_material_cache(directory_name)
     log.info(
         "Gradient card material saved",
         extra={
@@ -1524,7 +1479,6 @@ async def extractor_save_gradient_card_material(
 async def extractor_delete_gradient_card_material(
     request: Request,
     directory_name: str,
-    evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialDeleteResponse:
     """Delete a saved gradient-card material archive.
     删除已保存的梯度卡耗材档案。
@@ -1543,7 +1497,6 @@ async def extractor_delete_gradient_card_material(
             event="extractor_delete_gradient_card_material_failed",
         )
 
-    evict_material_cache(result.directory_name)
     log.info(
         "Gradient card material deleted",
         extra={
@@ -1566,7 +1519,6 @@ async def extractor_update_gradient_card_material(
     directory_name: str,
     payload: GradientCardMaterialUpdateRequest,
     registry: FileRegistry = Depends(get_file_registry),
-    evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialUpdateResponse:
     """Update saved gradient-card material metadata.
     更新已保存的梯度卡耗材元数据。
@@ -1590,7 +1542,6 @@ async def extractor_update_gradient_card_material(
         _rollback_existing_material_write(
             directory_name=directory_name,
             backup=material_backup,
-            evict_material_cache=evict_material_cache,
         )
         _discard_material_directory_backup(material_backup)
         raise HTTPException(status_code=404, detail=str(exc))
@@ -1598,7 +1549,6 @@ async def extractor_update_gradient_card_material(
         _rollback_existing_material_write(
             directory_name=directory_name,
             backup=material_backup,
-            evict_material_cache=evict_material_cache,
         )
         _discard_material_directory_backup(material_backup)
         raise HTTPException(status_code=422, detail=str(exc))
@@ -1606,7 +1556,6 @@ async def extractor_update_gradient_card_material(
         _rollback_existing_material_write(
             directory_name=directory_name,
             backup=material_backup,
-            evict_material_cache=evict_material_cache,
         )
         _discard_material_directory_backup(material_backup)
         _raise_internal_route_error(
@@ -1630,7 +1579,6 @@ async def extractor_update_gradient_card_material(
                 directory_name=normalized_directory_name,
                 archive_path=result.archive_path,
                 backup=material_backup,
-                evict_material_cache=evict_material_cache,
             ),
             event="extractor_update_gradient_card_material_registration_failed",
         )
@@ -1652,7 +1600,6 @@ async def extractor_update_gradient_card_material(
         for value in (payload.material_name, payload.brand, payload.estimated_rgb)
         if value is not None
     )
-    evict_material_cache(normalized_directory_name)
     log.info(
         "Gradient card material metadata updated",
         extra={
@@ -1745,7 +1692,6 @@ async def extractor_export_gradient_card_materials(
 async def extractor_import_gradient_card_materials(
     request: Request,
     archives: list[UploadFile] = File(...),
-    evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialBulkImportResponse:
     """Import one or more saved-material ZIP archives into the material library.
     导入一个或多个已保存耗材 ZIP 归档到耗材库。
@@ -1831,8 +1777,6 @@ async def extractor_import_gradient_card_materials(
             "archives_received": len(archives),
         },
     )
-    for dn in imported_directory_names:
-        evict_material_cache(dn)
     return GradientCardMaterialBulkImportResponse(
         status="ok",
         message=f"Imported {len(imported_materials)} saved materials",

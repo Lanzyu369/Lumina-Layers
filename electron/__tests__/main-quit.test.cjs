@@ -1,113 +1,180 @@
-const { describe, it } = require("node:test");
-const assert = require("assert");
+"use strict";
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const vm = require("node:vm");
+const { EventEmitter } = require("node:events");
+const { createRequire } = require("node:module");
+const mainPath = path.join(__dirname, "../main.cjs");
+const nativeRequire = createRequire(mainPath);
 
-const QUIT_DIALOG = {
-  zh: {
-    title: "\u9000\u51FA\u786E\u8BA4",
-    message: "\u786E\u5B9A\u8981\u9000\u51FA Lumina Studio \u5417\uFF1F",
-    detail: "\u9000\u51FA\u540E\u6240\u6709\u672A\u4FDD\u5B58\u7684\u64CD\u4F5C\u5C06\u4E22\u5931\u3002",
-    quit: "\u9000\u51FA",
-    cancel: "\u53D6\u6D88",
-  },
-  en: {
-    title: "Quit Confirmation",
-    message: "Are you sure you want to quit Lumina Studio?",
-    detail: "All unsaved changes will be lost.",
-    quit: "Quit",
-    cancel: "Cancel",
-  },
-};
+async function until(check) {
+  const deadline = Date.now() + 2000;
+  while (!check()) {
+    assert.ok(Date.now() < deadline, "desktop must reach the expected state");
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
 
-describe("QUIT_DIALOG constants", () => {
-  it("should have zh and en keys", () => {
-    assert.ok("zh" in QUIT_DIALOG);
-    assert.ok("en" in QUIT_DIALOG);
+async function fixture(t, platform, mode = "healthy") {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "lumina-source-desktop-"));
+  const windows = [], children = [], dialogs = [], errors = [], commands = [], signals = [];
+  const timers = new Set();
+  const ipcMain = new EventEmitter();
+  ipcMain.handle = () => {};
+  const event = () => ({ defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } });
+  const app = new EventEmitter();
+  Object.assign(app, {
+    getPath: () => root, requestSingleInstanceLock: () => true,
+    whenReady: () => Promise.resolve(), getVersion: () => "2.0.0", setName() {}, setAboutPanelOptions() {},
+    quit() {
+      const before = event();
+      this.emit("before-quit", before);
+      if (before.defaultPrevented) return;
+      this.closingForQuit = true;
+      for (const window of windows.filter(w => !w.isDestroyed())) window.close();
+      this.closingForQuit = false;
+      this.emit("will-quit", event());
+      this.quitted = true;
+    },
   });
-
-  it("zh dialog should have correct title", () => {
-    assert.strictEqual(QUIT_DIALOG.zh.title, "\u9000\u51FA\u786E\u8BA4");
-  });
-
-  it("en dialog should have correct title", () => {
-    assert.strictEqual(QUIT_DIALOG.en.title, "Quit Confirmation");
-  });
-
-  it("zh dialog should have quit and cancel buttons", () => {
-    assert.strictEqual(QUIT_DIALOG.zh.quit, "\u9000\u51FA");
-    assert.strictEqual(QUIT_DIALOG.zh.cancel, "\u53D6\u6D88");
-  });
-
-  it("en dialog should have quit and cancel buttons", () => {
-    assert.strictEqual(QUIT_DIALOG.en.quit, "Quit");
-    assert.strictEqual(QUIT_DIALOG.en.cancel, "Cancel");
-  });
-
-  it("both languages should have message and detail", () => {
-    for (const lang of ["zh", "en"]) {
-      assert.ok(QUIT_DIALOG[lang].message);
-      assert.ok(QUIT_DIALOG[lang].detail);
+  class Window extends EventEmitter {
+    constructor(options) {
+      super(); this.options = options; windows.push(this);
+      this.webContents = new EventEmitter();
+      this.webContents.setWindowOpenHandler = () => {};
     }
+    loadURL(url) { this.loadedUrl = url; return Promise.resolve(); }
+    loadFile() { return Promise.resolve(); }
+    show() { this.visible = true; }
+    isDestroyed() { return Boolean(this.destroyed); }
+    close() {
+      const closing = event();
+      this.emit("close", closing);
+      if (!closing.defaultPrevented) {
+        this.destroyed = true; this.emit("closed");
+        if (!app.closingForQuit && windows.every(w => w.isDestroyed())) app.emit("window-all-closed");
+      }
+    }
+  }
+  const defaultSession = new EventEmitter();
+  Object.assign(defaultSession, {
+    webRequest: { onBeforeRequest() {} }, setPermissionRequestHandler() {}, setPermissionCheckHandler() {},
   });
+  let healthCallback;
+  const modules = {
+    electron: {
+      app, BrowserWindow: Window, ipcMain, Menu: { setApplicationMenu() {} },
+      dialog: {
+        showErrorBox(...args) { errors.push(args); },
+        showMessageBox(_window, options) { return new Promise(resolve => dialogs.push({ options, resolve })); },
+      },
+      protocol: { registerSchemesAsPrivileged() {}, handle() {} },
+      session: { defaultSession }, net: {}, webFrameMain: {},
+    },
+    "./backend-endpoint.cjs": {
+      ...nativeRequire("./backend-endpoint.cjs"),
+      assertPortsAvailable: async () => {},
+      selectBackendEndpoint: async () => {
+        if (mode === "port-busy") throw new Error("port_in_use");
+        return { port: 8001, origin: "http://127.0.0.1:8001", healthUrl: "http://127.0.0.1:8001/api/health", instanceId: "source-test" };
+      },
+    },
+    child_process: {
+      spawn(command, args, options) {
+        const child = new EventEmitter();
+        Object.assign(child, { command, args, options, stdout: new EventEmitter(), stderr: new EventEmitter(),
+          pid: 24680 + children.length, exitCode: null, signalCode: null, killed: false });
+        children.push(child);
+        queueMicrotask(() => child.emit("spawn"));
+        return child;
+      },
+      execSync(command) { commands.push(command); return "node\n"; },
+    },
+    http: { get(_url, callback) {
+      healthCallback = callback;
+      const request = new EventEmitter();
+      request.setTimeout = () => {}; request.destroy = () => {};
+      return request;
+    } },
+    net: { connect(_port, _host, connected) {
+      const socket = new EventEmitter();
+      socket.destroy = () => {}; socket.setTimeout = () => {};
+      queueMicrotask(connected);
+      return socket;
+    } },
+    fs: { ...fs, createWriteStream: () => ({ write() {} }) },
+  };
+  t.after(() => {
+    for (const timer of timers) clearTimeout(timer);
+    for (const child of children) { child.exitCode = 0; child.emit("exit", 0); }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  vm.runInNewContext(fs.readFileSync(mainPath, "utf8"), {
+    require: name => modules[name] || nativeRequire(name),
+    __dirname: path.dirname(mainPath), console: { log() {} }, URL, Response, Headers,
+    setTimeout(callback, delay) { const timer = setTimeout(callback, delay); timers.add(timer); return timer; },
+    clearTimeout,
+    process: { platform, env: { LUMINA_MATERIAL_REGISTRY_URL: "https://custom.example/materials" },
+      kill(pid, signal) { signals.push({ pid, signal }); } },
+  }, { filename: mainPath });
+  await until(() => healthCallback || app.quitted);
+  const mainWindow = () => windows.find(w => w.options.title === "Lumina Studio 2");
+  return { app, children, dialogs, errors, commands, signals, ipcMain, mainWindow,
+    async healthy() {
+      const response = new EventEmitter();
+      Object.assign(response, { statusCode: 200, headers: { "content-type": "application/json" } });
+      healthCallback(response);
+      response.emit("data", Buffer.from(JSON.stringify({ status: "ok", service: "lumina-studio", desktop_instance_id: "source-test" })));
+      response.emit("end");
+      await until(mainWindow);
+      mainWindow().emit("ready-to-show");
+    },
+  };
+}
+
+for (const platform of ["win32", "darwin"]) {
+  test(`source desktop on ${platform} launches Python and Vite, then confirms and cleans up on exit`, async t => {
+    const f = await fixture(t, platform);
+    assert.equal(path.basename(f.children[0].args[0]), "api_server.py");
+    assert.equal(f.children[0].options.env.LUMINA_API_PORT, "8001");
+    assert.equal(f.children[0].options.env.LUMINA_MATERIAL_REGISTRY_URL, "https://custom.example/materials");
+    await f.healthy();
+    assert.equal(f.children.length, 2);
+    assert.equal(path.basename(f.children[1].args[0]), "vite.js");
+    assert.equal(f.children[1].options.env.VITE_API_PROXY_TARGET, "http://127.0.0.1:8001");
+    assert.equal(f.mainWindow().loadedUrl, "http://127.0.0.1:4174");
+    assert.equal(f.mainWindow().visible, true);
+    f.ipcMain.emit("set-language", {}, "en");
+    f.mainWindow().close();
+    assert.deepEqual(Array.from(f.dialogs[0].options.buttons), ["Cancel", "Quit"]);
+    f.dialogs[0].resolve({ response: 0 });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.mainWindow().isDestroyed(), false);
+    assert.equal(f.app.quitted, undefined);
+    f.mainWindow().close();
+    f.dialogs[1].resolve({ response: 1 });
+    await until(() => f.app.quitted);
+    assert.equal(f.mainWindow().isDestroyed(), true);
+    if (platform === "win32") assert.equal(f.commands.filter(c => c.startsWith("taskkill /T /F /PID ")).length, 2);
+    else assert.deepEqual(f.signals, [{ pid: -24680, signal: "SIGTERM" }, { pid: -24681, signal: "SIGTERM" }]);
+  });
+}
+
+test("source desktop reports port conflicts before spawning children", async t => {
+  const f = await fixture(t, "darwin", "port-busy");
+  assert.equal(f.children.length, 0);
+  assert.equal(f.errors.length, 1);
+  assert.equal(f.app.quitted, true);
 });
 
-describe("Language selection logic", () => {
-  it("should select zh dialog when currentLang is zh", () => {
-    const currentLang = "zh";
-    const dlg = QUIT_DIALOG[currentLang] || QUIT_DIALOG.zh;
-    assert.strictEqual(dlg.title, "\u9000\u51FA\u786E\u8BA4");
-    assert.strictEqual(dlg.quit, "\u9000\u51FA");
-  });
-
-  it("should select en dialog when currentLang is en", () => {
-    const currentLang = "en";
-    const dlg = QUIT_DIALOG[currentLang] || QUIT_DIALOG.zh;
-    assert.strictEqual(dlg.title, "Quit Confirmation");
-    assert.strictEqual(dlg.quit, "Quit");
-  });
-
-  it("should fallback to zh for unknown language", () => {
-    const currentLang = "fr";
-    const dlg = QUIT_DIALOG[currentLang] || QUIT_DIALOG.zh;
-    assert.strictEqual(dlg.title, "\u9000\u51FA\u786E\u8BA4");
-  });
-});
-
-describe("Close event behavior", () => {
-  it("should preventDefault and show dialog on close", () => {
-    let preventDefaultCalled = false;
-    const event = { preventDefault: () => { preventDefaultCalled = true; } };
-
-    const currentLang = "zh";
-    const dlg = QUIT_DIALOG[currentLang] || QUIT_DIALOG.zh;
-
-    event.preventDefault();
-    assert.ok(preventDefaultCalled);
-
-    const buttons = [dlg.cancel, dlg.quit];
-    assert.deepStrictEqual(buttons, ["\u53D6\u6D88", "\u9000\u51FA"]);
-  });
-
-  it("cancel button should be defaultId=0", () => {
-    const currentLang = "en";
-    const dlg = QUIT_DIALOG[currentLang] || QUIT_DIALOG.zh;
-    const buttons = [dlg.cancel, dlg.quit];
-    assert.strictEqual(buttons[0], "Cancel");
-    assert.strictEqual(buttons[1], "Quit");
-  });
-
-  it("response=1 should trigger quit", () => {
-    const currentLang = "zh";
-    const dlg = QUIT_DIALOG[currentLang] || QUIT_DIALOG.zh;
-    const buttons = [dlg.cancel, dlg.quit];
-    const response = 1;
-    assert.strictEqual(buttons[response], "\u9000\u51FA");
-  });
-
-  it("response=0 should keep window", () => {
-    const currentLang = "en";
-    const dlg = QUIT_DIALOG[currentLang] || QUIT_DIALOG.zh;
-    const buttons = [dlg.cancel, dlg.quit];
-    const response = 0;
-    assert.strictEqual(buttons[response], "Cancel");
-  });
+test("source desktop reports an exited backend and quits", async t => {
+  const f = await fixture(t, "darwin");
+  f.children[0].exitCode = 1;
+  f.children[0].emit("exit", 1);
+  await until(() => f.app.quitted);
+  assert.equal(f.errors[0][0], "Backend Unavailable");
+  assert.equal(f.mainWindow(), undefined);
 });

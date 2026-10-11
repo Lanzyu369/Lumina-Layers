@@ -2,7 +2,7 @@
 Lumina Studio — headless benchmark script.
 
 Runs both SVG mode (Lanz1.svg) and High-Fidelity mode (Lanz2.jpg) without
-starting the Gradio UI, measures wall-clock time for each stage, and prints
+starting the UI, measures wall-clock time for each stage, and prints
 [BENCH] summary lines that can be grepped from log files for easy comparison
 across optimisation iterations.
 

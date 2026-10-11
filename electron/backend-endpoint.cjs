@@ -48,6 +48,17 @@ async function canListen(port) {
   });
 }
 
+/** Check required local ports without terminating their owners. */
+async function assertPortsAvailable(ports) {
+  for (const port of ports) {
+    await new Promise((resolve, reject) => {
+      const server = net.createServer();
+      server.once("error", error => reject(new Error(`port_in_use:${port}:${error.code}`)));
+      server.listen(port, "127.0.0.1", () => server.close(resolve));
+    });
+  }
+}
+
 /** Pick a bounded loopback endpoint and persist it for a stable desktop origin. */
 async function selectBackendEndpoint({ preferredPort = 8000, maxAttempts = 100, portFile } = {}) {
   if (!Number.isInteger(preferredPort) || preferredPort < 1024 || preferredPort > 65535 ||
@@ -109,4 +120,4 @@ function validateHealthResponse(response, instanceId, done) {
   });
 }
 
-module.exports = { selectBackendEndpoint, validateHealthResponse };
+module.exports = { assertPortsAvailable, selectBackendEndpoint, validateHealthResponse };

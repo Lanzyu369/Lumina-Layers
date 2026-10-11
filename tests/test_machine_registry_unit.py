@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import sys
 
 import pytest
 
@@ -18,45 +17,42 @@ def test_machine_registry_root_resolution_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     explicit_root = tmp_path / "explicit-registry"
-    frozen_root = tmp_path / "frozen"
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "_MEIPASS", str(frozen_root), raising=False)
 
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(explicit_root))
     assert resolve_machine_registry_root() == explicit_root.resolve()
 
     monkeypatch.delenv("LUMINA_MACHINE_REGISTRY_DIR")
     assert resolve_machine_registry_root() == (
-        frozen_root / "machine_registry"
-    ).resolve()
-
-    monkeypatch.setattr(sys, "frozen", False)
-    assert resolve_machine_registry_root() == (
         Path(__file__).resolve().parents[1] / "machine_registry"
     )
 
 
-def test_runtime_machine_registry_consumers_share_frozen_root(
+def test_runtime_machine_registry_consumers_share_configured_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from api.export_device_validation import _machine_registry_path
     from api.routers.system import _machine_registry_root
-    from utils.bambu_3mf_writer import _resolve_machine_registry_root
+    from utils.fatcat_metadata import select_metadata_target
 
-    frozen_root = tmp_path / "frozen"
-    expected = (frozen_root / "machine_registry").resolve()
+    expected = (tmp_path / "machine_registry").resolve()
     unrelated_cwd = tmp_path / "cwd"
     unrelated_cwd.mkdir()
     monkeypatch.chdir(unrelated_cwd)
-    monkeypatch.delenv("LUMINA_MACHINE_REGISTRY_DIR", raising=False)
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "_MEIPASS", str(frozen_root), raising=False)
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(expected))
 
     assert resolve_machine_registry_root() == expected
     assert _machine_registry_root() == expected
     assert _machine_registry_path() == expected / "registry.json"
-    assert Path(_resolve_machine_registry_root()) == expected
+    with pytest.raises(FileNotFoundError) as error:
+        select_metadata_target(
+            slicer="BambuStudio",
+            printer_id="bambu-h2d",
+            nozzle_size="0.4",
+            device_profile_id=None,
+            build_plate_id=None,
+        )
+    assert str(error.value) == f"Machine registry not found: {expected / 'registry.json'}"
 
 
 def test_load_machine_registry_indexes_device_profiles(tmp_path):

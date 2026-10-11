@@ -1304,20 +1304,17 @@ def test_load_export_project_settings_uses_exact_fatcat_native_project(
     assert "inherits" not in template
 
 
-def test_load_export_project_settings_uses_frozen_registry_and_fatcat_source(
+def test_load_export_project_settings_uses_configured_registry_and_fatcat_source(
     tmp_path,
     monkeypatch,
 ) -> None:
-    frozen_root = tmp_path / "frozen"
-    registry_root = frozen_root / "machine_registry"
+    registry_root = tmp_path / "machine_registry"
     _write_registry_fixture(
         registry_root,
     )
     unrelated_cwd = tmp_path / "cwd"
     unrelated_cwd.mkdir()
-    monkeypatch.delenv("LUMINA_MACHINE_REGISTRY_DIR", raising=False)
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "_MEIPASS", str(frozen_root), raising=False)
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
     monkeypatch.chdir(unrelated_cwd)
 
     template = load_export_project_settings(

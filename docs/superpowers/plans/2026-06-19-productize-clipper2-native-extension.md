@@ -7,9 +7,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Move the validated `clipper2_batch` native SVG mesh accelerator out of `.scratch` into a reproducible repository build path used by local profiling, Docker, and desktop packaging.
+**Goal:** Move the validated `clipper2_batch` native SVG mesh accelerator out of `.scratch` into a reproducible repository build path used by local profiling.
 
-**Architecture:** Add a focused `native/clipper2_batch/` source tree with the C++ Python extension, the minimal Clipper2 vendor files needed to build it, and the Boost license. Add `scripts/build_native_extensions.py` using standard-library `sysconfig` plus a POSIX C++ compiler so the extension builds to the repo root as `clipper2_batch<EXT_SUFFIX>`, which `core.vector_native_mesh` can import. Wire Docker and desktop build scripts to build the extension before runtime packaging, while keeping Python capability guard as the quality boundary.
+**Architecture:** Add a focused `native/clipper2_batch/` source tree with the C++ Python extension, the minimal Clipper2 vendor files needed to build it, and the Boost license. Add `scripts/build_native_extensions.py` using standard-library `sysconfig` plus a POSIX C++ compiler so the extension builds to the repo root as `clipper2_batch<EXT_SUFFIX>`, which `core.vector_native_mesh` can import. Keep the Python capability guard as the quality boundary.
 
 **Tech Stack:** Python 3.12+, standard-library build script, C++17, Clipper2 Boost-licensed sources, pytest, existing corpus profiler.
 
@@ -82,26 +82,6 @@ Run:
 
 Expected: PASS.
 
-### Task 4: Wire Product Builds
-
-**Files:**
-- Modify: `Dockerfile`
-- Modify: `scripts/build_desktop.py`
-- Modify: `lumina_studio.spec`
-
-- [x] **Step 1: Build native extension in Docker**
-
-After `COPY . /app/`, run:
-`python scripts/build_native_extensions.py`
-
-- [x] **Step 2: Build native extension before PyInstaller**
-
-In `scripts/build_desktop.py`, run the native build script before `pyinstaller lumina_studio.spec`.
-
-- [x] **Step 3: Include native binary in PyInstaller**
-
-In `lumina_studio.spec`, locate `clipper2_batch<EXT_SUFFIX>` at the repo root and include it in `binaries` when present. Add `clipper2_batch` to hidden imports.
-
 ### Task 5: Build And Verify Product Native Module
 
 **Files:**
@@ -156,7 +136,7 @@ Run:
 `.venv/bin/python -m py_compile scripts/build_native_extensions.py tests/test_build_native_extensions_unit.py core/vector_native_mesh.py`
 
 Run:
-`git diff --check -- native/clipper2_batch scripts/build_native_extensions.py tests/test_build_native_extensions_unit.py Dockerfile scripts/build_desktop.py lumina_studio.spec docs/superpowers/plans/2026-06-19-productize-clipper2-native-extension.md`
+`git diff --check -- native/clipper2_batch scripts/build_native_extensions.py tests/test_build_native_extensions_unit.py Dockerfile docs/superpowers/plans/2026-06-19-productize-clipper2-native-extension.md`
 
 Run common mojibake-marker scan over touched tracked files and check for leftover Lumina processes.
 
@@ -168,4 +148,3 @@ Expected: all checks clean.
 - Importing `clipper2_batch` from the repo root exposes `native_mesh_capabilities()`.
 - Clean SVG corpus stays 17/0/0 without `.scratch` on `PYTHONPATH`.
 - Docker and desktop build paths invoke the native extension build.
-- PyInstaller spec includes the native binary when built.

@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from importlib import metadata
-from importlib.machinery import EXTENSION_SUFFIXES
 import hashlib
 from pathlib import Path
-import sys
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 from packaging.requirements import Requirement
@@ -108,114 +106,6 @@ def test_installed_neroued_exposes_explicit_zero_copy_mesh_view() -> None:
             None,
         )
     )
-
-
-def test_pyinstaller_collects_neroued_extension_and_runtime(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    collected: list[str] = []
-
-    def fake_collect_all(package_name: str):
-        collected.append(package_name)
-        if package_name == "neroued_3mf":
-            return (
-                [("n3mf-data", "neroued_3mf")],
-                [("n3mf-extension", "neroued_3mf")],
-                ["neroued_3mf._neroued_3mf"],
-            )
-        return [], [], []
-
-    hooks_module = ModuleType("PyInstaller.utils.hooks")
-    hooks_module.collect_all = fake_collect_all
-    fatcat_module_path = tmp_path / "site-packages" / f"{FATCAT_MODULE}.py"
-    fatcat_data_root = fatcat_module_path.parent / "fatcat_metadata_data"
-    for relative_path in FATCAT_REQUIRED_DATA_FILES:
-        path = fatcat_data_root / relative_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{}\n", encoding="utf-8")
-    fatcat_runtime = ModuleType(FATCAT_MODULE)
-    fatcat_runtime.__file__ = str(fatcat_module_path)
-    for name in FATCAT_REQUIRED_ENTRY_POINTS:
-        setattr(fatcat_runtime, name, lambda *_args: None)
-    writer_runtime = ModuleType("neroued_3mf")
-    monkeypatch.setitem(sys.modules, FATCAT_MODULE, fatcat_runtime)
-    monkeypatch.setitem(sys.modules, "neroued_3mf", writer_runtime)
-    versions = {
-        FATCAT_DISTRIBUTION: FATCAT_VERSION,
-        FATCAT_WRITER_DISTRIBUTION: FATCAT_WRITER_VERSION,
-    }
-    monkeypatch.setattr(metadata, "version", versions.__getitem__)
-
-    def fake_get_module_file_attribute(module_name: str) -> str:
-        if module_name == FATCAT_MODULE:
-            return str(fatcat_module_path)
-        return str(Path("/tmp") / f"_lumina_svg_core{EXTENSION_SUFFIXES[0]}")
-
-    hooks_module.get_module_file_attribute = fake_get_module_file_attribute
-    utils_module = ModuleType("PyInstaller.utils")
-    pyinstaller_module = ModuleType("PyInstaller")
-    monkeypatch.setitem(sys.modules, "PyInstaller", pyinstaller_module)
-    monkeypatch.setitem(sys.modules, "PyInstaller.utils", utils_module)
-    monkeypatch.setitem(sys.modules, "PyInstaller.utils.hooks", hooks_module)
-    monkeypatch.chdir(ROOT)
-    monkeypatch.delitem(sys.modules, "scripts.fatcat_packaging_contract", raising=False)
-    monkeypatch.delitem(sys.modules, "scripts", raising=False)
-    monkeypatch.setattr(
-        sys,
-        "path",
-        [entry for entry in sys.path if Path(entry or ".").resolve() != ROOT],
-    )
-
-    def fake_analysis(*_args, **kwargs):
-        return SimpleNamespace(
-            pure=[],
-            zipped_data=[],
-            scripts=[],
-            binaries=kwargs.get("binaries", []),
-            datas=kwargs.get("datas", []),
-        )
-
-    namespace = {
-        "SPEC": str(ROOT / "lumina_studio.spec"),
-        "SPECPATH": str(ROOT),
-        "Analysis": fake_analysis,
-        "PYZ": lambda *_args, **_kwargs: object(),
-        "EXE": lambda *_args, **_kwargs: object(),
-    }
-    spec_source = (ROOT / "lumina_studio.spec").read_text(encoding="utf-8")
-    exec(compile(spec_source, str(ROOT / "lumina_studio.spec"), "exec"), namespace)
-
-    assert collected.count("neroued_3mf") == 1
-    assert ("n3mf-data", "neroued_3mf") in namespace["backend_datas"]
-    assert ("n3mf-extension", "neroued_3mf") in namespace["backend_binaries"]
-    assert "neroued_3mf" in namespace["backend_hiddenimports"]
-    assert "neroued_3mf._neroued_3mf" in namespace["backend_hiddenimports"]
-
-
-def test_desktop_fatcat_collection_has_no_optional_warning_fallback() -> None:
-    spec = (ROOT / "lumina_studio.spec").read_text(encoding="utf-8")
-    build_script = (ROOT / "scripts" / "build_desktop.py").read_text(
-        encoding="utf-8",
-    )
-
-    assert "LUMINA_REQUIRE_FATCAT_B4" not in spec
-    assert "WARNING: Fat Cat" not in spec
-    assert "LUMINA_REQUIRE_FATCAT_B4" not in build_script
-    assert "validate_fatcat_packaging_contract" in spec
-    assert "validate_fatcat_packaging_contract" in build_script
-
-
-def test_spec_bootstraps_repo_root_before_shared_contract_import() -> None:
-    spec = (ROOT / "lumina_studio.spec").read_text(encoding="utf-8")
-
-    bootstrap = spec.index("SPEC_ROOT = Path(SPEC).resolve().parent")
-    shared_import = spec.index(
-        "from scripts.fatcat_packaging_contract import validate_fatcat_packaging_contract"
-    )
-
-    assert "sys.path.insert(0, str(SPEC_ROOT))" in spec
-    assert bootstrap < shared_import
 
 
 def test_ci_native_wheel_bootstrap_uses_the_same_pinned_inputs() -> None:

@@ -32,7 +32,6 @@ const IMAGE_PICK_TIMEOUT_MS = 300_000;
 const HANDOFF_TIMEOUT_MS = 120_000;
 const TOKEN_REFILL_PER_SECOND = 30;
 const TOKEN_BURST_CAPACITY = 60;
-const MAX_SESSION_REQUEST_IDS = 10_000;
 
 export interface WorkshopRpcHandlerContext {
   readonly identity: WorkshopModuleIdentity;
@@ -206,7 +205,6 @@ class WorkshopRpcHostImpl implements WorkshopRpcHost {
   private readonly supportedEvents: ReadonlySet<string>;
   private readonly scheduler: WorkshopRpcScheduler;
   private readonly bucket: TokenBucket;
-  private readonly seenRequestIds = new Set<string>();
   private readonly pending = new Map<string, PendingRequest>();
   private activePort: WorkshopMessagePort | null = null;
   private closed = false;
@@ -252,21 +250,13 @@ class WorkshopRpcHostImpl implements WorkshopRpcHost {
         "The Workshop RPC method is not supported.",
       );
     }
-    if (this.seenRequestIds.has(requestId)) {
+    if (this.pending.has(requestId)) {
       return errorResponseEnvelope(
         requestId,
         "rpc-duplicate-request",
-        "The Workshop RPC request ID was already used.",
+        "The Workshop RPC request ID is already pending.",
       );
     }
-    if (this.seenRequestIds.size >= MAX_SESSION_REQUEST_IDS) {
-      return errorResponseEnvelope(
-        requestId,
-        "rpc-session-exhausted",
-        "The Workshop RPC session reached its request limit.",
-      );
-    }
-    this.seenRequestIds.add(requestId);
     if (!this.bucket.consume()) {
       return errorResponseEnvelope(
         requestId,

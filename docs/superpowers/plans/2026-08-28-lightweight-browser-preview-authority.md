@@ -106,7 +106,7 @@ git add frontend/src/stores/converter/store.ts \
 git commit -m "fix(preview): keep lightweight model authoritative"
 ```
 
-Use an English-first, Chinese-second body explaining that Generate changes
+Use a PR description explaining that Generate changes
 download state only.
 
 ### Task 2: Preserve real-time viewer and model-surface interaction

@@ -1163,7 +1163,8 @@ def worker_batch_convert_item(
               GLB path under ``TEMP_DIR``, prefixed by ``artifact_prefix``.
             - ``metadata_sidecar_path`` (str | None): JSON sidecar path
               under ``TEMP_DIR``, prefixed by ``artifact_prefix``.
-              The sidecar validates as ``PerImageMetadataSidecar``.
+              Contains the source filename, XY footprint and material slots
+              consumed by the parent process during merged export.
             - ``xy_bbox_mm`` (tuple[float, float]): ``(width_mm, depth_mm)``
               footprint, scalar copy of ``sidecar.xy_bbox_mm``.
             - ``status_msg`` (str): Status message from the converter.

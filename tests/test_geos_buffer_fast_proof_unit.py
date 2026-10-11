@@ -242,27 +242,6 @@ def test_proof_builder_refuses_broad_rebuild_targets() -> None:
         validate_rebuild_target(ROOT / ".scratch")
 
 
-def test_geos_fast_buffer_docs_cover_local_runtime_and_lgpl_boundary() -> None:
-    from scripts.build_geos_buffer_fast_proof import ROOT
-
-    readme = (
-        ROOT / "native" / "geos_buffer_fast" / "README.md"
-    ).read_text(encoding="utf-8")
-    notice = (
-        ROOT / "native" / "geos_buffer_fast" / "NOTICE.md"
-    ).read_text(encoding="utf-8")
-
-    assert "LGPL-2.1-or-later" in readme
-    assert ".scratch/geos_buffer_fast_proof" in readme
-    assert "must not replace Shapely" in readme
-    assert "LUMINA_GEOS_BUFFER_FAST_MANIFEST" in readme
-    assert "fallback" in readme.lower()
-    assert "desktop" in readme.lower()
-    assert "https://libgeos.org/" in readme
-    assert "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html" in notice
-    assert "geos-3.13.1-buffer-subgraph-index.patch" in notice
-
-
 def test_geos_patch_changes_lookup_cost_only() -> None:
     from scripts.build_geos_buffer_fast_proof import PATCH_PATH
 

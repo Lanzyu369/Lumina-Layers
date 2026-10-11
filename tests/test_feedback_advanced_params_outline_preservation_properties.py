@@ -323,24 +323,10 @@ def client(
     TestClient，将 feedback 路径配置固定到测试目录。
     """
     from api.app import create_app
-    import api.routers.feedback as feedback_router
 
     monkeypatch.setenv("LUMINA_FEEDBACK_DUMP_DIR", str(feedback_root))
     monkeypatch.setenv("LUMINA_FEEDBACK_STARTUP_CLEANUP", "false")
-    # Disable the per-client feedback rate limiter for property-based runs.
-    # Hypothesis dispatches 50 examples through a single TestClient (which
-    # all share ``client_key="testclient"``), and the production default of
-    # 30 / 300s would trip mid-run with ``HTTP 429``. Setting the cap to 0
-    # follows the documented disable contract in
-    # ``api.routers.feedback._enforce_feedback_rate_limit``.
-    # 关闭基于客户端的反馈限流：Hypothesis 在同一个 TestClient（共享
-    # ``client_key="testclient"``）下连发 50 个样本，生产默认 30 / 300s 会
-    # 在中途触发 ``HTTP 429``。把上限设为 0 即按
-    # ``_enforce_feedback_rate_limit`` 的关停约定旁路。
-    monkeypatch.setenv("LUMINA_FEEDBACK_RATE_LIMIT_MAX", "0")
     monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "off")
-    monkeypatch.delenv("LUMINA_FEEDBACK_RATE_LIMIT_WINDOW_S", raising=False)
-    feedback_router._clear_feedback_rate_limit_state()
     return TestClient(create_app())
 
 

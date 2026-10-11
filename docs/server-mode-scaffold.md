@@ -25,8 +25,12 @@ Phase A4-1 ("server-side data plane scaffold") landed because a future
 B2B Elegoo deployment, a multi-user history/favorites feature, or a
 multi-replica cloud rollout *might* need durable cross-restart state.
 None of those are current product priorities — Lumina ships as an
-**offline desktop tool**, both today and through the planned crowdfund
-delivery (`.exe` / `.dmg` / `.AppImage` packages).
+**local desktop tool**.
+
+PostgreSQL dependencies are optional: install them with
+`python -m pip install -r requirements-postgres.txt` after the normal runtime
+setup. Tests use `requirements-dev.txt`; real database integration tests require
+`LUMINA_INTEGRATION_DB_URL` pointing to a disposable database.
 
 The env switch defaults to `LUMINA_BACKEND=memory` (the in-process
 Python dicts that have always powered desktop runs).

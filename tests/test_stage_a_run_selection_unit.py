@@ -34,7 +34,7 @@ from core.single_stage import (
     save_stage_a_material_archive,
 )
 from core.single_stage.kit import SingleStageSpec
-from core.single_stage.materials import (
+from core.single_stage.material_runs import (
     _BIAS_FLAG_BLACK_SUBSTRATE_FLAT,
     _BIAS_FLAG_C0_WHITE_HIGH,
     _BIAS_FLAG_C0_WHITE_LOW,

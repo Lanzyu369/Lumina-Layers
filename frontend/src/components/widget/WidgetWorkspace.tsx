@@ -483,8 +483,7 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
         dragPositionRef.current = { x: newX, y: newY };
 
         const width = containerRef.current?.getBoundingClientRect().width ?? containerWidth;
-        const snap = computeSnap(newX, newX + widgetWidth, width, newY, undefined, widgetWidth);
-        const targetEdge = snap.edge ?? 'left';
+        const targetEdge = computeSnap(newX, newX + widgetWidth, width);
         const contentDropY = toEdgeContentY(newY, targetEdge);
         const insertion = computeInsertion(id, targetEdge, contentDropY);
         const visualLineY = Math.max(0, insertion.lineY - getDockScrollTop(targetEdge));
@@ -528,16 +527,7 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
       const widgetLeft = newX;
       const widgetRight = newX + widgetWidth;
 
-      const snap = computeSnap(
-        widgetLeft,
-        widgetRight,
-        containerRect.width,
-        newY,
-        undefined,
-        widgetWidth
-      );
-
-      const targetEdge = snap.edge!;
+      const targetEdge = computeSnap(widgetLeft, widgetRight, containerRect.width);
       const contentDropY = toEdgeContentY(newY, targetEdge);
       const insertion = computeInsertion(id, targetEdge, contentDropY);
 

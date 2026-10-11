@@ -8,7 +8,6 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-import pytest
 
 
 def _build_minimal_inputs():
@@ -47,8 +46,3 @@ def test_isolated_pixels_cleaned_omits_merged_count_when_all_merged(caplog):
         "merged_count", getattr(record, "isolated_count")
     )
     assert "merged_count" not in record.__dict__
-
-
-def test_isolated_pixels_cleaned_includes_merged_count_when_partial(caplog, monkeypatch):
-    """When only some isolated pixels can be merged, both fields must appear."""
-    pytest.skip("Optional partial-merge test; primary contract covered by the omit test.")

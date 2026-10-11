@@ -115,6 +115,7 @@ from core.material_dynamic_solver import (
 from core.single_stage import record_material_usage
 from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 from utils.lut_manager import LUTManager
+from .generation_params import build_generation_worker_params
 
 
 def _assert_editor_snapshot_current(
@@ -2251,14 +2252,6 @@ def _prepare_recipe_override_worker_inputs(
     return mm_temp_path, recipe_override_masks_path
 
 
-def _serialize_fridge_magnets(request: ConvertGenerateRequest) -> list[dict]:
-    """Serialize fridge-magnet items into plain JSON-compatible dicts.
-    将冰箱贴磁铁槽项序列化为纯 JSON 兼容字典。
-    """
-
-    return [item.model_dump(mode="json") for item in request.fridge_magnets]
-
-
 def _has_requested_fridge_magnet_cavities(request: ConvertGenerateRequest) -> bool:
     """Return whether fridge-magnet cavities are explicitly requested."""
 
@@ -2826,36 +2819,9 @@ async def convert_generate(
 
     # 2b. Collect scalar parameters into a dict for the worker
     params: dict = {
+        **build_generation_worker_params(request),
         "target_width_mm": request.target_width_mm,
-        "spacer_thick": request.spacer_thick,
-        "backing_infill_density_percent": (
-            request.backing_infill_density_percent
-        ),
-        "structure_mode": request.structure_mode.value,
-        "color_mode": request.color_mode.value,
-        "color_layers": request.color_layers,
-        "layer_height_mm": request.layer_height_mm,
-        "model_enable": request.model_enable,
-        "model_only": request.model_only,
-        "model_threshold": request.model_threshold,
-        "model_margin": request.model_margin,
-        "add_loop": request.add_loop,
-        "loop_width": request.loop_width,
-        "loop_length": request.loop_length,
-        "loop_hole": request.loop_hole,
-        "loop_pos": request.loop_pos,
-        "enable_fridge_magnet": request.enable_fridge_magnet,
-        "fridge_magnets": _serialize_fridge_magnets(request),
-        "loop_angle": request.loop_angle,
-        "loop_offset_x": request.loop_offset_x,
-        "loop_offset_y": request.loop_offset_y,
-        "loop_position_preset": request.loop_position_preset,
         "modeling_mode": core_modeling_mode,
-        "quantize_colors": request.quantize_colors,
-        "svg_pixels_per_mm": request.svg_pixels_per_mm,
-        "svg_hole_compensation_enabled": request.svg_hole_compensation_enabled,
-        "svg_hole_max_area_mm2": request.svg_hole_max_area_mm2,
-        "svg_hole_max_width_mm": request.svg_hole_max_width_mm,
         # Dynamic cache reuse already contains every confirmed RGB, recipe,
         # and solver-metadata edit. Replaying its mappings in S03 would solve
         # the same edits twice and require a target map outside S02's final-
@@ -2875,26 +2841,9 @@ async def convert_generate(
             else None
         ),
         "recipe_override_masks_path": recipe_override_masks_path,
-        "separate_backing": request.separate_backing,
-        "enable_relief": request.enable_relief,
         "height_mode": height_mode,
         "heightmap_path": heightmap_path,
-        "color_height_map": request.color_height_map,
-        "heightmap_max_height": request.heightmap_max_height,
-        "enable_cleanup": request.enable_cleanup,
-        "enable_outline": request.enable_outline,
-        "outline_width": request.outline_width,
-        "enable_cloisonne": request.enable_cloisonne,
-        "wire_width_mm": request.wire_width_mm,
-        "wire_height_mm": request.wire_height_mm,
         "free_color_set": free_color_set,
-        "enable_coating": request.enable_coating,
-        "coating_height_mm": request.coating_height_mm,
-        "hue_weight": request.hue_weight,
-        "chroma_gate": request.chroma_gate,
-        "use_lut_constrained": request.use_lut_constrained,
-        "auto_dynamic_range": request.auto_dynamic_range,
-        "high_precision_3d_preview": request.high_precision_3d_preview,
         "matched_rgb_path": matched_rgb_path,
         "original_matched_rgb_path": original_matched_rgb_path,
         "height_identity_rgb_path": height_identity_rgb_path,
@@ -2910,14 +2859,6 @@ async def convert_generate(
         "edit_projection": edit_projection,
         "preview_glb_path": preview_glb_path,
         "vector_parse_clip_cache_path": vector_parse_clip_cache_path,
-        "printer_id": request.printer_id,
-        "slicer": request.slicer,
-        "nozzle_size": request.nozzle_size,
-        "device_profile_id": request.device_profile_id,
-        "build_plate_id": request.build_plate_id,
-        "custom_3mf_template_id": request.custom_3mf_template_id,
-        "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
-        "enable_wipe_tower_auto_placement": request.enable_wipe_tower_auto_placement,
         "material_source": session_material_source,
         "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
         "material_min_layer_count": dynamic_material_settings[1],
@@ -3329,35 +3270,8 @@ def _resolve_large_format_shared_params(
         free_color_set = request.free_color_set
 
     params = {
-        "spacer_thick": request.spacer_thick,
-        "backing_infill_density_percent": (
-            request.backing_infill_density_percent
-        ),
-        "structure_mode": request.structure_mode.value,
-        "color_mode": request.color_mode.value,
-        "color_layers": request.color_layers,
-        "layer_height_mm": request.layer_height_mm,
-        "model_enable": request.model_enable,
-        "model_only": request.model_only,
-        "model_threshold": request.model_threshold,
-        "model_margin": request.model_margin,
-        "add_loop": request.add_loop,
-        "loop_width": request.loop_width,
-        "loop_length": request.loop_length,
-        "loop_hole": request.loop_hole,
-        "loop_pos": request.loop_pos,
-        "enable_fridge_magnet": request.enable_fridge_magnet,
-        "fridge_magnets": _serialize_fridge_magnets(request),
-        "loop_angle": request.loop_angle,
-        "loop_offset_x": request.loop_offset_x,
-        "loop_offset_y": request.loop_offset_y,
-        "loop_position_preset": request.loop_position_preset,
+        **build_generation_worker_params(request),
         "modeling_mode": CoreModelingMode(request.modeling_mode.value),
-        "quantize_colors": request.quantize_colors,
-        "svg_pixels_per_mm": request.svg_pixels_per_mm,
-        "svg_hole_compensation_enabled": request.svg_hole_compensation_enabled,
-        "svg_hole_max_area_mm2": request.svg_hole_max_area_mm2,
-        "svg_hole_max_width_mm": request.svg_hole_max_width_mm,
         "replacement_regions": replacement_regions,
         "recipe_overrides": (
             [
@@ -3368,25 +3282,8 @@ def _resolve_large_format_shared_params(
             else None
         ),
         "recipe_override_masks_path": recipe_override_masks_path,
-        "separate_backing": request.separate_backing,
-        "enable_relief": request.enable_relief,
         "height_mode": request.height_mode or "color",
-        "color_height_map": request.color_height_map,
-        "heightmap_max_height": request.heightmap_max_height,
-        "enable_cleanup": request.enable_cleanup,
-        "enable_outline": request.enable_outline,
-        "outline_width": request.outline_width,
-        "enable_cloisonne": request.enable_cloisonne,
-        "wire_width_mm": request.wire_width_mm,
-        "wire_height_mm": request.wire_height_mm,
         "free_color_set": free_color_set,
-        "enable_coating": request.enable_coating,
-        "coating_height_mm": request.coating_height_mm,
-        "hue_weight": request.hue_weight,
-        "chroma_gate": request.chroma_gate,
-        "use_lut_constrained": request.use_lut_constrained,
-        "auto_dynamic_range": request.auto_dynamic_range,
-        "high_precision_3d_preview": request.high_precision_3d_preview,
         "matched_rgb_path": matched_rgb_path,
         "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
@@ -3397,14 +3294,6 @@ def _resolve_large_format_shared_params(
         "final_material_matrix_authority_mask_path": (
             final_material_matrix_authority_mask_path
         ),
-        "printer_id": request.printer_id,
-        "slicer": request.slicer,
-        "nozzle_size": request.nozzle_size,
-        "device_profile_id": request.device_profile_id,
-        "build_plate_id": request.build_plate_id,
-        "custom_3mf_template_id": request.custom_3mf_template_id,
-        "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
-        "enable_wipe_tower_auto_placement": request.enable_wipe_tower_auto_placement,
         "relief_global_max_height": relief_global_max_height,
         "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
         "material_min_layer_count": dynamic_material_settings[1],

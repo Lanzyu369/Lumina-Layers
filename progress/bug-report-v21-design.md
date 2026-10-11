@@ -1,5 +1,7 @@
 # Bug Report v2.1 — Design Document
 
+> 历史设计记录。当前工单格式与复现流程见 `docs/bug-report-reproducibility.md`；旧版扁平 JSON 落盘器及其专属测试已移除。
+
 > **Status**: Design (not implemented). v2.1 of the post-v2 product roadmap.
 > **Author**: Cascade (planning).
 > **Implementer**: GPT subagent (downstream).
@@ -1035,8 +1037,8 @@ You are implementing Bug Report v2.1 as specified in this document.
 3. All user-visible Chinese must come from `frontend/src/i18n/translations.ts`.
 4. Light + dark theme via Tailwind tokens; no raw `#fff` / `bg-white` / `text-black`.
 5. Canonical INFO budget 14/30 must NOT regress.
-6. Governance trio test count must INCREASE by ≥ 1 (new whitelist entry).
-7. Bilingual Google-style docstrings for all new public Python APIs.
+6. Verify the affected logging event contracts with focused tests.
+7. Document new public API behavior where needed.
 8. New worker entry points (none expected here, but if any) must be top-level + picklable.
 
 **Branch**: cut from `dev-refactor` HEAD; branch name `feat/bug-report-v21`.
