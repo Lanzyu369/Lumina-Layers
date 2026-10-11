@@ -8,96 +8,36 @@
 
 import { describe, it, expect } from 'vitest';
 import * as fc from 'fast-check';
-import { clampPosition, computeSnap, computeStackPositions, resolveWidgetHeight, WIDGET_WIDTH, COLLAPSED_HEIGHT, EXPANDED_HEIGHT, STACK_GAP } from '../utils/widgetUtils';
+import { computeSnap, computeStackPositions, resolveWidgetHeight, WIDGET_WIDTH, COLLAPSED_HEIGHT, EXPANDED_HEIGHT, STACK_GAP } from '../utils/widgetUtils';
 import { useWidgetStore, DEFAULT_LAYOUT } from '../stores/widgetStore';
 import type { WidgetLayoutState, WidgetId } from '../types/widget';
 
 describe('Widget Workspace Property-Based Tests', () => {
-  // Feature: floating-widget-workspace, Property 1: 位置边界约束
-  describe('Property 1: Clamping Invariant', () => {
-    it('clamped position is always within container bounds', () => {
-      // **Validates: Requirements 2.4, 9.1**
+  describe('Nearest edge selection', () => {
+    it('snaps to the left when the widget is in the left half', () => {
       fc.assert(
-        fc.property(
-          fc.record({
-            x: fc.double({ min: -5000, max: 5000, noNaN: true }),
-            y: fc.double({ min: -5000, max: 5000, noNaN: true }),
-          }),
-          fc.integer({ min: 100, max: 5000 }), // containerWidth
-          fc.integer({ min: 100, max: 5000 }), // containerHeight
-          (position, containerWidth, containerHeight) => {
-            const result = clampPosition(position, containerWidth, containerHeight);
-            const maxX = Math.max(0, containerWidth - WIDGET_WIDTH);
-            const maxY = Math.max(0, containerHeight - COLLAPSED_HEIGHT);
-            expect(result.x).toBeGreaterThanOrEqual(0);
-            expect(result.x).toBeLessThanOrEqual(maxX);
-            expect(result.y).toBeGreaterThanOrEqual(0);
-            expect(result.y).toBeLessThanOrEqual(maxY);
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
-  });
-
-  // Feature: floating-widget-workspace, Property 3: 强制边缘吸附正确性
-  describe('Property 3: Forced Snap Detection', () => {
-    it('always snaps to left edge when widget center is in left half', () => {
-      // **Validates: Requirements 3.2, 3.5**
-      fc.assert(
-        fc.property(
-          fc.integer({ min: 500, max: 5000 }),   // containerWidth
-          fc.integer({ min: 0, max: 5000 }),     // widgetTop
-          (containerWidth, widgetTop) => {
-            // Place widget so its center is in the left half
-            const widgetLeft = 0;
-            const widgetRight = widgetLeft + WIDGET_WIDTH;
-            const result = computeSnap(widgetLeft, widgetRight, containerWidth, widgetTop);
-            expect(result.shouldSnap).toBe(true);
-            expect(result.edge).toBe('left');
-            expect(result.snappedPosition.x).toBe(0);
-          }
-        ),
+        fc.property(fc.integer({ min: 500, max: 5000 }), (containerWidth) => {
+          expect(computeSnap(0, WIDGET_WIDTH, containerWidth)).toBe('left');
+        }),
         { numRuns: 100 }
       );
     });
 
-    it('always snaps to right edge when widget center is in right half', () => {
-      // **Validates: Requirements 3.2, 3.5**
+    it('snaps to the right when the widget is in the right half', () => {
       fc.assert(
-        fc.property(
-          fc.integer({ min: 500, max: 5000 }),   // containerWidth
-          fc.integer({ min: 0, max: 5000 }),     // widgetTop
-          (containerWidth, widgetTop) => {
-            // Place widget so its center is in the right half
-            const widgetLeft = containerWidth - WIDGET_WIDTH;
-            const widgetRight = containerWidth;
-            const result = computeSnap(widgetLeft, widgetRight, containerWidth, widgetTop);
-            expect(result.shouldSnap).toBe(true);
-            expect(result.edge).toBe('right');
-            expect(result.snappedPosition.x).toBe(containerWidth - WIDGET_WIDTH);
-          }
-        ),
+        fc.property(fc.integer({ min: 500, max: 5000 }), (containerWidth) => {
+          expect(computeSnap(containerWidth - WIDGET_WIDTH, containerWidth, containerWidth)).toBe('right');
+        }),
         { numRuns: 100 }
       );
     });
 
-    it('always returns shouldSnap true for any position', () => {
-      // **Validates: Requirements 3.2, 3.5**
+    it('snaps an exact midpoint to the left', () => {
       fc.assert(
-        fc.property(
-          fc.integer({ min: -500, max: 5000 }),  // widgetLeft
-          fc.integer({ min: 500, max: 5000 }),   // containerWidth
-          fc.integer({ min: 0, max: 5000 }),     // widgetTop
-          (widgetLeft, containerWidth, widgetTop) => {
-            const widgetRight = widgetLeft + WIDGET_WIDTH;
-            const result = computeSnap(widgetLeft, widgetRight, containerWidth, widgetTop);
-            expect(result.shouldSnap).toBe(true);
-            expect(result.edge).not.toBeNull();
-            // Edge must be 'left' or 'right'
-            expect(['left', 'right']).toContain(result.edge);
-          }
-        ),
+        fc.property(fc.integer({ min: WIDGET_WIDTH, max: 5000 }), (containerWidth) => {
+          const widgetLeft = (containerWidth - WIDGET_WIDTH) / 2;
+          expect(computeSnap(widgetLeft, widgetLeft + WIDGET_WIDTH, containerWidth)).toBe('left');
+        }),
         { numRuns: 100 }
       );
     });

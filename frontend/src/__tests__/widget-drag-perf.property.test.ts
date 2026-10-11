@@ -10,7 +10,6 @@ import * as fc from 'fast-check';
 import {
   computeSnap,
   computeStackPositions,
-  clampPosition,
   WIDGET_WIDTH,
   COLLAPSED_HEIGHT,
   EXPANDED_HEIGHT,
@@ -19,119 +18,56 @@ import {
 import type { WidgetId, WidgetLayoutState } from '../types/widget';
 
 describe('Widget Drag Performance Property-Based Tests', () => {
-  // Feature: slider-drag-performance, Property 1: computeSnap 始终返回有效吸附结果
-  describe('Property 1: computeSnap 始终返回有效吸附结果', () => {
-    /**
-     * **Validates: Requirements 5.1, 5.3**
-     *
-     * For any valid widget left/right edge positions and container width,
-     * computeSnap always returns shouldSnap: true, edge is 'left' or 'right',
-     * and snappedPosition.x is 0 (left snap) or containerWidth - WIDGET_WIDTH (right snap).
-     * For identical inputs, the result is always consistent (pure function).
-     */
-    it('always returns a valid snap result for any position and container width', () => {
-      // **Validates: Requirements 5.1, 5.3**
+  describe('Nearest edge selection', () => {
+    it('always returns a left or right edge, including drag overshoot', () => {
       fc.assert(
         fc.property(
-          // widgetLeft: any reasonable position (can be negative from drag overshoot)
           fc.double({ min: -2000, max: 5000, noNaN: true, noDefaultInfinity: true }),
-          // containerWidth: must be positive and at least WIDGET_WIDTH for meaningful layout
           fc.integer({ min: WIDGET_WIDTH, max: 5000 }),
-          // widgetTop: any reasonable y position
-          fc.double({ min: -1000, max: 5000, noNaN: true, noDefaultInfinity: true }),
-          (widgetLeft, containerWidth, widgetTop) => {
-            const widgetRight = widgetLeft + WIDGET_WIDTH;
-            const result = computeSnap(widgetLeft, widgetRight, containerWidth, widgetTop);
-
-            // shouldSnap is always true — widgets are never free-floating
-            expect(result.shouldSnap).toBe(true);
-
-            // edge is always 'left' or 'right'
-            expect(result.edge).not.toBeNull();
-            expect(['left', 'right']).toContain(result.edge);
-
-            // snappedPosition.x is exactly 0 (left) or containerWidth - WIDGET_WIDTH (right)
-            if (result.edge === 'left') {
-              expect(result.snappedPosition.x).toBe(0);
-            } else {
-              expect(result.snappedPosition.x).toBe(containerWidth - WIDGET_WIDTH);
-            }
+          (widgetLeft, containerWidth) => {
+            expect(['left', 'right']).toContain(computeSnap(widgetLeft, widgetLeft + WIDGET_WIDTH, containerWidth));
           }
         ),
         { numRuns: 200, verbose: true }
       );
     });
 
-    it('is a pure function — identical inputs always produce identical outputs', () => {
-      // **Validates: Requirements 5.1, 5.3**
+    it('returns the same edge for identical inputs', () => {
       fc.assert(
         fc.property(
           fc.double({ min: -2000, max: 5000, noNaN: true, noDefaultInfinity: true }),
           fc.integer({ min: WIDGET_WIDTH, max: 5000 }),
-          fc.double({ min: -1000, max: 5000, noNaN: true, noDefaultInfinity: true }),
-          (widgetLeft, containerWidth, widgetTop) => {
+          (widgetLeft, containerWidth) => {
             const widgetRight = widgetLeft + WIDGET_WIDTH;
-
-            const result1 = computeSnap(widgetLeft, widgetRight, containerWidth, widgetTop);
-            const result2 = computeSnap(widgetLeft, widgetRight, containerWidth, widgetTop);
-
-            expect(result1).toEqual(result2);
+            expect(computeSnap(widgetLeft, widgetRight, containerWidth)).toBe(computeSnap(widgetLeft, widgetRight, containerWidth));
           }
         ),
         { numRuns: 100 }
       );
     });
 
-    it('snaps to left when widget center is in the left half of the container', () => {
-      // **Validates: Requirements 5.1, 5.3**
+    it('snaps to the left when the widget center is in the left half', () => {
       fc.assert(
         fc.property(
           fc.integer({ min: WIDGET_WIDTH, max: 5000 }),
-          fc.double({ min: 0, max: 5000, noNaN: true, noDefaultInfinity: true }),
-          (containerWidth, widgetTop) => {
-            // Place widget so center is strictly in the left half
-            // center = widgetLeft + WIDGET_WIDTH / 2 < containerWidth / 2
-            // => widgetLeft < containerWidth / 2 - WIDGET_WIDTH / 2
-            const maxLeft = (containerWidth - WIDGET_WIDTH) / 2 - 1;
-            if (maxLeft < -2000) return; // skip degenerate cases
-
-            const widgetLeft = fc.sample(
-              fc.double({ min: -2000, max: maxLeft, noNaN: true, noDefaultInfinity: true }),
-              1
-            )[0];
-            const widgetRight = widgetLeft + WIDGET_WIDTH;
-
-            const result = computeSnap(widgetLeft, widgetRight, containerWidth, widgetTop);
-            expect(result.edge).toBe('left');
-            expect(result.snappedPosition.x).toBe(0);
+          fc.double({ min: 1, max: 2000, noNaN: true, noDefaultInfinity: true }),
+          (containerWidth, offset) => {
+            const widgetLeft = (containerWidth - WIDGET_WIDTH) / 2 - offset;
+            expect(computeSnap(widgetLeft, widgetLeft + WIDGET_WIDTH, containerWidth)).toBe('left');
           }
         ),
         { numRuns: 100 }
       );
     });
 
-    it('snaps to right when widget center is in the right half of the container', () => {
-      // **Validates: Requirements 5.1, 5.3**
+    it('snaps to the right when the widget center is in the right half', () => {
       fc.assert(
         fc.property(
           fc.integer({ min: WIDGET_WIDTH, max: 5000 }),
-          fc.double({ min: 0, max: 5000, noNaN: true, noDefaultInfinity: true }),
-          (containerWidth, widgetTop) => {
-            // Place widget so center is strictly in the right half
-            // center = widgetLeft + WIDGET_WIDTH / 2 > containerWidth / 2
-            // => widgetLeft > containerWidth / 2 - WIDGET_WIDTH / 2
-            const minLeft = (containerWidth - WIDGET_WIDTH) / 2 + 1;
-            if (minLeft > 5000) return; // skip degenerate cases
-
-            const widgetLeft = fc.sample(
-              fc.double({ min: minLeft, max: 5000, noNaN: true, noDefaultInfinity: true }),
-              1
-            )[0];
-            const widgetRight = widgetLeft + WIDGET_WIDTH;
-
-            const result = computeSnap(widgetLeft, widgetRight, containerWidth, widgetTop);
-            expect(result.edge).toBe('right');
-            expect(result.snappedPosition.x).toBe(containerWidth - WIDGET_WIDTH);
+          fc.double({ min: 1, max: 2000, noNaN: true, noDefaultInfinity: true }),
+          (containerWidth, offset) => {
+            const widgetLeft = (containerWidth - WIDGET_WIDTH) / 2 + offset;
+            expect(computeSnap(widgetLeft, widgetLeft + WIDGET_WIDTH, containerWidth)).toBe('right');
           }
         ),
         { numRuns: 100 }
@@ -301,128 +237,4 @@ describe('Widget Drag Performance Property-Based Tests', () => {
     });
   });
 
-  // Feature: slider-drag-performance, Property 3: clampPosition 保持位置在容器边界内
-  describe('Property 3: clampPosition 保持位置在容器边界内', () => {
-    /**
-     * **Validates: Requirements 5.5**
-     *
-     * For any position {x, y} and positive container dimensions {containerWidth, containerHeight},
-     * clampPosition returns a position satisfying:
-     *   0 <= result.x <= max(0, containerWidth - widgetWidth)
-     *   0 <= result.y <= max(0, containerHeight - headerHeight)
-     */
-
-    // Smart generators: positions can be negative or very large (drag overshoot scenarios)
-    const arbPosition = fc.record({
-      x: fc.double({ min: -5000, max: 10000, noNaN: true, noDefaultInfinity: true }),
-      y: fc.double({ min: -5000, max: 10000, noNaN: true, noDefaultInfinity: true }),
-    });
-
-    // Container dimensions must be positive
-    const arbContainerWidth = fc.integer({ min: 1, max: 5000 });
-    const arbContainerHeight = fc.integer({ min: 1, max: 5000 });
-
-    // Widget dimensions: positive, can be larger than container (edge case)
-    const arbWidgetWidth = fc.integer({ min: 1, max: 1000 });
-    const arbHeaderHeight = fc.integer({ min: 1, max: 200 });
-
-    it('result is always within container bounds using default dimensions', () => {
-      // **Validates: Requirements 5.5**
-      fc.assert(
-        fc.property(
-          arbPosition,
-          arbContainerWidth,
-          arbContainerHeight,
-          (position, containerWidth, containerHeight) => {
-            const result = clampPosition(position, containerWidth, containerHeight);
-
-            const maxX = Math.max(0, containerWidth - WIDGET_WIDTH);
-            const maxY = Math.max(0, containerHeight - COLLAPSED_HEIGHT);
-
-            expect(result.x).toBeGreaterThanOrEqual(0);
-            expect(result.x).toBeLessThanOrEqual(maxX);
-            expect(result.y).toBeGreaterThanOrEqual(0);
-            expect(result.y).toBeLessThanOrEqual(maxY);
-          }
-        ),
-        { numRuns: 200, verbose: true }
-      );
-    });
-
-    it('result is always within container bounds using custom dimensions', () => {
-      // **Validates: Requirements 5.5**
-      fc.assert(
-        fc.property(
-          arbPosition,
-          arbContainerWidth,
-          arbContainerHeight,
-          arbWidgetWidth,
-          arbHeaderHeight,
-          (position, containerWidth, containerHeight, widgetWidth, headerHeight) => {
-            const result = clampPosition(position, containerWidth, containerHeight, widgetWidth, headerHeight);
-
-            const maxX = Math.max(0, containerWidth - widgetWidth);
-            const maxY = Math.max(0, containerHeight - headerHeight);
-
-            expect(result.x).toBeGreaterThanOrEqual(0);
-            expect(result.x).toBeLessThanOrEqual(maxX);
-            expect(result.y).toBeGreaterThanOrEqual(0);
-            expect(result.y).toBeLessThanOrEqual(maxY);
-          }
-        ),
-        { numRuns: 200, verbose: true }
-      );
-    });
-
-    it('is a pure function — identical inputs always produce identical outputs', () => {
-      // **Validates: Requirements 5.5**
-      fc.assert(
-        fc.property(
-          arbPosition,
-          arbContainerWidth,
-          arbContainerHeight,
-          arbWidgetWidth,
-          arbHeaderHeight,
-          (position, containerWidth, containerHeight, widgetWidth, headerHeight) => {
-            const result1 = clampPosition(position, containerWidth, containerHeight, widgetWidth, headerHeight);
-            const result2 = clampPosition(position, containerWidth, containerHeight, widgetWidth, headerHeight);
-
-            expect(result1).toEqual(result2);
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
-
-    it('returns position unchanged when already within bounds', () => {
-      // **Validates: Requirements 5.5**
-      fc.assert(
-        fc.property(
-          arbContainerWidth,
-          arbContainerHeight,
-          arbWidgetWidth,
-          arbHeaderHeight,
-          (containerWidth, containerHeight, widgetWidth, headerHeight) => {
-            const maxX = Math.max(0, containerWidth - widgetWidth);
-            const maxY = Math.max(0, containerHeight - headerHeight);
-
-            // Skip if no valid interior range exists
-            if (maxX <= 0 || maxY <= 0) return;
-
-            // Generate a position strictly within bounds
-            const pos = {
-              x: fc.sample(fc.double({ min: 0, max: maxX, noNaN: true, noDefaultInfinity: true }), 1)[0],
-              y: fc.sample(fc.double({ min: 0, max: maxY, noNaN: true, noDefaultInfinity: true }), 1)[0],
-            };
-
-            const result = clampPosition(pos, containerWidth, containerHeight, widgetWidth, headerHeight);
-
-            expect(result.x).toBe(pos.x);
-            expect(result.y).toBe(pos.y);
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
-  });
 });

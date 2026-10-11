@@ -1,44 +1,14 @@
-"""Guardrail tests: Beijing time must NOT leak into structured server logs.
-
-确保 ``api.structured_logging`` 继续使用 UTC ISO 时间戳，不被 feedback 工单的
-北京时间工具污染。日志治理工具（``scripts/log_quality_check.py``、
-``scripts/audit_logs.py``、``progress/log_audit_*_reviewer.json`` 冻结基线）
-依赖 UTC 时间戳；把北京时间写进结构化日志会让这些工具全部失效。
-
-The two tests below encode two hard invariants:
-
-1. ``api.structured_logging`` must not import anything from
-   ``api.feedback_time`` — feedback-side Beijing-time helpers stay scoped to
-   ticket id generation and ``received_at_cst`` fields.
-2. A real log record emitted through the public
-   ``api.structured_logging.get_logger`` API must serialise its ``timestamp``
-   field with the UTC ``+00:00`` offset, never ``+08:00``.
-"""
+"""Structured server log timestamps remain UTC regardless of ticket time zones."""
 
 from __future__ import annotations
 
-import inspect
 import io
 import json
 import logging
 
-import api.structured_logging as structured_logging
 from api.structured_logging import _JsonFormatter, get_logger
 
 
-def test_structured_logging_does_not_import_feedback_time() -> None:
-    """``api.structured_logging`` source must contain no ``feedback_time`` reference.
-
-    Test A from the guardrail plan. We deliberately check the raw source string
-    rather than ``sys.modules`` because a contributor could later add a lazy /
-    function-scoped import; catching it textually is both simpler and stricter.
-    """
-    src = inspect.getsource(structured_logging)
-    assert "feedback_time" not in src, (
-        "api/structured_logging.py must not reference api.feedback_time; "
-        "Beijing-time helpers are scoped to feedback tickets only. See "
-        "tests/test_feedback_time_guardrail_unit.py docstring for rationale."
-    )
 
 
 def test_structured_log_timestamp_is_utc_iso_not_beijing() -> None:

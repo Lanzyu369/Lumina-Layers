@@ -1,7 +1,7 @@
 """Self-driven log quality checks for Lumina Studio workflows.
 
 Runs a small API workflow, audits the captured structured log file, and
-emits human-readable plus machine-readable governance reports.
+emits human-readable plus machine-readable log reports.
 
 Ad-hoc workflow steps (not in the default canonical workflow):
   - replace_bw / replace_8color / replace_5color_ext: per-mode replace regression.
@@ -122,8 +122,6 @@ WORKFLOW_ORDER = [
     "confirm_palette",
 ]
 WORKFLOW_STEPS = set(WORKFLOW_ORDER)
-DEFAULT_MAX_INFO = 30
-DEFAULT_MAX_INFO_PER_ENDPOINT = 8
 DEFAULT_PORT = 18000
 DEFAULT_TIMEOUT_SECONDS = 120.0
 DEFAULT_SERVER_START_TIMEOUT_SECONDS = 30.0
@@ -179,7 +177,6 @@ MOCK_COLOR_CONFIGS = {
 
 _CATCH_ALL_PATTERN = re.compile(r"^(.*_log|status_.*|request_.*)$")
 _ALLOWED_LOG_EVENTS = {"client_log", "log_file_configured"}
-_INFO_BUDGET_EXCLUDED_EVENTS = {"worker_pool_shutdown"}
 _ANSI_PATTERN = re.compile(r"(?:\x1b|\\u001b)\[")
 _BRACKET_TAG_PATTERN = re.compile(r"^\s*\[[A-Z][A-Z0-9_]*\]")
 _WARNING_ERROR_ACTIONABLE_FIELDS = frozenset(
@@ -205,8 +202,8 @@ class QualityCheckError(RuntimeError):
 
 @dataclass(frozen=True)
 class CheckResult:
-    """One governance threshold result.
-    单个治理阈值检查结果。
+    """One log or workflow check result.
+    单个日志或工作流检查结果。
     """
 
     name: str
@@ -288,7 +285,6 @@ class QualityReport:
     checks: list[CheckResult]
     workflow_checks: list[CheckResult]
     overall_passed: bool
-    baseline_diff: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable representation.
@@ -323,23 +319,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--output",
         type=Path,
         help="Write JSON report to this path.",
-    )
-    parser.add_argument(
-        "--baseline",
-        type=Path,
-        help="Compare the generated report against a baseline JSON report.",
-    )
-    parser.add_argument(
-        "--max-info",
-        type=int,
-        default=DEFAULT_MAX_INFO,
-        help="Maximum INFO lines allowed across the whole workflow.",
-    )
-    parser.add_argument(
-        "--max-info-per-endpoint",
-        type=int,
-        default=DEFAULT_MAX_INFO_PER_ENDPOINT,
-        help="Maximum INFO lines allowed for one request-scoped endpoint.",
     )
     parser.add_argument(
         "--port",
@@ -757,26 +736,20 @@ def build_quality_report(
     workflow: list[str],
     log_path: Path,
     audit_result: Mapping[str, Any],
-    max_info: int,
-    max_info_per_endpoint: int,
-    baseline_path: Path | None = None,
 ) -> QualityReport:
-    """Combine audit output with governance metrics and threshold checks.
+    """Combine captured logs with format, diagnostic, and workflow checks.
 
     Args:
         mode: Execution mode. 执行模式。
         workflow: Workflow steps. 业务流步骤。
         log_path: Captured log path. 捕获日志路径。
         audit_result: Raw ``audit_files`` result. 原始审计结果。
-        max_info: Whole-workflow INFO budget. 全流程 INFO 预算。
-        max_info_per_endpoint: Per-request INFO budget. 单请求 INFO 预算。
-        baseline_path: Optional baseline path. 可选 baseline 路径。
 
     Returns:
         QualityReport: Scored report. 评分报表。
     """
 
-    metrics = _scan_log_file_for_governance_metrics(log_path)
+    metrics = _scan_log_metrics(log_path)
     info_by_endpoint = _count_info_lines_by_request_id(log_path)
     max_endpoint_info = max(info_by_endpoint.values(), default=0)
     event_counts = {
@@ -784,18 +757,6 @@ def build_quality_report(
         for key, value in dict(audit_result.get("event_counts", {})).items()
     }
     checks = [
-        CheckResult.evaluate(
-            name="info_lines_within_budget",
-            actual=metrics["info_lines"],
-            operator="<=",
-            threshold=max_info,
-        ),
-        CheckResult.evaluate(
-            name="info_per_endpoint_within_budget",
-            actual=max_endpoint_info,
-            operator="<=",
-            threshold=max_info_per_endpoint,
-        ),
         CheckResult.evaluate(
             name="no_request_completed_catchall",
             actual=int(audit_result.get("request_completed_count", 0)),
@@ -873,11 +834,7 @@ def build_quality_report(
         workflow_checks=workflow_checks,
         overall_passed=all(check.passed for check in checks)
         and all(check.passed for check in workflow_checks),
-        baseline_diff=(
-            _build_baseline_diff(event_counts, report_total_lines=int(audit_result.get("total_lines", 0)), baseline_path=baseline_path)
-            if baseline_path is not None
-            else None
-        ),
+
     )
     return report
 
@@ -1082,9 +1039,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             workflow=workflow,
             log_path=log_path,
             audit_result=audit_result,
-            max_info=args.max_info,
-            max_info_per_endpoint=args.max_info_per_endpoint,
-            baseline_path=args.baseline,
         )
         write_report(report, output_path)
         sys.stdout.write(_format_stdout_summary(report, output_path))
@@ -1385,7 +1339,7 @@ def _mock_assemble_puzzle_3mf(*, output_path: str, **_kwargs: Any) -> str:
 
     Writes a placeholder byte payload to ``output_path`` so the puzzle endpoint
     success path can complete. The endpoint emits its canary log and registers
-    the file via FileRegistry; downstream consumers (governance audit, INFO
+    the file via FileRegistry; downstream consumers (log analysis, INFO
     counters) only inspect the response payload, never the file content.
     """
     from pathlib import Path as _Path
@@ -1620,7 +1574,7 @@ def _mock_export_gradient_card_materials(
     *_args: Any,
     **kwargs: Any,
 ) -> Any:
-    from core.single_stage.materials import MaterialArchiveExportResult
+    from core.single_stage.material_library import MaterialArchiveExportResult
 
     archive_path = _make_temp_path(".zip", created_paths)
     archive_path.write_bytes(b"stub material export")
@@ -1637,7 +1591,7 @@ def _mock_import_gradient_card_materials(
     *_args: Any,
     **_kwargs: Any,
 ) -> Any:
-    from core.single_stage.materials import MaterialArchiveImportResult
+    from core.single_stage.material_library import MaterialArchiveImportResult
 
     archive_path = _make_temp_path(".json", created_paths)
     params_path = _make_temp_path(".json", created_paths)
@@ -4645,7 +4599,7 @@ def _kill_windows_process_tree(pid: int) -> None:
     )
 
 
-def _scan_log_file_for_governance_metrics(log_path: Path) -> dict[str, int]:
+def _scan_log_metrics(log_path: Path) -> dict[str, int]:
     info_lines = 0
     warning_lines = 0
     error_lines = 0
@@ -4674,11 +4628,7 @@ def _scan_log_file_for_governance_metrics(log_path: Path) -> dict[str, int]:
                 event = payload_event
             message = payload.get("message", "")
 
-            excluded_from_info_budget = (
-                isinstance(payload_event, str)
-                and payload_event in _INFO_BUDGET_EXCLUDED_EVENTS
-            )
-            if level == "INFO" and not excluded_from_info_budget:
+            if level == "INFO":
                 info_lines += 1
             elif level == "WARNING":
                 warning_lines += 1
@@ -4748,52 +4698,6 @@ def _count_info_lines_by_request_id(log_path: Path) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def _build_baseline_diff(
-    current_events: Mapping[str, int],
-    *,
-    report_total_lines: int,
-    baseline_path: Path | None,
-) -> dict[str, Any]:
-    if baseline_path is None:
-        return {}
-    resolved = (REPO_ROOT / baseline_path).resolve() if not baseline_path.is_absolute() else baseline_path
-    try:
-        baseline = json.loads(resolved.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise QualityCheckError(f"Baseline report cannot be read: {resolved}: {exc}") from exc
-    old_events = {
-        str(key): int(value)
-        for key, value in dict(baseline.get("event_counts", {})).items()
-    }
-    old_total_lines = int(baseline.get("total_lines", 0))
-    added = {
-        event: count
-        for event, count in current_events.items()
-        if event not in old_events
-    }
-    removed = {
-        event: count
-        for event, count in old_events.items()
-        if event not in current_events
-    }
-    changed = {
-        event: {
-            "before": old_events[event],
-            "after": current_events[event],
-            "delta": current_events[event] - old_events[event],
-        }
-        for event in current_events.keys() & old_events.keys()
-        if current_events[event] != old_events[event]
-    }
-    return {
-        "baseline_path": str(resolved),
-        "new_events": dict(sorted(added.items())),
-        "removed_events": dict(sorted(removed.items())),
-        "changed_events": dict(sorted(changed.items())),
-        "line_count": report_total_lines,
-        "baseline_line_count": old_total_lines,
-        "line_count_delta": report_total_lines - old_total_lines,
-    }
 
 
 def _parse_workflow(raw_workflow: str) -> list[str]:
@@ -4830,16 +4734,25 @@ def _default_output_path(mode: Mode) -> Path:
 
 
 def _format_stdout_summary(report: QualityReport, output_path: Path) -> str:
+    log_path = Path(report.log_path)
+    display_log_path = (
+        log_path.relative_to(REPO_ROOT)
+        if log_path.is_relative_to(REPO_ROOT) else log_path
+    )
+    display_output_path = (
+        output_path.relative_to(REPO_ROOT)
+        if output_path.is_relative_to(REPO_ROOT) else output_path
+    )
     lines = [
         (
             "=== Lumina Log Quality Check "
             f"(mode={report.mode}, workflow={','.join(report.workflow)}) ==="
         ),
         (
-            f"Log: {Path(report.log_path).relative_to(REPO_ROOT)} "
+            f"Log: {display_log_path} "
             f"({_format_bytes(report.total_bytes)}, {report.total_lines} lines)"
         ),
-        f"JSON: {output_path.relative_to(REPO_ROOT)}",
+        f"JSON: {display_output_path}",
         "",
         "LEVEL DISTRIBUTION",
         f"  INFO    : {report.info_lines}",
@@ -4863,7 +4776,7 @@ def _format_stdout_summary(report: QualityReport, output_path: Path) -> str:
     lines.extend(
         [
             "",
-            "GOVERNANCE CHECKS",
+            "LOG CHECKS",
         ]
     )
     for check in report.checks:
@@ -4885,41 +4798,9 @@ def _format_stdout_summary(report: QualityReport, output_path: Path) -> str:
     lines.append("")
     lines.append(f"RESULT: {'PASS' if report.overall_passed else 'FAIL'}")
 
-    if report.baseline_diff:
-        lines.extend(["", _format_baseline_diff(report)])
-
     return "\n".join(lines) + "\n"
 
 
-def _format_baseline_diff(report: QualityReport) -> str:
-    diff = report.baseline_diff or {}
-    baseline_path = str(diff.get("baseline_path", "baseline"))
-    lines = [f"=== DIFF vs {baseline_path} ==="]
-    new_events = diff.get("new_events") or {}
-    removed_events = diff.get("removed_events") or {}
-
-    lines.append("+ NEW EVENTS:")
-    if new_events:
-        for event, count in new_events.items():
-            lines.append(f"  {event:<32} ({count})")
-    else:
-        lines.append("  none")
-
-    lines.append("- REMOVED EVENTS:")
-    if removed_events:
-        for event, count in removed_events.items():
-            lines.append(f"  {event:<32} ({count})")
-    else:
-        lines.append("  none")
-
-    lines.append(
-        "+ LINE COUNT: "
-        f"{diff.get('line_count', 0)} "
-        f"(was {diff.get('baseline_line_count', 0)}, "
-        f"delta {diff.get('line_count_delta', 0):+})"
-    )
-    lines.append(f"RESULT: {'NO REGRESSION' if report.overall_passed else 'CHECK FAILED'}")
-    return "\n".join(lines)
 
 
 def _format_bytes(size: int) -> str:

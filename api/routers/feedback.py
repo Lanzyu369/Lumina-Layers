@@ -10,8 +10,6 @@ import asyncio
 import json
 import os
 import re
-import time
-from collections import deque
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,9 +41,6 @@ log = get_logger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_DEFAULT_RATE_LIMIT_MAX = 30
-_DEFAULT_RATE_LIMIT_WINDOW_S = 300.0
-_RATE_LIMIT_HITS: dict[str, deque[float]] = {}
 
 
 class BugReportSessionIds(BaseModel):
@@ -199,7 +194,6 @@ class BugReportContext(BaseModel):
             if clean and clean not in normalized:
                 normalized.append(clean)
         return normalized
-
 
 
 class BugReportRequest(BaseModel):
@@ -520,70 +514,6 @@ def _preferred_session_id(context: BugReportContext) -> str | None:
     return context.active_session_ids.converter or context.active_session_ids.single_stage
 
 
-def _clear_feedback_rate_limit_state() -> None:
-    _RATE_LIMIT_HITS.clear()
-
-
-def _feedback_rate_limit_config() -> tuple[int, float]:
-    try:
-        max_requests = int(
-            os.environ.get("LUMINA_FEEDBACK_RATE_LIMIT_MAX", str(_DEFAULT_RATE_LIMIT_MAX))
-        )
-    except ValueError:
-        max_requests = _DEFAULT_RATE_LIMIT_MAX
-    try:
-        window_s = float(
-            os.environ.get(
-                "LUMINA_FEEDBACK_RATE_LIMIT_WINDOW_S",
-                str(_DEFAULT_RATE_LIMIT_WINDOW_S),
-            )
-        )
-    except ValueError:
-        window_s = _DEFAULT_RATE_LIMIT_WINDOW_S
-    return max_requests, window_s
-
-
-def _feedback_client_key(request: Request) -> str:
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
-
-
-def _enforce_feedback_rate_limit(request: Request) -> None:
-    max_requests, window_s = _feedback_rate_limit_config()
-    if max_requests <= 0 or window_s <= 0:
-        return
-
-    now = time.monotonic()
-    client_key = _feedback_client_key(request)
-    hits = _RATE_LIMIT_HITS.setdefault(client_key, deque())
-    cutoff = now - window_s
-    while hits and hits[0] <= cutoff:
-        hits.popleft()
-
-    if len(hits) >= max_requests:
-        retry_after = max(1, int(window_s - (now - hits[0])))
-        log.warning(
-            "Bug report rate limit exceeded.",
-            extra={
-                "event": "feedback_bug_report_rate_limited",
-                "error_type": "RateLimitExceeded",
-                "error_message": "Too many bug reports submitted by one client.",
-                "client_key": client_key,
-                "max_requests": max_requests,
-                "window_s": window_s,
-                "retry_after_s": retry_after,
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many bug reports. Please wait and retry.",
-            headers={"Retry-After": str(retry_after)},
-        )
-
-    hits.append(now)
-
-
 def _resolve_feedback_root() -> Path:
     """Return the on-disk root for ticket directories.
 
@@ -793,7 +723,6 @@ async def submit_bug_report(
     """
 
     request, original_upload, original_omission_reason = submission
-    _enforce_feedback_rate_limit(http_request)
 
     # Validate screenshot data URL format early — reject before creating ticket.
     # 提前校验截图格式，非法时直接 400，不创建工单。
@@ -1133,7 +1062,6 @@ async def resubmit_bug_report(ticket_id: str, http_request: Request) -> BugRepor
     重新上传之前上传失败的工单。
     """
 
-    _enforce_feedback_rate_limit(http_request)
     ticket_dir, _ = _load_ticket_for_status(ticket_id)
     if feedback_server_url() is None:
         raise HTTPException(

@@ -7,7 +7,6 @@ import copy
 from dataclasses import dataclass
 import os
 import re
-import sys
 import json
 import shutil
 import glob
@@ -180,28 +179,8 @@ class _NativeBrandIndexItem:
 class LUTManager:
     """LUT preset manager"""
     
-    # LUT preset folder path - handle both dev and frozen modes
-    if getattr(sys, 'frozen', False):
-        # Running as compiled executable
-        # Check multiple possible locations
-        exe_dir = os.path.dirname(sys.executable)
-        
-        # Try exe directory first (where we copy it in the spec file)
-        if os.path.exists(os.path.join(exe_dir, "lut-preset")):
-            LUT_PRESET_DIR = os.path.join(exe_dir, "lut-preset")
-        # Then try _internal directory (fallback)
-        elif os.path.exists(os.path.join(exe_dir, "_internal", "lut-preset")):
-            LUT_PRESET_DIR = os.path.join(exe_dir, "_internal", "lut-preset")
-        # Finally try _MEIPASS (bundled resources)
-        elif hasattr(sys, '_MEIPASS') and os.path.exists(os.path.join(sys._MEIPASS, "lut-preset")):
-            LUT_PRESET_DIR = os.path.join(sys._MEIPASS, "lut-preset")
-        else:
-            # Fallback to exe directory (will be created if needed)
-            LUT_PRESET_DIR = os.path.join(exe_dir, "lut-preset")
-    else:
-        # Running as script
-        _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        LUT_PRESET_DIR = os.path.join(_BASE_DIR, "lut-preset")
+    _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    LUT_PRESET_DIR = os.path.join(_BASE_DIR, "lut-preset")
 
     @classmethod
     def _resolve_mutable_lut_dir(
@@ -1493,7 +1472,7 @@ class LUTManager:
         Save user-uploaded LUT file to preset folder
         
         Args:
-            uploaded_file: Gradio uploaded file object
+            uploaded_file: Object with the source file path in its .name attribute
             custom_name: Custom filename (optional)
         
         Returns:

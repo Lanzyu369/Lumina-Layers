@@ -218,7 +218,7 @@ Give the reviewer `BASE_SHA=cb736342e2d1aed382b98e45e36e44ac1287a3eb`, the final
 
 - [x] **Step 3: Commit and publish the isolated branch**
 
-Use Conventional Commits with English then Chinese rationale in the commit body. Push `MOVIBALE/fix/native-vector-preview-asset-reuse` normally and open a PR against `dev-refactor`; do not merge and do not force-push.
+Use Conventional Commits with the rationale in the commit body. Push `MOVIBALE/fix/native-vector-preview-asset-reuse` normally and open a PR against `dev-refactor`; do not merge and do not force-push.
 
 - [x] **Step 4: Report exact delivery evidence**
 

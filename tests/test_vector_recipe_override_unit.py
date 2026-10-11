@@ -148,7 +148,8 @@ class TestApplyRecipeOverridesToAnalysis:
         # if layers were added — here target == num_layers so no padding).
         assert analysis.matched_shapes[1]["recipe"] == [1, 1, 1]
 
-    def test_added_layers_extend_num_layers_and_pad_non_overrides(self):
+    @pytest.mark.parametrize("base_channel_idx", [0, 2])
+    def test_added_layers_extend_num_layers_and_pad_non_overrides(self, base_channel_idx):
         """target_layers > num_layers must extend every shape's recipe."""
         shape_inside = {"geometry": box(1, 1, 4, 4), "recipe": [2, 2, 2]}
         shape_outside = {"geometry": box(6, 6, 9, 9), "recipe": [1, 1, 1]}
@@ -171,7 +172,7 @@ class TestApplyRecipeOverridesToAnalysis:
             recipe_overrides=overrides,
             region_masks={"region-A": mask},
             target_layers=5,
-            base_channel_idx=0,
+            base_channel_idx=base_channel_idx,
         )
 
         assert analysis.num_layers == 5
@@ -180,7 +181,7 @@ class TestApplyRecipeOverridesToAnalysis:
         # Non-override shape: original LUT recipe padded at the bottom
         # (Top2Bottom tail) with the base channel so the backing slab stays
         # continuous across the added depth.
-        assert analysis.matched_shapes[1]["recipe"] == [1, 1, 1, 0, 0]
+        assert analysis.matched_shapes[1]["recipe"] == [1, 1, 1, base_channel_idx, base_channel_idx]
 
     def test_virtual_materials_extend_slot_names_and_preview_colors(self):
         """User-declared non-native primaries must land in the palette tail."""

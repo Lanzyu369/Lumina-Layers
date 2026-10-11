@@ -30,14 +30,6 @@ describe('Palette-LUT Merge Property-Based Tests', () => {
     });
   });
 
-  // The legacy `colorWorkstationCollapsed` field and bottom-drawer ColorWorkstation
-  // component have been removed; the color editor entry now lives in the top-level
-  // secondary tab row. Only the persist-migration invariants below remain. 颜色编辑
-  // 入口已迁至顶部二级 tab，仅保留持久化迁移不变式。
-  describe.skip('Property 1–3 (legacy ColorWorkstation, retired)', () => {
-    it.skip('placeholder', () => undefined);
-  });
-
   // Feature: palette-lut-merge, Property 4: 持久化迁移正确性
   describe('Property 4: 持久化迁移正确性', () => {
     // Access the migrate function from Zustand persist options

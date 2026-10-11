@@ -24,7 +24,10 @@ from __future__ import annotations
 import logging
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
+
+from core.material_color_solver import MaterialParams
 
 
 # ---------------------------------------------------------------------------
@@ -118,11 +121,21 @@ def test_resolve_lut_path_or_error_invalid_object() -> None:
 
 def _fake_load_multiple_materials(names):
     """Stub used by the parity tests to avoid loading real material profiles."""
-    return [{"name": n, "channel": idx} for idx, n in enumerate(names)]
+    return [
+        MaterialParams(
+            name=name,
+            directory_name=name,
+            E=np.zeros(3),
+            k=np.ones(3),
+            C0_white=np.ones(3),
+            estimated_rgb=np.array([0, 128, 255], dtype=np.uint8),
+        )
+        for name in names
+    ]
 
 
 def _fake_build_material_slot_names(materials):
-    return [m["name"] for m in materials]
+    return [material.name for material in materials]
 
 
 def _fake_build_material_preview_colors(materials):

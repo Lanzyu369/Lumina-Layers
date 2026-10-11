@@ -1,7 +1,6 @@
 """Actual compact writer output, including mixed-source and >template palettes."""
 
 import json
-import os
 from zipfile import ZipFile
 
 import pytest
@@ -10,7 +9,6 @@ from fatcat_writer_cases import CASES, make_writer
 import utils.bambu_3mf_writer as writer_module
 from fatcat_material_assertions import assert_native_materials
 
-pytestmark = pytest.mark.skipif(os.environ.get("FATCAT_B4_INTEGRATION") != "1", reason="installed native dependencies required")
 
 
 @pytest.mark.parametrize("case", CASES)

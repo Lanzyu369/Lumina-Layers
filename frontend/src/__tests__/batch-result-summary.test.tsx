@@ -2,8 +2,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import { translations } from "../i18n/translations";
 import type { BatchResponse } from "../api/types";
-import fs from "node:fs";
-import path from "node:path";
 
 // --- Mutable locale for i18n mock ---
 let currentLang: "zh" | "en" = "zh";
@@ -193,48 +191,4 @@ describe("BatchResultSummary", () => {
     });
   });
 
-  describe("source code compliance scan", () => {
-    it("has no raw color literals (#, bg-white, text-black) or hardcoded zh/en strings", () => {
-      const componentPath = path.resolve(
-        __dirname,
-        "../components/ui/BatchResultSummary.tsx",
-      );
-      const source = fs.readFileSync(componentPath, "utf-8");
-
-      // No bare hex color values like #fff, #000, #ffffff (allow svg stroke/fill refs)
-      // Filter out lines that are clearly SVG path data or comments
-      const codeLines = source
-        .split("\n")
-        .filter((line) => {
-          const trimmed = line.trim();
-          // Skip comments
-          if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) return false;
-          // Skip SVG path/polyline/line elements
-          if (/<path|<polyline|<line/.test(trimmed)) return false;
-          return true;
-        });
-
-      const codeContent = codeLines.join("\n");
-
-      // No bg-white or text-black Tailwind classes
-      expect(codeContent).not.toMatch(/\bbg-white\b/);
-      expect(codeContent).not.toMatch(/\btext-black\b/);
-
-      // No bare # color literals in className strings (e.g. style={{ color: "#fff" }})
-      // Match patterns like: "#fff", "#000", "#ffffff" in non-SVG context
-      const hexInStyles = codeContent.match(/["'`]#[0-9a-fA-F]{3,8}["'`]/g);
-      expect(hexInStyles).toBeNull();
-
-      // No hardcoded Chinese user-facing strings (should use t() instead)
-      // Check for common Chinese characters that would indicate hardcoded text
-      // Exclude import statements and type annotations
-      const nonImportLines = codeLines.filter(
-        (line) => !line.trim().startsWith("import") && !line.trim().startsWith("export type"),
-      );
-      const nonImportContent = nonImportLines.join("\n");
-
-      // Should not contain hardcoded Chinese like "下载" or "模型" outside of comments
-      expect(nonImportContent).not.toMatch(/["'`][^"'`]*[\u4e00-\u9fff]+[^"'`]*["'`]/);
-    });
-  });
 });

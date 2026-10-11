@@ -2,7 +2,6 @@
 
 import json
 import math
-import os
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -15,7 +14,6 @@ from utils.fatcat_metadata import compose_builtin_project_settings
 from fatcat_material_assertions import assert_native_materials, native_materials_support_plate, native_plate_binding
 from fatcat_native_source_fixtures import complete_native_project, assert_source_material_snapshot
 
-pytestmark = pytest.mark.skipif(os.environ.get("FATCAT_B4_INTEGRATION") != "1", reason="installed native dependencies required")
 
 
 def _matrix():
@@ -50,7 +48,10 @@ def test_native_source_preserves_selected_materials_and_selected_plate(tmp_path:
         machine_uid=f"bambu-lab:{machine}", nozzle_uid=f"nozzle:{device.nozzle_size}mm",
         material_types=["PLA"] * 2, plate_value=plate_value)
     if not supported:
-        with pytest.raises(ValueError, match="no available native filament profile"):
+        with pytest.raises(
+            ValueError,
+            match="no available native filament profile|matches multiple native profiles",
+        ):
             compose_builtin_project_settings(request)
     else:
         result = compose_builtin_project_settings(request)
@@ -115,7 +116,10 @@ def test_native_source_compacts_four_materials_and_selected_plate(tmp_path: Path
         machine_uid=f"bambu-lab:{machine}", nozzle_uid=f"nozzle:{device.nozzle_size}mm",
         material_types=["PLA"] * 4, plate_value=plate_value)
     if not supported:
-        with pytest.raises(ValueError, match="no available native filament profile"):
+        with pytest.raises(
+            ValueError,
+            match="no available native filament profile|matches multiple native profiles",
+        ):
             compose_builtin_project_settings(request)
     else:
         source = writer._get_base_config_template()

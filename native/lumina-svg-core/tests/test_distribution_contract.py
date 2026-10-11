@@ -199,14 +199,6 @@ def test_normalized_boolean_has_no_predictive_clipper_preflight() -> None:
     assert "checkedSizeSum" in safety
 
 
-def test_parallel_replay_restores_geometry_trace_without_resource_budget_state() -> None:
-    kernel = (PACKAGE_ROOT / "src" / "geometry_kernel.cpp").read_text(encoding="utf-8")
-    assert "const ComplexityBudget budgetBeforeReplay" in kernel
-    assert "const size_t topologySizeBeforeReplay" in kernel
-    assert "*domain.complexity_budget = budgetBeforeReplay;" in kernel
-    assert "replayPaintCommandsOnce(commands, domain, false)" in kernel
-    assert "ParallelReplayBudgetScope" not in kernel
-
 def test_cmake_revision_cache_arguments_cannot_override_pins(
     tmp_path: Path,
 ) -> None:

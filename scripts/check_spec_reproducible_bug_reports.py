@@ -75,12 +75,12 @@ def _build_steps() -> list[Step]:
             cwd=REPO_ROOT,
         ),
         Step(
-            label="pytest · logging governance",
+            label="pytest · logging and errors",
             cmd=(
                 py,
                 "-m",
                 "pytest",
-                "tests/test_logging_exception_governance_unit.py",
+                "tests/test_api_errors_unit.py",
                 "tests/test_structured_logging_unit.py",
                 "tests/test_logger_unit.py",
                 "-q",
@@ -89,7 +89,7 @@ def _build_steps() -> list[Step]:
         ),
         Step(
             label="tsc · frontend typecheck",
-            cmd=("npx", "tsc", "--noEmit"),
+            cmd=("pnpm", "exec", "tsc", "--noEmit", "-p", "tsconfig.app.json"),
             cwd=REPO_ROOT / "frontend",
         ),
         Step(

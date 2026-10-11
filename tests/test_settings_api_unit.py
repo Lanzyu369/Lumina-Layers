@@ -710,30 +710,28 @@ class TestGetPrinters:
         assert response.status_code == 403
         assert "local Lumina Studio app" in response.json()["detail"]
 
-    def test_machine_registry_asset_serves_from_frozen_bundle_root(
+    def test_machine_registry_asset_serves_from_configured_root(
         self,
         tmp_path,
         monkeypatch,
     ) -> None:
-        frozen_root = tmp_path / "frozen"
-        asset_path = frozen_root / "machine_registry" / "build_plates" / "bed_pei.png"
+        registry_root = tmp_path / "machine_registry"
+        asset_path = registry_root / "build_plates" / "bed_pei.png"
         asset_path.parent.mkdir(parents=True)
-        asset_path.write_bytes(b"frozen-neutral-plate")
+        asset_path.write_bytes(b"neutral-plate")
         unrelated_cwd = tmp_path / "cwd"
         unrelated_cwd.mkdir()
         monkeypatch.chdir(unrelated_cwd)
-        monkeypatch.delenv("LUMINA_MACHINE_REGISTRY_DIR", raising=False)
-        monkeypatch.setattr(sys, "frozen", True, raising=False)
-        monkeypatch.setattr(sys, "_MEIPASS", str(frozen_root), raising=False)
+        monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
 
         response = client.get(
             "/api/system/machine-registry/assets/build_plates/bed_pei.png"
         )
 
         assert response.status_code == 200
-        assert response.content == b"frozen-neutral-plate"
+        assert response.content == b"neutral-plate"
 
-    def test_frozen_minimal_registry_keeps_profiles_and_omits_thumbnails(
+    def test_minimal_registry_keeps_profiles_and_omits_thumbnails(
         self,
         tmp_path,
         monkeypatch,
@@ -745,8 +743,7 @@ class TestGetPrinters:
         source_data = json.loads(
             (source_root / "registry.json").read_text(encoding="utf-8")
         )
-        frozen_root = tmp_path / "frozen"
-        registry_root = frozen_root / "machine_registry"
+        registry_root = tmp_path / "machine_registry"
         registry_root.mkdir(parents=True)
         shutil.copy2(source_root / "registry.json", registry_root / "registry.json")
 
@@ -763,9 +760,7 @@ class TestGetPrinters:
         unrelated_cwd = tmp_path / "elsewhere"
         unrelated_cwd.mkdir()
         monkeypatch.chdir(unrelated_cwd)
-        monkeypatch.delenv("LUMINA_MACHINE_REGISTRY_DIR", raising=False)
-        monkeypatch.setattr(sys, "frozen", True, raising=False)
-        monkeypatch.setattr(sys, "_MEIPASS", str(frozen_root), raising=False)
+        monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
 
         response = client.get("/api/system/printers")
 

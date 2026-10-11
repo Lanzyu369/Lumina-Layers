@@ -19,7 +19,7 @@ not record source paths, hashes, or file sizes.
 `lumina-svg-core` 0.3.1 exposes result schema 4. Studio installs the published
 AGPL-3.0-only runtime through `requirements-native-svg.txt`; the standalone
 repository owns engine development and wheel builds. Studio CI verifies the
-published wheel hashes, geometry compatibility and frozen application probes.
+published wheel hashes, geometry compatibility and source application workflows.
 A supported document returns:
 
 - raw paint regions, source-order visible paint regions, and one silhouette;
@@ -71,7 +71,7 @@ minimum-area filters, or proximity grouping.
 
 ## Native implementation
 
-The standalone Apache-2.0 package uses a fixed LunaSVG revision and its bundled
+The standalone AGPL-3.0-only package uses a fixed LunaSVG revision and its bundled
 PlutoVG, plus a fixed Clipper2 revision. The LunaSVG change is a narrow,
 versioned paint-command recorder; the native package does not consume LunaSVG's
 private scene tree.
@@ -284,15 +284,14 @@ presented as a private production source. If a private or large regression
 input is not supplied, the benchmark records it as unavailable instead of
 reusing an older parser result or substituting another file.
 
-## Packaging and hosted validation
+## Native wheels and hosted validation
 
 The standalone source tree contains the Apache-2.0 project license and complete
 third-party notices for LunaSVG, PlutoVG, Clipper2, FreeType, stb, and pybind11.
 Release wheels target CPython 3.12 on Windows amd64, macOS arm64, macOS x86_64,
 and Linux x86_64. Linux wheels are built directly on Ubuntu 24.04 with its
 system ABI; older glibc compatibility requires a source build. The production
-workflow verifies host Linux product artifacts and a Windows PyInstaller
-onefile native self-test.
+workflow verifies host Linux product artifacts and the native SVG self-test.
 
 The previous published PR head completed all configured hosted checks. A fresh
 workflow run is required after this parser update; its final state belongs in

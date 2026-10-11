@@ -375,6 +375,7 @@ describe("settingsOptionIds", () => {
       expect(supportsLayerConfigRanges("AnycubicSlicerNext")).toBe(true);
       expect(supportsLayerConfigRanges("FlashStudio")).toBe(true);
       expect(supportsLayerConfigRanges("QIDIStudio")).toBe(true);
+      expect(supportsLayerConfigRanges("PrusaSlicer")).toBe(true);
     });
 
     it("returns true for legacy aliases", () => {
@@ -385,7 +386,6 @@ describe("settingsOptionIds", () => {
     });
 
     it("returns false for unsupported slicers and empty values", () => {
-      expect(supportsLayerConfigRanges("PrusaSlicer")).toBe(false);
       expect(supportsLayerConfigRanges("Cura")).toBe(false);
       expect(supportsLayerConfigRanges("")).toBe(false);
       expect(supportsLayerConfigRanges("UnknownSlicer")).toBe(false);

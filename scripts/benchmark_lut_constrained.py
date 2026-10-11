@@ -94,7 +94,7 @@ def main() -> None:
         for n_colors in N_COLORS_LEVELS:
             # Old path
             t0 = time.perf_counter()
-            out_old = quantize_colors(rgb, n_colors=n_colors, seed=42, skip_post_blur=True)
+            out_old = quantize_colors(rgb, n_colors=n_colors, seed=42)
             final_old = _lut_match_quantized(out_old, lut_rgb, lut_lab, lut_tree)
             t_old = time.perf_counter() - t0
             de_old = _compute_delta_e_mean(rgb, final_old)
@@ -103,7 +103,7 @@ def main() -> None:
             # New path
             t0 = time.perf_counter()
             out_new = quantize_colors(
-                rgb, n_colors=n_colors, seed=42, skip_post_blur=True,
+                rgb, n_colors=n_colors, seed=42,
                 lut_lab=lut_lab, lut_rgb=lut_rgb, lut_tree=lut_tree,
                 use_lut_constrained=True,
             )

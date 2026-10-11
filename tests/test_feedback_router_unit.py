@@ -4,7 +4,7 @@
 - 同步路径返回 ``assembly_status == 'in_progress'``、
   ``submission_status`` 为 ``'pending'`` / ``'disabled'``
 - 工单目录 ``feedback/<YYYY-MM>/<ticket_id>/ticket.json`` 正确落地
-- 失败场景（screenshot 过大 / 校验失败 / 限流 / 目录写入失败）
+- 失败场景（screenshot 过大 / 校验失败 / 目录写入失败）
 - 工单上传状态查询与失败重传
 """
 
@@ -240,15 +240,11 @@ def client(
     feedback_root: Path,
 ) -> TestClient:
     from api.app import create_app
-    import api.routers.feedback as feedback_router
 
     monkeypatch.setenv("LUMINA_FEEDBACK_DUMP_DIR", str(feedback_root))
     monkeypatch.setenv("LUMINA_FEEDBACK_STARTUP_CLEANUP", "false")
     # Never reach the real feedback server from unit tests.
     monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "off")
-    monkeypatch.delenv("LUMINA_FEEDBACK_RATE_LIMIT_MAX", raising=False)
-    monkeypatch.delenv("LUMINA_FEEDBACK_RATE_LIMIT_WINDOW_S", raising=False)
-    feedback_router._clear_feedback_rate_limit_state()
     app = create_app()
     return TestClient(app)
 
@@ -1426,28 +1422,22 @@ def test_submit_bug_report_rejects_invalid_large_screenshot_base64(
     assert warnings[0].error_type == "InvalidBase64"
 
 
-def test_submit_bug_report_rate_limits_repeated_submissions(
+def test_submit_bug_report_accepts_repeated_local_submissions(
     client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
+    feedback_root: Path,
 ) -> None:
-    monkeypatch.setenv("LUMINA_FEEDBACK_RATE_LIMIT_MAX", "1")
-    monkeypatch.setenv("LUMINA_FEEDBACK_RATE_LIMIT_WINDOW_S", "60")
-    _capture_feedback_logger(caplog, logging.WARNING)
-
-    first = client.post("/api/feedback/bug-report", json=_payload(description="first"))
-    second = client.post("/api/feedback/bug-report", json=_payload(description="second"))
-
-    assert first.status_code == 200
-    assert second.status_code == 429
-    assert 1 <= int(second.headers["Retry-After"]) <= 60
-    warnings = [
-        record for record in caplog.records
-        if getattr(record, "event", None) == "feedback_bug_report_rate_limited"
+    """Each local report remains independently saved after repeated submits."""
+    responses = [
+        client.post("/api/feedback/bug-report", json=_payload(description=f"Report {index}"))
+        for index in range(31)
     ]
-    assert len(warnings) == 1
-    assert warnings[0].error_type == "RateLimitExceeded"
-    assert warnings[0].max_requests == 1
+    assert all(response.status_code == 200 for response in responses)
+    ticket_ids = [response.json()["ticket_id"] for response in responses]
+    assert len(set(ticket_ids)) == 31
+    assert [
+        _read_ticket_json(feedback_root, ticket_id)["description"]
+        for ticket_id in ticket_ids
+    ] == [f"Report {index}" for index in range(31)]
 
 
 def test_submit_bug_report_returns_500_when_ticket_dir_creation_fails(

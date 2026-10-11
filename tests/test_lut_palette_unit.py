@@ -931,14 +931,6 @@ class TestMergeAndIntegration:
         assert len(warnings) > 0
         assert "layer_height_mm" in warnings[0]
 
-    def test_converter_uses_palette_hex(self):
-        """Converter 使用 palette hex_color — 跳过（集成复杂度高）。"""
-        pytest.skip("Converter 集成测试需要完整运行环境，此处跳过")
-
-    def test_converter_fallback_default(self):
-        """无 palette 时 Converter 回退默认预览色 — 跳过。"""
-        pytest.skip("Converter 集成测试需要完整运行环境，此处跳过")
-
     def test_recipe_logger_with_palette(self):
         """有 palette 时 ColorRecipeLogger 使用调色板颜色名称。"""
         palette = [
@@ -1029,18 +1021,6 @@ class TestAPISchemas:
         )
         assert len(resp2.default_palette) == 1
         assert resp2.default_palette[0].color_name == "Signal Red"
-
-    def test_confirm_palette_saves_to_session(self):
-        """confirm-palette 端点保存调色板到 session — 跳过（需要运行 FastAPI 应用）。"""
-        pytest.skip("需要运行 FastAPI 应用环境")
-
-    def test_confirm_palette_rejects_empty_name(self):
-        """confirm-palette 拒绝空白颜色名称 — 跳过（需要运行 FastAPI 应用）。"""
-        pytest.skip("需要运行 FastAPI 应用环境")
-
-    def test_confirm_palette_session_not_found(self):
-        """confirm-palette 对不存在的 session 返回 404 — 跳过（需要运行 FastAPI 应用）。"""
-        pytest.skip("需要运行 FastAPI 应用环境")
 
     def test_lut_info_response_contains_palette(self):
         """LutInfoResponse schema 包含 palette 和打印参数字段。"""

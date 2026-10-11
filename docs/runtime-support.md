@@ -5,8 +5,9 @@
 - Run from source with `python api_server.py` or `python start_all.py`, or use
   the Electron desktop app. See the [installation guide](../README.md#installation)
   and [desktop guide](desktop-electron.md).
-- Packaged Electron starts the backend and uses its built frontend serving.
-  `LUMINA_SERVE_FRONTEND_DIST` and `LUMINA_FRONTEND_DIST_DIR` remain supported.
+- Electron starts the local Python backend and Vite frontend. A built frontend
+  can also be served by the API with `LUMINA_SERVE_FRONTEND_DIST` and
+  `LUMINA_FRONTEND_DIST_DIR`.
 - Local settings, slicer launch, feedback, cache cleanup and material management
   keep their origin guards. The retired `LUMINA_ALLOW_PUBLIC_GRAY_API` variable
   has no effect.
@@ -21,12 +22,8 @@
   Unsupported wheel targets need the release source archive and a C++17 toolchain.
 - Linux cgroup CPU/memory limits and the optional local GEOS dense-buffer
   runtime remain independent of deployment packaging.
-- The Studio repository's Windows desktop build uses `scripts/build_desktop.py`
-  and `lumina_studio.spec`. The official Windows/macOS beta pipeline is maintained
-  in the private Lumina-Distribution repository; its source overlay must use the
-  same FatCat dependency and picker-asset contract before integrating this branch.
-  The former Gradio `main.py` packaging workflow and bundled application
-  3MF template file have been retired; metadata data comes from FatCat.
+- Native 3MF metadata comes from FatCat; its dependency setup is documented in
+  the desktop source guide.
 
 ## Retired on 2026-10-06
 
@@ -45,10 +42,8 @@ previously installed services, scheduled tasks or user data.
 
 当前支持源码本地运行和 Electron 桌面客户端。桌面页面服务、本地访问限制、
 Linux 资源限额检测、可选 PostgreSQL 后端及本地 GEOS 构建均继续保留。
-本仓库的 Windows 桌面构建使用 `scripts/build_desktop.py` 和 `lumina_studio.spec`；
-官方 Windows/macOS 内测流水线位于私有 Lumina-Distribution 仓库，其覆盖脚本
-需要同步 FatCat 依赖及选择器资源合同后才能集成本分支。旧 Gradio
-启动文件的打包流程及本体内置 3MF 模板文件已移除，元数据配置来自 FatCat。
+桌面窗口启动本机 Python 和 Vite。原生 3MF 元数据来自 FatCat，
+依赖准备方式见桌面源码指南。
 SVG 使用独立项目发布的 AGPLv3 运行时 `lumina-svg-core` 0.3.1，CI 安装并核验
 发布包。Linux x86-64 要求 glibc 2.28+；Mac 的 Python 3.12/3.13 包要求 macOS 12+，
 3.14 要求 macOS 14+。没有兼容 wheel 的平台需要从发行源码包构建。

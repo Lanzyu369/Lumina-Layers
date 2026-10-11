@@ -113,7 +113,7 @@ def test_resolve_click_selection_hexes_prefers_matched_for_display():
     assert state_hex == "#112233"
 
 
-def test_extract_lut_available_colors_logs_single_info_event(tmp_path, caplog):
+def test_extract_lut_available_colors_logs_single_info_event(tmp_path, caplog, monkeypatch):
     lut_path = tmp_path / "sample_lut.npy"
     np.save(
         lut_path,
@@ -127,6 +127,7 @@ def test_extract_lut_available_colors_logs_single_info_event(tmp_path, caplog):
     )
 
     target_logger = pipeline_utils.log
+    monkeypatch.setattr(target_logger, "propagate", False)
     target_logger.addHandler(caplog.handler)
     caplog.set_level(logging.DEBUG, logger=target_logger.name)
     try:
@@ -148,13 +149,14 @@ def test_extract_lut_available_colors_logs_single_info_event(tmp_path, caplog):
     assert info_events == ["lut_colors_loaded"]
 
 
-def test_lut_colors_loaded_omits_unique_count_when_no_duplicates(tmp_path, caplog):
+def test_lut_colors_loaded_omits_unique_count_when_no_duplicates(tmp_path, caplog, monkeypatch):
     """When LUT entries are all unique, lut_colors_loaded must not carry unique_count."""
     lut_path = tmp_path / "no_dupes.npy"
     rgb = np.array([[0, 0, 0], [128, 128, 128], [255, 255, 255]], dtype=np.uint8)
     np.save(lut_path, rgb)
 
     target_logger = pipeline_utils.log
+    monkeypatch.setattr(target_logger, "propagate", False)
     target_logger.addHandler(caplog.handler)
     caplog.set_level(logging.INFO, logger=target_logger.name)
     try:
@@ -173,7 +175,7 @@ def test_lut_colors_loaded_omits_unique_count_when_no_duplicates(tmp_path, caplo
     assert not hasattr(record, "unique_count")
 
 
-def test_lut_colors_loaded_includes_unique_count_when_duplicates_present(tmp_path, caplog):
+def test_lut_colors_loaded_includes_unique_count_when_duplicates_present(tmp_path, caplog, monkeypatch):
     """When the LUT contains duplicates, both color_count and unique_count must appear."""
     lut_path = tmp_path / "with_dupes.npy"
     rgb = np.array(
@@ -183,6 +185,7 @@ def test_lut_colors_loaded_includes_unique_count_when_duplicates_present(tmp_pat
     np.save(lut_path, rgb)
 
     target_logger = pipeline_utils.log
+    monkeypatch.setattr(target_logger, "propagate", False)
     target_logger.addHandler(caplog.handler)
     caplog.set_level(logging.INFO, logger=target_logger.name)
     try:

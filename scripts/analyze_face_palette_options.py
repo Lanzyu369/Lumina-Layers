@@ -342,7 +342,7 @@ def main() -> None:
 
     image_path = resolve_image(REPO_ROOT, args.image)
     rgb = load_rgb(image_path)
-    quant = quantize_colors(rgb, 256, seed=42, skip_post_blur=True)
+    quant = quantize_colors(rgb, 256, seed=42)
     unique_target, inverse, counts = np.unique(
         quant.reshape(-1, 3),
         axis=0,

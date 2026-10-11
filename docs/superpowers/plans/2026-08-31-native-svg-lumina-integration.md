@@ -11,7 +11,7 @@
 
 **Architecture:** `core/native_svg_adapter.py` is the only Lumina-to-library boundary. It bulk-converts the native ragged arrays into Shapely objects, preserves normalized SVG user units and the existing `VectorAnalysis` fields, and returns structured fallback/error diagnostics; `VectorProcessor.analyze_svg` chooses native or legacy exactly once, while #585's `LayeredCoordinateDomain` remains the only downstream coordinate authority.
 
-**Tech Stack:** Python 3.12, NumPy, Shapely 2 ragged arrays, existing `VectorProcessor`/`VectorAnalysis`, pytest/Hypothesis, trimesh/neroued-3mf, PyInstaller, Docker, GitHub Actions.
+**Tech Stack:** Python 3.12, NumPy, Shapely 2 ragged arrays, existing `VectorProcessor`/`VectorAnalysis`, pytest/Hypothesis, trimesh/neroued-3mf, Docker, GitHub Actions.
 
 ---
 
@@ -229,46 +229,11 @@ git add tests/test_native_svg_workflow_integration.py core tests
 git commit -m "test(vector): verify native SVG product workflows"
 ```
 
-### Task 5: Runtime dependency, Docker, and PyInstaller onefile probe
+### Task 5: Source runtime dependency and native SVG probe
 
-**Files:**
-- Create: `requirements-native-svg.txt`
-- Modify: `requirements.txt`
-- Modify: `Dockerfile`
-- Modify: `lumina_studio.spec`
-- Modify: `scripts/build_desktop.py`
-- Modify: `api_server.py`
-- Create: `tests/test_native_svg_packaging_contract_unit.py`
-- Modify: `tests/test_desktop_build_contract_unit.py`
+`requirements-native-svg.txt` selects the in-tree native package. Use Python 3.12, install the package, and run `api_server.py --native-svg-self-test <small.svg>`. The probe must execute actual native geometry and report non-empty raw, visible and silhouette results with a deterministic fingerprint.
 
-- [ ] **Step 1: Write failing dependency and frozen-runtime tests**
-
-Assert the local workspace dependency is exactly version 0.1.1, production Python is 3.12, PyInstaller collects `lumina_svg_core` and `_lumina_svg_core`, desktop dependency checks fail if it is absent, and `api_server.py --native-svg-self-test <small.svg>` analyzes actual geometry and prints a stable JSON fingerprint before exiting zero.
-
-- [ ] **Step 2: Run packaging tests and verify RED**
-
-Run: `python3 -m pytest tests/test_native_svg_packaging_contract_unit.py tests/test_desktop_build_contract_unit.py -q`
-
-Expected: FAIL because native packaging is not declared.
-
-- [ ] **Step 3: Wire the workspace package without pretending it is published**
-
-`requirements-native-svg.txt` points to `./native/lumina-svg-core` and documents the replacement boundary `lumina-svg-core==0.1.1` after the external repository release. Docker copies the native source before `pip install` and uses Python 3.12. PyInstaller treats the compiled package as required, not optional.
-
-- [ ] **Step 4: Add a real frozen probe**
-
-The probe calls the Lumina adapter on a supplied SVG, requires `geometry_backend == "native"`, verifies non-empty raw/visible/silhouette collections and deterministic fingerprint, then exits. A bare import is insufficient.
-
-- [ ] **Step 5: Run packaging tests and local onefile build where supported**
-
-Run packaging tests on macOS. Run the Windows onefile build in GitHub Actions and execute the probe from the generated `.exe`, which validates `_MEIPASS` extraction.
-
-- [ ] **Step 6: Commit packaging integration**
-
-```bash
-git add requirements-native-svg.txt requirements.txt Dockerfile lumina_studio.spec scripts/build_desktop.py api_server.py tests
-git commit -m "build(vector): package native SVG runtime"
-```
+Run `python -m pytest tests/test_native_svg_packaging_contract_unit.py -q` for dependency and CLI coverage.
 
 ### Task 6: Full VectorAnalysis performance, RSS, and proxy identity gate
 
@@ -309,7 +274,7 @@ git add scripts/benchmark_native_svg_analysis.py progress/native-svg-fast-path-b
 git commit -m "perf(vector): verify complete native SVG analysis path"
 ```
 
-### Task 7: Cross-platform wheel, container, onefile, and slicer reality CI
+### Task 7: Cross-platform wheel and slicer reality CI
 
 **Files:**
 - Modify: `.github/workflows/native-svg-core.yml`
@@ -318,7 +283,7 @@ git commit -m "perf(vector): verify complete native SVG analysis path"
 
 - [ ] **Step 1: Add CI jobs for all required realities**
 
-Jobs build and install repaired wheels on Windows amd64, macOS arm64/x86_64, and manylinux x86_64; build the production Docker image; run the Windows PyInstaller onefile probe; generate representative GLB/3MF; and retain wheel, benchmark, 3MF, and probe artifacts.
+Jobs build and install native wheels on Windows amd64, macOS arm64/x86_64, and Linux x86_64; generate representative GLB/3MF; and retain wheel, benchmark, and model artifacts.
 
 - [ ] **Step 2: Add deterministic Bambu/Orca validation**
 
@@ -371,7 +336,7 @@ Record disposition and verification in the review document. Do not merge.
 
 - [ ] **Step 5: Verify clean branch and open the dependency PR**
 
-Confirm branch name, clean status, exact ancestry from #585, conventional commits, no secrets/generated caches, and ordinary upstream tracking. Open a PR against `dev-refactor` whose English-first/Chinese-second body declares dependency on PR #585 and separately states the external-repository extraction/publish boundary.
+Confirm branch name, clean status, exact ancestry from #585, conventional commits, no secrets/generated caches, and ordinary upstream tracking. Open a PR against `dev-refactor` whose description declares dependency on PR #585 and separately states the external-repository extraction/publish boundary.
 
 - [ ] **Step 6: Leave the PR unmerged**
 

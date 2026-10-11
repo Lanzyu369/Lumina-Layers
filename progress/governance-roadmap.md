@@ -1,5 +1,7 @@
 # Log Governance Roadmap
 
+> 历史记录：日志条数预算、事件源码白名单、冻结 reviewer 基线和治理回合已退役。以下数字与流程只描述当时的工作；当前日志使用与验证以 `docs/logging-guide.md` 为准。
+
 ## 1. Purpose
 
 This roadmap is the v2 closeout reference for Lumina Studio logging governance.

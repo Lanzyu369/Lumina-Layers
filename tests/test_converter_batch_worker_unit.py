@@ -11,8 +11,8 @@ real GLB), then asserts:
 2. ``threemf_path``, ``preview_glb_path``, ``metadata_sidecar_path`` all
    point to distinct files whose basenames start with the supplied
    ``artifact_prefix``.
-3. The sidecar JSON deserialises as ``PerImageMetadataSidecar``,
-   ``slots`` has length >= 1 and every ``MaterialSlot`` 4-tuple
+3. The sidecar JSON supplies the merge writer's ``MaterialSlot`` values,
+   ``slots`` has length >= 1 and every material identity 4-tuple
    (``slot_id`` / ``slot_name`` / ``preview_color`` / ``material_id``)
    is non-empty.
 4. ``xy_bbox_mm`` in the returned dict matches the sidecar's
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -37,13 +38,13 @@ import pytest
 import trimesh
 from PIL import Image
 
-from api.schemas.batch_sidecar import PerImageMetadataSidecar
 from api.workers.converter_workers import (
     _batch_compute_xy_bbox_mm,
     worker_batch_convert_item,
 )
 from config import MODELS_DIR, OUTPUT_DIR, TEMP_DIR
 from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
+from utils.merged_bambu_3mf_writer import MaterialSlot
 
 
 # ---------------------------------------------------------------------------
@@ -410,42 +411,31 @@ def test_worker_batch_convert_item_three_paths_distinct_and_prefixed(
 def test_worker_batch_convert_item_sidecar_validates_with_full_slots(
     batch_worker_artifacts,
 ) -> None:
-    """Sidecar JSON validates as PerImageMetadataSidecar with non-empty slots (R1.3, R6.2)."""
+    """Worker JSON supplies complete material identities to the merge writer."""
     _, image_path, result = batch_worker_artifacts
 
     sidecar_out = result["metadata_sidecar_path"]
     with open(sidecar_out, "r", encoding="utf-8") as fh:
         sidecar_payload = json.load(fh)
 
-    sidecar_model = PerImageMetadataSidecar.model_validate(sidecar_payload)
+    assert set(sidecar_payload) == {
+        "schema_version", "source_filename", "xy_bbox_mm", "slots",
+    }
+    assert sidecar_payload["schema_version"] == 1
+    assert sidecar_payload["source_filename"] == os.path.basename(image_path)
+    assert set(sidecar_payload["xy_bbox_mm"]) == {"width_mm", "depth_mm"}
+    assert sidecar_payload["xy_bbox_mm"]["width_mm"] > 0
+    assert sidecar_payload["xy_bbox_mm"]["depth_mm"] > 0
 
-    # source_filename round-trips the original image basename.
-    assert sidecar_model.source_filename == os.path.basename(image_path)
-
-    # At least 1 slot present, with every MaterialSlot 4-tuple field
-    # non-empty (slot_id is an int >=0, slot_name / preview_color /
-    # material_id are non-empty strings — the Pydantic model already
-    # enforces these via min_length / pattern, but assert explicitly so
-    # the test fails loudly if the schema is loosened).
-    assert len(sidecar_model.slots) >= 1, (
-        f"sidecar must contain at least one MaterialSlot; got "
-        f"{sidecar_model.slots!r}"
-    )
-    for slot in sidecar_model.slots:
-        assert isinstance(slot.slot_id, int) and slot.slot_id >= 0, (
-            f"slot_id must be a non-negative int; got {slot.slot_id!r}"
-        )
-        assert isinstance(slot.slot_name, str) and slot.slot_name, (
-            f"slot_name must be a non-empty string; got {slot.slot_name!r}"
-        )
-        assert isinstance(slot.preview_color, str) and slot.preview_color, (
-            f"preview_color must be a non-empty hex string; got "
-            f"{slot.preview_color!r}"
-        )
-        assert isinstance(slot.material_id, str) and slot.material_id, (
-            f"material_id must be a non-empty string; got "
-            f"{slot.material_id!r}"
-        )
+    slots = [MaterialSlot(**slot) for slot in sidecar_payload["slots"]]
+    assert slots
+    assert len({slot.slot_id for slot in slots}) == len(slots)
+    for slot in slots:
+        assert isinstance(slot.slot_id, int) and slot.slot_id >= 0
+        assert isinstance(slot.slot_name, str) and slot.slot_name
+        assert isinstance(slot.preview_color, str)
+        assert re.fullmatch(r"#[0-9A-Fa-f]{6}", slot.preview_color)
+        assert isinstance(slot.material_id, str) and slot.material_id
 
 
 def test_worker_batch_convert_item_xy_bbox_matches_sidecar(

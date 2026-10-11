@@ -806,7 +806,7 @@ Expected: only the topic branch is pushed; protected branches are untouched.
 
 - [ ] **Step 3: Create a ready PR against `dev-refactor`**
 
-Create the PR with English first and Chinese second. Include:
+When creating the PR, include:
 
 - bug/root-cause summary;
 - explicit non-goals, including the PR #549 SVG/GLB race;

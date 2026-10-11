@@ -165,23 +165,28 @@ def test_v2_backing_expansion_matches_v1_scale_factor_order() -> None:
     )
 
 
-def test_duplicate_color_slots_keep_distinct_export_names() -> None:
+@pytest.mark.parametrize(("rgba", "expected_base"), [
+    ((255, 0, 0, 255), "color_ff0000"),
+    ((255, 128, 0, 255), "color_ff8000"),
+    ((0, 0, 0, 255), "color_000000"),
+    ((255, 255, 255, 255), "color_ffffff"),
+])
+def test_color_names_keep_rgb_and_disambiguate_duplicate_slots(
+    rgba: tuple[int, int, int, int], expected_base: str,
+) -> None:
+    """GLB colors retain their RGB name and distinct names for repeated slots.
+    GLB 颜色名称保留 RGB 值，并区分颜色相同的耗材槽位。
+    """
     seen: set[str] = set()
 
-    first = vector_glb_preview.make_vector_glb_export_name(
-        source_name="Red A",
-        role="color",
-        rgba=(255, 0, 0, 255),
-        seen_names=seen,
-    )
-    second = vector_glb_preview.make_vector_glb_export_name(
-        source_name="Red B",
-        role="color",
-        rgba=(255, 0, 0, 255),
-        seen_names=seen,
-    )
+    names = [
+        vector_glb_preview.make_vector_glb_export_name(
+            source_name=source_name, role="color", rgba=rgba, seen_names=seen,
+        )
+        for source_name in ("Slot A", "Slot B", "Slot C")
+    ]
 
-    assert [first, second] == ["color_ff0000", "color_ff0000_1"]
+    assert names == [expected_base, f"{expected_base}_1", f"{expected_base}_2"]
 
 
 def test_v2_exporter_rejects_part_without_footprint(tmp_path) -> None:

@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path, PureWindowsPath
 import re
-import sys
 from typing import Any
 
 
@@ -97,15 +96,13 @@ class MachineRegistrySelectionError(ValueError):
 def resolve_machine_registry_root() -> Path:
     """Resolve the single runtime machine-registry resource root.
 
-    解析唯一的运行时机器注册表资源根目录。显式环境变量优先；冻结应用
-    使用 PyInstaller 的 ``_MEIPASS``；源码运行使用仓库内置目录。
+    解析唯一的运行时机器注册表资源根目录。显式环境变量优先，
+    默认使用仓库内置目录。
     """
 
     configured_root = os.environ.get("LUMINA_MACHINE_REGISTRY_DIR", "").strip()
     if configured_root:
         return Path(configured_root).expanduser().resolve()
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return (Path(sys._MEIPASS) / "machine_registry").resolve()
     return (Path(__file__).resolve().parents[1] / "machine_registry").resolve()
 
 
@@ -228,7 +225,7 @@ def resolve_installed_bed_model(
     """Resolve a native bed STL from the user's matching slicer installation.
 
     从用户本机对应切片软件中解析原生热床 STL。第三方模型不会复制进
-    Lumina 仓库或安装包；找不到时调用方应使用 Lumina 自有 fallback。
+    Lumina 仓库；找不到时调用方应使用 Lumina 自有 fallback。
 
     Args:
         profile: Selected machine registry device profile.

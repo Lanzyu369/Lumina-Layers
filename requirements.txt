@@ -6,8 +6,6 @@ opencv-python
 Pillow
 trimesh>=4.0.0
 scipy
-pystray
-pytz
 networkx
 lxml
 resvg-py>=0.2.6
@@ -38,13 +36,3 @@ neroued-vectorizer>=0.1.1
 neroued-3mf==0.4.0+fatcat.b7; python_version >= "3.12"
 neroued-3mf>=0.4.0,<0.5.0; python_version < "3.12"
 -r requirements-3mf-native.txt
-# Test support for async pytest cases
-pytest>=8.0,<9.0
-pytest-asyncio>=0.23.0
-hypothesis>=6.0,<7.0
-# Phase A4 — Postgres backend scaffold (lazy-imported; only used when
-# LUMINA_BACKEND=postgres or when running `alembic` directly. Default
-# desktop / single-user runs at LUMINA_BACKEND=memory never load these.)
-alembic>=1.14
-sqlalchemy>=2.0
-psycopg[binary]>=3.2

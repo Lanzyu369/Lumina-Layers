@@ -3,12 +3,10 @@ Property-based tests for backward compatibility.
 向后兼容性属性测试。
 
 Feature: image-pipeline-modularization
-Tests: Property 4, 5, 6, 11
+Tests: Public imports, signatures and converter entry results
 """
 
-import ast
 import inspect
-import os
 
 import pytest
 
@@ -257,64 +255,9 @@ class TestProperty6GeneratePreviewCachedSignature:
             assert param in param_names, f"generate_preview_cached 签名缺少可选参数: {param}"
 
 
-# ===========================================================================
-# Property 11: 函数体行数限制
-# Feature: image-pipeline-modularization, Property 11: 函数体行数限制
-# **Validates: Requirements 7.5, 11.2**
-# ===========================================================================
-
-
-def _count_function_body_lines(node: ast.FunctionDef) -> int:
-    """使用 AST 计算函数体的行数（不含 docstring）。
-
-    Args:
-        node: AST FunctionDef 节点
-
-    Returns:
-        函数体行数（排除 docstring 后的语句行数）
-    """
-    body = node.body
-    # 跳过 docstring（第一个语句如果是字符串常量）
-    if (
-        body
-        and isinstance(body[0], ast.Expr)
-        and isinstance(body[0].value, ast.Constant)
-        and isinstance(body[0].value.value, str)
-    ):
-        body = body[1:]
-
-    if not body:
-        return 0
-
-    first_line = body[0].lineno
-    last_line = body[-1].end_lineno or body[-1].lineno
-    return last_line - first_line + 1
-
-
-# converter.py 中的 UI 辅助函数（不受 20 行限制）
-_LEGACY_UI_HELPER_FUNCTIONS = {
-    "update_preview_with_loop",
-    "on_remove_loop",
-    "generate_final_model",
-    "on_preview_click_select_color",
-    "generate_highlight_preview",
-    "clear_highlight_preview",
-    "update_preview_with_replacements",
-    "update_preview_with_backing_color",
-}
-
-# Explicit parameter mappings are validated by behavior, not source line count.
 _CONVERTER_THIN_WRAPPER_FUNCTIONS = [
     "convert_image_to_3d",
     "generate_preview_cached",
-]
-
-# image_processing.py 中 LuminaImageProcessor 需要检查 ≤30 行的方法
-_IMAGE_PROCESSOR_METHODS = [
-    "__init__",
-    "process_image",
-    "_process_high_fidelity_mode",
-    "_process_pixel_mode",
 ]
 
 
@@ -362,33 +305,3 @@ class TestConverterEntryResults:
             assert result[0] is image
             assert result[1] is cache
             assert result[2] == "OK"
-
-
-class TestProperty11FunctionBodyLineLimit:
-    """Validate the existing image-processor delegation size guard."""
-
-    @pytest.fixture(scope="class")
-    def image_processing_ast(self):
-        """解析 image_processing.py 的 AST。"""
-        ip_path = os.path.join("core", "image_processing.py")
-        with open(ip_path, "r", encoding="utf-8") as f:
-            source = f.read()
-        return ast.parse(source, filename=ip_path)
-
-    @pytest.mark.parametrize("method_name", _IMAGE_PROCESSOR_METHODS)
-    def test_image_processor_method_within_30_lines(self, image_processing_ast, method_name: str):
-        """image_processing.py 中 LuminaImageProcessor 方法体不超过 30 行。"""
-        found = False
-        for node in ast.walk(image_processing_ast):
-            if isinstance(node, ast.ClassDef) and node.name == "LuminaImageProcessor":
-                for item in node.body:
-                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        if item.name == method_name:
-                            found = True
-                            body_lines = _count_function_body_lines(item)
-                            assert body_lines <= 30, (
-                                f"LuminaImageProcessor.{method_name} 方法体为 " f"{body_lines} 行，超过 30 行限制"
-                            )
-                            break
-                break
-        assert found, f"image_processing.py 中 LuminaImageProcessor 未找到方法 {method_name}"

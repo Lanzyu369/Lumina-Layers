@@ -92,28 +92,26 @@ All notable changes to Lumina Studio are documented in this file.
 - Fixed missing import for safe_fix_3mf_names in BW calibration generation
 - Fixed coating/outline compatibility when both features enabled simultaneously
 - Fixed relief/cloisonné mutual exclusion with auto-disable and info toast
-- Fixed preview click coordinate transformation for Gradio 6.0
+- Fixed preview click coordinate transformation
 - Fixed 5-Color high-fidelity top/bottom and left/right orientation
 - Fixed 5-Color Extended model orientation and SVG layer count
 - Disabled 2.5D relief for 5-Color Extended mode
 - Fixed 2.5D relief mode state leaks, hex key mismatch and parameter clamping
 - Fixed SVG subpath handling
 - Fixed color_recipe_path return value inconsistency after main branch merge
-- Removed svg_to_mesh internal progress calls to avoid Gradio event loop GIL interference
+- Removed svg_to_mesh internal progress calls to avoid UI event loop GIL interference
 - Removed redundant preview pre-generation in generate_with_auto_preview
 - Fixed HEIC format support: frontend display, upload file_types, passback conversion
 - Fixed cached 3MF invalidation when parameters change
 - Fixed ModelingMode None crash on image upload
-- Unified 8-color stacks asset path resolution for PyInstaller
+- Unified 8-color stacks asset path resolution
 - Restored ZIP_DEFLATED compression and indent alignment
 - Removed leftover conflict marker in bambu_3mf_writer.py
-- Removed file_types from gr.Image calls (incompatible with Gradio 6.5.1)
-- Fixed SVG upload crash due to Gradio base64 preprocessing bug
+- Fixed SVG upload crash during base64 preprocessing
 - Fixed SVG geometry crop: replaced pixel-based Dual-Pass Crop with geometry-based bounds crop
 - Fixed SVG even-odd fill rule when combining subpaths
-- Fixed icon.ico regenerated as square sizes and bundled in PyInstaller
+- Fixed icon.ico dimensions
 - Fixed slicer launch return count mismatch (5 outputs)
-- Fixed bambu_config_template.json not bundled in PyInstaller and artifact; fixed frozen path resolution
 - Removed unused create_5color_combination_tab and duplicate helper functions from layout_new.py
 
 ### Features (Post-Release)
@@ -196,7 +194,7 @@ All notable changes to Lumina Studio are documented in this file.
 
 ### Bug Fixes
 - Fixed black background in vector mode 2D preview
-- Fixed preview click coordinate transformation for Gradio 6.0
+- Fixed preview click coordinate transformation
 - Added missing colormath library to requirements
 
 ### Other
@@ -259,7 +257,6 @@ All notable changes to Lumina Studio are documented in this file.
 - **Modeling Mode Consolidation** - High-Fidelity mode replaces Vector & Woodblock modes; two unified modes (High-Fidelity / Pixel Art)
 - **Dynamic Language Toggle** - Click language button to switch Chinese/English; full UI translation without page reload
 - **Output Directory** - Save output files to local project output directory instead of C: temp
-- **Gradio Temp Directory Redirect** - Redirected Gradio temp directory to project directory
 
 ### Bug Fixes
 - Fixed 3MF naming issue when colors are missing; use local output dir
@@ -280,7 +277,6 @@ All notable changes to Lumina Studio are documented in this file.
 - **Auto Port Selection** - Automatically selects available port to avoid conflicts
 
 ### Bug Fixes
-- Fixed Gradio 6.0+ compatibility
 - Fixed macOS 26812 trace trap memory issue
 - Fixed cumulative generation statistics font color
 - Fixed language switch button styling

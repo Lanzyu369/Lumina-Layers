@@ -2,7 +2,7 @@
 Unit tests for processing_ops submodules.
 processing_ops 子模块的单元测试。
 
-覆盖范围：bilateral_filter, median_filter, kmeans_quantizer, image_scaler
+覆盖范围：bilateral_filter, median_filter, kmeans_quantizer
 测试边界情况：空数组、单像素图像、极端参数值
 
 _需求: 10.2, 10.6_
@@ -13,7 +13,6 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from config import ModelingMode, PrinterConfig
 
 
 # ===========================================================================
@@ -280,7 +279,7 @@ class TestHighFidelityImageProcessing:
         )
         idx = np.indices((12, 12)).sum(axis=0) % len(colors)
         rgb = colors[idx]
-        processor = SimpleNamespace(use_lut_constrained=False, lut_fingerprint=None, _last_unique_colors=0)
+        processor = SimpleNamespace(use_lut_constrained=False, _last_unique_colors=0)
 
         quantized, unique_colors, processed = LuminaImageProcessor._prepare_high_fidelity_images(
             processor,
@@ -298,110 +297,3 @@ class TestHighFidelityImageProcessing:
             (0, 0, 255),
             (255, 255, 0),
         }
-
-
-# ===========================================================================
-# image_scaler 单元测试
-# ===========================================================================
-
-class TestImageScaler:
-    """image_scaler.calculate_target_dimensions 的单元测试。"""
-
-    def test_high_fidelity_pixel_scale(self):
-        """HIGH_FIDELITY 模式下 pixel_scale = 0.1。"""
-        from core.pipeline.processing_ops.image_scaler import calculate_target_dimensions
-
-        target_w, target_h, pixel_scale = calculate_target_dimensions(
-            img_width=100, img_height=100,
-            target_width_mm=50.0,
-            modeling_mode=ModelingMode.HIGH_FIDELITY,
-        )
-        assert pixel_scale == pytest.approx(0.1)
-
-    def test_pixel_mode_pixel_scale(self):
-        """PIXEL 模式下 pixel_scale = NOZZLE_WIDTH。"""
-        from core.pipeline.processing_ops.image_scaler import calculate_target_dimensions
-
-        target_w, target_h, pixel_scale = calculate_target_dimensions(
-            img_width=100, img_height=100,
-            target_width_mm=50.0,
-            modeling_mode=ModelingMode.PIXEL,
-        )
-        assert pixel_scale == pytest.approx(PrinterConfig.NOZZLE_WIDTH)
-
-    def test_returns_positive_integers(self):
-        """返回正整数 target_w, target_h。"""
-        from core.pipeline.processing_ops.image_scaler import calculate_target_dimensions
-
-        target_w, target_h, pixel_scale = calculate_target_dimensions(
-            img_width=200, img_height=150,
-            target_width_mm=80.0,
-            modeling_mode=ModelingMode.HIGH_FIDELITY,
-        )
-        assert isinstance(target_w, int)
-        assert isinstance(target_h, int)
-        assert target_w > 0
-        assert target_h > 0
-
-    def test_aspect_ratio_preserved(self):
-        """宽高比保持一致。"""
-        from core.pipeline.processing_ops.image_scaler import calculate_target_dimensions
-
-        img_w, img_h = 200, 100
-        target_w, target_h, _ = calculate_target_dimensions(
-            img_width=img_w, img_height=img_h,
-            target_width_mm=80.0,
-            modeling_mode=ModelingMode.HIGH_FIDELITY,
-        )
-        original_ratio = img_w / img_h
-        result_ratio = target_w / target_h
-        # 由于 int 截断，允许小误差
-        assert abs(original_ratio - result_ratio) < 0.1
-
-    def test_high_fidelity_target_w_calculation(self):
-        """HIGH_FIDELITY 模式下 target_w = target_width_mm * 10。"""
-        from core.pipeline.processing_ops.image_scaler import calculate_target_dimensions
-
-        target_w, _, _ = calculate_target_dimensions(
-            img_width=100, img_height=100,
-            target_width_mm=50.0,
-            modeling_mode=ModelingMode.HIGH_FIDELITY,
-        )
-        assert target_w == 500  # 50mm * 10 px/mm
-
-    def test_pixel_mode_target_w_calculation(self):
-        """PIXEL 模式下 target_w = target_width_mm / NOZZLE_WIDTH。"""
-        from core.pipeline.processing_ops.image_scaler import calculate_target_dimensions
-
-        target_w, _, _ = calculate_target_dimensions(
-            img_width=100, img_height=100,
-            target_width_mm=42.0,
-            modeling_mode=ModelingMode.PIXEL,
-        )
-        expected = int(42.0 / PrinterConfig.NOZZLE_WIDTH)
-        assert target_w == expected
-
-    def test_square_image_produces_square_output(self):
-        """正方形图像应产生正方形输出。"""
-        from core.pipeline.processing_ops.image_scaler import calculate_target_dimensions
-
-        target_w, target_h, _ = calculate_target_dimensions(
-            img_width=100, img_height=100,
-            target_width_mm=50.0,
-            modeling_mode=ModelingMode.HIGH_FIDELITY,
-        )
-        assert target_w == target_h
-
-    def test_high_fidelity_rounds_float_epsilon_to_expected_pixel_width(self):
-        """Float epsilon in physical width must not shrink the target by one pixel."""
-        from core.pipeline.processing_ops.image_scaler import calculate_target_dimensions
-
-        target_w, target_h, _ = calculate_target_dimensions(
-            img_width=78,
-            img_height=56,
-            target_width_mm=7.799999999999997,
-            modeling_mode=ModelingMode.HIGH_FIDELITY,
-        )
-
-        assert target_w == 78
-        assert target_h == 56

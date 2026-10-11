@@ -100,13 +100,6 @@ export interface WidgetStore {
   closeColor2DOverlay: () => void;
 }
 
-// ===== 吸附计算 =====
-export interface SnapResult {
-  shouldSnap: boolean;
-  edge: "left" | "right" | null;
-  snappedPosition: { x: number; y: number };
-}
-
 // ===== Widget 注册表（静态配置）=====
 export interface WidgetConfig {
   id: WidgetId;

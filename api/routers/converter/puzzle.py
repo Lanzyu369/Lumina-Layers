@@ -73,6 +73,7 @@ from core.material_dynamic_solver import (
 from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 from utils.fatcat_metadata import select_metadata_target
 from utils.merged_bambu_3mf_writer import MaterialSlot as WriterMaterialSlot
+from .generation_params import build_common_generation_params
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
@@ -1279,59 +1280,24 @@ async def generate_puzzle(
         )
 
         worker_params: dict[str, Any] = {
+            **build_common_generation_params(generate_params),
             "target_width_mm": piece.bbox_mm[2] - piece.bbox_mm[0],
-            "spacer_thick": generate_params.spacer_thick,
-            "backing_infill_density_percent": generate_params.backing_infill_density_percent,
-            "enable_base_layer_height_modifier": generate_params.enable_base_layer_height_modifier,
-            "structure_mode": generate_params.structure_mode.value,
-            "color_mode": generate_params.color_mode.value,
             "add_loop": False,
-            "loop_width": generate_params.loop_width,
-            "loop_length": generate_params.loop_length,
-            "loop_hole": generate_params.loop_hole,
             "loop_pos": None,
-            "enable_fridge_magnet": generate_params.enable_fridge_magnet,
-            "fridge_magnets": [item.model_dump(mode="json") for item in generate_params.fridge_magnets],
             "loop_angle": 0.0,
             "loop_offset_x": 0.0,
             "loop_offset_y": 0.0,
             "loop_position_preset": None,
             "modeling_mode": core_modeling_mode,
-            "quantize_colors": generate_params.quantize_colors,
-            "svg_pixels_per_mm": generate_params.svg_pixels_per_mm,
             # Piece PNGs already contain the confirmed SVG compensation.
             "svg_hole_compensation_enabled": False,
-            "svg_hole_max_area_mm2": generate_params.svg_hole_max_area_mm2,
-            "svg_hole_max_width_mm": generate_params.svg_hole_max_width_mm,
             "replacement_regions": None,
-            "separate_backing": generate_params.separate_backing,
-            "enable_relief": generate_params.enable_relief,
             "height_mode": height_mode,
-            "color_height_map": generate_params.color_height_map,
-            "heightmap_max_height": generate_params.heightmap_max_height,
-            "enable_cleanup": generate_params.enable_cleanup,
-            "enable_outline": generate_params.enable_outline,
-            "outline_width": generate_params.outline_width,
-            "enable_cloisonne": generate_params.enable_cloisonne,
-            "wire_width_mm": generate_params.wire_width_mm,
-            "wire_height_mm": generate_params.wire_height_mm,
             "free_color_set": free_color_set,
-            "enable_coating": generate_params.enable_coating,
-            "coating_height_mm": generate_params.coating_height_mm,
-            "hue_weight": generate_params.hue_weight,
-            "chroma_gate": generate_params.chroma_gate,
             "matched_rgb_path": piece_matched_path,
             "piece_boundary_geometry_path": piece_boundary_path,
             "disable_material_dilation": True,
             "center_on_bed": False,
-            "printer_id": generate_params.printer_id,
-            "slicer": generate_params.slicer,
-            "nozzle_size": generate_params.nozzle_size,
-            "device_profile_id": generate_params.device_profile_id,
-            "build_plate_id": generate_params.build_plate_id,
-            "enable_wipe_tower_auto_placement": (
-                generate_params.enable_wipe_tower_auto_placement
-            ),
             "relief_global_max_height": relief_global_max_height,
             "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
             "material_min_layer_count": dynamic_material_settings[1],

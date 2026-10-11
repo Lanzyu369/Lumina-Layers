@@ -62,37 +62,6 @@ const hexColorArray = fc
 
 describe("Feature: free-color-and-replace-fix — Property-Based Tests", () => {
   /**
-   * **Validates: Requirements 1.1, 1.3**
-   *
-   * Property 1: Hex 前缀 round-trip
-   * For any valid hex color string h (without #), applying '#' + h then
-   * .replace(/^#/, '') should produce the same value as h; and '#' + h
-   * should start with '#' and have length 7.
-   */
-  describe("Property 1: Hex 前缀 round-trip", () => {
-    it("adding # prefix then removing it yields the original hex string", () => {
-      fc.assert(
-        fc.property(hexColor, (h) => {
-          const withPrefix = "#" + h;
-          const stripped = withPrefix.replace(/^#/, "");
-          return stripped === h;
-        }),
-        { numRuns: 100 }
-      );
-    });
-
-    it("'#' + h starts with '#' and has length 7", () => {
-      fc.assert(
-        fc.property(hexColor, (h) => {
-          const withPrefix = "#" + h;
-          return withPrefix.startsWith("#") && withPrefix.length === 7;
-        }),
-        { numRuns: 100 }
-      );
-    });
-  });
-
-  /**
    * **Validates: Requirements 2.1, 4.1, 4.2, 4.3**
    *
    * Property 2: 点击设置 pending 而非立即替换

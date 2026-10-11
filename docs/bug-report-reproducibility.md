@@ -14,6 +14,8 @@ Use this guide before changing `/api/feedback/bug-report`, feedback ticket assem
 - Exact-source capture uses `multipart/form-data` with required `request_payload` JSON, optional `original_image`, and repeated `source_files` parts. Source files have no type, size, or count cap. Legacy `original_image_omission_reason=too_large` remains readable for older clients
 - `GET /api/feedback/bug-report/<ticket_id>/status` reports the upload state; `POST /api/feedback/bug-report/<ticket_id>/resubmit` retries a failed upload from the local ticket. Both are local-origin only
 
+- Local report submission and retry have no per-IP quota. The hosted feedback service owns upload throttling and abuse prevention.
+
 ## Ticket Contents
 
 - `ticket.json`: canonical payload (`schema_version=3`) with user description, workflow snapshot, action history, client logs, attachments manifest, `submission` upload state, and `assembly_status`
@@ -92,7 +94,7 @@ The script accepts both new random-monthly and historical daily-serial ids, copi
 
 ## Structured Logging
 
-Structured logging events are whitelisted under `FEEDBACK_STRUCTURED_EVENTS` in `tests/test_logging_exception_governance_unit.py`:
+Feedback assembly events identify the relevant step in a submitted ticket. Their behavior is covered by the feedback router, assembler, and hosted-submission tests:
 
 - `feedback_bug_report_submitted`
 - `feedback_ticket_assembled_init`
@@ -100,4 +102,4 @@ Structured logging events are whitelisted under `FEEDBACK_STRUCTURED_EVENTS` in 
 - `feedback_attachment_collected`
 - `feedback_materials_bundle_packed_done`
 
-`feedback_hosted_submission_done` (INFO) and `feedback_hosted_submission_failed` (WARNING) record upload outcomes; rate-limit events are also allowed. WARNING / ERROR events (`feedback_ticket_assembly_interrupted`, `feedback_materials_bundle_packed_failed`, etc.) are off the INFO whitelist by design.
+`feedback_hosted_submission_done` (INFO) and `feedback_hosted_submission_failed` (WARNING) record upload outcomes. WARNING / ERROR events (`feedback_ticket_assembly_interrupted`, `feedback_materials_bundle_packed_failed`, etc.) retain useful failure details. No source event whitelist or INFO count baseline needs updating.

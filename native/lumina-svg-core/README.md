@@ -97,15 +97,14 @@ not a substitute for the projection entry point.
 
 The desktop engine no longer rejects valid local SVG input because of a
 configured byte, element, path, command, CSS, clone-work, or elapsed-time
-quota. Parsing and geometry counters remain only to detect integer-size
-overflow and invalid numeric state before a C++ container or coordinate cast
-would wrap. Actual allocation failures, file errors, malformed XML, invalid
+quota. Checks tied to representable container sizes, coordinate casts and
+parser validity remain; cumulative CSS and geometry work accounting is removed.
+Actual allocation failures, file errors, malformed XML, invalid
 coordinates, unsupported SVG semantics, and real recursion cycles still fail
 as whole-document errors.
 
-The geometry kernel records actual Boolean inputs, Clipper work, and returned
-output for diagnostics and overflow checks; these counters are not admission
-budgets and do not lower CPU parallelism. Raw paths retain the exact
+The geometry kernel runs Boolean operations without an auxiliary work ledger
+or budget state passed through each helper. Raw paths retain the exact
 self-intersection and canonical-boundary algorithms, including the #603
 integer geometry rules. Operands already canonicalized by Clipper are not
 scanned again by a shadow Boolean pass.

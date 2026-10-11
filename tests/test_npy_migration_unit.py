@@ -12,7 +12,6 @@ file scanning, and upload auto-conversion.
 
 import os
 import json
-import inspect
 import tempfile
 import shutil
 
@@ -49,36 +48,28 @@ class TestConfigLUTFilePath:
 # ============================================================
 
 
-class TestStatsPreserveFiles:
-    """验证 Stats 模块两处 preserve_files 包含 lumina_lut.json。"""
+def test_output_cleanup_preserves_lut_and_statistics(tmp_path, monkeypatch):
+    import utils.stats as stats_module
 
-    def test_clear_output_preserve_files_contains_json(self):
-        """clear_output() 中的 preserve_files 应包含 'lumina_lut.json'。"""
-        source = inspect.getsource(Stats.clear_output)
-        assert (
-            '"lumina_lut.json"' in source or "'lumina_lut.json'" in source
-        ), "clear_output() 的 preserve_files 应包含 'lumina_lut.json'"
+    monkeypatch.setattr(stats_module, "OUTPUT_DIR", str(tmp_path))
+    lut = tmp_path / "lumina_lut.json"
+    counters = tmp_path / "lumina_stats.txt"
+    lut.write_text('{"colors": []}', encoding="utf-8")
+    counters.write_text("conversions:7\n", encoding="utf-8")
+    (tmp_path / "preview.png").write_bytes(b"preview")
+    nested = tmp_path / "models"
+    nested.mkdir()
+    (nested / "model.3mf").write_bytes(b"model")
 
-    def test_clear_output_preserve_files_not_npy(self):
-        """clear_output() 中的 preserve_files 不应包含 'lumina_lut.npy'。"""
-        source = inspect.getsource(Stats.clear_output)
-        assert (
-            '"lumina_lut.npy"' not in source and "'lumina_lut.npy'" not in source
-        ), "clear_output() 的 preserve_files 不应包含 'lumina_lut.npy'"
+    assert Stats.get_output_size() == len(b"preview") + len(b"model")
+    removed, failed = Stats.clear_output()
 
-    def test_get_output_size_preserve_files_contains_json(self):
-        """get_output_size() 中的 preserve_files 应包含 'lumina_lut.json'。"""
-        source = inspect.getsource(Stats.get_output_size)
-        assert (
-            '"lumina_lut.json"' in source or "'lumina_lut.json'" in source
-        ), "get_output_size() 的 preserve_files 应包含 'lumina_lut.json'"
+    assert removed == 2
+    assert failed == []
+    assert {p.name for p in tmp_path.iterdir()} == {"lumina_lut.json", "lumina_stats.txt"}
+    assert lut.read_text(encoding="utf-8") == '{"colors": []}'
+    assert counters.read_text(encoding="utf-8") == "conversions:7\n"
 
-    def test_get_output_size_preserve_files_not_npy(self):
-        """get_output_size() 中的 preserve_files 不应包含 'lumina_lut.npy'。"""
-        source = inspect.getsource(Stats.get_output_size)
-        assert (
-            '"lumina_lut.npy"' not in source and "'lumina_lut.npy'" not in source
-        ), "get_output_size() 的 preserve_files 不应包含 'lumina_lut.npy'"
 
 
 # ============================================================

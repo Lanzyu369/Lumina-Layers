@@ -124,7 +124,7 @@ Modify:
   - Add explicit `psutil>=5.9` for PID/create-time owner identity.
 - `.gitignore`
   - Ignore resource-store runtime journals/leases/index backups without ignoring test fixtures.
-- `docs/agents/domain.md`, a new `CONTEXT-MAP.md`, and a new `docs/context/resource-store/CONTEXT.md`
+- `CONTEXT-MAP.md` and a new `docs/context/resource-store/CONTEXT.md`
   - Record ownership and invariants after code exists.
 
 ## Persisted Layout
@@ -226,7 +226,7 @@ Task 1 also defines typed `ResourceAtomicPublishUnsupported`, `ResourceCapacityE
 
 - [ ] **Step 4: Implement persisted model boundaries**
 
-Define frozen identity/value objects and strict aggregate models with bilingual Google-style public docstrings. Repository code never mutates a loaded aggregate in place; it builds and fully validates a new copy before serialization. `ResourceIndexDelta` canonicalizes/deep-copies its maps and exposes read-only mappings/tuples so caller mutation cannot change a journaled delta hash:
+Define frozen identity/value objects and strict aggregate models with documentation of their public behavior. Repository code never mutates a loaded aggregate in place; it builds and fully validates a new copy before serialization. `ResourceIndexDelta` canonicalizes/deep-copies its maps and exposes read-only mappings/tuples so caller mutation cannot change a journaled delta hash:
 
 ```python
 ResourceKind = Literal["material", "lut"]
@@ -1227,7 +1227,6 @@ git commit -m "feat(resources): audit and repair local resource stores"
 **Files:**
 - Create: `docs/context/resource-store/CONTEXT.md`
 - Create: `CONTEXT-MAP.md`
-- Modify: `docs/agents/domain.md`
 - Modify: `.gitignore`
 
 - [ ] **Step 1: Document ownership and invariants**
@@ -1281,7 +1280,7 @@ Expected: no runtime index/journal/lease/database is newly tracked and no token 
 
 ```bash
 set -euo pipefail
-git add docs/context/resource-store/CONTEXT.md CONTEXT-MAP.md docs/agents/domain.md .gitignore
+git add docs/context/resource-store/CONTEXT.md CONTEXT-MAP.md .gitignore
 git commit -m "docs(resources): map resource store ownership"
 ```
 

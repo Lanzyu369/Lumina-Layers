@@ -11,7 +11,7 @@
 大规模耗材/层数组合：使用有限候选覆盖缓存 + 目标色反向精修
 ```
 
-这个文档只描述设计和实际落地可行性，不直接授权开始实现。进入代码实现前，必须先按仓库规约把这项计划登记到在线 tracking spreadsheet，并单独评审 implementation plan。
+这个文档描述设计和实际落地可行性；是否实施及实施范围以当前用户任务为准。
 
 ## 当前证据
 
@@ -863,4 +863,3 @@ python scripts/run_vitest.py run
 7. 固定 palette/config 时 hybrid lookup 确定。
 8. hybrid candidate count 受 config 严格限制。
 9. 实现提供清晰 feature flag 或 resolver switch，方便回滚。
-10. 开始实现前，online tracking spreadsheet 已登记这项 planned change。

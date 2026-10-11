@@ -4,7 +4,7 @@
 
 **Goal:** Close out the remaining PR #318 review findings so the material-registry split can be re-reviewed and merged safely, while treating PR #242 as superseded by PR #318.
 
-**Architecture:** PR #318 splits material-registry responsibilities across the FastAPI registry routes, local/cloud material sync frontend, Electron desktop packaging, and seeded material archives. The closeout must keep the existing boundary intact: API routes validate/translate request errors, `core/single_stage` owns package limits and archive logic, frontend panels render user-friendly cloud/local states, and Electron packaging must include runtime resources referenced by `electron/main.cjs`.
+**Architecture:** PR #318 splits material-registry responsibilities across the FastAPI registry routes, local/cloud material sync frontend, and seeded material archives. API routes validate and translate request errors, `core/single_stage` owns archive logic, and frontend panels render user-friendly cloud/local states.
 
 **Tech Stack:** Python/FastAPI, pytest, React 19, TypeScript, Vitest, Electron Builder, GitHub PR workflow.
 
@@ -15,7 +15,6 @@
 - PR #318: `shmx/feat/material-registry-split-plan` -> `dev-refactor`, head `25c3f89f00215b5376fd50715004240dd59b7aed`, merge state currently dirty.
 - PR #242: `Min/feat/material-registry-package-v2` -> `dev-refactor`, review decision is changes requested and the branch is an ancestor/superseded subset of PR #318.
 - Previous verification found PR #318 targeted backend tests, targeted Vitest tests, and frontend TypeScript check passing, but four closeout issues remain.
-- Before implementation, register this planned closeout in the online tracking spreadsheet per repository process.
 
 ## Task 0: Prepare Isolated Closeout Workspace
 
@@ -147,41 +146,6 @@
 
 **Expected result:** Oversized registry uploads are rejected before the whole archive is accepted into temp storage, and existing registry/sync tests still pass.
 
-## Task 3: Include Material Seed in Desktop Packaging
-
-**Files:**
-
-- `electron/package.json`
-- `tests/test_desktop_build_contract_unit.py` or an existing desktop packaging contract test if one exists.
-
-**Purpose:** Make the packaged desktop app include the material seed that `scripts/build_desktop.py` copies and `electron/main.cjs` reads at runtime.
-
-**Steps:**
-
-- [ ] Add a failing contract test that reads `electron/package.json` and asserts `build.extraResources` contains:
-
-  ```json
-  {
-    "from": "resources/materials",
-    "to": "materials"
-  }
-  ```
-
-- [ ] Run the new contract test before implementation:
-
-  ```bash
-  python -m pytest tests/test_desktop_build_contract_unit.py -q
-  ```
-
-- [ ] Update `electron/package.json` under `build.extraResources` to include the `resources/materials` directory.
-- [ ] Re-run:
-
-  ```bash
-  python -m pytest tests/test_desktop_build_contract_unit.py -q
-  ```
-
-**Expected result:** Desktop packaging now carries `electron/resources/materials/lumina-materials-seed.zip` to `process.resourcesPath/materials/lumina-materials-seed.zip`, matching `electron/main.cjs`.
-
 ## Task 4: Render a Friendly No-Registry Cloud State
 
 **Files:**
@@ -273,7 +237,6 @@
     tests/test_material_sync_api_unit.py \
     tests/test_material_sync_scheduler_unit.py \
     tests/test_material_seed_unit.py \
-    tests/test_desktop_build_contract_unit.py \
     -q
   ```
 
@@ -347,7 +310,6 @@
   ```text
   chore(materials): fix registry split plan whitespace
   fix(materials): cap registry service package uploads
-  fix(desktop): package bundled material seed
   fix(materials): show no-registry cloud library notice
   ```
 

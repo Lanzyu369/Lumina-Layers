@@ -1,38 +1,65 @@
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
+import { trackLuminaEvent } from "../../analytics/umami";
+import {
+  apiErrorToVisibleMessage,
+  downloadResourceBlob,
+} from "../../api/client";
+import {
+  applyRecipeOverride as apiApplyRecipeOverride,
+  autoDetectColors as apiAutoDetectColors,
+  cleanupSessionFiles as apiCleanupSessionFiles,
+  colorHighlight as apiColorHighlight,
+  convertPreview as apiConvertPreview,
+  convertPuzzleLayoutPreview as apiConvertPuzzleLayoutPreview,
+  cropImage as apiCropImage,
+  detectRegion as apiDetectRegion,
+  fetchBedSizes as apiFetchBedSizes,
+  fetchGradientGroups as apiFetchGradientGroups,
+  fetchLutColors as apiFetchLutColors,
+  fetchLutList as apiFetchLutList,
+  getEditorCommitStatus as apiGetEditorCommitStatus,
+  getEditorSelection as apiGetEditorSelection,
+  mutateEditorSelection as apiMutateEditorSelection,
+  mutateFreeColors as apiMutateFreeColors,
+  regionReplace as apiRegionReplace,
+  regionReplaceBatch as apiRegionReplaceBatch,
+  regionRequantize as apiRegionRequantize,
+  replaceColor as apiReplaceColor,
+  replaceColorsBatch as apiReplaceColorsBatch,
+  replacementHistory as apiReplacementHistory,
+  resetReplacements as apiResetReplacements,
+  selectModelSurface as apiSelectModelSurface,
+  uploadHeightmap as apiUploadHeightmap,
+  uploadLut as apiUploadLut,
+  uploadModelSurface as apiUploadModelSurface
+} from "../../api/converter";
+import {
+  fetchLutCatalog as apiFetchLutCatalog,
+  fetchLutDetailsCatalog as apiFetchLutDetailsCatalog,
+  fetchLutInfo as apiFetchLutInfo,
+  fetchSessionLutInfo as apiFetchSessionLutInfo,
+} from "../../api/lut";
+import { fetchMaterialColorSuggestions } from "../../api/materialCache";
+import { uploadImagePreview } from "../../api/system";
 import type {
-  ColorMode,
-  ModelingMode,
-  StructureMode,
-  ColorReplacementItem,
-  RecipeOverrideItem,
-  RecipeHistoryItem,
-  VirtualMaterial,
-  BedSizeItem,
-  PaletteEntry,
   AutoHeightMode,
-  BatchResponse,
-  BatchPreviewItem,
-  LutInfoResponse,
+  ColorMode,
+  DynamicMaterialResultResponse,
   FridgeMagnetItem,
+  GradientSelectionSource,
+  MaterialColorSuggestionsResponse,
+  ModelingMode,
+  ModelSurfaceSelectResponse,
+  PaletteEntry,
   PuzzleConnectorStyle,
   PuzzleSizingMode,
   PuzzleStyle,
-  NativeBrandGroup,
-  LutSupportedMode,
-  LutDetailsCatalogGroup,
-  LutColorsCard,
-  PerformanceTiming,
+  RecipeHistoryItem,
   ReplacementHistoryResponse,
-  EditorCommitResult,
   SelectionDocumentResponse,
-  DynamicMaterialRecipe,
-  DynamicMaterialResultResponse,
-  MaterialLayerBenefitPoint,
-  MaterialLayerBenefitScope,
-  ModelSurfaceCandidate,
-  ModelSurfaceMeshSummary,
-  ModelSurfaceSelectResponse,
+  StructureMode,
+  VirtualMaterial
 } from "../../api/types";
 import {
   ColorMode as ColorModeEnum,
@@ -40,61 +67,28 @@ import {
   StructureMode as StructureModeEnum,
 } from "../../api/types";
 import {
-  fetchLutList as apiFetchLutList,
-  convertPreview as apiConvertPreview,
-  convertGenerate as apiConvertGenerate,
-  convertGenerateLargeFormat as apiConvertGenerateLargeFormat,
-  convertGeneratePuzzle as apiConvertGeneratePuzzle,
-  convertPuzzleLayoutPreview as apiConvertPuzzleLayoutPreview,
-  fetchLayerImages as apiFetchLayerImages,
-  fetchBedSizes as apiFetchBedSizes,
-  uploadHeightmap as apiUploadHeightmap,
-  fetchLutColors as apiFetchLutColors,
-  cropImage as apiCropImage,
-  convertBatch as apiConvertBatch,
-  replaceColor as apiReplaceColor,
-  replaceColorsBatch as apiReplaceColorsBatch,
-  colorHighlight as apiColorHighlight,
-  detectRegion as apiDetectRegion,
-  regionReplace as apiRegionReplace,
-  regionReplaceBatch as apiRegionReplaceBatch,
-  regionRequantize as apiRegionRequantize,
-  applyRecipeOverride as apiApplyRecipeOverride,
-  resetReplacements as apiResetReplacements,
-  replacementHistory as apiReplacementHistory,
-  mutateFreeColors as apiMutateFreeColors,
-  getEditorSelection as apiGetEditorSelection,
-  getEditorCommitStatus as apiGetEditorCommitStatus,
-  mutateEditorSelection as apiMutateEditorSelection,
-  autoDetectColors as apiAutoDetectColors,
-  cleanupSessionFiles as apiCleanupSessionFiles,
-  uploadLut as apiUploadLut,
-  getGlbStatus as apiGetGlbStatus,
-  rebuildVectorPreviewRenderer as apiRebuildVectorPreviewRenderer,
-  uploadModelSurface as apiUploadModelSurface,
-  selectModelSurface as apiSelectModelSurface,
-} from "../../api/converter";
+  createFridgeMagnetFromPreset,
+  getDefaultFridgeMagnetPresetKey,
+  normalizeFridgeMagnetItem,
+  resolveFridgeMagnetSpacerThick,
+} from "../../constants/fridgeMagnets";
 import {
-  apiErrorToVisibleMessage,
-  downloadResourceBlob,
-} from "../../api/client";
-import type { ApiRequestOptions } from "../../api/client";
-import type { LutColorEntry, LutInfo } from "../../api/types";
+  SVG_HOLE_COMPENSATION_DEFAULTS,
+  svgHoleCompensationOptions,
+  validSvgHoleCompensationOptions,
+  type SvgHoleCompensationOptions,
+} from "../../constants/svgHoleCompensation";
+import { tRuntime } from "../../i18n/runtime";
 import {
-  fetchLutInfo as apiFetchLutInfo,
-  fetchLutCatalog as apiFetchLutCatalog,
-  fetchLutDetailsCatalog as apiFetchLutDetailsCatalog,
-  fetchSessionLutInfo as apiFetchSessionLutInfo,
-} from "../../api/lut";
+  postClientLog,
+  summarizeErrorForLog,
+  summarizeFileForLog,
+} from "../../utils/clientLog";
 import {
-  computeAutoHeightMap,
   colorRemapToReplacementRegions,
-  toAbsoluteReliefHeightMap,
+  computeAutoHeightMap
 } from "../../utils/colorUtils";
-import { normalizeResourceUrl } from "../../utils/resourceUrl";
 import { rememberDerivedImageSource, resolveSourceFile } from "../../utils/sourceFileOrigins";
-import { computeScaleFactor } from "../../utils/scaleUtils";
-import { createPreviewSpace, type PreviewSpaceBounds } from "../../utils/previewSpace";
 import {
   autoLayoutFridgeMagnets,
   buildSuggestedFridgeMagnetCenters,
@@ -103,102 +97,67 @@ import {
   layoutFridgeMagnetsByCenters,
 } from "../../utils/fridgeMagnetLayout";
 import {
-  createFridgeMagnetFromPreset,
-  getDefaultFridgeMagnetPresetKey,
-  normalizeFridgeMagnetItem,
-  resolveFridgeMagnetSpacerThick,
-} from "../../constants/fridgeMagnets";
+  isSvgImageFile,
+  rotateImageFile,
+  type ImageRotationDegrees,
+} from "../../utils/imageRotation";
+import { createPreviewSpace,type PreviewSpaceBounds } from "../../utils/previewSpace";
+import { normalizeResourceUrl } from "../../utils/resourceUrl";
+import { computeScaleFactor } from "../../utils/scaleUtils";
+import {
+  registerPreviewArtifactInvalidator
+} from "../generatedArtifactInvalidation";
+import { lutErrorToVisibleMessage } from "../lutErrorMessages";
+import { registerPrinterBedLabelSynchronizer } from "../printerBedLabelSync";
 import { useSettingsStore } from "../settingsStore";
 import {
-  SVG_HOLE_COMPENSATION_DEFAULTS,
-  svgHoleCompensationOptions,
-  validSvgHoleCompensationOptions,
-  type SvgHoleCompensationOptions,
-} from "../../constants/svgHoleCompensation";
-import { lutErrorToVisibleMessage } from "../lutErrorMessages";
+  newestEditorContentRevision
+} from "./editorRevision";
 import {
-  postClientLog,
-  summarizeErrorForLog,
-  summarizeFileForLog,
-} from "../../utils/clientLog";
-import { trackLuminaEvent } from "../../analytics/umami";
+  buildCurrentVisibleColorRemapMap,buildSourceChangeProjectColorState,chooseLastSelectedColor,clonePortableProjectColorState,cloneRecipeOverrides,cloneRemapHistory,cloneReplacementRegions,colorRemapFromReplacementRegions,createAdjustmentSnapshot,editorCommitResultStateFromResponse,EMPTY_LUT_MATCH_STATE,getPreviewBaseUrl,hasAdjustmentState,historyFlagsFromResponse,INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,matchesColorHighlightSnapshot,normalizeHexNoHash,normalizeReplacementRegionsFromHistory,selectionModeForTool,selectionStateFromDocument,selectionToolForLegacyMode,toggleHexInSet,
+} from "./editorState";
 import {
-  captureGeneratedArtifactIdentity,
-  isGeneratedArtifactIdentityCurrent,
-  registerGeneratedArtifactInvalidator,
-  registerPreviewArtifactInvalidator,
-  registerSingleItemDownloadInvalidator,
-} from "../generatedArtifactInvalidation";
-import { registerPrinterBedLabelSynchronizer } from "../printerBedLabelSync";
-import { uploadImagePreview } from "../../api/system";
-import { tRuntime } from "../../i18n/runtime";
-import { fetchMaterialColorSuggestions } from "../../api/materialCache";
-import { fetchGradientGroups as apiFetchGradientGroups } from "../../api/converter";
-import type { WorkshopRecipeSource } from "../../workshop/types";
-import {
-  showBrowserCompletionNotification,
-  type CompletionNotificationKind,
-} from "../../utils/browserNotifications";
-import type {
-  GradientGroupItem,
-  GradientSelectionSource,
-  MaterialColorSuggestionsResponse,
-} from "../../api/types";
+  createGenerationActions,getElapsedMsSince,getErrorType,invalidateGenerationRequests,notifyCompletion,
+} from "./generationActions";
 import {
   buildLutCatalogIndex,
   findLutLocationByPath,
 } from "./legacyLutSelection";
 import {
-  isSvgImageFile,
-  rotateImageFile,
-  type ImageRotationDegrees,
-} from "../../utils/imageRotation";
-import { resolveVectorPreviewRenderer } from "../../utils/vectorPreviewRenderer";
-import {
-  isGenerateRevisionConflict,
-  newestEditorContentRevision,
-} from "./editorRevision";
+  buildPuzzlePreviewParams,buildPuzzlePreviewSourceKey,cancelDerivedPreviewWork,createDerivedPreviewActions,DEFAULT_LAYER_IMAGES_STATE,DEFAULT_PUZZLE_PREVIEW_STATE,
+} from "./previewArtifacts";
 import {
   canCommitPreviewResponse,
   capturePreviewCommitGuard,
   type PreviewCommitGuard,
   type PreviewCommitOwner,
 } from "./previewCommitGuard";
+import { buildMissingAutoReliefHeightMap,buildPreviewParams } from "./requests";
+import {
+  buildConversionSourceParams,buildNativeModelDefaults,buildNativeModelState,clampValue,filterNativeBrandGroups,getMaterialArchiveReliefMinimumExtraHeight,getNativeBrandGroupByKey,getNativeDbNamesForGroup,getNativeDbOptionNames,getSelectedNativeBrandGroup,getSupportedModeByPair,inferDefaultMaterialBackingDirName,isDynamicMaterialActive,MATERIAL_DYNAMIC_LAYER_COUNT_MAX,MATERIAL_DYNAMIC_LAYER_COUNT_MIN,normalizeDynamicMaterialLayerCount,normalizeLegacyLutNames,normalizeLutColorMode,normalizeLutDrivenReliefState,normalizeLutGroups,normalizeNativeBrandGroups,normalizePublicColorMode,normalizeStringArray,RELIEF_MAX_EXTRA_HEIGHT_MM,resolveConverterSourceSelection,resolveMaterialPrintLayerCount,resolveNativeBrandSelection,resolveNativeSupportedModeForBrand,resolvePreferredSupportedMode,
+} from "./sources";
+import type {
+  ConverterActions,ConverterState,ModelSurfaceModelRotation,ModelSurfacePlacement,PendingReplacement,RegionData,SelectionDocument,SelectionMode,SelectionTool,SourceVersion,
+} from "./types";
+export { CONVERTER_ERROR_KEYS } from "./generationActions";
+export { buildLayerImagesSourceKey } from "./previewArtifacts";
+export {
+  clampValue,getMaterialArchiveReliefMinimumExtraHeight,getMaterialArchiveReliefMinimumTotalHeight,inferDefaultMaterialBackingDirName,isDynamicMaterialActive,MATERIAL_DYNAMIC_LAYER_COUNT_MAX,MATERIAL_DYNAMIC_LAYER_COUNT_MIN,resolveConverterSourceSelection,
+} from "./sources";
+export type {
+  ContentCommitStatus,ConverterActions,ConverterState,ModelSurfaceModelRotation,ModelSurfacePlacement,ModelSurfacePlacementMode,PendingReplacement,RegionData,SelectionDocument,SelectionMode,SelectionTool,SourceVersion,WorkshopConverterImageInput,
+} from "./types";
 
 type LuminaWindow = Window & {
   __luminaGenerateStart?: number;
   __luminaPreviewStart?: number;
 };
 
-const BATCH_PREVIEW_BROWSER_SAFE_LIMIT = 96;
 const BACKING_INFILL_DENSITY_STORAGE_KEY =
   "lumina_backingInfillDensityPercent";
 const BACKING_INFILL_DENSITY_MIN_PERCENT = 5;
 const BACKING_INFILL_DENSITY_MAX_PERCENT = 100;
 const BACKING_INFILL_DENSITY_DEFAULT_PERCENT = 100;
-
-function notifyCompletion(kind: CompletionNotificationKind): void {
-  const settings = useSettingsStore.getState();
-  if (!settings.enableCompletionNotifications) return;
-  showBrowserCompletionNotification(kind, settings.language);
-}
-
-function looksLikeWhiteMaterialLabel(label: string | null | undefined): boolean {
-  const text = String(label ?? "").trim().toLowerCase();
-  if (!text) return false;
-  if (text.includes("白")) return true;
-  const tokens = text
-    .replace(/\\/g, "/")
-    .replace(/\//g, " ")
-    .replace(/[-_]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
-  return tokens.includes("white") || tokens.includes("w");
-}
-
-export function inferDefaultMaterialBackingDirName(names: string[]): string | null {
-  return names.find((name) => looksLikeWhiteMaterialLabel(name)) ?? names[0] ?? null;
-}
 
 // ===========================================================================
 // Material-archive achievable-color suggestion helpers (module-local state)
@@ -310,53 +269,6 @@ function visibleConverterError(error: unknown, fallback: string): string {
   return apiErrorToVisibleMessage(error, fallback);
 }
 
-function selectionModeForTool(tool: SelectionTool): SelectionMode {
-  return tool === "same-color" ? "select-all" : "multi-select";
-}
-
-function selectionToolForLegacyMode(mode: SelectionMode): SelectionTool {
-  return mode === "select-all" ? "same-color" : "point";
-}
-
-function regionDataFromSelectionComponent(
-  component: SelectionDocument["components"][number],
-  previewUrl: string,
-): RegionData {
-  return {
-    regionId: component.region_id,
-    colorHex: component.color_hex,
-    pixelCount: component.pixel_count,
-    previewUrl,
-    bbox:
-      component.bbox.length === 4
-        ? (component.bbox as [number, number, number, number])
-        : null,
-    clickX: component.anchor[0],
-    clickY: component.anchor[1],
-  };
-}
-
-function selectionStateFromDocument(
-  document: SelectionDocument,
-  previewUrl: string,
-): Partial<ConverterState> {
-  const selectedRegions = document.components.map((component) =>
-    regionDataFromSelectionComponent(component, previewUrl),
-  );
-  const last = selectedRegions[selectedRegions.length - 1] ?? null;
-  return {
-    selectionDocument: document,
-    selectedRegions,
-    regionData: last,
-    selectedColors: new Set(
-      document.selected_color_hexes.map((hex) => hex.replace(/^#/, "")),
-    ),
-    selectedColor: last?.colorHex.replace(/^#/, "") ?? null,
-    historyCanUndo: document.can_undo,
-    historyCanRedo: document.can_redo,
-  };
-}
-
 function selectionUpdatesFromResponse(
   current: ConverterState,
   sessionId: string,
@@ -379,10 +291,6 @@ function selectionUpdatesFromResponse(
   );
 }
 
-export const CONVERTER_ERROR_KEYS = {
-  heightmapUploadRequired: "relief_heightmap_generate_requires_upload",
-} as const;
-
 function clearedHeightmapUploadState() {
   return {
     heightmapThumbnailUrl: null,
@@ -403,80 +311,10 @@ function isSvgFile(file: File): boolean {
   );
 }
 
-// ========== Selection Mode Types ==========
-
-export type SelectionMode =
-  | "select-all"
-  | "current"
-  | "multi-select"
-  | "region";
-
-export type SelectionTool = "same-color" | "color-range" | "point" | "brush";
-
 /** Default CIEDE2000 tolerance for the colour-range selection tool. */
 export const DEFAULT_COLOR_RANGE_TOLERANCE = 6;
 /** Upper bound for the colour-range tolerance slider (ΔE00). */
 export const MAX_COLOR_RANGE_TOLERANCE = 30;
-
-export type SelectionDocument = SelectionDocumentResponse;
-
-export type SourceVersion = "legacy" | "native" | "material";
-
-export interface RegionData {
-  regionId: string;
-  colorHex: string;
-  pixelCount: number;
-  previewUrl: string;
-  contours?: number[][][] | null;
-  bbox?: [number, number, number, number] | null;
-  clickX?: number;
-  clickY?: number;
-}
-
-// ========== Pending Replacement Types ==========
-
-export interface PendingReplacement {
-  sourceHex: string; // 原色 hex（不带 #）
-  targetHex: string; // 目标色 hex（不带 #）
-  mode: SelectionMode; // 触发时的选择模式
-  sourceColors?: string[]; // select-all 批量模式下的多个源色
-  sourceRegions?: RegionData[]; // multi-select 模式下的多个连通区域
-}
-
-type RemapSnapshot = Record<string, string>;
-
-type AdjustmentSnapshot = {
-  colorRemapMap: Record<string, string>;
-  remapHistory: RemapSnapshot[];
-  replacement_regions: ColorReplacementItem[];
-  recipe_overrides: RecipeOverrideItem[];
-  regionReplacementCount: number;
-  previewImageUrl: string | null;
-  previewBaseImageUrl: string | null;
-  originalPreviewUrl: string | null;
-  previewGlbUrl: string | null;
-  color_layers: number | null;
-  layer_height_mm: number | null;
-  lutMatchMode: string | null;
-  lutMatchInfo: Record<string, unknown> | null;
-};
-
-export type ModelSurfacePlacementMode = "edge_to_edge" | "inset";
-
-export interface ModelSurfacePlacement {
-  mode: ModelSurfacePlacementMode;
-  offset_x_mm: number;
-  offset_y_mm: number;
-  scale: number;
-  rotation_deg: number;
-  inset_mm: number;
-}
-
-export interface ModelSurfaceModelRotation {
-  x_deg: number;
-  y_deg: number;
-  z_deg: number;
-}
 
 export const DEFAULT_MODEL_SURFACE_PLACEMENT: ModelSurfacePlacement = {
   mode: "edge_to_edge",
@@ -492,341 +330,6 @@ export const DEFAULT_MODEL_SURFACE_MODEL_ROTATION: ModelSurfaceModelRotation = {
   y_deg: 0,
   z_deg: 0,
 };
-
-// ========== Helpers ==========
-
-export function clampValue(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
-}
-
-const RELIEF_MIN_EXTRA_HEIGHT_MM = 0.08;
-const RELIEF_MAX_EXTRA_HEIGHT_MM = 15.0;
-const MATERIAL_ARCHIVE_RELIEF_LAYER_HEIGHT_MM = 0.08;
-export const MATERIAL_DYNAMIC_LAYER_COUNT_MIN = 5;
-export const MATERIAL_DYNAMIC_LAYER_COUNT_MAX = 10;
-
-function normalizeDynamicMaterialLayerCount(
-  value: number,
-  fallback: number,
-): number {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-  return clampValue(
-    Math.round(value),
-    MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
-    MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
-  );
-}
-
-type MaterialArchiveReliefMinimumState = {
-  source_version: SourceVersion;
-  materialLayerCount: number;
-  materialDynamicLayerCountEnabled?: boolean;
-  materialMaxLayerCount?: number;
-  spacer_thick: number;
-};
-
-type DynamicMaterialActivationState = {
-  source_version: SourceVersion;
-  materialDynamicLayerCountEnabled: boolean;
-};
-
-type MaterialPrintLayerCountState = {
-  source_version: SourceVersion;
-  materialLayerCount: number;
-  materialDynamicLayerCountEnabled?: boolean;
-  materialMaxLayerCount?: number;
-};
-
-export function isDynamicMaterialActive(
-  state: DynamicMaterialActivationState,
-): boolean {
-  return (
-    state.source_version === "material" &&
-    state.materialDynamicLayerCountEnabled === true
-  );
-}
-
-function resolveMaterialPrintLayerCount(
-  state: MaterialPrintLayerCountState,
-): number {
-  return state.source_version === "material" &&
-    state.materialDynamicLayerCountEnabled === true
-    ? (state.materialMaxLayerCount ?? state.materialLayerCount)
-    : state.materialLayerCount;
-}
-
-function resolveRecipeAwareLayerCount(
-  state: ConverterState,
-  baseLayerCount: number | undefined,
-): number | undefined {
-  const overrideLayerCount = state.recipe_overrides.reduce(
-    (maximum, override) => Math.max(maximum, override.recipe.length),
-    0,
-  );
-  const resolved = Math.max(baseLayerCount ?? 0, overrideLayerCount);
-  return resolved > 0 ? resolved : undefined;
-}
-
-function resolveColorMatchingWeights(
-  state: Pick<
-    ConverterState,
-    | "source_version"
-    | "materialDynamicLayerCountEnabled"
-    | "hue_enable"
-    | "chroma_gate"
-  >,
-): { hue_weight: number; chroma_gate: number } {
-  if (isDynamicMaterialActive(state)) {
-    return { hue_weight: 0, chroma_gate: 0 };
-  }
-  return {
-    hue_weight: state.hue_enable ? 0.5 : 0,
-    chroma_gate: state.hue_enable ? state.chroma_gate : 0,
-  };
-}
-
-export function getMaterialArchiveReliefMinimumTotalHeight(
-  state: MaterialArchiveReliefMinimumState,
-): number {
-  if (state.source_version !== "material") {
-    return RELIEF_MIN_EXTRA_HEIGHT_MM;
-  }
-  const layerCount = state.materialDynamicLayerCountEnabled
-    ? (state.materialMaxLayerCount ?? state.materialLayerCount)
-    : state.materialLayerCount;
-  return (
-    Math.max(1, Math.round(layerCount)) *
-    MATERIAL_ARCHIVE_RELIEF_LAYER_HEIGHT_MM
-  );
-}
-
-export function getMaterialArchiveReliefMinimumExtraHeight(
-  state: MaterialArchiveReliefMinimumState,
-): number {
-  const minimumTotalHeight = getMaterialArchiveReliefMinimumTotalHeight(state);
-  return clampValue(
-    minimumTotalHeight - state.spacer_thick,
-    RELIEF_MIN_EXTRA_HEIGHT_MM,
-    RELIEF_MAX_EXTRA_HEIGHT_MM,
-  );
-}
-
-function clampAbsoluteReliefHeightMap(
-  map: Record<string, number> | undefined,
-  minimumTotalHeight: number,
-): Record<string, number> | undefined {
-  if (!map) {
-    return undefined;
-  }
-  return Object.fromEntries(
-    Object.entries(map).map(([hex, height]) => [
-      hex,
-      Math.max(height, minimumTotalHeight),
-    ]),
-  );
-}
-
-export function buildLayerImagesSourceKey(
-  state: Pick<
-    ConverterState,
-    "sessionId" | "previewGlbUrl" | "previewBaseImageUrl" | "previewImageUrl"
-  >,
-): string | null {
-  if (!state.sessionId) {
-    return null;
-  }
-
-  return [
-    state.sessionId,
-    state.previewGlbUrl ?? "",
-    state.previewBaseImageUrl ?? state.previewImageUrl ?? "",
-  ].join("|");
-}
-
-function buildPuzzlePreviewSourceKey(
-  state: Pick<
-    ConverterState,
-    | "sessionId"
-    | "previewGlbUrl"
-    | "previewBaseImageUrl"
-    | "previewImageUrl"
-    | "previewPixelWidth"
-    | "previewPixelHeight"
-  >,
-): string | null {
-  if (!state.sessionId) {
-    return null;
-  }
-
-  return [
-    state.sessionId,
-    state.previewGlbUrl ?? "",
-    state.previewBaseImageUrl ?? state.previewImageUrl ?? "",
-    state.previewPixelWidth ?? "",
-    state.previewPixelHeight ?? "",
-  ].join("|");
-}
-
-function matchesColorHighlightSnapshot(
-  state: Pick<ConverterState, "sessionId" | "selectionMode" | "selectedColors">,
-  snapshot: {
-    sessionId: string;
-    selectionMode: SelectionMode;
-    selectedColors: string[];
-  },
-): boolean {
-  if (state.sessionId !== snapshot.sessionId) return false;
-  if (state.selectionMode !== snapshot.selectionMode) return false;
-  if (state.selectedColors.size !== snapshot.selectedColors.length)
-    return false;
-  return snapshot.selectedColors.every((hex) => state.selectedColors.has(hex));
-}
-
-function normalizeHexNoHash(hex: string | null | undefined): string | null {
-  if (!hex) return null;
-  const raw = hex.replace(/^#/, "").trim();
-  return /^[0-9a-fA-F]{6}$/.test(raw) ? raw : null;
-}
-
-function chooseLastSelectedColor(colors: Set<string>): string | null {
-  const values = Array.from(colors);
-  return values.length > 0 ? values[values.length - 1] : null;
-}
-
-function findMatchingHexInSet(colors: Set<string>, hex: string): string | null {
-  const target = hex.toLowerCase();
-  return Array.from(colors).find((value) => value.toLowerCase() === target) ?? null;
-}
-
-function toggleHexInSet(colors: Set<string>, hex: string): Set<string> {
-  const next = new Set(colors);
-  const existing = findMatchingHexInSet(next, hex);
-  if (existing) {
-    next.delete(existing);
-  } else {
-    next.add(hex);
-  }
-  return next;
-}
-
-function buildCurrentVisibleColorRemapMap(
-  currentMap: Record<string, string>,
-  sourceHexes: string[],
-  targetHex: string,
-): Record<string, string> {
-  const normalizedTarget = normalizeHexNoHash(targetHex);
-  if (!normalizedTarget) {
-    return { ...currentMap };
-  }
-
-  const rawSources = sourceHexes
-    .map((hex) => normalizeHexNoHash(hex))
-    .filter((hex): hex is string => hex !== null);
-  if (rawSources.length === 0) {
-    return { ...currentMap };
-  }
-
-  const sourceSet = new Set(rawSources.map((hex) => hex.toLowerCase()));
-  const next = { ...currentMap };
-  for (const [origHex, mappedHex] of Object.entries(currentMap)) {
-    const normalizedMapped = normalizeHexNoHash(mappedHex);
-    if (normalizedMapped && sourceSet.has(normalizedMapped.toLowerCase())) {
-      next[origHex] = normalizedTarget;
-    }
-  }
-
-  for (const sourceHex of rawSources) {
-    const existingKey =
-      Object.keys(next).find(
-        (key) => normalizeHexNoHash(key)?.toLowerCase() === sourceHex.toLowerCase(),
-      ) ?? sourceHex;
-    next[existingKey] = normalizedTarget;
-  }
-
-  return next;
-}
-
-function cloneRecipeOverrides(items: RecipeOverrideItem[]): RecipeOverrideItem[] {
-  return items.map((item) => ({
-    region_id: item.region_id,
-    recipe: [...item.recipe],
-    layer_order: item.layer_order,
-    ...(item.color_layers !== undefined
-      ? { color_layers: item.color_layers }
-      : {}),
-    ...(item.actual_recipe_top_to_bottom
-      ? { actual_recipe_top_to_bottom: [...item.actual_recipe_top_to_bottom] }
-      : {}),
-    ...(item.print_recipe_top_to_bottom
-      ? { print_recipe_top_to_bottom: [...item.print_recipe_top_to_bottom] }
-      : {}),
-    ...(item.actual_layer_count !== undefined
-      ? { actual_layer_count: item.actual_layer_count }
-      : {}),
-    ...(item.padding_layer_count !== undefined
-      ? { padding_layer_count: item.padding_layer_count }
-      : {}),
-    ...(item.virtual_materials
-      ? {
-          virtual_materials: item.virtual_materials.map((material) => ({
-            ...material,
-          })),
-        }
-      : {}),
-  }));
-}
-
-function cloneReplacementRegions(
-  items: ColorReplacementItem[],
-): ColorReplacementItem[] {
-  return items.map((item) => ({ ...item }));
-}
-
-function replacementRegionStringField(
-  region: ColorReplacementItem | Record<string, unknown>,
-  key: string,
-): string | null {
-  const value = (region as Record<string, unknown>)[key];
-  return typeof value === "string" ? value : null;
-}
-
-function normalizeReplacementRegionsFromHistory(
-  regions: Array<ColorReplacementItem | Record<string, unknown>>,
-): ColorReplacementItem[] {
-  return regions.flatMap((region) => {
-    const matchedHex = normalizeHexNoHash(
-      replacementRegionStringField(region, "matched_hex") ??
-        replacementRegionStringField(region, "selected_color") ??
-        replacementRegionStringField(region, "quantized_hex"),
-    );
-    const replacementHex = normalizeHexNoHash(
-      replacementRegionStringField(region, "replacement_hex") ??
-        replacementRegionStringField(region, "replacement_color"),
-    );
-    if (!matchedHex || !replacementHex) return [];
-    const quantizedHex = normalizeHexNoHash(
-      replacementRegionStringField(region, "quantized_hex") ?? matchedHex,
-    ) ?? matchedHex;
-    return [
-      {
-        quantized_hex: quantizedHex,
-        matched_hex: matchedHex,
-        replacement_hex: replacementHex,
-      },
-    ];
-  });
-}
-
-function historyFlagsFromResponse(
-  response: { can_undo?: boolean; can_redo?: boolean } | null | undefined,
-): Pick<ConverterState, "historyCanUndo" | "historyCanRedo"> {
-  return {
-    historyCanUndo: Boolean(response?.can_undo),
-    historyCanRedo: Boolean(response?.can_redo),
-  };
-}
 
 function editorCommitStateFromResponse(
   response: { editor_content_revision?: number | null } | null | undefined,
@@ -850,104 +353,30 @@ function editorCommitStateFromResponse(
   };
 }
 
-function editorCommitResultStateFromResponse(
-  current: ConverterState,
-  sessionId: string,
-  operation: string | null | undefined,
-  result: EditorCommitResult | null | undefined,
-): Partial<ConverterState> {
-  if (!result || current.sessionId !== sessionId) return {};
-
-  const updates: Partial<ConverterState> = {};
-  const hasPreviewUrl = Object.prototype.hasOwnProperty.call(
-    result,
-    "preview_url",
-  );
-  if (hasPreviewUrl && result.preview_url) {
-    const previewUrl = normalizeResourceUrl(result.preview_url);
-    updates.previewImageUrl = previewUrl;
-    updates.previewBaseImageUrl = previewUrl;
-    updates.threemfDiskPath = null;
-    updates.downloadUrl = null;
-    updates.layerImages = [];
-    updates.layerImagesSourceKey = null;
-  }
-  if (result.preview_glb_url) {
-    updates.previewGlbUrl = normalizeResourceUrl(result.preview_glb_url);
-  } else if (
-    operation === "reset_replacements" &&
-    result.preview_glb_url === null
-  ) {
-    // Reset explicitly publishes a null GLB because the old derived artifact
-    // no longer describes the restored content. Other receipts also serialize
-    // omitted optional fields as null; those must not clear a live GLB.
-    updates.previewGlbUrl = null;
-  }
-  if (result.replacement_regions !== undefined && result.replacement_regions !== null) {
-    updates.replacement_regions = normalizeReplacementRegionsFromHistory(
-      result.replacement_regions,
-    );
-    updates.colorRemapMap = colorRemapFromReplacementRegions(
-      result.replacement_regions,
-    );
-  }
-  if (result.recipe_overrides !== undefined && result.recipe_overrides !== null) {
-    updates.recipe_overrides = cloneRecipeOverrides(result.recipe_overrides);
-  }
-  if (
-    result.region_replacement_count !== undefined &&
-    result.region_replacement_count !== null
-  ) {
-    updates.regionReplacementCount = result.region_replacement_count;
-  }
-  if (result.free_color_set !== undefined && result.free_color_set !== null) {
-    updates.free_color_set = new Set(result.free_color_set);
-  }
-  if (result.color_layers !== undefined && result.color_layers !== null) {
-    updates.color_layers = result.color_layers;
-  }
-  if (result.layer_height_mm !== undefined && result.layer_height_mm !== null) {
-    updates.layer_height_mm = result.layer_height_mm;
-  }
-  if (Array.isArray(result.gradient_groups)) {
-    updates.gradientGroups = result.gradient_groups;
-  }
-  if (result.can_undo !== undefined && result.can_undo !== null) {
-    updates.historyCanUndo = result.can_undo;
-  }
-  if (result.can_redo !== undefined && result.can_redo !== null) {
-    updates.historyCanRedo = result.can_redo;
-  }
-  const dynamicRecipes = result.material_dynamic_recipes;
-  const benefitCurve = result.material_layer_benefit_curve;
-  const hasDynamicRecipes = dynamicRecipes !== undefined && dynamicRecipes !== null;
-  const hasBenefitCurve = benefitCurve !== undefined && benefitCurve !== null;
-  if (hasDynamicRecipes) {
-    updates.materialDynamicRecipes = dynamicRecipes;
-  }
-  if (hasBenefitCurve) {
-    updates.materialLayerBenefitCurve = benefitCurve;
-  }
-  if (
-    result.material_layer_benefit_scope !== undefined &&
-    result.material_layer_benefit_scope !== null &&
-    result.material_layer_benefit_pixel_count !== undefined &&
-    result.material_layer_benefit_pixel_count !== null
-  ) {
-    updates.materialLayerBenefitScope =
-      result.material_layer_benefit_scope;
-    updates.materialLayerBenefitPixelCount =
-      result.material_layer_benefit_pixel_count;
-  } else if (hasDynamicRecipes || hasBenefitCurve) {
-    // Match the normal edit response's legacy fallback only when a dynamic
-    // result was actually supplied; null-only optional fields mean no update.
-    updates.materialLayerBenefitScope = "all_printable_pixels";
-    updates.materialLayerBenefitPixelCount = 0;
-  }
-  if (operation === "reset_replacements" && hasPreviewUrl) {
-    updates.originalPreviewUrl = normalizeResourceUrl(result.preview_url);
-  }
-  return updates;
+function dynamicMaterialResultState(
+  response: DynamicMaterialResultResponse,
+): Pick<
+  ConverterState,
+  | "materialDynamicRecipes"
+  | "materialLayerBenefitCurve"
+  | "materialLayerBenefitScope"
+  | "materialLayerBenefitPixelCount"
+> &
+  Partial<
+    Pick<
+      ConverterState,
+      "contentCommitStatus" | "contentCommitOperationId" | "selectionDocument"
+    >
+  > {
+  return {
+    materialDynamicRecipes: response.material_dynamic_recipes ?? [],
+    materialLayerBenefitCurve: response.material_layer_benefit_curve ?? [],
+    materialLayerBenefitScope:
+      response.material_layer_benefit_scope ?? "all_printable_pixels",
+    materialLayerBenefitPixelCount:
+      response.material_layer_benefit_pixel_count ?? 0,
+    ...editorCommitStateFromResponse(response),
+  };
 }
 
 function buildHistoryRestoreState(
@@ -990,83 +419,6 @@ function buildHistoryRestoreState(
       ? { gradientGroups: response.gradient_groups ?? null }
       : {}),
   };
-}
-
-function colorRemapFromReplacementRegions(
-  regions: Array<ColorReplacementItem | Record<string, unknown>>,
-): Record<string, string> {
-  const map: Record<string, string> = {};
-  for (const region of regions) {
-    const source = normalizeHexNoHash(
-      replacementRegionStringField(region, "matched_hex") ??
-        replacementRegionStringField(region, "selected_color") ??
-        replacementRegionStringField(region, "quantized_hex"),
-    );
-    const target = normalizeHexNoHash(
-      replacementRegionStringField(region, "replacement_hex") ??
-        replacementRegionStringField(region, "replacement_color"),
-    );
-    if (source && target) {
-      map[source] = target;
-    }
-  }
-  return map;
-}
-
-function cloneRemapHistory(history: RemapSnapshot[]): RemapSnapshot[] {
-  return history.map((snapshot) => ({ ...snapshot }));
-}
-
-function createAdjustmentSnapshot(
-  state: Pick<
-    ConverterState,
-    | "colorRemapMap"
-    | "remapHistory"
-    | "replacement_regions"
-    | "recipe_overrides"
-    | "regionReplacementCount"
-    | "previewImageUrl"
-    | "previewBaseImageUrl"
-    | "originalPreviewUrl"
-    | "previewGlbUrl"
-    | "color_layers"
-    | "layer_height_mm"
-    | "lutMatchMode"
-    | "lutMatchInfo"
-  >,
-): AdjustmentSnapshot {
-  return {
-    colorRemapMap: { ...state.colorRemapMap },
-    remapHistory: cloneRemapHistory(state.remapHistory),
-    replacement_regions: cloneReplacementRegions(state.replacement_regions),
-    recipe_overrides: cloneRecipeOverrides(state.recipe_overrides),
-    regionReplacementCount: state.regionReplacementCount,
-    previewImageUrl: state.previewImageUrl,
-    previewBaseImageUrl: state.previewBaseImageUrl,
-    originalPreviewUrl: state.originalPreviewUrl,
-    previewGlbUrl: state.previewGlbUrl,
-    color_layers: state.color_layers,
-    layer_height_mm: state.layer_height_mm,
-    lutMatchMode: state.lutMatchMode,
-    lutMatchInfo: state.lutMatchInfo ? { ...state.lutMatchInfo } : null,
-  };
-}
-
-function hasAdjustmentState(
-  state: Pick<
-    ConverterState,
-    | "colorRemapMap"
-    | "replacement_regions"
-    | "recipe_overrides"
-    | "regionReplacementCount"
-  >,
-): boolean {
-  return (
-    Object.keys(state.colorRemapMap).length > 0 ||
-    state.replacement_regions.length > 0 ||
-    state.recipe_overrides.length > 0 ||
-    state.regionReplacementCount > 0
-  );
 }
 
 type FridgeMagnetBoundsState = Pick<
@@ -1249,27 +601,7 @@ function resolveRegionBbox(
   return normalized as [number, number, number, number];
 }
 
-function getPreviewBaseUrl(
-  state: Pick<
-    ConverterState,
-    "previewBaseImageUrl" | "originalPreviewUrl" | "previewImageUrl"
-  >,
-): string | null {
-  return (
-    state.previewBaseImageUrl ??
-    state.originalPreviewUrl ??
-    state.previewImageUrl
-  );
-}
-
 let replacementPreviewEpoch = 0;
-
-export type ContentCommitStatus =
-  | "idle"
-  | "pending"
-  | "committed"
-  | "failed"
-  | "unknown";
 
 let editorOperationSequence = 0;
 
@@ -2029,477 +1361,6 @@ function hasNewerDifferentSingleRegionDetectIntent(
   );
 }
 
-function normalizeStringArray(values: string[]): string[] {
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    normalized.push(value);
-  }
-  return normalized;
-}
-
-function normalizePublicColorMode(value: string): ColorMode {
-  return value === "8-Color" ? ColorModeEnum.EIGHT_COLOR : (value as ColorMode);
-}
-
-function normalizeLutColorMode<T extends { color_mode?: string }>(info: T): T {
-  if (!info.color_mode) {
-    return info;
-  }
-  const colorMode = normalizePublicColorMode(info.color_mode);
-  return colorMode === info.color_mode
-    ? info
-    : { ...info, color_mode: colorMode };
-}
-
-function normalizeLutDrivenReliefState(
-  state: Pick<
-    ConverterState,
-    "color_mode" | "enable_relief" | "modeling_mode"
-  >,
-  updates: Partial<ConverterState>,
-): Partial<ConverterState> {
-  const nextColorMode = updates.color_mode ?? state.color_mode;
-  const nextModelingMode = updates.modeling_mode ?? state.modeling_mode;
-  if (
-    nextModelingMode === ModelingModeEnum.VECTOR &&
-    nextColorMode === ColorModeEnum.FIVE_COLOR_EXT
-  ) {
-    return { ...updates, enable_relief: false };
-  }
-  return updates;
-}
-
-function normalizeLutGroups<
-  TGroup extends { items?: TItem[] },
-  TItem extends { color_mode?: string },
->(groups: TGroup[]): TGroup[] {
-  return groups.map((group) => ({
-    ...group,
-    items: (group.items ?? []).map(normalizeLutColorMode),
-  }));
-}
-
-function normalizeNativeBrandGroups(
-  groups: NativeBrandGroup[],
-): NativeBrandGroup[] {
-  return groups.map((group) => ({
-    ...group,
-    db_options: group.db_options.map(normalizeLutColorMode),
-  }));
-}
-
-function getNativeBrandGroupByKey(
-  groups: NativeBrandGroup[],
-  brandKey: string,
-): NativeBrandGroup | null {
-  return groups.find((group) => group.brand_key === brandKey) ?? null;
-}
-
-function filterNativeBrandGroups(
-  groups: NativeBrandGroup[],
-): NativeBrandGroup[] {
-  return groups.filter((group) => group.brand_key === "bambulab_pla");
-}
-
-function getNativeDbOptionNames(group: NativeBrandGroup | null): string[] {
-  return group
-    ? normalizeStringArray(group.db_options.map((option) => option.name))
-    : [];
-}
-
-function hasNativePredictiveModel(group: NativeBrandGroup | null): boolean {
-  return Boolean(group?.package_name?.trim() || group?.model_name?.trim());
-}
-
-function buildNativeModelDefaults(
-  group: NativeBrandGroup | null,
-): Pick<
-  ConverterState,
-  "model_enable" | "model_only" | "model_threshold" | "model_margin"
-> {
-  return hasNativePredictiveModel(group)
-    ? {
-        model_enable: true,
-        model_only: false,
-        model_threshold: null,
-        model_margin: null,
-      }
-    : {
-        model_enable: false,
-        model_only: false,
-        model_threshold: null,
-        model_margin: null,
-      };
-}
-
-function buildNativeModelState(
-  group: NativeBrandGroup | null,
-  currentState?: Pick<
-    ConverterState,
-    | "selectedNativeBrandKey"
-    | "model_enable"
-    | "model_only"
-    | "model_threshold"
-    | "model_margin"
-  >,
-): Pick<
-  ConverterState,
-  "model_enable" | "model_only" | "model_threshold" | "model_margin"
-> {
-  if (!group) {
-    return buildNativeModelDefaults(null);
-  }
-  if (
-    currentState &&
-    currentState.selectedNativeBrandKey === group.brand_key &&
-    hasNativePredictiveModel(group)
-  ) {
-    return {
-      model_enable: currentState.model_enable,
-      model_only: currentState.model_only,
-      model_threshold: currentState.model_threshold,
-      model_margin: currentState.model_margin,
-    };
-  }
-  return buildNativeModelDefaults(group);
-}
-
-function getSelectedNativeBrandGroup(
-  state: Pick<ConverterState, "nativeBrandGroups" | "selectedNativeBrandKey">,
-): NativeBrandGroup | null {
-  if (state.selectedNativeBrandKey) {
-    const byKey = getNativeBrandGroupByKey(
-      state.nativeBrandGroups,
-      state.selectedNativeBrandKey,
-    );
-    if (byKey) {
-      return byKey;
-    }
-  }
-  return state.nativeBrandGroups[0] ?? null;
-}
-
-function getNativeDbNamesForGroup(group: NativeBrandGroup | null): string[] {
-  if (!group) {
-    return [];
-  }
-
-  const allowed = new Set(getNativeDbOptionNames(group));
-  return normalizeStringArray(
-    group.default_db_names.filter((name) => allowed.has(name)),
-  );
-}
-
-function getSupportedModeByPair(
-  modes: LutSupportedMode[],
-  colorLayers: number | null,
-  layerHeightMm: number | null,
-): LutSupportedMode | null {
-  if (colorLayers == null || layerHeightMm == null) {
-    return null;
-  }
-  return (
-    modes.find(
-      (mode) =>
-        mode.color_layers === colorLayers &&
-        mode.layer_height_mm === layerHeightMm,
-    ) ?? null
-  );
-}
-
-function resolvePreferredSupportedMode(
-  modes: LutSupportedMode[],
-): LutSupportedMode | null {
-  if (modes.length === 0) return null;
-  const exactFive = modes.find((mode) => mode.color_layers === 5);
-  if (exactFive) return exactFive;
-  let preferred = modes[0];
-  for (const mode of modes) {
-    if (mode.color_layers > preferred.color_layers) {
-      preferred = mode;
-    }
-  }
-  return preferred;
-}
-
-function resolveNativeSupportedModeForBrand(
-  brand: NativeBrandGroup,
-  colorLayers: number | null,
-  layerHeightMm: number | null,
-): LutSupportedMode | null {
-  const supported_modes = brand.supported_modes ?? [];
-  const exactMode = getSupportedModeByPair(
-    supported_modes,
-    colorLayers,
-    layerHeightMm,
-  );
-  if (exactMode) {
-    return exactMode;
-  }
-  const preferredFive = supported_modes.find((mode) => mode.color_layers === 5);
-  if (preferredFive) {
-    return preferredFive;
-  }
-  if (layerHeightMm != null) {
-    const matchingHeight = supported_modes.filter(
-      (mode) => mode.layer_height_mm === layerHeightMm,
-    );
-    if (matchingHeight.length > 0) {
-      if (colorLayers != null) {
-        let preferred = matchingHeight[0];
-        let smallestDistance = Math.abs(preferred.color_layers - colorLayers);
-        for (const mode of matchingHeight.slice(1)) {
-          const distance = Math.abs(mode.color_layers - colorLayers);
-          if (distance < smallestDistance) {
-            preferred = mode;
-            smallestDistance = distance;
-          }
-        }
-        return preferred;
-      }
-      return matchingHeight[0];
-    }
-  }
-  return resolvePreferredSupportedMode(supported_modes);
-}
-
-function resolveNativeBrandSelection(
-  state: Pick<
-    ConverterState,
-    | "nativeBrandGroups"
-    | "selectedNativeBrandKey"
-    | "selectedNativeDbNames"
-    | "color_layers"
-    | "layer_height_mm"
-  >,
-): {
-  brand: NativeBrandGroup | null;
-  db_names: string[];
-  supported_mode: LutSupportedMode | null;
-  supported_modes: LutSupportedMode[];
-  predictive_model_available: boolean;
-  isReady: boolean;
-} {
-  const brand = getSelectedNativeBrandGroup(state);
-  if (!brand) {
-    return {
-      brand: null,
-      db_names: [],
-      supported_mode: null,
-      supported_modes: [],
-      predictive_model_available: false,
-      isReady: false,
-    };
-  }
-
-  const allowedNames = new Set(getNativeDbOptionNames(brand));
-  const selectedDbNames = normalizeStringArray(
-    state.selectedNativeDbNames.filter((name) => allowedNames.has(name)),
-  );
-  const db_names =
-    state.selectedNativeDbNames.length === 0
-      ? []
-      : selectedDbNames.length > 0
-        ? selectedDbNames
-        : normalizeStringArray(
-            brand.default_db_names.filter((name) => allowedNames.has(name)),
-          );
-  const supported_modes = brand.supported_modes ?? [];
-  const supported_mode = resolveNativeSupportedModeForBrand(
-    brand,
-    state.color_layers,
-    state.layer_height_mm,
-  );
-
-  return {
-    brand,
-    db_names,
-    supported_mode,
-    supported_modes,
-    predictive_model_available: hasNativePredictiveModel(brand),
-    isReady: db_names.length > 0 && supported_mode != null,
-  };
-}
-
-export function resolveConverterSourceSelection(
-  state: Pick<
-    ConverterState,
-    | "source_version"
-    | "lut_name"
-    | "lut_names"
-    | "nativeBrandGroups"
-    | "selectedNativeBrandKey"
-    | "selectedNativeDbNames"
-    | "color_layers"
-    | "layer_height_mm"
-    | "selectedMaterialDirNames"
-    | "materialLayerCount"
-    | "materialLayerHeightMm"
-  > &
-    Partial<
-      Pick<
-        ConverterState,
-        | "lutListFull"
-        | "legacyCatalogGroups"
-        | "materialDynamicLayerCountEnabled"
-        | "materialMaxLayerCount"
-      >
-    >,
-): {
-  source_kind: "legacy_single" | "legacy_multi" | "native_bundle";
-  isReady: boolean;
-  isMaterial: boolean;
-  lut_name: string;
-  db_names: string[];
-  native: ReturnType<typeof resolveNativeBrandSelection>;
-  color_layers: number | null;
-  layer_height_mm: number | null;
-} {
-  const emptyNative = {
-    brand: null,
-    db_names: [] as string[],
-    supported_mode: null,
-    supported_modes: [] as { color_layers: number; layer_height_mm: number }[],
-    predictive_model_available: false,
-    isReady: false,
-  };
-
-  if (state.source_version === "material") {
-    return {
-      source_kind: "legacy_single",
-      isReady: (state.selectedMaterialDirNames ?? []).length > 0,
-      isMaterial: true,
-      lut_name: "",
-      db_names: [],
-      native: emptyNative,
-      color_layers: resolveMaterialPrintLayerCount(state),
-      layer_height_mm: state.materialLayerHeightMm ?? 0.08,
-    };
-  }
-
-  if (state.source_version === "legacy") {
-    const lutNames = normalizeLegacyLutNames(state.lut_names, state.lut_name);
-    return {
-      source_kind: lutNames.length > 1 ? "legacy_multi" : "legacy_single",
-      isReady: lutNames.length > 0,
-      isMaterial: false,
-      lut_name: lutNames[0] ?? "",
-      db_names: [],
-      native: emptyNative,
-      color_layers: null,
-      layer_height_mm: null,
-    };
-  }
-
-  const native = resolveNativeBrandSelection(state);
-  return {
-    source_kind: "native_bundle",
-    isReady: native.isReady,
-    isMaterial: false,
-    lut_name: "",
-    db_names: native.db_names,
-    native,
-    color_layers: native.supported_mode?.color_layers ?? null,
-    layer_height_mm: native.supported_mode?.layer_height_mm ?? null,
-  };
-}
-
-function buildLegacySourceParams(
-  state: Pick<ConverterState, "lut_name" | "lut_names">,
-) {
-  const lutNames = normalizeLegacyLutNames(state.lut_names, state.lut_name);
-  const primaryName = lutNames[0] ?? state.lut_name;
-  if (lutNames.length > 1) {
-    return {
-      source_kind: "legacy_multi" as const,
-      lut_name: primaryName,
-      lut_names: lutNames,
-    };
-  }
-  return {
-    source_kind: "legacy_single" as const,
-    lut_name: primaryName,
-  };
-}
-
-function buildMaterialSourceParams(
-  state: Pick<
-    ConverterState,
-    | "selectedMaterialDirNames"
-    | "source_version"
-    | "materialLayerCount"
-    | "materialLayerHeightMm"
-    | "materialBackingMaterialDirName"
-    | "materialDynamicLayerCountEnabled"
-    | "materialMinLayerCount"
-    | "materialMaxLayerCount"
-  >,
-) {
-  const settingsState = useSettingsStore.getState();
-  const materialGridResolution = settingsState.enableSolverCacheGridSelection
-    ? settingsState.solverCacheGridResolution
-    : undefined;
-  const resolvedBackingDirName =
-    state.materialBackingMaterialDirName &&
-    state.selectedMaterialDirNames.includes(state.materialBackingMaterialDirName)
-      ? state.materialBackingMaterialDirName
-      : inferDefaultMaterialBackingDirName(state.selectedMaterialDirNames);
-  const backingMaterialIndex = resolvedBackingDirName
-    ? state.selectedMaterialDirNames.indexOf(resolvedBackingDirName)
-    : -1;
-  const printLayerCount = resolveMaterialPrintLayerCount(state);
-  return {
-    source_kind: "legacy_single" as const,
-    lut_name: "__material_archive__",
-    material_source: "material_archive" as const,
-    selected_materials: state.selectedMaterialDirNames,
-    material_layer_count: printLayerCount,
-    material_layer_height_mm: state.materialLayerHeightMm,
-    material_grid_resolution: materialGridResolution,
-    material_backing_material_index:
-      backingMaterialIndex >= 0 ? backingMaterialIndex : 0,
-    material_dynamic_layer_count_enabled: isDynamicMaterialActive(state),
-    material_min_layer_count: state.materialMinLayerCount,
-    material_max_layer_count: state.materialMaxLayerCount,
-    material_delta_e00_tolerance: settingsState.materialDeltaE00Tolerance,
-  };
-}
-
-function buildNativeSourceParams(
-  selection: ReturnType<typeof resolveConverterSourceSelection>,
-  modelState?: Pick<
-    ConverterState,
-    "model_enable" | "model_only" | "model_threshold" | "model_margin"
-  >,
-) {
-  if (selection.source_kind !== "native_bundle" || !selection.native.brand) {
-    return null;
-  }
-  const supportedMode = selection.native.supported_mode;
-
-  return {
-    source_kind: "native_bundle" as const,
-    material_type: selection.native.brand.material_type,
-    vendor: selection.native.brand.vendor,
-    db_names: selection.native.db_names,
-    color_layers: supportedMode?.color_layers ?? undefined,
-    layer_height_mm: supportedMode?.layer_height_mm ?? undefined,
-    ...(selection.native.predictive_model_available
-      ? {
-          model_enable: modelState?.model_enable ?? false,
-          model_only: modelState?.model_only ?? false,
-          model_threshold: modelState?.model_threshold ?? undefined,
-          model_margin: modelState?.model_margin ?? undefined,
-        }
-      : {}),
-  };
-}
-
 function extractFileIdFromApiUrl(
   url: string | null | undefined,
 ): string | null {
@@ -2517,11 +1378,6 @@ function collectKeepFileIds(urls: Array<string | null | undefined>): string[] {
     }
   }
   return Array.from(keepIds);
-}
-
-function normalizeStoreResourceUrl(url: string | null | undefined): string | null {
-  if (!url) return null;
-  return normalizeResourceUrl(url) ?? url ?? null;
 }
 
 export function collectConverterKeepFileIds(state: {
@@ -2585,922 +1441,6 @@ export function isValidImageType(mimeType: string, fileName?: string): boolean {
     if (RAW_EXTENSIONS_CONVERTER.has(ext)) return true;
   }
   return false;
-}
-
-export interface WorkshopConverterImageInput {
-  file: File;
-  pixelWidth: number;
-  pixelHeight: number;
-  targetWidthMm: number;
-  targetHeightMm: number;
-  source: WorkshopRecipeSource;
-}
-
-// ========== State Interface ==========
-
-export interface ConverterState {
-  // 图片
-  imageFile: File | null;
-  imagePreviewUrl: string | null;
-  aspectRatio: number | null;
-  workshopSource: WorkshopRecipeSource | null;
-
-  // 模型覆面
-  modelSurfaceEnabled: boolean;
-  modelSurfaceFile: File | null;
-  modelSurfacePreviewUrl: string | null;
-  modelSurfaceModelFileId: string | null;
-  modelSurfaceSummary: ModelSurfaceMeshSummary | null;
-  modelSurfaceSelectionId: string | null;
-  modelSurfaceSelection: Record<string, unknown> | null;
-  modelSurfaceFootprint: Record<string, unknown> | null;
-  modelSurfaceCandidates: ModelSurfaceCandidate[];
-  modelSurfacePlacement: ModelSurfacePlacement;
-  modelSurfaceModelRotation: ModelSurfaceModelRotation;
-  modelSurfaceLoading: boolean;
-  modelSurfaceSelecting: boolean;
-  modelSurfaceError: string | null;
-  modelSurfaceWarnings: string[];
-
-  // 会话（预览后由后端返回）
-  sessionId: string | null;
-
-  // 基础参数
-  source_version: SourceVersion;
-  lut_name: string;
-  lut_names: string[];
-  nativeBrandGroups: NativeBrandGroup[];
-  nativeBrandGroupsLoading: boolean;
-  selectedNativeBrandKey: string;
-  selectedNativeDbNames: string[];
-  target_width_mm: number;
-  target_height_mm: number;
-  spacer_thick: number;
-  backing_infill_density_percent: number;
-  structure_mode: StructureMode;
-  color_mode: ColorMode;
-  modeling_mode: ModelingMode;
-  color_layers: number | null;
-  layer_height_mm: number | null;
-  model_enable: boolean;
-  model_only: boolean;
-  model_threshold: number | null;
-  model_margin: number | null;
-  selectedLutInfo: LutInfoResponse | null;
-
-  // Material-archive mode
-  selectedMaterialDirNames: string[];
-  materialLayerCount: number;
-  materialLayerHeightMm: number;
-  materialBackingMaterialDirName: string | null;
-  materialDynamicLayerCountEnabled: boolean;
-  materialMinLayerCount: number;
-  materialMaxLayerCount: number;
-  materialDynamicRecipes: DynamicMaterialRecipe[];
-  materialLayerBenefitCurve: MaterialLayerBenefitPoint[];
-  materialLayerBenefitScope: MaterialLayerBenefitScope;
-  materialLayerBenefitPixelCount: number;
-
-  // 高级设置
-  quantize_colors: number;
-  quantize_colors_unlocked: boolean;
-  high_precision_3d_preview: boolean;
-  enable_cleanup: boolean;
-  svg_hole_compensation_enabled: boolean;
-  svg_hole_max_area_mm2: number;
-  svg_hole_max_width_mm: number;
-  hue_enable: boolean;
-  use_lut_constrained: boolean;
-  auto_dynamic_range: boolean;
-  chroma_gate: number;
-  separate_backing: boolean;
-
-  // 挂件环
-  add_loop: boolean;
-  loop_width: number;
-  loop_length: number;
-  loop_hole: number;
-  loop_angle: number; // -180 到 180 度，默认 0
-  loop_offset_x: number; // -20 到 20 mm，默认 0
-  loop_offset_y: number; // -20 到 20 mm，默认 0
-  loop_position_preset: string; // 默认 "top-center"
-  enable_fridge_magnet: boolean;
-  fridge_magnets: FridgeMagnetItem[];
-  selectedFridgeMagnetId: string | null;
-  base_spacer_thick: number;
-
-  // 浮雕
-  enable_relief: boolean;
-  color_height_map: Record<string, number>;
-  heightmap_max_height: number;
-
-  // 描边
-  enable_outline: boolean;
-  outline_width: number;
-
-  // 掐丝珐琅
-  enable_cloisonne: boolean;
-  wire_width_mm: number;
-  wire_height_mm: number;
-
-  // 涂层
-  enable_coating: boolean;
-  coating_height_mm: number;
-
-  // 大画幅
-  largeFormatEnabled: boolean;
-  tileWidthMm: number;
-  tileHeightMm: number;
-  /** View-only: draw the tile cut lines over the 3D preview. */
-  largeFormatTileOverlayVisible: boolean;
-  puzzleEnabled: boolean;
-  puzzleStyle: PuzzleStyle;
-  puzzleSizingMode: PuzzleSizingMode;
-  pieceWidthMm: number;
-  pieceHeightMm: number;
-  puzzleRows: number;
-  puzzleCols: number;
-  targetPieceCount: number;
-  connectorStyle: PuzzleConnectorStyle;
-  labelsEnabled: boolean;
-  engraveBackLabels: boolean;
-  irregularityStrength: number;
-  minNeckWidthMm: number;
-  puzzleOverlayUrl: string | null;
-  puzzleWarnings: string[];
-  puzzleResolvedRows: number | null;
-  puzzleResolvedCols: number | null;
-  puzzleResolvedPieceCount: number | null;
-  puzzleDerivedPieceWidthMm: number | null;
-  puzzleDerivedPieceHeightMm: number | null;
-
-  // 颜色替换
-  replacement_regions: ColorReplacementItem[];
-  recipe_overrides: RecipeOverrideItem[];
-  customRecipeHistory: RecipeHistoryItem[];
-  free_color_set: Set<string>;
-
-  // 调色板与选择
-  selectedColor: string | null;
-  palette: PaletteEntry[];
-
-  // 颜色替换映射（纯前端）
-  colorRemapMap: Record<string, string>;
-  remapHistory: RemapSnapshot[];
-  remapRedoHistory: RemapSnapshot[];
-  adjustmentHistory: AdjustmentSnapshot[];
-  adjustmentRedoHistory: AdjustmentSnapshot[];
-  historyCanUndo: boolean;
-  historyCanRedo: boolean;
-  historyBusy: boolean;
-  contentCommitStatus: ContentCommitStatus;
-  contentCommitOperationId: string | null;
-
-  // 颜色轮廓数据（后端 OpenCV 提取，用于 3D 高亮）
-  colorContours: Record<string, number[][][]>;
-  // 浮雕联动
-  autoHeightMode: AutoHeightMode;
-  heightmapFile: File | null;
-  heightmapThumbnailUrl: string | null;
-  heightmapUploadSessionId: string | null;
-
-  // 3D 预览
-  previewGlbUrl: string | null;
-  previewPerformanceTiming: PerformanceTiming | null;
-  generatePerformanceTiming: PerformanceTiming | null;
-  lutMatchMode: string | null;
-  lutMatchInfo: Record<string, unknown> | null;
-
-  // 预览时的原始尺寸（用于实时缩放比例计算）
-  preview_width_mm: number | null; // 预览时的原始宽度
-  preview_height_mm: number | null; // 预览时的原始高度
-  preview_spacer_thick: number | null; // 预览时的原始厚度
-  previewPixelWidth: number | null; // 预览图像像素宽度（用于 3D→像素坐标转换）
-  previewPixelHeight: number | null; // 预览图像像素高度（用于 3D→像素坐标转换）
-  previewWarnings: string[];
-  generateWarnings: string[];
-  largeFormatWarnings: string[];
-
-  // 模型边界（供 KeychainRing3D 定位）
-  modelBounds: {
-    minX: number;
-    maxX: number;
-    minY: number;
-    maxY: number;
-    maxZ: number;
-  } | null;
-
-  // 裁剪
-  enableCrop: boolean;
-  cropModalOpen: boolean;
-  isCropping: boolean;
-
-  // 自动检测颜色
-  autoDetectColorsLoading: boolean;
-
-  // UI 状态
-  isLoading: boolean;
-  isGenerating: boolean;
-  error: string | null;
-  previewImageUrl: string | null;
-  modelUrl: string | null;
-
-  // LUT 列表
-  lutList: string[];
-  lutListLoading: boolean;
-  lutListFull: LutInfo[];
-  legacyCatalogGroups: LutDetailsCatalogGroup[];
-  legacyCatalogLoading: boolean;
-  selectedLegacyManufacturer: string;
-
-  // LUT 全部颜色
-  lutColors: LutColorEntry[];
-  lutColorCards: LutColorsCard[];
-  lutColorsLoading: boolean;
-  lutColorsLutName: string;
-
-  // 材料档案模式下的可达色建议（替换 lutColors 的作用）
-  // Material-archive mode's achievable-color suggestions (replaces lutColors).
-  materialSuggestions: MaterialColorSuggestionsResponse | null;
-  materialSuggestionsLoading: boolean;
-  materialSuggestionsTargetHex: string | null;
-  materialSuggestionsError: string | null;
-
-  // 预览完成后后端同步计算的"渐变海带纹分组"。用于颜色工作站的按组多选替换
-  // 以及可选的自动去海带纹批量换色。未计算 / 未命中时保持为 ``null``。
-  // Gradient-banding groups computed synchronously by the preview pipeline.
-  // Drives the Color Workstation group multi-select flow and the optional
-  // "auto replace gradient banding" setting. Stays ``null`` until a fetch
-  // completes; ``[]`` means the backend ran but reported no banding.
-  gradientGroups: GradientGroupItem[] | null;
-  gradientGroupsLoading: boolean;
-  gradientGroupsError: string | null;
-  /** Session ID of the currently-loaded groups (for staleness checks). */
-  gradientGroupsSessionId: string | null;
-  /**
-   * Which gradient group/region the user most recently clicked in the
-   * Gradient Groups panel. ``null`` when the current multi-selection was not
-   * initiated from the panel. UI uses this to disambiguate group vs region
-   * highlight when their hex sets are identical.
-   *
-   * 面板最近一次点击的分组/区域标识；当前多选不是由面板发起时为 null。
-   */
-  gradientSelection: GradientSelectionSource | null;
-
-  /**
-   * Ordered list of regions the user ticked in the Gradient Groups panel
-   * for merged flatten/recolor. All entries share the same ``groupIndex``
-   * (same-group invariant enforced by the toggle action). Empty array
-   * means "no multi-region selection" — the existing single-region /
-   * single-group flows stay untouched.
-   * 用户在面板勾选的 region 列表（保持勾选顺序），用于"合并去海带纹 / 合并
-   * 换色"；同 group 不变式由 toggle action 守护。
-   */
-  selectedGradientRegions: Array<{
-    groupIndex: number;
-    regionIndex: number;
-  }>;
-
-  // 热床尺寸
-  bed_label: string;
-  bedSizes: BedSizeItem[];
-  bedSizesLoading: boolean;
-
-  // 批量模式
-  batchMode: boolean;
-  batchFiles: File[];
-  batchLoading: boolean;
-  batchResult: BatchResponse | null;
-  batchPreviewItems: BatchPreviewItem[];
-
-  // 颜色替换预览
-  replacePreviewLoading: boolean;
-  originalPreviewUrl: string | null;
-  previewBaseImageUrl: string | null;
-
-  // 切片集成：3MF 路径
-  threemfDiskPath: string | null;
-  downloadUrl: string | null;
-
-  // 分层预览
-  layerImages: { layer_index: number; name: string; url: string }[];
-  layerImagesLoading: boolean;
-  layerImagesOpen: boolean;
-  layerImagesSourceKey: string | null;
-
-  // 选择工具与统一选区。Legacy fields remain during migration so existing
-  // gradient/custom-recipe consumers can be moved without a flag day.
-  selectionMode: SelectionMode;
-  selectionTool: SelectionTool;
-  selectionDocument: SelectionDocument | null;
-  brushSizePx: number;
-  /** CIEDE2000 tolerance used by the colour-range selection tool. */
-  colorRangeTolerance: number;
-  selectedColors: Set<string>;
-  regionData: RegionData | null;
-  selectedRegions: RegionData[];
-  selectionBlinkEnabled: boolean;
-
-  // 待确认颜色替换
-  pendingReplacement: PendingReplacement | null;
-
-  // 区域替换计数（current 模式不走 colorRemapMap，需要独立计数以启用清除按钮）
-  regionReplacementCount: number;
-
-  // 当前图片是否已手动点击过预览按钮（自动预览的前置条件）
-  hasManualPreview: boolean;
-
-  /**
-   * An established preview was invalidated and still needs one debounced
-   * refresh. Store-owned so the obligation survives hook unmount/remount.
-   * 已有预览失效后仍欠一次防抖刷新；由 store 持有以跨越 Hook 重挂载。
-   */
-  previewAutoRefreshPending: boolean;
-
-  /**
-   * Monotonic ownership revision for preview inputs/results. Any action that
-   * clears the preview increments it so an older response cannot bind later.
-   * 预览输入/结果所有权版本；清空预览时递增，拒绝旧响应回写。
-   */
-  previewRequestRevision: number;
-
-  /** Monotonic counter bumped whenever a valid preview request starts. */
-  previewSubmissionSequence: number;
-}
-
-// ========== Actions Interface ==========
-
-export interface ConverterActions {
-  // 图片
-  setImageFile: (file: File | null) => void;
-  rotateImageForExport: (degrees: ImageRotationDegrees) => Promise<void>;
-  loadVectorizedSvgIntoConverter: (file: File) => void;
-  loadWorkshopImageIntoConverter: (
-    input: WorkshopConverterImageInput,
-  ) => void;
-  setModelSurfaceEnabled: (enabled: boolean) => void;
-  uploadModelSurfaceFile: (file: File) => Promise<void>;
-  clearModelSurface: () => void;
-  selectModelSurfaceFace: (faceIndex: number, candidateId?: string) => Promise<void>;
-  updateModelSurfacePlacement: (updates: Partial<ModelSurfacePlacement>) => void;
-  updateModelSurfaceModelRotation: (updates: Partial<ModelSurfaceModelRotation>) => void;
-  fitModelSurfaceArtwork: () => void;
-
-  // 参数 setter
-  setLutName: (name: string) => void;
-  setLegacyLutNames: (names: string[]) => void;
-  setTargetWidthMm: (width: number) => void;
-  setTargetHeightMm: (height: number) => void;
-  setSpacerThick: (thick: number) => void;
-  setBackingInfillDensityPercent: (density: number) => void;
-  setStructureMode: (mode: StructureMode) => void;
-  setColorMode: (mode: ColorMode) => void;
-  setModelingMode: (mode: ModelingMode) => void;
-  setColorLayers: (layers: number | null) => void;
-  setLayerHeightMm: (height: number | null) => void;
-  setModelEnable: (enabled: boolean) => void;
-  setModelOnly: (enabled: boolean) => void;
-  setModelThreshold: (value: number | null) => void;
-  setModelMargin: (value: number | null) => void;
-  setQuantizeColors: (colors: number) => void;
-  setQuantizeColorsUnlocked: (unlocked: boolean) => void;
-  setHighPrecision3dPreview: (enabled: boolean) => void;
-  setEnableCleanup: (enabled: boolean) => void;
-  setSvgHoleCompensationEnabled: (enabled: boolean) => void;
-  setSvgHoleMaxAreaMm2: (area: number) => void;
-  setSvgHoleMaxWidthMm: (width: number) => void;
-  setHueEnable: (enabled: boolean) => void;
-  setUseLutConstrained: (enabled: boolean) => void;
-  setAutoDynamicRange: (enabled: boolean) => void;
-  setChromaGate: (threshold: number) => void;
-  setSeparateBacking: (enabled: boolean) => void;
-  setAddLoop: (enabled: boolean) => void;
-  setLoopWidth: (width: number) => void;
-  setLoopLength: (length: number) => void;
-  setLoopHole: (hole: number) => void;
-  setLoopAngle: (angle: number) => void;
-  setLoopOffsetX: (x: number) => void;
-  setLoopOffsetY: (y: number) => void;
-  setLoopPositionPreset: (preset: string) => void;
-  setEnableFridgeMagnet: (enabled: boolean) => void;
-  resetFridgeMagnetLayout: () => void;
-  addFridgeMagnet: () => void;
-  removeFridgeMagnet: (id: string) => void;
-  updateFridgeMagnet: (
-    id: string,
-    updates: Partial<Omit<FridgeMagnetItem, "id">>,
-  ) => void;
-  updateFridgeMagnetCenter: (
-    id: string,
-    centerX: number,
-    centerY: number,
-  ) => void;
-  selectFridgeMagnet: (id: string | null) => void;
-  clearSelectedFridgeMagnet: () => void;
-  setEnableRelief: (enabled: boolean) => void;
-  setColorHeightMap: (map: Record<string, number>) => void;
-  setHeightmapMaxHeight: (height: number) => void;
-  setEnableOutline: (enabled: boolean) => void;
-  setOutlineWidth: (width: number) => void;
-  setEnableCloisonne: (enabled: boolean) => void;
-  setWireWidthMm: (width: number) => void;
-  setWireHeightMm: (height: number) => void;
-  setEnableCoating: (enabled: boolean) => void;
-  setCoatingHeightMm: (height: number) => void;
-
-  // 大画幅
-  setLargeFormatEnabled: (enabled: boolean) => void;
-  setTileWidthMm: (width: number) => void;
-  setTileHeightMm: (height: number) => void;
-  setLargeFormatTileOverlayVisible: (visible: boolean) => void;
-  setPuzzleEnabled: (enabled: boolean) => void;
-  setPuzzleStyle: (style: PuzzleStyle) => void;
-  setPuzzleSizingMode: (mode: PuzzleSizingMode) => void;
-  setPieceWidthMm: (width: number) => void;
-  setPieceHeightMm: (height: number) => void;
-  setPuzzleRows: (rows: number) => void;
-  setPuzzleCols: (cols: number) => void;
-  setTargetPieceCount: (count: number) => void;
-  setConnectorStyle: (style: PuzzleConnectorStyle) => void;
-  setLabelsEnabled: (enabled: boolean) => void;
-  setEngraveBackLabels: (enabled: boolean) => void;
-  setIrregularityStrength: (strength: number) => void;
-  setMinNeckWidthMm: (width: number) => void;
-  submitPuzzleLayoutPreview: () => Promise<boolean>;
-  clearPuzzleLayoutPreview: () => void;
-
-  // 热床尺寸
-  setBedLabel: (label: string) => void;
-  fetchBedSizes: () => Promise<void>;
-
-  // 调色板与选择
-  setSelectedColor: (hex: string | null) => void;
-  setPalette: (entries: PaletteEntry[]) => void;
-
-  // 统一选择工具；setSelectionMode 在迁移期仅保留兼容映射。
-  setSelectionMode: (mode: SelectionMode) => void;
-  setSelectionTool: (tool: SelectionTool) => void;
-  setBrushSizePx: (size: number) => void;
-  setColorRangeTolerance: (tolerance: number) => void;
-  hydrateSelectionDocument: () => Promise<void>;
-  applySelectionMutation: (input: {
-    operation:
-      | "point-toggle"
-      | "same-color-toggle"
-      | "color-range-toggle"
-      | "brush-add"
-      | "clear";
-    x?: number;
-    y?: number;
-    colorHex?: string;
-    colorTolerance?: number;
-    brushRadius?: number;
-    brushPoints?: Array<{ x: number; y: number }>;
-    optimisticDocument?: SelectionDocument;
-  }) => Promise<void>;
-  toggleColorInSelection: (hex: string) => void;
-  applyBatchColorRemap: (newHex: string) => Promise<void>;
-  detectRegion: (x: number, y: number) => Promise<void>;
-  detectAndAccumulateRegion: (x: number, y: number) => Promise<void>;
-  removeRegionFromSelection: (regionId: string) => void;
-  setSelectionBlinkEnabled: (enabled: boolean) => void;
-  toggleSelectionBlink: () => void;
-  applyRegionReplace: (newHex: string) => Promise<void>;
-  applyCustomRecipeOverride: (
-    regionIds: string[],
-    recipe: number[],
-    layerOrder?: string,
-    /** Virtual materials declared at apply time; required when ``recipe`` carries indices ``>= LUT.N``. */
-    virtualMaterials?: VirtualMaterial[],
-  ) => Promise<void>;
-  upsertRecipeOverrides: (
-    regionIds: string[],
-    recipe: number[],
-    layerOrder: string,
-    /** Optional virtuals to persist alongside the override so ``/generate`` can extend the palette. */
-    virtualMaterials?: VirtualMaterial[],
-  ) => void;
-  clearRecipeOverrides: (regionIds?: string[]) => void;
-  /** 追加一条历史；按 id LRU 置顶，容量 10。 */
-  pushCustomRecipeHistory: (item: RecipeHistoryItem) => void;
-  /** 清空历史（一般在 submitPreview 之外很少主动调）。 */
-  clearCustomRecipeHistory: () => void;
-  /** 应用一条历史到当前选区；内部复用 applyCustomRecipeOverride。 */
-  applyCustomRecipeFromHistory: (
-    historyId: string,
-    regionIds: string[],
-  ) => Promise<void>;
-
-  /**
-   * Replace the shared selection mask with ``targetHex`` via region replace.
-   * Resolves ``true`` when the shared-selection path consumed the request
-   * (applied or aborted) and ``false`` when no shared selection exists.
-   * 用目标色替换共享选区；返回 true 表示已由共享选区路径处理（成功或中止），
-   * false 表示当前没有共享选区。
-   */
-  replaceSharedSelectionColor: (targetHex: string) => Promise<boolean>;
-
-  // 待确认颜色替换
-  setPendingReplacement: (pending: PendingReplacement | null) => void;
-  confirmReplacement: () => Promise<void>;
-
-  // 颜色替换（纯前端）
-  applyColorRemap: (origHex: string, newHex: string) => void;
-  undoColorRemap: () => Promise<void>;
-  redoColorRemap: () => Promise<void>;
-  canUndoAdjustments: () => boolean;
-  canRedoAdjustments: () => boolean;
-  clearAllRemaps: () => Promise<void>;
-  clearSelection: () => Promise<void>;
-
-  // 浮雕高度
-  updateColorHeight: (hex: string, heightMm: number) => void;
-  applyAutoHeight: (mode: "darker-higher" | "lighter-higher") => void;
-  setAutoHeightMode: (mode: AutoHeightMode) => void;
-
-  // 高度图
-  setHeightmapFile: (file: File | null) => void;
-  uploadHeightmap: () => Promise<void>;
-
-  // GLB 预览
-  setPreviewGlbUrl: (url: string | null) => void;
-
-  /**
-   * Poll ``/api/convert/glb-status`` after a replace-* endpoint returned
-   * ``preview_glb_url: null``; on ``ready`` the new URL is written into
-   * ``previewGlbUrl``. Re-entrant: later replace calls override the
-   * poller via a monotonic token so stale results can never overwrite
-   * the freshest GLB. 异步 GLB 轮询；各 replace 成功后一行调用即可。
-   */
-  _pollAsyncGlb: () => void;
-
-  /** Rebuild only the lightweight GLB renderer for the current SVG session. */
-  rebuildVectorPreviewRenderer: (
-    enableSmoothVectorPreview: boolean,
-  ) => Promise<void>;
-
-  // 模型边界
-  setModelBounds: (bounds: ConverterState["modelBounds"]) => void;
-
-  // API 操作
-  uploadLut: (file: File) => Promise<void>;
-  fetchLutList: (options?: ApiRequestOptions) => Promise<void>;
-  fetchLutCatalog: (signal?: AbortSignal) => Promise<void>;
-  fetchLegacyCatalog: (options?: ApiRequestOptions) => Promise<void>;
-  setLegacyManufacturer: (name: string) => void;
-  fetchLutColors: (
-    lutName: string,
-    signal?: AbortSignal,
-  ) => Promise<void>;
-
-  // 材料档案模式下按目标色请求建议
-  // Query achievable-color suggestions for a target hex (material-archive mode).
-  fetchMaterialSuggestions: (targetHex: string) => Promise<void>;
-  clearMaterialSuggestions: () => void;
-
-  /**
-   * Pull the preview's gradient-banding groups from the backend session.
-   * Safe to call multiple times: if ``sessionId`` matches the currently
-   * loaded groups the call is a cheap no-op. A new session triggers a
-   * fresh fetch that aborts any in-flight request.
-   *
-   * 从后端 session 拉取渐变海带纹分组：同 sessionId 直接复用缓存，不同则
-   * 触发新请求并取消旧请求。
-   */
-  fetchGradientGroups: (sessionId: string) => Promise<void>;
-  /** Reset gradient-group state (e.g. on new image upload or mode switch). */
-  clearGradientGroups: () => void;
-  /**
-   * Collapse every gradient group to its representative colour by populating
-   * ``colorRemapMap`` with non-representative → representative pairs and
-   * flushing the batch through the existing replace-preview path.
-   *
-   * 把每个渐变分组统一替换为代表色：在 ``colorRemapMap`` 里注册非代表色 →
-   * 代表色的映射，然后走既有的 ``submitReplacePreview`` 批量通道。
-   *
-   * Called automatically when ``autoReplaceGradientBanding`` is on, but
-   * also exposed so a button can trigger it on demand.
-   */
-  applyAutoGradientReplace: () => Promise<void>;
-  /**
-   * Replace ``selectedColors`` with the given hexes in one shot and switch
-   * to ``select-all`` mode. Used by the Gradient Groups panel so a single
-   * click multi-selects every colour inside a gradient group or region
-   * without firing N sequential highlight requests. When ``source`` is
-   * provided the store remembers *which* group/region triggered the batch
-   * so the panel can highlight exactly one row even when a region and its
-   * enclosing group share an identical hex set.
-   *
-   * 一次性把渐变分组内的所有耗材色写入多选集合：切到 select-all 模式 +
-   * 合并成一次高亮预览请求。传 ``source`` 可记录触发本次多选的分组/区域，
-   * 供面板按钮排它性高亮使用。
-   */
-  selectGradientGroupColors: (
-    hexes: string[],
-    source?: GradientSelectionSource,
-  ) => void;
-  /**
-   * Flatten gradient banding for a single group — or a specific region
-   * inside that group — without requiring the user to first multi-select
-   * and pick a target colour. Mirrors :func:`applyAutoGradientReplace`
-   * but scoped to one gradient, so the user can fix one band at a time.
-   *
-   * 针对单个渐变分组（或组内某个区域）一键去除海带纹：把非代表色映射
-   * 到代表色并走 ``submitReplacePreview`` 刷预览，无需先选中再拾色器。
-   */
-  applyGradientReplaceForGroup: (
-    groupIndex: number,
-    regionIndex?: number,
-  ) => Promise<void>;
-  /**
-   * Replace the pixels inside exactly one gradient sub-region with
-   * ``targetHex``. Backed by ``POST /api/convert/region-replace`` with
-   * ``gradient_group_index`` / ``gradient_region_index``; the server
-   * rebuilds the mask from the cached per-pixel ``gradient_region_id_map``
-   * so only that banded region changes, even when other regions on the
-   * canvas share the same quantised hex.
-   *
-   * Unlike :func:`confirmReplacement` + ``colorRemapMap`` (which is a
-   * whole-image ``hex → hex`` mapping and would recolour every matching
-   * pixel), this action is strictly spatial. Callers are the Gradient
-   * Groups panel + LUT picker when the current selection originated from
-   * a region button.
-   *
-   * 仅替换某个 gradient 子区域内的像素为 ``targetHex``。用后端 region-replace
-   * 的 gradient 路径，通过缓存的 region_id_map 精确定位，不会误伤共享
-   * 同一量化 hex 的其它区域——修复"换一条 cyan 带 → 全身皮肤变色"的 bug。
-   */
-  applyGradientRegionPixelReplace: (
-    groupIndex: number,
-    regionIndex: number,
-    targetHex: string,
-  ) => Promise<void>;
-
-  /**
-   * Toggle a sub-region's checkbox in the Gradient Groups panel.
-   *
-   * Same-group invariant: if the new region's ``groupIndex`` differs from
-   * the current selection's group, the existing list is dropped and only
-   * the new region kept. This prevents users accidentally merging regions
-   * from unrelated gradients (e.g. a sky band + a skin band) while still
-   * letting them switch groups smoothly without an explicit clear.
-   * 勾选同一 group 内的 region；点了别的 group 的 region 时清空旧选择，
-   * 避免把不相关的渐变误合并。
-   */
-  toggleGradientRegionSelection: (
-    groupIndex: number,
-    regionIndex: number,
-  ) => void;
-  /** Clear all multi-region checkboxes. 清空多区域勾选。 */
-  clearGradientRegionSelection: () => void;
-  /**
-   * Flatten the currently-checked regions by computing one pixel-count-
-   * weighted representative colour across their union and repainting all
-   * of them to that colour in a single ``/region-replace-batch`` call.
-   * Noop when fewer than 2 regions are selected.
-   * 对勾选的 region 求像素加权代表色，一次 batch 调用统一刷成该色。
-   */
-  flattenSelectedGradientRegions: () => Promise<void>;
-  /**
-   * Re-quantise gradient regions through the material-archive solver with
-   * a fresh per-region palette of ``localQuantizeColors`` colours (range
-   * 12-256). Unlike flatten which collapses everything to one
-   * representative hex, this keeps each region's low-frequency gradient
-   * by giving it a dedicated colour budget and re-matching those colours
-   * to material recipes.
-   *
-   * Two call modes:
-   *   - **Implicit** (``targets`` omitted): operates on
-   *     ``selectedGradientRegions`` (the checkbox-driven list) and clears
-   *     it on success so the panel resets to "nothing checked".
-   *   - **Explicit** (``targets`` provided): operates on the caller-
-   *     supplied list. Leaves ``selectedGradientRegions`` untouched so a
-   *     per-region "re-quantize" button can run without nuking an
-   *     unrelated batch selection the user was assembling.
-   *
-   * 支持两种调用形式：缺省 targets 走当前勾选列表并清空；显式 targets
-   * 则仅量化调用方传入的 region 并保留 ``selectedGradientRegions``，便于
-   * "某一个 region 单独二次量化"的按钮不破坏用户正在构造的批量选择。
-   */
-  requantizeSelectedGradientRegions: (
-    localQuantizeColors: number,
-    targets?: ReadonlyArray<{ groupIndex: number; regionIndex: number }>,
-  ) => Promise<void>;
-  /**
-   * Repaint every currently-checked region with ``targetHex`` via a single
-   * ``/region-replace-batch`` call. Used by the LUT picker flow when the
-   * user has a multi-region selection and picks a target colour.
-   * 用户从 LUT 选定 ``targetHex`` 后，把所有勾选的 region 一次 batch 刷成该色。
-   */
-  applyMultiRegionPixelReplace: (targetHex: string) => Promise<void>;
-  setSourceVersion: (version: SourceVersion) => void;
-  setSelectedMaterialDirNames: (names: string[]) => void;
-  setMaterialLayerCount: (count: number) => void;
-  setMaterialDynamicLayerCountEnabled: (enabled: boolean) => void;
-  setMaterialMinLayerCount: (count: number) => void;
-  setMaterialMaxLayerCount: (count: number) => void;
-  setMaterialLayerHeightMm: (height: number) => void;
-  setMaterialBackingMaterialDirName: (name: string | null) => void;
-  setNativeBrandKey: (brandKey: string) => void;
-  setNativeSupportedMode: (mode: {
-    color_layers: number;
-    layer_height_mm: number;
-  }) => void;
-  setNativeDbNames: (dbNames: string[]) => void;
-  invalidatePreviewForAutoRefresh: () => void;
-  submitPreview: () => Promise<void>;
-  submitGenerate: () => Promise<string | null>;
-  reconcileUnknownContentCommit: () => Promise<void>;
-
-  // 裁剪
-  setEnableCrop: (enabled: boolean) => void;
-  setCropModalOpen: (open: boolean) => void;
-  submitCrop: (
-    x: number,
-    y: number,
-    width: number,
-    height: number,
-  ) => Promise<void>;
-
-  // 自动检测颜色
-  autoDetectColors: () => Promise<void>;
-
-  // 批量模式
-  addBatchFiles: (files: File[]) => void;
-  removeBatchFile: (index: number) => void;
-  clearBatchFiles: () => void;
-  submitBatch: () => Promise<void>;
-
-  // 统一文件选择（auto-batch-multiselect）
-  handleFilesSelect: (files: File[]) => void;
-
-  // 颜色替换预览
-  submitReplacePreview: () => Promise<void>;
-  submitSingleReplace: (origHex: string, newHex: string) => Promise<void>;
-  cleanupAfterDownload: () => void;
-
-  // 完整流水线（preview → generate）
-  submitFullPipeline: () => Promise<string | null>;
-
-  // 自由色
-  toggleFreeColor: (hex: string) => void;
-  clearFreeColors: () => void;
-
-  // UI 状态
-  setError: (error: string | null) => void;
-  clearError: () => void;
-
-  // 分层预览
-  fetchLayerImages: (previewSourceKey?: string | null) => Promise<void>;
-  resetLayerImages: () => void;
-  setLayerImagesOpen: (open: boolean) => void;
-
-  // 配方导入
-  importRecipeState: (
-    partial: Partial<ConverterState>,
-    imageFile: File,
-    heightmapFile?: File | null,
-  ) => void;
-}
-
-// ========== localStorage Helpers ==========
-
-const EMPTY_LUT_MATCH_STATE = {
-  lutMatchMode: null,
-  lutMatchInfo: null,
-} as const;
-
-const DEFAULT_LAYER_IMAGES_STATE = {
-  layerImages: [] as { layer_index: number; name: string; url: string }[],
-  layerImagesLoading: false,
-  layerImagesOpen: false,
-  layerImagesSourceKey: null as string | null,
-};
-
-/**
- * Partial invalidation for cached per-layer preview images after a color
- * replacement. Preserves `layerImagesOpen` (user panel visibility) and
- * `layerImagesLoading`, but drops stale image URLs and source key so the
- * next hover/fetch refreshes layer data against the new preview.
- * 颜色替换后用于失效分层预览图缓存的局部状态：保留用户面板可见性与
- * 加载状态，清除过期的图片 URL 与 source key，确保下次悬停/拉取
- * 能针对新预览刷新分层数据。
- */
-const INVALIDATE_LAYER_IMAGES_AFTER_REPLACE = {
-  layerImages: [] as { layer_index: number; name: string; url: string }[],
-  layerImagesSourceKey: null as string | null,
-} as const;
-
-function dynamicMaterialResultState(
-  response: DynamicMaterialResultResponse,
-): Pick<
-  ConverterState,
-  | "materialDynamicRecipes"
-  | "materialLayerBenefitCurve"
-  | "materialLayerBenefitScope"
-  | "materialLayerBenefitPixelCount"
-> &
-  Partial<
-    Pick<
-      ConverterState,
-      "contentCommitStatus" | "contentCommitOperationId" | "selectionDocument"
-    >
-  > {
-  return {
-    materialDynamicRecipes: response.material_dynamic_recipes ?? [],
-    materialLayerBenefitCurve: response.material_layer_benefit_curve ?? [],
-    materialLayerBenefitScope:
-      response.material_layer_benefit_scope ?? "all_printable_pixels",
-    materialLayerBenefitPixelCount:
-      response.material_layer_benefit_pixel_count ?? 0,
-    ...editorCommitStateFromResponse(response),
-  };
-}
-
-const DEFAULT_PUZZLE_PREVIEW_STATE = {
-  puzzleOverlayUrl: null,
-  puzzleWarnings: [] as string[],
-  puzzleResolvedRows: null,
-  puzzleResolvedCols: null,
-  puzzleResolvedPieceCount: null,
-  puzzleDerivedPieceWidthMm: null,
-  puzzleDerivedPieceHeightMm: null,
-};
-
-const DEFAULT_PUZZLE_LAYOUT_SEED = 0;
-
-type PortableProjectColorState = Pick<
-  ConverterState,
-  | "replacement_regions"
-  | "free_color_set"
-  | "customRecipeHistory"
->;
-
-function normalizeReplacementHex(hex: string): string {
-  return hex.trim().replace(/^#/, "").toLowerCase();
-}
-
-function mergePortableReplacementRegions(
-  persisted: ColorReplacementItem[],
-  live: ColorReplacementItem[],
-): ColorReplacementItem[] {
-  const bySource = new Map<string, ColorReplacementItem>();
-  for (const item of [...persisted, ...live]) {
-    const quantized = normalizeReplacementHex(item.quantized_hex);
-    const matched = normalizeReplacementHex(item.matched_hex);
-    const source = quantized || matched;
-    if (!source) continue;
-    bySource.set(source, { ...item });
-  }
-  return Array.from(bySource.values());
-}
-
-function clonePortableProjectColorState(
-  state: Pick<
-    ConverterState,
-    "replacement_regions" | "free_color_set" | "customRecipeHistory"
-  >,
-): PortableProjectColorState {
-  return {
-    replacement_regions: state.replacement_regions.map((item) => ({
-      ...item,
-    })),
-    free_color_set: new Set(state.free_color_set),
-    customRecipeHistory: state.customRecipeHistory.map((item) => ({
-      ...item,
-      recipe: [...item.recipe],
-      predictedRgb: [...item.predictedRgb] as [number, number, number],
-      predictedLab: [...item.predictedLab] as [number, number, number],
-      ...(item.displayHexes ? { displayHexes: [...item.displayHexes] } : {}),
-      ...(item.displayLabels
-        ? { displayLabels: [...item.displayLabels] }
-        : {}),
-      ...(item.virtualMaterials
-        ? {
-            virtualMaterials: item.virtualMaterials.map((material) => ({
-              ...material,
-            })),
-          }
-        : {}),
-    })),
-  };
-}
-
-function buildSourceChangeProjectColorState(
-  state: ConverterState,
-): PortableProjectColorState {
-  const portable = clonePortableProjectColorState(state);
-  const liveRemaps = colorRemapToReplacementRegions(
-    state.colorRemapMap,
-    state.palette,
-  );
-  return {
-    ...portable,
-    replacement_regions: mergePortableReplacementRegions(
-      portable.replacement_regions,
-      liveRemaps,
-    ),
-  };
 }
 
 function buildPreviewSessionResetState(
@@ -3573,42 +1513,6 @@ function buildPreviewSessionResetState(
   };
 }
 
-function buildMissingAutoReliefHeightMap(
-  state: Pick<
-    ConverterState,
-    | "enable_relief"
-    | "autoHeightMode"
-    | "color_height_map"
-    | "heightmap_max_height"
-    | "palette"
-    | "lutColors"
-  >,
-  paletteOverride?: PaletteEntry[],
-): Record<string, number> | null {
-  if (!state.enable_relief) return null;
-  if (state.autoHeightMode === "use-heightmap") return null;
-  if (Object.keys(state.color_height_map).length > 0) return null;
-  const palette =
-    paletteOverride ??
-    (state.palette.length > 0
-      ? state.palette
-      : state.lutColors.map((color: LutColorEntry) => {
-          const hex = color.hex.replace(/^#/, "").toLowerCase();
-          return {
-            quantized_hex: hex,
-            matched_hex: hex,
-            pixel_count: 0,
-            percentage: 0,
-          };
-        }));
-  if (palette.length === 0) return null;
-  return computeAutoHeightMap(
-    palette,
-    state.autoHeightMode,
-    state.heightmap_max_height,
-  );
-}
-
 const SVG_HOLE_COMPENSATION_STORAGE_KEY = "lumina_svgHoleCompensation";
 
 function loadSvgHoleCompensationSettings(): SvgHoleCompensationOptions {
@@ -3653,10 +1557,7 @@ function buildSvgHoleCompensationChangeState(
   }
   persistSvgHoleCompensationSettings(options);
   _cancelPreviewWork();
-  _generateRequestSequence += 1;
-  _batchRequestSequence += 1;
-  _activeFilenameEligibleGenerateSequence = null;
-  _endGenerateTimer();
+  invalidateGenerationRequests();
   return {
     ...(resetPreview ? buildPreviewSessionResetState(current, true) : {}),
     ...options,
@@ -3701,25 +1602,6 @@ function loadLutName(): string {
   } catch {
     return "";
   }
-}
-
-function normalizeLegacyLutNames(
-  lutNames: string[] | undefined,
-  fallbackLutName: string,
-): string[] {
-  const ordered = [
-    ...(fallbackLutName ? [fallbackLutName] : []),
-    ...(lutNames ?? []),
-  ];
-  const seen = new Set<string>();
-  return ordered.filter((name) => {
-    const trimmed = name.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      return false;
-    }
-    seen.add(trimmed);
-    return true;
-  });
 }
 
 function areStringArraysEqual(left: string[], right: string[]): boolean {
@@ -4069,9 +1951,6 @@ export const DEFAULT_STATE: ConverterState = {
 let _previewStartTime: number | null = null;
 const _PREVIEW_TIMER_LABEL = "[LUMINA] preview";
 let _previewTimerActive = false;
-let _generateStartTime: number | null = null;
-const _GENERATE_TIMER_LABEL = "[LUMINA] generate";
-let _generateTimerActive = false;
 
 function _startPreviewTimer(): void {
   if (_previewTimerActive) {
@@ -4104,37 +1983,6 @@ function _endPreviewTimer(): void {
   _previewTimerActive = false;
 }
 
-function _startGenerateTimer(): void {
-  if (_generateTimerActive) {
-    try {
-      console.timeEnd(_GENERATE_TIMER_LABEL);
-    } catch {
-      // Ignore missing timer in non-browser/test environments.
-    }
-  }
-  console.time(_GENERATE_TIMER_LABEL);
-  _generateTimerActive = true;
-}
-
-function _logGenerateTimer(message: string): void {
-  if (!_generateTimerActive) return;
-  try {
-    console.timeLog(_GENERATE_TIMER_LABEL, message);
-  } catch {
-    // Ignore when console.timeLog is unavailable.
-  }
-}
-
-function _endGenerateTimer(): void {
-  if (!_generateTimerActive) return;
-  try {
-    console.timeEnd(_GENERATE_TIMER_LABEL);
-  } catch {
-    // Ignore missing timer in non-browser/test environments.
-  }
-  _generateTimerActive = false;
-}
-
 function _previewClientLog(
   label: string,
   details?: Record<string, unknown>,
@@ -4148,101 +1996,6 @@ function _previewClientLog(
     method,
   });
 }
-
-function _clientLog(
-  label: string,
-  details?: Record<string, unknown>,
-  method: "log" | "warn" | "error" = "log",
-) {
-  postClientLog(label, {
-    startTime: _generateStartTime,
-    details,
-    scope: "generate",
-    phase: label,
-    method,
-  });
-}
-
-function getElapsedMsSince(startTime: number | null): number | null {
-  if (startTime == null || typeof performance === "undefined") {
-    return null;
-  }
-  return Math.round(performance.now() - startTime);
-}
-
-function getFileCountBucket(count: number): string {
-  if (count <= 0) return "0";
-  if (count === 1) return "1";
-  if (count <= 5) return "2-5";
-  if (count <= 10) return "6-10";
-  if (count <= 25) return "11-25";
-  return "26+";
-}
-
-function getErrorType(error: unknown): string {
-  return error instanceof Error ? error.name : typeof error;
-}
-
-function buildPuzzlePreviewParams(
-  state: Pick<
-    ConverterState,
-    | "target_height_mm"
-    | "puzzleStyle"
-    | "puzzleSizingMode"
-    | "pieceWidthMm"
-    | "pieceHeightMm"
-    | "puzzleRows"
-    | "puzzleCols"
-    | "targetPieceCount"
-    | "connectorStyle"
-    | "labelsEnabled"
-    | "engraveBackLabels"
-    | "irregularityStrength"
-    | "minNeckWidthMm"
-  >,
-) {
-  return {
-    target_height_mm: state.target_height_mm,
-    puzzle_style: state.puzzleStyle,
-    sizing_mode: state.puzzleSizingMode,
-    piece_width_mm: state.pieceWidthMm,
-    piece_height_mm: state.pieceHeightMm,
-    rows: state.puzzleRows,
-    cols: state.puzzleCols,
-    target_piece_count: state.targetPieceCount,
-    seed: DEFAULT_PUZZLE_LAYOUT_SEED,
-    connector_style: state.connectorStyle,
-    labels_enabled: state.labelsEnabled,
-    engrave_back_labels: false,
-    irregularity_strength: state.irregularityStrength,
-    min_neck_width_mm: state.minNeckWidthMm,
-  } as const;
-}
-
-// ========== Async segmented-GLB polling ==========
-//
-// The backend replace endpoints (replace-color, region-replace and their
-// batch variants, apply-recipe-override, reset-replacements) now return
-// ``preview_glb_url: null`` immediately and rebuild the segmented GLB on
-// a background thread — this dropped the typical ``/region-replace``
-// latency from ~45 s to ~10 s for 6 Mpix images. The frontend therefore
-// has to poll ``/api/convert/glb-status/{sid}`` after every replace to
-// pick up the new GLB URL once the worker finishes.
-// 由于 replace 端点改为异步生成 GLB，前端需要在每次 replace 后轮询
-// /glb-status，拿到新 URL 后再刷新 3D 预览（previewGlbUrl）。
-const GLB_POLL_INTERVAL_MS = 500;
-// Monotonic token used by every poll loop; starting a new poll or
-// changing sessionId bumps this so any older loop exits on its next tick.
-// 单调递增的 token：新轮询/切换 session 都会自增，旧循环下一轮检测到 token
-// 变了就退出，避免多路 polling 互相覆盖 previewGlbUrl。
-let _glbPollSequence = 0;
-let _vectorRendererRequestSequence = 0;
-let _vectorRendererRequestQueue: Promise<void> = Promise.resolve();
-let _generateRequestSequence = 0;
-let _batchRequestSequence = 0;
-let _activeFilenameEligibleGenerateSequence: number | null = null;
-/** True while a generate retry after a revision conflict is running. 版本冲突重试进行中。 */
-let _generateRevisionRetryActive = false;
 
 /**
  * Re-read the authoritative editor content revision from the backend.
@@ -4278,87 +2031,9 @@ function _cancelPreviewWork(): void {
   }
   _gradientGroupsAbortController?.abort();
   _gradientGroupsAbortController = null;
-  _glbPollSequence += 1;
-  _vectorRendererRequestSequence += 1;
+  cancelDerivedPreviewWork();
   invalidateReplacementPreviewCommits();
   _endPreviewTimer();
-}
-
-function _isCurrentGenerateRequest(
-  sequence: number,
-  sessionId: string,
-  getCurrentSessionId: () => string | null,
-): boolean {
-  return _generateRequestSequence === sequence && getCurrentSessionId() === sessionId;
-}
-
-function _startGlbStatusPolling(
-  sessionId: string,
-  applyGlbResult: (
-    url: string,
-    colorContours?: Record<string, number[][][]> | null,
-  ) => void,
-  getCurrentSessionId: () => string | null,
-): void {
-  _glbPollSequence += 1;
-  const mySeq = _glbPollSequence;
-  const tick = async (): Promise<void> => {
-    // Lost-focus guard: if a newer poll started or the user switched sessions,
-    // exit silently. A local build remains pending until it completes, fails,
-    // or the user starts a newer request.
-    // 仅在新轮询或 session 切换时退出；本地计算持续到完成、失败或被新请求替代。
-    if (_glbPollSequence !== mySeq) return;
-    if (getCurrentSessionId() !== sessionId) return;
-
-    try {
-      const status = await apiGetGlbStatus(sessionId);
-      // Re-check all guards after the awaited round-trip: another replace
-      // may have scheduled a newer build while we waited, and its token
-      // will surface via the next poll started by that replace — we must
-      // not race it by writing stale state here.
-      // 网络往返后再次校验，避免把中途被覆盖的旧 URL 写进 state。
-      if (_glbPollSequence !== mySeq) return;
-      if (getCurrentSessionId() !== sessionId) return;
-
-      if (status.status === "ready" && status.glb_url) {
-        const normalized = normalizeResourceUrl(status.glb_url);
-        if (normalized) {
-          applyGlbResult(normalized, status.color_contours ?? null);
-        }
-        return;
-      }
-      if (status.status === "error") {
-        // GLB build failed but the 2D preview already updated; keep the
-        // old 3D preview rather than surfacing a modal — the user can
-        // retry via any replace action to re-trigger a build.
-        // GLB 生成失败时不弹错；2D 已可用，旧 3D 继续显示，再次替换即重试。
-        postClientLog("converter: glb async build failed", {
-          scope: "converter",
-          phase: "glb-error",
-          details: { session_id: sessionId, error: status.error },
-        });
-        return;
-      }
-      // idle / pending — continue polling on next tick.
-      // idle / pending 继续轮询下一轮。
-      window.setTimeout(() => {
-        void tick();
-      }, GLB_POLL_INTERVAL_MS);
-    } catch (err) {
-      // Network blip: log and stop. Next replace will kick off a fresh
-      // poll, so we'd only mask a transient error by retrying here.
-      // 网络抖动时停止，下一次 replace 会重新起轮询，无需原地重试。
-      postClientLog("converter: glb poll network error", {
-        scope: "converter",
-        phase: "glb-poll-error",
-        details: { session_id: sessionId, error: summarizeErrorForLog(err) },
-      });
-    }
-  };
-
-  window.setTimeout(() => {
-    void tick();
-  }, GLB_POLL_INTERVAL_MS);
 }
 
 // ========== Store ==========
@@ -4366,6 +2041,14 @@ function _startGlbStatusPolling(
 export const useConverterStore = create<ConverterState & ConverterActions>()(
   subscribeWithSelector((set, _get) => ({
     ...DEFAULT_STATE,
+    ...createGenerationActions(set, _get, {
+      waitForSelectionMutation,
+      waitForContentCommits,
+      getReplacementEpoch: () => replacementPreviewEpoch,
+      confirmedEditorRevision: (sessionId) => confirmedSelectionRevisions.get(sessionId)?.editorContentRevision,
+      refreshConfirmedEditorContentRevision,
+    }),
+    ...createDerivedPreviewActions(set, _get),
 
     // --- 图片 ---
     setImageFile: (file: File | null) => {
@@ -8389,97 +6072,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
     },
 
-    // --- GLB 预览 ---
-    setPreviewGlbUrl: (url: string | null) => set({ previewGlbUrl: url }),
-
-    _pollAsyncGlb: () => {
-      const sid = _get().sessionId;
-      if (!sid) return;
-      _startGlbStatusPolling(
-        sid,
-        (url, colorContours) =>
-          set({
-            previewGlbUrl: url,
-            modelUrl: null,
-            ...(colorContours ? { colorContours } : {}),
-          }),
-        () => _get().sessionId,
-      );
-    },
-
-    rebuildVectorPreviewRenderer: async (
-      enableSmoothVectorPreview: boolean,
-    ) => {
-      const requested = _get();
-      if (
-        !requested.sessionId ||
-        resolveVectorPreviewRenderer(
-          requested,
-          enableSmoothVectorPreview,
-        ) === null
-      ) {
-        return;
-      }
-
-      const sessionId = requested.sessionId;
-      const previewRevision = requested.previewRequestRevision;
-      const sequence = ++_vectorRendererRequestSequence;
-      const runRequest = async (): Promise<void> => {
-        const beforeRequest = _get();
-        if (
-          sequence !== _vectorRendererRequestSequence ||
-          beforeRequest.sessionId !== sessionId ||
-          beforeRequest.previewRequestRevision !== previewRevision ||
-          useSettingsStore.getState().enableSmoothVectorPreview !==
-            enableSmoothVectorPreview
-        ) {
-          return;
-        }
-        try {
-          const response = await apiRebuildVectorPreviewRenderer(
-            sessionId,
-            enableSmoothVectorPreview,
-          );
-          const latest = _get();
-          if (
-            sequence !== _vectorRendererRequestSequence ||
-            latest.sessionId !== sessionId ||
-            latest.previewRequestRevision !== previewRevision ||
-            response.session_id !== sessionId ||
-            useSettingsStore.getState().enableSmoothVectorPreview !==
-              enableSmoothVectorPreview
-          ) {
-            return;
-          }
-          latest._pollAsyncGlb();
-        } catch (error) {
-          const latest = _get();
-          if (
-            sequence !== _vectorRendererRequestSequence ||
-            latest.sessionId !== sessionId ||
-            latest.previewRequestRevision !== previewRevision
-          ) {
-            return;
-          }
-          postClientLog("converter: vector renderer rebuild failed", {
-            scope: "converter",
-            phase: "vector-renderer-rebuild",
-            details: {
-              session_id: sessionId,
-              error: summarizeErrorForLog(error),
-            },
-          });
-        }
-      };
-
-      const queuedRequest = _vectorRendererRequestQueue.then(
-        runRequest,
-        runRequest,
-      );
-      _vectorRendererRequestQueue = queuedRequest.catch(() => undefined);
-      await queuedRequest;
-    },
-
     // --- 模型边界 ---
     setModelBounds: (bounds: ConverterState["modelBounds"]) =>
       set((state) => ({
@@ -9311,8 +6903,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         ...portableProjectColors.replacement_regions,
         ...remapReplacementRegions,
       ];
-      const shouldReplayGlobalReplacements =
-        previewReplacementRegions.length > 0;
+      const shouldReplayGlobalReplacements = previewReplacementRegions.length > 0;
 
       set({
         isLoading: true,
@@ -9328,14 +6919,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       });
       console.log("[DEBUG] submitPreview: cleared layerImages");
       try {
-        const resolvedSourceSelection = resolveConverterSourceSelection(state);
         const colorMode = normalizePublicColorMode(state.color_mode);
         const sourceParams =
-          state.source_version === "material"
-            ? buildMaterialSourceParams(state)
-            : state.source_version === "native"
-              ? buildNativeSourceParams(resolvedSourceSelection, state)
-              : buildLegacySourceParams(state);
+          buildConversionSourceParams(state);
         if (!sourceParams) {
           _previewClientLog(
             "preview: invalid source",
@@ -9350,59 +6936,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           });
           return;
         }
-        const previewParams = {
-          ...sourceParams,
-          color_layers:
-            state.source_version === "material"
-              ? resolveMaterialPrintLayerCount(state)
-              : sourceParams.source_kind === "native_bundle"
-                ? (sourceParams.color_layers ?? undefined)
-                : (state.color_layers ?? undefined),
-          layer_height_mm:
-            state.source_version === "material"
-              ? state.materialLayerHeightMm
-              : sourceParams.source_kind === "native_bundle"
-                ? (sourceParams.layer_height_mm ?? undefined)
-                : (state.layer_height_mm ?? undefined),
-          target_width_mm: state.target_width_mm,
-          color_mode: colorMode,
-          modeling_mode: state.modeling_mode,
-          quantize_colors: state.quantize_colors,
-          high_precision_3d_preview: state.high_precision_3d_preview,
-          enable_smooth_vector_preview:
-            useSettingsStore.getState().enableSmoothVectorPreview,
-          enable_cleanup: state.enable_cleanup,
-          enable_outline: state.enable_outline,
-          outline_width: state.outline_width,
-          svg_pixels_per_mm: useSettingsStore.getState().svgPixelsPerMm,
-          ...svgHoleCompensationOptions(state),
-          ...resolveColorMatchingWeights(state),
-          use_lut_constrained: state.use_lut_constrained,
-          auto_dynamic_range: state.auto_dynamic_range,
-          is_dark: useSettingsStore.getState().theme === "dark",
-          large_format_enabled: state.largeFormatEnabled,
-          ...(shouldReplayGlobalReplacements
-            ? { replacement_regions: previewReplacementRegions }
-            : {}),
-          ...(state.modelSurfaceEnabled &&
-          state.modelSurfaceModelFileId &&
-          state.modelSurfaceSelection &&
-          state.modelSurfaceFootprint
-            ? {
-                surface_model_file_id: state.modelSurfaceModelFileId,
-                surface_selection_json: JSON.stringify(state.modelSurfaceSelection),
-                surface_footprint_json: JSON.stringify(state.modelSurfaceFootprint),
-                surface_placement_json: JSON.stringify(state.modelSurfacePlacement),
-                surface_model_transform_json: JSON.stringify({
-                  rotation_deg: {
-                    x: state.modelSurfaceModelRotation.x_deg,
-                    y: state.modelSurfaceModelRotation.y_deg,
-                    z: state.modelSurfaceModelRotation.z_deg,
-                  },
-                }),
-              }
-            : {}),
-        };
+        const previewParams = buildPreviewParams(state, useSettingsStore.getState(), sourceParams, previewReplacementRegions);
         _logPreviewTimer("request sent");
         _previewClientLog("preview: request sent", {
           source_kind: sourceParams.source_kind,
@@ -9674,537 +7208,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (_previewAbortController === requestController) {
           _previewAbortController = null;
           _endPreviewTimer();
-        }
-      }
-    },
-
-    submitGenerate: async () => {
-      let state = _get();
-      if (!state.sessionId) {
-        set({ error: "请先预览图片" });
-        return null;
-      }
-      const sessionId = state.sessionId;
-      if (state.contentCommitStatus === "unknown") {
-        set({
-          error:
-            "编辑提交结果暂时未知，已暂停生成；请先同步这次编辑的提交状态。",
-        });
-        return null;
-      }
-      const pendingSelection = waitForSelectionMutation(sessionId);
-      if (pendingSelection) {
-        const selectionCommitSucceeded = await pendingSelection;
-        if (_get().sessionId !== sessionId) return null;
-        if (!selectionCommitSucceeded) return null;
-      }
-      const pendingContentCommit = waitForContentCommits(sessionId);
-      if (pendingContentCommit) {
-        const contentCommitSucceeded = await pendingContentCommit;
-        if (_get().sessionId !== sessionId) return null;
-        if (!contentCommitSucceeded) {
-          // A failed edit already left its previous committed state visible.
-          // Do not send a generate request that could combine that state with
-          // a partially failed mutation.
-          return null;
-        }
-      }
-      state = _get();
-      const sourceSelection = resolveConverterSourceSelection(state);
-      if (!sourceSelection.isReady) {
-        set({
-          error:
-            state.source_version === "material"
-              ? "请先选择耗材"
-              : state.source_version === "native"
-                ? "请先选择品牌和数据库"
-                : "请先选择 LUT",
-        });
-        return null;
-      }
-      const autoReliefHeightMap = buildMissingAutoReliefHeightMap(state);
-      if (autoReliefHeightMap) {
-        set({ color_height_map: autoReliefHeightMap });
-        state = _get();
-      }
-      const hasCurrentHeightmapUpload =
-        state.heightmapUploadSessionId === sessionId &&
-        Object.keys(state.color_height_map).length > 0;
-      if (
-        state.enable_relief &&
-        state.autoHeightMode === "use-heightmap" &&
-        !hasCurrentHeightmapUpload
-      ) {
-        set({ error: CONVERTER_ERROR_KEYS.heightmapUploadRequired });
-        return null;
-      }
-      // Requirement 10.4: enable_relief 为 true 且 color_height_map 为空时阻止生成
-      if (
-        state.enable_relief &&
-        Object.keys(state.color_height_map).length === 0
-      ) {
-        // Requirement 10.3: 高度图模式时给出更具体的提示
-        if (state.autoHeightMode === "use-heightmap") {
-          set({ error: CONVERTER_ERROR_KEYS.heightmapUploadRequired });
-        } else {
-          set({ error: "请先设置颜色高度映射后再生成" });
-        }
-        return null;
-      }
-
-      const generateSettings = useSettingsStore.getState();
-      const generateIdentity = captureGeneratedArtifactIdentity(
-        generateSettings.deviceProfileId,
-        generateSettings.buildPlateId,
-      );
-      const generateReplacementEpoch = replacementPreviewEpoch;
-      set({
-        isGenerating: true,
-        error: null,
-        generatePerformanceTiming: null,
-        generateWarnings: [],
-      });
-      _generateRequestSequence += 1;
-      const generateSequence = _generateRequestSequence;
-      _activeFilenameEligibleGenerateSequence =
-        !state.batchMode &&
-        !state.puzzleEnabled &&
-        !state.largeFormatEnabled &&
-        state.modeling_mode !== ModelingModeEnum.COLOR_CARD
-          ? generateSequence
-          : null;
-      const shouldIgnoreStaleGenerateResponse = (): boolean => {
-        const latestSettings = useSettingsStore.getState();
-        if (
-          _isCurrentGenerateRequest(
-            generateSequence,
-            sessionId,
-            () => useConverterStore.getState().sessionId,
-          ) &&
-          replacementPreviewEpoch === generateReplacementEpoch &&
-          isGeneratedArtifactIdentityCurrent(
-            generateIdentity,
-            latestSettings.deviceProfileId,
-            latestSettings.buildPlateId,
-          )
-        ) {
-          return false;
-        }
-
-        const latestState = useConverterStore.getState();
-        if (
-          _generateRequestSequence === generateSequence &&
-          latestState.isGenerating
-        ) {
-          set({ isGenerating: false });
-        }
-        return true;
-      };
-      _generateStartTime = performance.now();
-      (window as LuminaWindow).__luminaGenerateStart = _generateStartTime;
-      _clientLog("generate: click", {
-        image: summarizeFileForLog(state.imageFile),
-        session_id: sessionId,
-        source_version: state.source_version,
-        target_width_mm: state.target_width_mm,
-        color_mode: state.color_mode,
-        modeling_mode: state.modeling_mode,
-        quantize_colors: state.quantize_colors,
-        high_precision_3d_preview: state.high_precision_3d_preview,
-        enable_cleanup: state.enable_cleanup,
-        enable_relief: state.enable_relief,
-        enable_outline: state.enable_outline,
-        enable_cloisonne: state.enable_cloisonne,
-        puzzle_enabled: state.puzzleEnabled,
-        large_format_enabled: state.largeFormatEnabled,
-      });
-      _startGenerateTimer();
-      try {
-        // Merge global-only replacement mappings. Spatial edits stay in the
-        // session preview cache and are selected by use_cached_matched_rgb.
-        // 仅合并全局替色映射；空间局部改色保留在会话预览缓存中。
-        let mergedReplacements: ColorReplacementItem[] | undefined =
-          state.replacement_regions.length > 0
-            ? [...state.replacement_regions]
-            : undefined;
-
-        if (Object.keys(state.colorRemapMap).length > 0) {
-          const remapRegions = colorRemapToReplacementRegions(
-            state.colorRemapMap,
-            state.palette,
-          );
-          mergedReplacements = [...(mergedReplacements ?? []), ...remapRegions];
-        }
-
-        const resolvedSourceSelection = resolveConverterSourceSelection(state);
-        const colorMode = normalizePublicColorMode(state.color_mode);
-        const sourceParams =
-          state.source_version === "material"
-            ? buildMaterialSourceParams(state)
-            : state.source_version === "native"
-              ? buildNativeSourceParams(resolvedSourceSelection, state)
-              : buildLegacySourceParams(state);
-        if (!sourceParams) {
-          set({
-            isGenerating: false,
-            error: "请先选择品牌和数据库",
-          });
-          return null;
-        }
-        const reliefMinimumTotalHeight =
-          getMaterialArchiveReliefMinimumTotalHeight(state);
-        const reliefHeightmapMaxHeight = state.enable_relief
-          ? Math.max(
-              state.spacer_thick + state.heightmap_max_height,
-              reliefMinimumTotalHeight,
-            )
-          : state.heightmap_max_height;
-        const reliefColorHeightMap =
-          state.enable_relief && state.autoHeightMode !== "use-heightmap"
-            ? clampAbsoluteReliefHeightMap(
-                toAbsoluteReliefHeightMap(
-                  state.color_height_map,
-                  state.spacer_thick,
-                ),
-                reliefMinimumTotalHeight,
-              )
-            : state.enable_relief
-              ? clampAbsoluteReliefHeightMap(
-                  state.color_height_map,
-                  reliefMinimumTotalHeight,
-                )
-              : undefined;
-        const baseColorLayerCount =
-          state.source_version === "material"
-            ? resolveMaterialPrintLayerCount(state)
-            : sourceParams.source_kind === "native_bundle"
-              ? (sourceParams.color_layers ?? undefined)
-              : (state.color_layers ?? undefined);
-        const baseParams = {
-          ...sourceParams,
-          color_layers: resolveRecipeAwareLayerCount(
-            state,
-            baseColorLayerCount,
-          ),
-          layer_height_mm:
-            state.source_version === "material"
-              ? state.materialLayerHeightMm
-              : sourceParams.source_kind === "native_bundle"
-                ? (sourceParams.layer_height_mm ?? undefined)
-                : (state.layer_height_mm ?? undefined),
-          target_width_mm: state.target_width_mm,
-          color_mode: colorMode,
-          modeling_mode: state.modeling_mode,
-          quantize_colors: state.quantize_colors,
-          high_precision_3d_preview: state.high_precision_3d_preview,
-          enable_cleanup: state.enable_cleanup,
-          svg_pixels_per_mm: generateSettings.svgPixelsPerMm,
-          ...svgHoleCompensationOptions(state),
-          ...resolveColorMatchingWeights(state),
-          use_lut_constrained: state.use_lut_constrained,
-          auto_dynamic_range: state.auto_dynamic_range,
-          is_dark: generateSettings.theme === "dark",
-          spacer_thick: state.spacer_thick,
-          backing_infill_density_percent:
-            state.backing_infill_density_percent,
-          structure_mode: state.structure_mode,
-          separate_backing: state.separate_backing,
-          add_loop: state.add_loop,
-          loop_width: state.loop_width,
-          loop_length: state.loop_length,
-          loop_hole: state.loop_hole,
-          loop_angle: state.loop_angle,
-          loop_offset_x: state.loop_offset_x,
-          loop_offset_y: state.loop_offset_y,
-          loop_position_preset: state.loop_position_preset,
-          enable_relief: state.enable_relief,
-          height_mode: state.enable_relief
-            ? state.autoHeightMode === "use-heightmap"
-              ? "heightmap"
-              : "color"
-            : undefined,
-          color_height_map: reliefColorHeightMap,
-          heightmap_max_height: reliefHeightmapMaxHeight,
-          enable_outline: state.enable_outline,
-          outline_width: state.outline_width,
-          enable_cloisonne: state.enable_cloisonne,
-          wire_width_mm: state.wire_width_mm,
-          wire_height_mm: state.wire_height_mm,
-          enable_coating: state.enable_coating,
-          coating_height_mm: state.coating_height_mm,
-          enable_fridge_magnet: state.enable_fridge_magnet,
-          fridge_magnets:
-            state.enable_fridge_magnet && state.fridge_magnets.length > 0
-              ? state.fridge_magnets
-              : undefined,
-          replacement_regions:
-            mergedReplacements && mergedReplacements.length > 0
-              ? mergedReplacements
-              : undefined,
-          recipe_overrides:
-            state.recipe_overrides.length > 0
-              ? state.recipe_overrides
-              : undefined,
-          free_color_set:
-            state.free_color_set.size > 0
-              ? Array.from(state.free_color_set).map((h) => `#${h}`)
-              : undefined,
-          printer_id: generateSettings.printerModel,
-          slicer: generateSettings.slicerSoftware,
-          nozzle_size: generateSettings.nozzleSize,
-          device_profile_id: generateSettings.deviceProfileId,
-          build_plate_id: generateSettings.buildPlateId,
-          custom_3mf_template_id: generateSettings.custom3mfTemplateId,
-          enable_base_layer_height_modifier:
-            generateSettings.enableBaseLayerHeightModifier,
-          enable_wipe_tower_auto_placement:
-            generateSettings.enableWipeTowerAutoPlacement,
-          use_cached_matched_rgb: state.regionReplacementCount > 0,
-          // Never fall back to the visible-region content_revision: it is a
-          // different counter and would always mismatch on the server.
-          // 不能回退到可见区域 content_revision，它是另一个计数器。
-          editor_content_revision: newestEditorContentRevision(
-            state.selectionDocument?.editor_content_revision,
-            confirmedSelectionRevisions.get(sessionId)?.editorContentRevision,
-          ),
-          selection_revision:
-            state.selectionDocument?.selection_revision ?? undefined,
-          ...(state.modelSurfaceEnabled &&
-          state.modelSurfaceModelFileId &&
-          state.modelSurfaceSelection &&
-          state.modelSurfaceFootprint
-            ? {
-                surface_model_file_id: state.modelSurfaceModelFileId,
-                surface_selection_json: JSON.stringify(state.modelSurfaceSelection),
-                surface_footprint_json: JSON.stringify(state.modelSurfaceFootprint),
-                surface_placement_json: JSON.stringify(state.modelSurfacePlacement),
-                surface_model_transform_json: JSON.stringify({
-                  rotation_deg: {
-                    x: state.modelSurfaceModelRotation.x_deg,
-                    y: state.modelSurfaceModelRotation.y_deg,
-                    z: state.modelSurfaceModelRotation.z_deg,
-                  },
-                }),
-              }
-            : {}),
-        } as const;
-
-        _clientLog("generate: request prepared", {
-          source_kind: sourceParams.source_kind,
-          replacement_count: mergedReplacements?.length ?? 0,
-          recipe_override_count: state.recipe_overrides.length,
-          free_color_count: state.free_color_set.size,
-          fridge_magnet_count: state.fridge_magnets.length,
-          color_layers: baseParams.color_layers ?? null,
-          layer_height_mm: baseParams.layer_height_mm ?? null,
-          structure_mode: baseParams.structure_mode,
-          separate_backing: baseParams.separate_backing,
-          enable_relief: baseParams.enable_relief,
-          enable_outline: baseParams.enable_outline,
-          enable_cloisonne: baseParams.enable_cloisonne,
-        });
-
-        if (state.puzzleEnabled) {
-          const puzzleResponse = await apiConvertGeneratePuzzle(sessionId, {
-            ...buildPuzzlePreviewParams(state),
-            params: baseParams,
-          });
-          if (shouldIgnoreStaleGenerateResponse()) {
-            return null;
-          }
-          const downloadUrl = normalizeStoreResourceUrl(puzzleResponse.download_url);
-          set({
-            isGenerating: false,
-            modelUrl: null,
-            batchPreviewItems: [],
-            downloadUrl,
-            threemfDiskPath: null,
-            generateWarnings: puzzleResponse.warnings ?? [],
-            puzzleWarnings: puzzleResponse.warnings ?? [],
-            puzzleResolvedRows: puzzleResponse.grid_rows ?? null,
-            puzzleResolvedCols: puzzleResponse.grid_cols ?? null,
-            puzzleResolvedPieceCount: puzzleResponse.piece_count ?? null,
-          });
-          _logGenerateTimer("puzzle 3mf received");
-          _clientLog("generate: puzzle 3mf received", {
-            download_url: downloadUrl,
-            has_legacy_threemf_disk_path: Boolean(
-              puzzleResponse.threemf_disk_path,
-            ),
-            warning_count: (puzzleResponse.warnings ?? []).length,
-            grid_rows: puzzleResponse.grid_rows ?? null,
-            grid_cols: puzzleResponse.grid_cols ?? null,
-            piece_count: puzzleResponse.piece_count ?? null,
-          });
-          trackLuminaEvent("lumina_converter_generate_done", {
-            source_version: state.source_version,
-            source_kind: sourceParams.source_kind,
-            color_mode: colorMode,
-            modeling_mode: state.modeling_mode,
-            output_kind: "puzzle_3mf",
-            puzzle: true,
-            large_format: false,
-            elapsed_ms: getElapsedMsSince(_generateStartTime),
-            warning_count: (puzzleResponse.warnings ?? []).length,
-          });
-          notifyCompletion("generation");
-          return null;
-        }
-
-        if (state.largeFormatEnabled) {
-          const lfResponse = await apiConvertGenerateLargeFormat(sessionId, {
-            // Let the backend derive height from the preview cache aspect
-            // ratio. SVG files can report slightly different browser and
-            // server dimensions (CSS width/height vs viewBox/content), and
-            // sending both values makes the backend reject large-format
-            // generation with 422 when they differ by more than 1 mm.
-            // 大画幅只提交宽度，让后端按预览缓存比例推导高度。SVG 的浏览器
-            // 预览比例与后端解析比例可能不完全一致；同时提交宽高会触发后端
-            // 1mm 容差校验并返回 422。
-            tile_width_mm: state.tileWidthMm,
-            tile_height_mm: state.tileHeightMm,
-            params: baseParams,
-          });
-          if (shouldIgnoreStaleGenerateResponse()) {
-            return null;
-          }
-          const downloadUrl = normalizeStoreResourceUrl(lfResponse.download_url);
-          set({
-            isGenerating: false,
-            modelUrl: null,
-            batchPreviewItems: [],
-            threemfDiskPath: null,
-            downloadUrl,
-            generateWarnings: [],
-            largeFormatWarnings: lfResponse.warnings ?? [],
-          });
-          _clientLog("generate: large-format zip received", {
-            download_url: downloadUrl,
-            warning_count: (lfResponse.warnings ?? []).length,
-            target_height_mm: state.target_height_mm,
-            tile_width_mm: state.tileWidthMm,
-            tile_height_mm: state.tileHeightMm,
-          });
-          trackLuminaEvent("lumina_converter_generate_done", {
-            source_version: state.source_version,
-            source_kind: sourceParams.source_kind,
-            color_mode: colorMode,
-            modeling_mode: state.modeling_mode,
-            output_kind: "large_format_zip",
-            puzzle: false,
-            large_format: true,
-            elapsed_ms: getElapsedMsSince(_generateStartTime),
-            warning_count: (lfResponse.warnings ?? []).length,
-          });
-          notifyCompletion("generation");
-          return null;
-        }
-
-        _logGenerateTimer("request sent");
-        _clientLog("generate: request sent", {
-          session_id: sessionId,
-          source_kind: sourceParams.source_kind,
-          replacement_count: mergedReplacements?.length ?? 0,
-          recipe_override_count: state.recipe_overrides.length,
-          free_color_count: state.free_color_set.size,
-        });
-        const response = await apiConvertGenerate(
-          sessionId,
-          baseParams,
-          generateSettings.preserveUploadFilenameFor3mf,
-        );
-        if (shouldIgnoreStaleGenerateResponse()) {
-          return null;
-        }
-        _logGenerateTimer("response received");
-        _clientLog("generate: response received", {
-          preview_3d_url: response.preview_3d_url ?? null,
-          download_url: response.download_url ?? null,
-          has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
-        });
-        const responseModelUrl = normalizeStoreResourceUrl(
-          response.preview_3d_url,
-        );
-        const downloadUrl = normalizeStoreResourceUrl(response.download_url);
-        set({
-          isGenerating: false,
-          // Generate owns the exact downloadable 3MF only. Browser geometry
-          // remains preview-owned so async lightweight polling and real-time
-          // Three.js helpers continue without a print-scene GLB takeover.
-          // Generate 只拥有精确 3MF 下载；浏览器几何继续由轻量预览负责。
-          modelUrl: null,
-          batchPreviewItems: [],
-          downloadUrl,
-          threemfDiskPath: null,
-          generatePerformanceTiming: response.performance_timing ?? null,
-          generateWarnings: response.warnings ?? [],
-          largeFormatWarnings: [],
-        });
-        _logGenerateTimer("UI unlocked (isGenerating=false, 3MF set)");
-        _clientLog("generate: UI unlocked", {
-          response_model_url: responseModelUrl,
-          selected_model_url: null,
-          download_url: downloadUrl,
-          has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
-          warning_count: (response.warnings ?? []).length,
-        });
-        trackLuminaEvent("lumina_converter_generate_done", {
-          source_version: state.source_version,
-          source_kind: sourceParams.source_kind,
-          color_mode: colorMode,
-          modeling_mode: state.modeling_mode,
-          output_kind: "threemf",
-          puzzle: false,
-          large_format: false,
-          elapsed_ms: getElapsedMsSince(_generateStartTime),
-          warning_count: (response.warnings ?? []).length,
-        });
-        notifyCompletion("generation");
-        return null;
-      } catch (err) {
-        if (shouldIgnoreStaleGenerateResponse()) {
-          return null;
-        }
-        // The editor revision this client sent was behind the server. All
-        // pending edits were already awaited above, so re-read the committed
-        // revision once and retry; a second conflict is surfaced to the user.
-        // 客户端版本落后于服务端：前面已等待所有未完成编辑，这里重读一次
-        // 已提交版本并重试；再次冲突才提示用户。
-        if (!_generateRevisionRetryActive && isGenerateRevisionConflict(err)) {
-          const refreshed = await refreshConfirmedEditorContentRevision(sessionId);
-          if (refreshed && _get().sessionId === sessionId) {
-            _clientLog("generate: retry after editor revision refresh", {
-              session_id: sessionId,
-            });
-            _generateRevisionRetryActive = true;
-            try {
-              return await _get().submitGenerate();
-            } finally {
-              _generateRevisionRetryActive = false;
-            }
-          }
-        }
-        set({
-          isGenerating: false,
-          error: visibleConverterError(err, "生成失败"),
-        });
-        trackLuminaEvent("lumina_converter_generate_failed", {
-          source_version: state.source_version,
-          color_mode: state.color_mode,
-          modeling_mode: state.modeling_mode,
-          puzzle: state.puzzleEnabled,
-          large_format: state.largeFormatEnabled,
-          elapsed_ms: getElapsedMsSince(_generateStartTime),
-          error_type: getErrorType(err),
-        });
-        _clientLog("generate: failed", summarizeErrorForLog(err), "error");
-        return null;
-      } finally {
-        if (_activeFilenameEligibleGenerateSequence === generateSequence) {
-          _activeFilenameEligibleGenerateSequence = null;
-        }
-        if (_generateRequestSequence === generateSequence) {
-          _endGenerateTimer();
         }
       }
     },
@@ -10691,206 +7694,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       });
     },
 
-    submitBatch: async () => {
-      let state = _get();
-      const batchStartTime =
-        typeof performance !== "undefined" ? performance.now() : null;
-      const batchFileCount = state.batchFiles.length;
-      const sourceSelection = resolveConverterSourceSelection(state);
-      if (!sourceSelection.isReady) {
-        set({
-          error:
-            state.source_version === "material"
-              ? "请先选择耗材"
-              : state.source_version === "native"
-                ? "请先选择品牌和数据库"
-                : "请先选择 LUT",
-        });
-        return;
-      }
-      const autoReliefHeightMap = buildMissingAutoReliefHeightMap(state);
-      if (autoReliefHeightMap) {
-        set({ color_height_map: autoReliefHeightMap });
-        state = _get();
-      }
-      if (state.enable_relief && state.autoHeightMode === "use-heightmap") {
-        set({
-          error: "批量生成暂不支持高度图浮雕，请改用按颜色浮雕或单图生成",
-        });
-        return;
-      }
-      if (
-        state.enable_relief &&
-        Object.keys(state.color_height_map).length === 0
-      ) {
-        set({ error: "请先设置颜色高度映射后再批量生成" });
-        return;
-      }
-      const settings = useSettingsStore.getState();
-      const batchIdentity = captureGeneratedArtifactIdentity(
-        settings.deviceProfileId,
-        settings.buildPlateId,
-      );
-      const batchSequence = ++_batchRequestSequence;
-      const isCurrentBatchRequest = (): boolean => {
-        const latestSettings = useSettingsStore.getState();
-        return (
-          batchSequence === _batchRequestSequence &&
-          isGeneratedArtifactIdentityCurrent(
-            batchIdentity,
-            latestSettings.deviceProfileId,
-            latestSettings.buildPlateId,
-          )
-        );
-      };
-      set({
-        batchLoading: true,
-        batchResult: null,
-        batchPreviewItems: [],
-        modelUrl: null,
-        previewGlbUrl: null,
-        generatePerformanceTiming: null,
-        threemfDiskPath: null,
-        downloadUrl: null,
-        error: null,
-      });
-      try {
-        const reliefMinimumTotalHeight =
-          getMaterialArchiveReliefMinimumTotalHeight(state);
-        const reliefHeightmapMaxHeight = state.enable_relief
-          ? Math.max(
-              state.spacer_thick + state.heightmap_max_height,
-              reliefMinimumTotalHeight,
-            )
-          : state.heightmap_max_height;
-        const reliefColorHeightMap =
-          state.enable_relief && state.autoHeightMode !== "use-heightmap"
-            ? clampAbsoluteReliefHeightMap(
-                toAbsoluteReliefHeightMap(
-                  state.color_height_map,
-                  state.spacer_thick,
-                ),
-                reliefMinimumTotalHeight,
-              )
-            : undefined;
-        const resolvedSourceSelection = resolveConverterSourceSelection(state);
-        const sourceParams =
-          state.source_version === "material"
-            ? buildMaterialSourceParams(state)
-            : state.source_version === "native"
-              ? buildNativeSourceParams(resolvedSourceSelection, state)
-              : buildLegacySourceParams(state);
-        if (!sourceParams) {
-          set({
-            batchLoading: false,
-            error: "请先选择品牌和数据库",
-          });
-          return;
-        }
-        const params = {
-          ...sourceParams,
-          target_width_mm: state.target_width_mm,
-          spacer_thick: state.spacer_thick,
-          backing_infill_density_percent:
-            state.backing_infill_density_percent,
-          structure_mode: state.structure_mode,
-          color_mode: state.color_mode,
-          modeling_mode: state.modeling_mode,
-          color_layers:
-            state.source_version === "material"
-              ? resolveMaterialPrintLayerCount(state)
-              : sourceParams.source_kind === "native_bundle"
-                ? (sourceParams.color_layers ?? undefined)
-                : (state.color_layers ?? undefined),
-          layer_height_mm:
-            state.source_version === "material"
-              ? state.materialLayerHeightMm
-              : sourceParams.source_kind === "native_bundle"
-                ? (sourceParams.layer_height_mm ?? undefined)
-                : (state.layer_height_mm ?? undefined),
-          quantize_colors: state.quantize_colors,
-          high_precision_3d_preview: state.high_precision_3d_preview,
-          enable_cleanup: state.enable_cleanup,
-          svg_pixels_per_mm: settings.svgPixelsPerMm,
-          ...svgHoleCompensationOptions(state),
-          ...resolveColorMatchingWeights(state),
-          use_lut_constrained: state.use_lut_constrained,
-          auto_dynamic_range: state.auto_dynamic_range,
-          separate_backing: state.separate_backing,
-          enable_relief: state.enable_relief,
-          enable_coating: state.enable_coating,
-          coating_height_mm: state.coating_height_mm,
-          printer_id: settings.printerModel,
-          slicer: settings.slicerSoftware,
-          nozzle_size: settings.nozzleSize,
-          device_profile_id: settings.deviceProfileId,
-          build_plate_id: settings.buildPlateId,
-          custom_3mf_template_id: settings.custom3mfTemplateId,
-          enable_base_layer_height_modifier:
-            settings.enableBaseLayerHeightModifier,
-          enable_wipe_tower_auto_placement:
-            settings.enableWipeTowerAutoPlacement,
-          ...(state.enable_relief
-            ? {
-                height_mode: "color",
-                color_height_map: reliefColorHeightMap,
-                heightmap_max_height: reliefHeightmapMaxHeight,
-              }
-            : {}),
-        };
-        const result = await apiConvertBatch(state.batchFiles, params);
-        if (!isCurrentBatchRequest()) return;
-        const previewItems = (result.preview_items ?? [])
-          .slice(0, BATCH_PREVIEW_BROWSER_SAFE_LIMIT)
-          .map((item) => ({
-            ...item,
-            url: normalizeResourceUrl(item.url) ?? item.url,
-          }));
-        const downloadUrl = normalizeStoreResourceUrl(result.download_url);
-        set({
-          batchResult: {
-            ...result,
-            download_url: downloadUrl,
-            threemf_disk_path: null,
-          },
-          batchLoading: false,
-          batchPreviewItems: previewItems,
-          // 批量预览只接受 preview_items。旧的 preview_3d_url 曾经指向
-          // 合并 GLB，颜色与背面显示不可靠，因此不再作为 UI 兜底。
-          modelUrl: null,
-          previewGlbUrl: null,
-          previewPerformanceTiming: null,
-          generatePerformanceTiming: null,
-          downloadUrl,
-          threemfDiskPath: null,
-        });
-        trackLuminaEvent("lumina_batch_convert_done", {
-          source_version: state.source_version,
-          source_kind: sourceParams.source_kind,
-          color_mode: state.color_mode,
-          modeling_mode: state.modeling_mode,
-          file_count_bucket: getFileCountBucket(batchFileCount),
-          elapsed_ms: getElapsedMsSince(batchStartTime),
-          preview_item_count: previewItems.length,
-        });
-        notifyCompletion("batch");
-      } catch (err) {
-        if (!isCurrentBatchRequest()) return;
-        set({
-          batchLoading: false,
-          error: visibleConverterError(err, "批量处理失败"),
-        });
-        trackLuminaEvent("lumina_batch_convert_failed", {
-          source_version: state.source_version,
-          color_mode: state.color_mode,
-          modeling_mode: state.modeling_mode,
-          file_count_bucket: getFileCountBucket(batchFileCount),
-          elapsed_ms: getElapsedMsSince(batchStartTime),
-          error_type: getErrorType(err),
-        });
-      }
-    },
-
     // --- 颜色替换：单次即时替换 ---
     submitSingleReplace: async (origHex: string, newHex: string) => {
       const initialState = _get();
@@ -11209,49 +8012,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     setError: (error: string | null) => set({ error }),
     clearError: () => set({ error: null }),
 
-    // --- 分层预览 ---
-    fetchLayerImages: async (previewSourceKey) => {
-      const currentState = _get();
-      const requestedSourceKey =
-        previewSourceKey ?? buildLayerImagesSourceKey(currentState);
-      if (!currentState.sessionId || !requestedSourceKey) return;
-      const requestedSessionId = currentState.sessionId;
-      const shouldClearStaleLayers =
-        currentState.layerImages.length > 0 &&
-        currentState.layerImagesSourceKey !== requestedSourceKey;
-
-      set({
-        ...(shouldClearStaleLayers ? DEFAULT_LAYER_IMAGES_STATE : {}),
-        layerImagesLoading: true,
-      });
-      try {
-        const res = await apiFetchLayerImages(requestedSessionId);
-        const latestState = _get();
-        if (
-          latestState.sessionId !== requestedSessionId ||
-          res.session_id !== requestedSessionId ||
-          buildLayerImagesSourceKey(latestState) !== requestedSourceKey
-        ) {
-          set({ layerImagesLoading: false });
-          return;
-        }
-        set({
-          layerImages: res.layers,
-          layerImagesLoading: false,
-          layerImagesOpen: true,
-          layerImagesSourceKey: requestedSourceKey,
-        });
-      } catch (e) {
-        console.error("fetchLayerImages failed:", e);
-        set({ layerImagesLoading: false });
-      }
-    },
-    resetLayerImages: () =>
-      set({
-        ...DEFAULT_LAYER_IMAGES_STATE,
-      }),
-    setLayerImagesOpen: (open: boolean) => set({ layerImagesOpen: open }),
-
     importRecipeState: (
       partial: Partial<ConverterState>,
       imageFile: File,
@@ -11322,37 +8082,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
   })),
 );
 
-registerGeneratedArtifactInvalidator(({ preservePreviews }) => {
-  _generateRequestSequence += 1;
-  _batchRequestSequence += 1;
-  _activeFilenameEligibleGenerateSequence = null;
-  _endGenerateTimer();
-  useConverterStore.setState({
-    isGenerating: false,
-    batchLoading: false,
-    batchResult: null,
-    threemfDiskPath: null,
-    downloadUrl: null,
-    generatePerformanceTiming: null,
-    puzzleWarnings: [],
-    puzzleResolvedRows: null,
-    puzzleResolvedCols: null,
-    puzzleResolvedPieceCount: null,
-    largeFormatWarnings: [],
-    ...(preservePreviews
-      ? {}
-      : {
-          modelUrl: null,
-          previewGlbUrl: null,
-          previewImageUrl: null,
-          previewBaseImageUrl: null,
-          batchPreviewItems: [],
-          layerImages: [],
-          layerImagesSourceKey: null,
-        }),
-  });
-});
-
 registerPrinterBedLabelSynchronizer((printerId) => {
   const { bedSizes, setBedLabel } = useConverterStore.getState();
   const printerBed = bedSizes.find((bed) => bed.printer_id === printerId);
@@ -11383,29 +8112,4 @@ registerPreviewArtifactInvalidator(() => {
   useConverterStore.setState(
     buildPreviewSessionResetState(useConverterStore.getState()),
   );
-});
-
-registerSingleItemDownloadInvalidator(() => {
-  if (
-    _activeFilenameEligibleGenerateSequence !== null &&
-    _activeFilenameEligibleGenerateSequence === _generateRequestSequence
-  ) {
-    _generateRequestSequence += 1;
-    _activeFilenameEligibleGenerateSequence = null;
-    useConverterStore.setState({ isGenerating: false });
-  }
-
-  const state = useConverterStore.getState();
-  if (
-    state.batchMode ||
-    state.puzzleEnabled ||
-    state.largeFormatEnabled ||
-    state.modeling_mode === ModelingModeEnum.COLOR_CARD
-  ) {
-    return;
-  }
-  useConverterStore.setState({
-    threemfDiskPath: null,
-    downloadUrl: null,
-  });
 });

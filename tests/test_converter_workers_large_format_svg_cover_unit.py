@@ -116,7 +116,9 @@ class _FakeVectorProcessor:
         self.color_mode = color_mode
 
     def analyze_svg(self, **_kwargs):
-        return SimpleNamespace(num_layers=5, scale_factor=1.0, matched_shapes=[])
+        return SimpleNamespace(
+            num_layers=5, slot_names=["Slot1"], scale_factor=1.0, matched_shapes=[]
+        )
 
     def build_mesh(self, **_kwargs):
         fake_geom = SimpleNamespace(vertices=[(0, 0, 0)], faces=[(0, 0, 0)])

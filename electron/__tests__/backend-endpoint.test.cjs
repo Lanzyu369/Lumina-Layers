@@ -39,7 +39,7 @@ test("selection prefers a free port, generates fresh identities, and fails at bo
   assert.notEqual(first.instanceId, second.instanceId);
 });
 
-test("persisted port keeps the packaged frontend origin stable across launches", async t => {
+test("persisted port keeps the backend endpoint stable across launches", async t => {
   const portFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "lumina-port-state-")), "backend-port.json");
   const first = await helper().selectBackendEndpoint({ portFile, preferredPort: 8100 });
   assert.equal(fs.existsSync(portFile), false, "selection cannot commit before backend health");
@@ -50,10 +50,20 @@ test("persisted port keeps the packaged frontend origin stable across launches",
   assert.notEqual(second.instanceId, first.instanceId);
 });
 
+test("required port check reports a collision and leaves its owner running", async t => {
+  const owner = await server(t, (_req, res) => res.end("owner"));
+  await assert.rejects(helper().assertPortsAvailable([owner.address().port]), /port_in_use/);
+  assert.equal(owner.listening, true);
+});
+
+test("required port check releases its probe listener", async () => {
+  await helper().assertPortsAvailable([0]);
+});
+
 test("a remembered occupied port recovers without advancing the authoritative storage origin", async t => {
   const portFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "lumina-port-state-")), "backend-port.json");
   const first = await helper().selectBackendEndpoint({ portFile, preferredPort: 8101 });
-  // This is the exact version-1 state shipped in existing desktop packages.
+  // This is a persisted version-1 endpoint state.
   fs.writeFileSync(portFile, JSON.stringify({ schemaVersion: 1, port: first.port }));
   let requests = 0;
   const owner = await server(t, (_req, res) => { requests++; res.end("foreign"); }, first.port);

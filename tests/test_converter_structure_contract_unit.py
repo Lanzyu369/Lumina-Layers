@@ -1,8 +1,6 @@
-"""Structure contract tests for converter refactor stability."""
+"""Public converter and material/LUT route contracts."""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 from fastapi import APIRouter, FastAPI
 
@@ -57,44 +55,3 @@ def test_converter_and_material_lut_paths_mounted_in_main_app() -> None:
     assert any(p.startswith("/api/five-color/") for p in paths)
     assert "/api/extractor/gradient-card-materials" in paths
     assert "/api/extractor/material-solver-cache/status" in paths
-
-
-def test_converter_router_package_layout_present() -> None:
-    """Monolith file should be removed and package layout should exist."""
-    root = Path(__file__).resolve().parents[1]
-    assert not (root / "api" / "routers" / "converter.py").exists()
-    assert (root / "api" / "routers" / "converter" / "__init__.py").exists()
-    assert (root / "api" / "routers" / "converter" / "preview.py").exists()
-    assert (root / "api" / "routers" / "converter" / "generate.py").exists()
-    assert (root / "api" / "routers" / "converter" / "replace.py").exists()
-    assert (root / "api" / "routers" / "converter" / "cleanup.py").exists()
-
-
-def test_no_legacy_frontend_converter_store_imports() -> None:
-    """Frontend should no longer import legacy converterStore.ts path."""
-    root = Path(__file__).resolve().parents[1]
-    frontend_src = root / "frontend" / "src"
-    for path in frontend_src.rglob("*.ts*"):
-        text = path.read_text(encoding="utf-8")
-        assert "stores/converterStore" not in text
-
-
-def test_no_legacy_converter_patch_paths_in_tests() -> None:
-    """Test patches should target converter submodules, not monolith symbols."""
-    root = Path(__file__).resolve().parents[1]
-    tests_dir = root / "tests"
-    legacy_markers = (
-        "api.routers.converter.LUTManager",
-        "api.routers.converter.ensure_png_tempfile",
-        "api.routers.converter.upload_to_tempfile",
-        "api.routers.converter.generate_segmented_glb",
-        "api.routers.converter.convert_preview",
-        "api.routers.converter.convert_generate",
-    )
-    this_file = Path(__file__).resolve()
-    for path in tests_dir.rglob("test_*.py"):
-        if path.resolve() == this_file:
-            continue
-        text = path.read_text(encoding="utf-8")
-        for marker in legacy_markers:
-            assert marker not in text

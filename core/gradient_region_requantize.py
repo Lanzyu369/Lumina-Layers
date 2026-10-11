@@ -223,7 +223,7 @@ def requantize_gradient_regions(
         # 像素集合，不依赖空间顺序。
         patch = region_pixels.reshape(-1, 1, 3)
         locally_quantised = quantize_colors(
-            patch, local_quantize_colors, skip_post_blur=True
+            patch, local_quantize_colors
         ).reshape(-1, 3)
 
         # Unique-colour dedup → solver lookup → broadcast per pixel.

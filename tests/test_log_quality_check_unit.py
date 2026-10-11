@@ -17,7 +17,7 @@ from scripts.log_quality_check import (
     WORKFLOW_ORDER,
     WORKFLOW_STEPS,
     _parse_workflow,
-    _scan_log_file_for_governance_metrics,
+    _scan_log_metrics,
     _select_replace_click,
     _workflow_required_event_checks,
 )
@@ -49,16 +49,31 @@ def _build_report_for_log(path: Path) -> log_quality_check.QualityReport:
         workflow=[],
         log_path=path,
         audit_result=audit_result,
-        max_info=30,
-        max_info_per_endpoint=8,
     )
+
+
+def test_quality_report_accepts_useful_info_without_a_line_budget(tmp_path: Path) -> None:
+    log_path = tmp_path / "many-info.log"
+    _write_json_lines(log_path, [
+        {"level": "INFO", "event": "log_file_configured", "message": "configured"},
+        *[
+            {"level": "INFO", "event": "worker_tile_done", "request_id": "same-request",
+             "tile_index": index, "message": "tile complete"}
+            for index in range(40)
+        ],
+    ])
+
+    report = _build_report_for_log(log_path)
+
+    assert report.info_lines == 41
+    assert report.overall_passed is True
 
 
 def test_scan_empty_file_returns_zero_metrics(tmp_path: Path) -> None:
     log_path = tmp_path / "empty.log"
     log_path.write_text("", encoding="utf-8")
 
-    metrics = _scan_log_file_for_governance_metrics(log_path)
+    metrics = _scan_log_metrics(log_path)
 
     assert metrics["info_lines"] == 0
     assert metrics["warning_lines"] == 0
@@ -77,7 +92,7 @@ def test_scan_counts_catch_all_request_log_event(tmp_path: Path) -> None:
         [{"level": "INFO", "event": "request_log", "message": "legacy bucket"}],
     )
 
-    metrics = _scan_log_file_for_governance_metrics(log_path)
+    metrics = _scan_log_metrics(log_path)
 
     assert metrics["info_lines"] == 1
     assert metrics["catch_all_event_count"] == 1
@@ -96,7 +111,7 @@ def test_scan_counts_bracket_tag_message_prefix(tmp_path: Path) -> None:
         ],
     )
 
-    metrics = _scan_log_file_for_governance_metrics(log_path)
+    metrics = _scan_log_metrics(log_path)
 
     assert metrics["bracket_tag_message_count"] == 1
 
@@ -114,7 +129,7 @@ def test_scan_counts_json_escaped_ansi_sequences(tmp_path: Path) -> None:
         ],
     )
 
-    metrics = _scan_log_file_for_governance_metrics(log_path)
+    metrics = _scan_log_metrics(log_path)
 
     assert metrics["ansi_field_count"] == 1
 
@@ -126,7 +141,7 @@ def test_scan_allows_client_log_event(tmp_path: Path) -> None:
         [{"level": "INFO", "event": "client_log", "message": "frontend timing"}],
     )
 
-    metrics = _scan_log_file_for_governance_metrics(log_path)
+    metrics = _scan_log_metrics(log_path)
 
     assert metrics["catch_all_event_count"] == 0
 
@@ -365,10 +380,13 @@ def test_fast_mode_app_mounts_local_development_routes() -> None:
     )
 
 
-def test_fast_mode_preview_supports_timed_worker_submission() -> None:
+@pytest.mark.parametrize("external_output", [False, True], ids=["repository", "external"])
+def test_fast_mode_preview_supports_timed_worker_submission(
+    tmp_path: Path, external_output: bool,
+) -> None:
     """The fast gate must mirror the preview endpoint's timed pool contract."""
 
-    output_path = (
+    output_path = tmp_path / "log-quality.json" if external_output else (
         log_quality_check.REPO_ROOT
         / ".scratch"
         / f"log-quality-timed-{uuid.uuid4().hex}.json"
@@ -396,6 +414,7 @@ def test_fast_mode_preview_supports_timed_worker_submission() -> None:
         assert completed.returncode == 0, completed.stdout + completed.stderr
         report = json.loads(output_path.read_text(encoding="utf-8"))
         assert report["overall_passed"] is True
+        assert "RESULT: PASS" in completed.stdout
     finally:
         output_path.unlink(missing_ok=True)
         output_path.with_suffix(".log").unlink(missing_ok=True)
@@ -2418,7 +2437,7 @@ def test_replace_click_targets_filled_band_for_ring_fixture() -> None:
 
 def test_check_result_evaluate_marks_passing_threshold() -> None:
     result = CheckResult.evaluate(
-        name="info_lines_within_budget",
+        name="observed_line_count",
         actual=18,
         operator="<=",
         threshold=30,

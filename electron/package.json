@@ -6,106 +6,14 @@
   "packageManager": "pnpm@10.33.2",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder",
     "test": "node --test __tests__/*.test.cjs"
   },
   "devDependencies": {
-    "electron": "^35.0.0",
-    "electron-builder": "^26.0.0"
+    "electron": "^35.0.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "electron",
-      "electron-builder",
-      "esbuild"
+      "electron"
     ]
-  },
-  "build": {
-    "appId": "com.lumina.studio",
-    "productName": "Lumina Studio",
-    "directories": {
-      "output": "dist_electron"
-    },
-    "extraResources": [
-      {
-        "from": "launcher-startup.json",
-        "to": "launcher-startup.json"
-      },
-      {
-        "from": "resources/backend",
-        "to": "backend"
-      },
-      {
-        "from": "resources/app/dist",
-        "to": "app/dist"
-      },
-      {
-        "from": "resources/materials",
-        "to": "materials"
-      },
-      {
-        "from": "resources/workshop-seed",
-        "to": "workshop-seed",
-        "filter": [
-          "**/*",
-          "!**/.gitignore"
-        ]
-      }
-    ],
-    "win": {
-      "icon": "../icon.ico",
-      "target": [
-        {
-          "target": "nsis",
-          "arch": ["x64"]
-        }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "installerIcon": "../icon.ico",
-      "uninstallerIcon": "../icon.ico",
-      "installerHeaderIcon": "../icon.ico"
-    },
-    "files": [
-      "main.cjs",
-      "managed-runtime.cjs",
-      "backend-endpoint.cjs",
-      "managed-startup.cjs",
-      "storage-migration.cjs",
-      "storage-migration-preload.cjs",
-      "preload.cjs",
-      "bed-model-bridge.cjs",
-      "generated-file-save.cjs",
-      "generated-file-directory.cjs",
-      "workshop-file-picker.cjs",
-      "workshop-security.cjs",
-      "splash.html",
-      "build/icon.png",
-      "build/icon.icns"
-    ],
-    "mac": {
-      "icon": "build/icon.icns",
-      "category": "public.app-category.graphics-design",
-      "target": [
-        {
-          "target": "dmg",
-          "arch": ["arm64", "x64"]
-        },
-        {
-          "target": "zip",
-          "arch": ["arm64", "x64"]
-        }
-      ]
-    },
-    "dmg": {
-      "icon": "build/icon.icns"
-    },
-    "linux": {
-      "icon": "build/icon.png",
-      "category": "Graphics",
-      "target": ["AppImage"]
-    }
   }
 }

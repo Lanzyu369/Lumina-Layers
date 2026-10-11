@@ -12,6 +12,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_LINT_CMD = ["pnpm", "lint"]
+FRONTEND_BUILD_CMD = ["pnpm", "build"]
 WINDOWS_COMMAND_SHIMS = {"pnpm"}
 
 
@@ -72,6 +73,7 @@ def main() -> int:
             ROOT / "frontend",
             "Frontend full regression failed",
         ),
+        (FRONTEND_BUILD_CMD, ROOT / "frontend", "Frontend build failed"),
         (FRONTEND_LINT_CMD, ROOT / "frontend", "Frontend lint failed"),
     ]
     try:
