@@ -1,4 +1,4 @@
-"""Packaging contracts for the required native SVG runtime."""
+"""Release and CLI contracts for the required native SVG runtime."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-import tomllib
 
 import pytest
 from shapely.geometry import box
@@ -18,7 +17,7 @@ from core.native_svg_adapter import NativeSvgFallback, NativeSvgGeometry
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_runtime_requirement_is_an_exact_workspace_package() -> None:
+def test_runtime_requirement_selects_the_published_031_release() -> None:
     native_requirements = (
         ROOT / "requirements-native-svg.txt"
     ).read_text(encoding="utf-8")
@@ -27,39 +26,25 @@ def test_runtime_requirement_is_an_exact_workspace_package() -> None:
         for line in native_requirements.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
-    assert requirement_lines == ["./native/lumina-svg-core"]
+    assert requirement_lines == [
+        "--find-links https://github.com/lumina-layer-studio/lumina-svg-core/releases/expanded_assets/v0.3.1",
+        "lumina-svg-core==0.3.1",
+    ]
 
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert "-r requirements-native-svg.txt" in requirements.splitlines()
 
-    pyproject = (
-        ROOT / "native" / "lumina-svg-core" / "pyproject.toml"
-    ).read_text(encoding="utf-8")
-    assert 'version = "0.3.0"' in pyproject
-    assert 'requires-python = "==3.12.*"' in pyproject
 
+def test_installed_runtime_is_the_released_031_package() -> None:
+    import lumina_svg_core
 
-def test_wheel_commands_resolve_the_package_directory() -> None:
-    pyproject = (
-        ROOT / "native" / "lumina-svg-core" / "pyproject.toml"
-    ).read_text(encoding="utf-8")
-
-    assert pyproject.count("{package}/tools/verify_wheel.py") == 3
-    assert "pytest {package}/tests -q" in pyproject
-    assert "{project}/tools/verify_wheel.py" not in pyproject
-
-
-def test_cibuildwheel_installs_test_dependencies_with_the_wheel() -> None:
-    pyproject_path = ROOT / "native" / "lumina-svg-core" / "pyproject.toml"
-    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
-
-    assert pyproject["project"]["optional-dependencies"]["test"] == [
-        "pytest>=8,<10",
-        "shapely>=2,<3",
-    ]
-    cibuildwheel = pyproject["tool"]["cibuildwheel"]
-    assert cibuildwheel["test-extras"] == ["test"]
-    assert "test-requires" not in cibuildwheel
+    assert lumina_svg_core.__version__ == "0.3.1"
+    if lumina_svg_core.__source_revision__ == "unknown":
+        assert lumina_svg_core.__source_dirty__ is None
+    else:
+        assert lumina_svg_core.__source_revision__ == "50c1dd5b57c15b4cccb3c51c08134aea01338a42"
+        assert lumina_svg_core.__source_dirty__ is False
+    assert lumina_svg_core.RESULT_SCHEMA_VERSION == 4
 
 
 def _geometry_outcome() -> NativeSvgGeometry:

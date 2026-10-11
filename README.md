@@ -283,6 +283,13 @@ python start_all.py
 The launcher starts the backend and frontend. Open the frontend address printed
 by the launcher (default: `http://localhost:4174`).
 
+SVG analysis uses the published `lumina-svg-core==0.3.1` release under
+AGPL-3.0-only. `requirements-native-svg.txt` selects the matching Python
+3.12–3.14 wheel from GitHub Releases. Linux x86-64 requires glibc 2.28+;
+Mac wheels require macOS 12+ for Python 3.12/3.13 and 14+ for Python 3.14.
+If no compatible wheel exists, pip builds the release source archive with
+Git and a C++17 toolchain. See the [upstream distribution guide](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.1/docs/DISTRIBUTIONS.md).
+
 For a local or desktop install, build `wheelhouse/3mf` from the pinned public
 Fat Cat root and patched `neroued-3mf` source before installing; do not reuse
 wheels from another OS or CPU. The required public source commit is

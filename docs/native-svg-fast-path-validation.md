@@ -16,7 +16,11 @@ not record source paths, hashes, or file sizes.
 
 ## Parser contract
 
-`lumina-svg-core` 0.3.0 exposes result schema 4. A supported document returns:
+`lumina-svg-core` 0.3.1 exposes result schema 4. Studio installs the published
+AGPL-3.0-only runtime through `requirements-native-svg.txt`; the standalone
+repository owns engine development and wheel builds. Studio CI verifies the
+published wheel hashes, geometry compatibility and source application workflows.
+A supported document returns:
 
 - raw paint regions, source-order visible paint regions, and one silhouette;
 - Polygon/MultiPolygon geometry only, in Lumina's normalized SVG user-unit
@@ -67,7 +71,7 @@ minimum-area filters, or proximity grouping.
 
 ## Native implementation
 
-The standalone Apache-2.0 package uses a fixed LunaSVG revision and its bundled
+The standalone AGPL-3.0-only package uses a fixed LunaSVG revision and its bundled
 PlutoVG, plus a fixed Clipper2 revision. The LunaSVG change is a narrow,
 versioned paint-command recorder; the native package does not consume LunaSVG's
 private scene tree.
