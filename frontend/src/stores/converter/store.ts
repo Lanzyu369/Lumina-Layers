@@ -88,6 +88,7 @@ import {
   colorRemapToReplacementRegions,
   computeAutoHeightMap
 } from "../../utils/colorUtils";
+import { rememberDerivedImageSource, resolveSourceFile } from "../../utils/sourceFileOrigins";
 import {
   autoLayoutFridgeMagnets,
   buildSuggestedFridgeMagnetCenters,
@@ -254,15 +255,6 @@ function isRawFileConverter(file: File): boolean {
   return RAW_EXTENSIONS_CONVERTER.has(ext);
 }
 
-const bugReportOriginalImageFiles = new WeakMap<File, File>();
-
-function rememberDerivedImageSource(derivedFile: File, currentFile: File): void {
-  bugReportOriginalImageFiles.set(
-    derivedFile,
-    bugReportOriginalImageFiles.get(currentFile) ?? currentFile,
-  );
-}
-
 /** Resolve the user-selected source behind a cropped or rotated converter file.
  *
  * 获取裁剪或旋转后的 Converter 文件所对应的用户原始输入文件。
@@ -270,8 +262,7 @@ function rememberDerivedImageSource(derivedFile: File, currentFile: File): void 
 export function resolveBugReportOriginalImageFile(
   currentFile: File | null,
 ): File | null {
-  if (!currentFile) return null;
-  return bugReportOriginalImageFiles.get(currentFile) ?? currentFile;
+  return resolveSourceFile(currentFile);
 }
 
 function visibleConverterError(error: unknown, fallback: string): string {

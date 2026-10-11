@@ -111,16 +111,16 @@ def test_proof_of_work_meets_requested_difficulty() -> None:
         feedback_hosted.solve_proof_of_work("challenge", TICKET, 40)
 
 
-def test_bundle_keeps_email_scope_and_holds_back_unsupported_files(tmp_path: Path) -> None:
+def test_bundle_preserves_every_file(tmp_path: Path) -> None:
     ticket_dir, payload = _ticket_dir(tmp_path)
     bundle = feedback_hosted.build_ticket_bundle(ticket_dir, payload)
 
-    assert [item.name for item in bundle.files] == ["lut_1.npy", "original.png"]
-    assert bundle.held_back == [{"name": "final.glb", "size_bytes": 4, "reason": "unsupported_type"}]
+    assert [item.name for item in bundle.files] == ["final.glb", "lut_1.npy", "original.png"]
+    assert bundle.held_back == []
     assert bundle.document["index_md"] == "# index"
     assert bundle.document["summary_txt"] == "摘要"
     assert "submission" not in bundle.document["ticket"]
-    assert bundle.document["attachments"][1] == {
+    assert bundle.document["attachments"][2] == {
         "name": "original.png", "kind": "original_image", "size_bytes": len(PNG),
         "sha256": hashlib.sha256(PNG).hexdigest(),
     }
@@ -134,7 +134,7 @@ def test_submission_uploads_bundle_with_proof(tmp_path: Path, monkeypatch: pytes
 
     assert section["status"] == "submitted"
     assert section["attempts"] == 1
-    assert section["uploaded_attachments"] == ["lut_1.npy", "original.png"]
+    assert section["uploaded_attachments"] == ["final.glb", "lut_1.npy", "original.png"]
     uploaded = server.bundles[0]
     assert uploaded["report"]["ticket_id"] == TICKET
     assert uploaded["files"]["original.png"] == PNG
@@ -150,7 +150,7 @@ def test_rejected_proof_is_retried_with_a_new_challenge(tmp_path: Path, monkeypa
     assert server.challenges == 2
 
 
-def test_rejected_attachment_falls_back_to_text_only_report(
+def test_rejected_attachment_reports_failure_without_dropping_data(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ticket_dir, payload = _ticket_dir(tmp_path)
@@ -158,11 +158,10 @@ def test_rejected_attachment_falls_back_to_text_only_report(
 
     section = _submit(ticket_dir, payload, server, monkeypatch)
 
-    assert section["status"] == "submitted"
-    assert server.bundles[1]["files"] == {}
-    assert server.bundles[1]["report"]["attachments"] == []
-    reasons = {item["name"]: item["reason"] for item in section["held_back_attachments"]}
-    assert reasons == {"final.glb": "unsupported_type", "lut_1.npy": "rejected", "original.png": "rejected"}
+    assert section["status"] == "failed"
+    assert len(server.bundles) == 1
+    assert server.bundles[0]["files"]
+    assert section["held_back_attachments"] == []
 
 
 def test_rate_limit_is_reported_without_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -232,31 +231,31 @@ def test_complete_ticket_with_32_luts_uploads_every_attachment(
     assert len(server.bundles[0]["report"]["attachments"]) == 36
 
 
-def test_whole_request_budget_keeps_reproduction_inputs_first(
+def test_former_request_budget_does_not_filter_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ticket_dir, payload = _ticket_dir(tmp_path)
     (ticket_dir / "final.3mf").write_bytes(b"PK" + b"0" * 30)
-    monkeypatch.setattr(feedback_hosted, "MAX_UPLOAD_BUNDLE_FILE_BYTES", len(PNG) + 6)
+    monkeypatch.setattr(feedback_hosted, "MAX_UPLOAD_BUNDLE_FILE_BYTES", len(PNG) + 6, raising=False)
 
     bundle = feedback_hosted.build_ticket_bundle(ticket_dir, payload)
 
-    assert [item.name for item in bundle.files] == ["lut_1.npy", "original.png"]
-    reasons = {item["name"]: item["reason"] for item in bundle.held_back}
-    assert reasons == {"final.3mf": "too_large", "final.glb": "unsupported_type"}
+    assert [item.name for item in bundle.files] == ["final.3mf", "final.glb", "lut_1.npy", "original.png"]
+    assert bundle.held_back == []
+    assert "final.3mf" in [item.name for item in bundle.files]
 
 
-def test_attachment_count_is_capped_at_server_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_former_attachment_count_limit_does_not_filter_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ticket_dir, payload = _ticket_dir(tmp_path)
-    monkeypatch.setattr(feedback_hosted, "MAX_UPLOAD_ATTACHMENTS", 1)
+    monkeypatch.setattr(feedback_hosted, "MAX_UPLOAD_ATTACHMENTS", 1, raising=False)
 
     bundle = feedback_hosted.build_ticket_bundle(ticket_dir, payload)
 
-    assert [item.name for item in bundle.files] == ["original.png"]
-    assert {"name": "lut_1.npy", "size_bytes": 6, "reason": "too_large"} in bundle.held_back
+    assert [item.name for item in bundle.files] == ["final.glb", "lut_1.npy", "original.png"]
+    assert bundle.held_back == []
 
 
-def test_oversized_request_falls_back_to_text_only_report(
+def test_rejected_large_request_reports_failure_without_dropping_data(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ticket_dir, payload = _ticket_dir(tmp_path)
@@ -264,5 +263,7 @@ def test_oversized_request_falls_back_to_text_only_report(
 
     section = _submit(ticket_dir, payload, server, monkeypatch)
 
-    assert section["status"] == "submitted"
-    assert server.bundles[1]["files"] == {}
+    assert section["status"] == "failed"
+    assert len(server.bundles) == 1
+    assert server.bundles[0]["files"]
+    assert section["held_back_attachments"] == []

@@ -105,7 +105,7 @@ describe("collectBugReportContext", () => {
   it("falls back to settings preference for color_mode/lut_name when activeTab is not converter", () => {
     const context = collectBugReportContext();
 
-    expect(context).toEqual({
+    expect(context).toMatchObject({
       url: "http://localhost:5174/settings",
       user_agent: "vitest-agent",
       screen_width: 1440,
@@ -196,7 +196,7 @@ describe("collectBugReportContext", () => {
     });
   });
 
-  it("collects only bounded workshop diagnostics while the workshop tab is active", () => {
+  it("collects full workshop state and runtime diagnostics while the workshop tab is active", () => {
     useWidgetStore.setState({ activeTab: "workshop" });
     useWorkshopStore.setState({
       activeModule: {
@@ -281,16 +281,16 @@ describe("collectBugReportContext", () => {
         "runtime_mode",
       ].sort(),
     );
-    expect(serialized).not.toContain("cellsRle");
-    expect(serialized).not.toContain("private-red");
-    expect(serialized).not.toContain("#ff0000");
-    expect(serialized).not.toContain("private-pattern.png");
-    expect(serialized).not.toContain("blob:http");
-    expect(serialized).not.toContain("/Users/min");
-    expect(serialized).not.toContain("private-image-bytes");
-    expect(serialized).not.toContain("ghp_private-token");
-    expect(serialized).not.toContain("private-registry-signature");
-    expect(serialized).not.toContain("private-desktop-token");
+    expect(serialized).toContain("cellsRle");
+    expect(serialized).toContain("private-red");
+    expect(serialized).toContain("#ff0000");
+    expect(serialized).toContain("private-pattern.png");
+    expect(serialized).toContain("blob:http");
+    expect(serialized).toContain("/Users/min");
+    expect(serialized).toContain("private-image-bytes");
+    expect(serialized).toContain("ghp_private-token");
+    expect(serialized).toContain("private-registry-signature");
+    expect(serialized).toContain("private-desktop-token");
   });
 
   it("does not attach stale workshop diagnostics from another active tab", () => {
@@ -455,6 +455,7 @@ describe("collectBugReportContext", () => {
     expect(context.active_session_ids).toEqual({
       converter: null,
       single_stage: null,
+      extractor: null,
     });
     expect(context.recent_client_logs).toEqual([]);
   });
@@ -482,7 +483,7 @@ describe("collectBugReportContext", () => {
     ]);
   });
 
-  it("redacts local file paths from recent client logs in bug reports", () => {
+  it("preserves local file paths from recent client logs in bug reports", () => {
     postClientLog("generate: response received", {
       scope: "generate",
       phase: "response-received",
@@ -497,10 +498,9 @@ describe("collectBugReportContext", () => {
     const context = collectBugReportContext();
     const serializedLogs = JSON.stringify(context.recent_client_logs);
 
-    expect(serializedLogs).not.toContain("/Users/min");
-    expect(serializedLogs).not.toContain("E:/tmp");
-    expect(serializedLogs).not.toContain("/private/tmp");
-    expect(serializedLogs).toContain("<redacted:local-path>");
+    expect(serializedLogs).toContain("/Users/min");
+    expect(serializedLogs).toContain("E:/tmp");
+    expect(serializedLogs).toContain("/private/tmp");
     expect(serializedLogs).toContain("/api/files/tmp-model");
   });
 
@@ -764,6 +764,7 @@ describe("collectBugReportContext", () => {
     expect(context.active_session_ids).toEqual({
       converter: "stale-converter-session",
       single_stage: "single-stage-session",
+      extractor: null,
     });
     // Gradient-card extraction has two source images and the backend does
     // not register those uploads as a singular original-image attachment

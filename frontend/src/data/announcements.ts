@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-10",
+    title: {
+      zh: "Lumina Layers — 10 月更新速览",
+      en: "Lumina Layers — October updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "提交问题反馈时，现在会附上完整错误记录、原图、SVG、模型等源文件和相关设置，方便直接复现问题。",
+        en: "Bug reports now include complete error records, original images, SVG and model source files, and related settings so the problem can be reproduced directly.",
+      }],
+    }],
+  },
+  {
     version: "2026-10-08",
     title: {
       zh: "Lumina Layers — 10 月更新速览",

@@ -1,9 +1,9 @@
 import axios from "axios";
 import { postClientLog, summarizeErrorForLog } from "../utils/clientLog";
-import { isUnsafeVisibleErrorText } from "../utils/visibleErrorText";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import { useErrorTicketPromptStore } from "../stores/errorTicketPromptStore";
 import { tRuntime } from "../i18n/runtime";
+import { rememberFeedbackSource } from "../utils/sourceFileOrigins";
 
 export interface ApiRequestOptions {
   suppressClientLog?: boolean;
@@ -92,85 +92,9 @@ const HTTP_REASON_PHRASES: Record<number, string> = {
   504: "gateway timeout",
 };
 
-function summarizeRedactedServerValue(
-  field: "detail" | "message" | "body",
-  value: unknown,
-): Record<string, unknown> {
-  const summary: Record<string, unknown> = {
-    [`${field}_redacted`]: true,
-    [`${field}_type`]: Array.isArray(value)
-      ? "array"
-      : value === null
-        ? "null"
-        : typeof value,
-  };
-  if (typeof value === "string") {
-    summary[`${field}_length`] = value.length;
-  } else if (Array.isArray(value)) {
-    summary[`${field}_item_count`] = value.length;
-  } else if (isRecord(value)) {
-    summary[`${field}_keys`] = Object.keys(value).slice(0, 12);
-  }
-  return summary;
-}
-
-function summarizeUnsafeClientValue(
-  field: "detail" | "message" | "body",
-  value: unknown,
-): Record<string, unknown> {
-  const summary = summarizeRedactedServerValue(field, value);
-  if (isRecord(value)) {
-    delete summary[`${field}_keys`];
-    summary[`${field}_key_count`] = Object.keys(value).length;
-  }
-  summary[`${field}_redaction_reason`] = "unsafe_client_error_text";
-  return summary;
-}
-
-function summarizeApiErrorData(
-  data: unknown,
-  statusCode: number | null = null,
-): unknown {
-  const redactServerDetails = isServerErrorStatus(statusCode);
-  if (data == null || typeof data !== "object") {
-    if (redactServerDetails && data != null) {
-      return summarizeRedactedServerValue("body", data);
-    }
-    if (unsafeTextInUnknown(data)) {
-      return summarizeUnsafeClientValue("body", data);
-    }
-    return data ?? null;
-  }
-  if (Array.isArray(data)) {
-    if (unsafeTextInUnknown(data)) {
-      return summarizeUnsafeClientValue("detail", data);
-    }
-    return { item_count: data.length };
-  }
-
-  const record = data as Record<string, unknown>;
-  if ("detail" in record) {
-    if (redactServerDetails) {
-      return summarizeRedactedServerValue("detail", record.detail);
-    }
-    if (unsafeTextInUnknown(record.detail)) {
-      return summarizeUnsafeClientValue("detail", record.detail);
-    }
-    return { detail: record.detail };
-  }
-  if ("message" in record) {
-    if (redactServerDetails) {
-      return summarizeRedactedServerValue("message", record.message);
-    }
-    if (unsafeTextInUnknown(record.message)) {
-      return summarizeUnsafeClientValue("message", record.message);
-    }
-    return { message: record.message };
-  }
-  if (unsafeTextInUnknown(record)) {
-    return summarizeUnsafeClientValue("body", record);
-  }
-  return { keys: Object.keys(record).slice(0, 12) };
+function summarizeApiErrorData(data: unknown, statusCode: number | null = null): unknown {
+  void statusCode;
+  return data ?? null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -228,9 +152,6 @@ const STRUCTURED_DETAIL_TRANSLATION_KEYS: ReadonlyMap<string, string> = new Map(
   ["model_surface_boolean_failed", "api_error_model_surface_boolean_failed"],
 ]);
 
-const SERVER_SAFE_STRUCTURED_DETAIL_STATUSES: ReadonlyMap<string, number> =
-  new Map();
-
 function extractReadableDetail(data: unknown): string | null {
   if (typeof data === "string" && data.trim()) {
     return data.trim();
@@ -270,35 +191,6 @@ function extractReadableDetail(data: unknown): string | null {
     return message.trim();
   }
   return null;
-}
-
-function extractServerSafeStructuredDetailCode(
-  data: unknown,
-  statusCode: number | null,
-): string | null {
-  if (!isRecord(data) || !isRecord(data.detail)) {
-    return null;
-  }
-  const errorCode = data.detail.error;
-  if (
-    typeof errorCode !== "string" ||
-    SERVER_SAFE_STRUCTURED_DETAIL_STATUSES.get(errorCode) !== statusCode
-  ) {
-    return null;
-  }
-  return errorCode;
-}
-
-function extractServerSafeStructuredDetailTranslation(
-  data: unknown,
-  statusCode: number | null,
-): string | null {
-  const errorCode = extractServerSafeStructuredDetailCode(data, statusCode);
-  if (!errorCode) {
-    return null;
-  }
-  const translationKey = STRUCTURED_DETAIL_TRANSLATION_KEYS.get(errorCode);
-  return translationKey ? tRuntime(translationKey) : null;
 }
 
 function isGenericHttpDetail(detail: string, statusCode: number | null): boolean {
@@ -439,22 +331,10 @@ function readableApiErrorMessage(
   error: unknown,
   requestId: string | null = null,
 ): string {
-  if (isServerErrorStatus(statusCode)) {
-    // Server error bodies remain hidden by default.  The only exception is
-    // an allowlisted machine code translated entirely by this client; no
-    // server-provided free text is exposed.
-    const structuredTranslation =
-      extractServerSafeStructuredDetailTranslation(data, statusCode);
-    if (structuredTranslation) {
-      return structuredTranslation;
-    }
-    return fallbackHttpStatusMessage(statusCode, requestId);
-  }
   const detail = extractReadableDetail(data);
   if (
     detail &&
-    !isGenericHttpDetail(detail, statusCode) &&
-    !isUnsafeVisibleErrorText(detail)
+    !isGenericHttpDetail(detail, statusCode)
   ) {
     return detail;
   }
@@ -489,21 +369,6 @@ function extractStatusCodeFromGenericErrorMessage(message: string): number | nul
   return Number.isInteger(statusCode) ? statusCode : null;
 }
 
-function unsafeTextInUnknown(value: unknown): boolean {
-  if (typeof value === "string") {
-    return isUnsafeVisibleErrorText(value);
-  }
-  if (Array.isArray(value)) {
-    return value.some(unsafeTextInUnknown);
-  }
-  if (isRecord(value)) {
-    return Object.entries(value).some(
-      ([key, nestedValue]) =>
-        isUnsafeVisibleErrorText(key) || unsafeTextInUnknown(nestedValue),
-    );
-  }
-  return false;
-}
 function cleanHttpStatusSuffix(suffix: string): string {
   const trimmed = suffix.trim();
   if (!trimmed) {
@@ -546,9 +411,7 @@ function statusPrefixedErrorVisibleMessage(
   const suffix = cleanHttpStatusSuffix(match[1] ?? "");
   if (
     !suffix ||
-    isServerErrorStatus(statusCode) ||
-    isGenericHttpDetail(suffix, statusCode) ||
-    isUnsafeVisibleErrorText(suffix)
+    isGenericHttpDetail(suffix, statusCode)
   ) {
     return fallbackHttpStatusMessage(statusCode, requestId);
   }
@@ -614,101 +477,7 @@ export function apiErrorToVisibleMessage(
   if (isGenericNoResponseErrorMessage(rawMessage)) {
     return fallbackHttpStatusMessage(null);
   }
-  if (isUnsafeVisibleErrorText(rawMessage)) {
-    return fallback;
-  }
   return rawMessage || fallback;
-}
-
-function buildReadableResponseData(
-  data: unknown,
-  statusCode: number | null,
-  readableMessage: string,
-): unknown {
-  if (isServerErrorStatus(statusCode)) {
-    const safeErrorCode = extractServerSafeStructuredDetailCode(
-      data,
-      statusCode,
-    );
-    if (safeErrorCode) {
-      return {
-        detail: {
-          error: safeErrorCode,
-          message: readableMessage,
-        },
-      };
-    }
-    return { detail: readableMessage };
-  }
-  if (!isRecord(data)) {
-    return { detail: readableMessage };
-  }
-  if (unsafeTextInUnknown(data)) {
-    return "message" in data && !("detail" in data)
-      ? { message: readableMessage }
-      : { detail: readableMessage };
-  }
-  const detail = data.detail;
-  const message = data.message;
-  if (isRecord(detail)) {
-    const detailMessage = detail.message;
-    const detailError = detail.error;
-    const hasReadableDetailMessage =
-      typeof detailMessage === "string" &&
-      detailMessage.trim().length > 0 &&
-      !isGenericHttpDetail(detailMessage, statusCode) &&
-      !isUnsafeVisibleErrorText(detailMessage);
-    const hasCodeOnlyDetail =
-      typeof detailError === "string" &&
-      detailError.trim().length > 0 &&
-      !hasReadableDetailMessage;
-    if (hasCodeOnlyDetail) {
-      if (
-        typeof message === "string" &&
-        isGenericHttpDetail(message, statusCode)
-      ) {
-        return { ...data, detail: readableMessage, message: readableMessage };
-      }
-      return { ...data, detail: readableMessage };
-    }
-  }
-  if (
-    typeof detail !== "string" ||
-    (
-      !isGenericHttpDetail(detail, statusCode) &&
-      !isUnsafeVisibleErrorText(detail)
-    )
-  ) {
-    if (
-      typeof message === "string" &&
-      isGenericHttpDetail(message, statusCode)
-    ) {
-      return { ...data, message: readableMessage };
-    }
-    return data;
-  }
-  if (
-    typeof message === "string" &&
-    isGenericHttpDetail(message, statusCode)
-  ) {
-    return { ...data, detail: readableMessage, message: readableMessage };
-  }
-  return { ...data, detail: readableMessage };
-}
-
-function replaceUnsafeResponseData(
-  response: { data?: unknown } | null | undefined,
-  statusCode: number | null,
-  readableMessage: string,
-): void {
-  if (!response) {
-    return;
-  }
-  response.data = buildReadableResponseData(
-    response.data,
-    statusCode,
-    readableMessage,
-  );
 }
 
 function getResponseHeaderValue(
@@ -765,6 +534,7 @@ function recordApiFailure({
       request_id: requestId,
       response_detail: responseDetailForLog,
       ...summarizeErrorForLog(error),
+      error,
       error_message: readableMessage,
     },
   });
@@ -829,11 +599,7 @@ function buildResourceDownloadError(
     new Error(`Resource download failed: ${url}`),
     requestId,
   );
-  const responseData = buildReadableResponseData(
-    data,
-    statusCode,
-    readableMessage,
-  );
+  const responseData = data;
   const error = new Error(readableMessage) as Error & {
     response?: {
       status: number | null;
@@ -947,6 +713,15 @@ export async function assertResourceDownloadAvailable(
   }
 }
 
+apiClient.interceptors.request.use((config) => {
+  if (config.data instanceof FormData && !config.url?.includes("/feedback/")) {
+    for (const value of config.data.values()) {
+      if (typeof File !== "undefined" && value instanceof File) rememberFeedbackSource(value);
+    }
+  }
+  return config;
+});
+
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -971,14 +746,6 @@ apiClient.interceptors.response.use(
       response?.data,
       statusCode,
     );
-    replaceUnsafeResponseData(response, statusCode, readableMessage);
-    if (error && typeof error === "object") {
-      try {
-        (error as { message?: string }).message = readableMessage;
-      } catch {
-        // Preserve the original error object if a runtime marks message read-only.
-      }
-    }
     if (!suppressClientLog) {
       recordApiFailure({
         method,
@@ -989,6 +756,13 @@ apiClient.interceptors.response.use(
         error,
         readableMessage,
       });
+    }
+    if (error && typeof error === "object") {
+      try {
+        (error as { message?: string }).message = readableMessage;
+      } catch {
+        // Preserve the original error object if a runtime marks message read-only.
+      }
     }
     return Promise.reject(error);
   },

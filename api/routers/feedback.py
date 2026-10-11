@@ -6,24 +6,23 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 import os
 import re
 from copy import deepcopy
 from datetime import datetime, timezone
-from math import isfinite
 from pathlib import Path
-from typing import Any, AsyncGenerator, AsyncIterator, Literal
+from typing import Any, AsyncIterator, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
-from starlette.datastructures import FormData, Headers, UploadFile
-from starlette.formparsers import MultiPartException, MultiPartParser
+from starlette.datastructures import FormData, UploadFile
+from starlette.formparsers import MultiPartException
 
 from api.dependencies import get_file_registry, get_session_store
 from api.feedback_assembler import (
-    MAX_DIRECT_ORIGINAL_IMAGE_BYTES,
     collect_direct_original_upload,
     collect_sync_attachments,
     finalize_ticket_async,
@@ -31,303 +30,17 @@ from api.feedback_assembler import (
 )
 from api.feedback_hosted import SubmissionStatus, feedback_server_url
 from api.feedback_ticket import generate_ticket_id, ticket_dir_for, ticket_dir_from_id
+from api.feedback_sources import collect_backend_diagnostics, collect_source_uploads
+from api.feedback_files import FeedbackMultipartParser
 from api.feedback_time import format_received_cst, now_beijing
 from api.local_origin_guard import require_local_app_origin
 from api.structured_logging import get_logger
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 log = get_logger(__name__)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_MAX_SCREENSHOT_DATA_URL_LENGTH = 7_000_000
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_MAX_RECENT_CLIENT_LOGS = 50
-_MAX_ACTION_HISTORY_ENTRIES = 100
-_MAX_SESSION_HISTORY_ENTRIES = 5
-_MAX_CLIENT_LOG_DEPTH = 4
-_MAX_CLIENT_LOG_ARRAY_ITEMS = 20
-_MAX_CLIENT_LOG_OBJECT_KEYS = 24
-_MAX_CLIENT_LOG_STRING_LENGTH = 1200
-_MAX_DESCRIPTION_STRING_LENGTH = 10_000
-
-# Relaxed limits for the grouped ``advanced_params`` capture. They are wider
-# than the generic client-log sanitizer above because the frontend builder
-# already trims the shape (≤11 groups, ≤64 color_height_map entries, ≤20
-# fridge magnets, ≤32 replacement regions) and emits a structured payload
-# rather than an arbitrary log blob.
-#
-# ``advanced_params`` 分组专用的放宽限制。前端 builder 已经裁剪好结构
-# （最多 11 个分组、color_height_map 最多 64 项、冰箱贴最多 20 项、颜色替换
-# 最多 32 项），因此服务端可以比通用客户端日志 sanitizer 放得更宽。
-_ADV_PARAMS_MAX_DEPTH = 6
-_ADV_PARAMS_MAX_ARRAY_ITEMS = 64
-_ADV_PARAMS_MAX_OBJECT_KEYS = 25
-_ADV_PARAMS_COLOR_HEIGHT_MAP_MAX_KEYS = 64
-_ADV_PARAMS_MAX_TOTAL_BYTES = 16_384
-
-_LOCAL_PATH_PLACEHOLDER = "[redacted_local_path]"
-_GENERIC_HTTP_STATUS_DETAIL = (
-    "The server reported an error while processing this request."
-)
-_LOCAL_FILE_URL_RE = re.compile(
-    r"file://(?:localhost/|/)(?:[A-Z]:/|(?:Users|home|private|tmp|var|Volumes|mnt|opt|etc)/)"
-    r"[^\s\"'<>)]*",
-    re.IGNORECASE,
-)
-_POSIX_LOCAL_PATH_RE = re.compile(
-    r"(?<![\w:])/(?:Users|home|private|tmp|var|Volumes|mnt|opt|etc)"
-    r"(?:/[^\s\"'<>)]*)?",
-    re.IGNORECASE,
-)
-_WINDOWS_LOCAL_PATH_RE = re.compile(
-    r"\b[A-Z]:[\\/](?:Users|Documents and Settings|Temp|tmp|Windows|ProgramData|"
-    r"Program Files(?: \(x86\))?)(?:[\\/][^\s\"'<>|]*)*",
-    re.IGNORECASE,
-)
-_UNC_LOCAL_PATH_RE = re.compile(
-    r"\\\\[A-Za-z0-9_.-]+\\[^\s\"'<>|]+(?:\\[^\s\"'<>|]+)*"
-)
-_GENERIC_HTTP_STATUS_RE = re.compile(
-    r"^\s*(?:Request failed with status code|HTTP(?:\s+error)?|"
-    r"status(?:\s+code)?|error)\s+[45]\d{2}\s*$",
-    re.IGNORECASE,
-)
-_GENERIC_HTTP_STATUS_WITH_REDACTED_PATH_RE = re.compile(
-    r"^\s*(?:Request failed with status code|HTTP(?:\s+error)?|"
-    r"status(?:\s+code)?|error)\s+[45]\d{2}"
-    rf"(?:\s*(?::|at|-)\s*{re.escape(_LOCAL_PATH_PLACEHOLDER)})\s*$",
-    re.IGNORECASE,
-)
-_GENERIC_HTTP_STATUS_WITH_CONTEXT_RE = re.compile(
-    r"^\s*(?:Request failed with status code|HTTP(?:\s+error)?|"
-    r"status(?:\s+code)?|error)\s+[45]\d{2}"
-    r"\s*(?::|at|-)\s*(?P<context>.+?)\s*$",
-    re.IGNORECASE,
-)
-_SAFE_API_CONTEXT_RE = re.compile(r"^/api/[A-Za-z0-9._~!$&'()*+,;=:@%/-]+$")
-_GENERIC_HTTP_STATUS_FRAGMENT_RE = re.compile(
-    r"(?:\b[A-Za-z]+Error:\s*)?"
-    r"(?:Request failed with status code|HTTP(?:\s+error)?|"
-    r"status(?:\s+code)?|error)\s+[45]\d{2}"
-    r"(?:\s*(?::|at|-)\s*(?P<context>"
-    rf"{re.escape(_LOCAL_PATH_PLACEHOLDER)}|"
-    r"/api/[^\s\"'<>)]*"
-    r"))?",
-    re.IGNORECASE,
-)
-
-
-def _truncate_feedback_text(value: str, limit: int = _MAX_CLIENT_LOG_STRING_LENGTH) -> str:
-    if len(value) <= limit:
-        return value
-    return f"{value[:limit]}...<truncated>"
-
-
-def _safe_status_context(value: str) -> str | None:
-    token = value.strip().strip("\"'<>").split(maxsplit=1)[0]
-    token = token.rstrip(".,;)")
-    token = token.split("?", 1)[0].split("#", 1)[0]
-    if not token.startswith("/api/"):
-        return None
-    if "\\" in token or "://" in token:
-        return None
-    if not _SAFE_API_CONTEXT_RE.fullmatch(token):
-        return None
-    if any(part in {".", ".."} for part in token.split("/")):
-        return None
-    return token
-
-
-def _sanitize_feedback_text(
-    value: str,
-    limit: int = _MAX_CLIENT_LOG_STRING_LENGTH,
-) -> str:
-    """Redact local diagnostic strings before feedback export.
-
-    在反馈导出前脱敏本机诊断字符串。
-    """
-
-    redacted = _LOCAL_FILE_URL_RE.sub(_LOCAL_PATH_PLACEHOLDER, value)
-    redacted = _UNC_LOCAL_PATH_RE.sub(_LOCAL_PATH_PLACEHOLDER, redacted)
-    redacted = _WINDOWS_LOCAL_PATH_RE.sub(_LOCAL_PATH_PLACEHOLDER, redacted)
-    redacted = _POSIX_LOCAL_PATH_RE.sub(_LOCAL_PATH_PLACEHOLDER, redacted)
-    if _GENERIC_HTTP_STATUS_RE.fullmatch(redacted) or (
-        _GENERIC_HTTP_STATUS_WITH_REDACTED_PATH_RE.fullmatch(redacted)
-    ):
-        redacted = _GENERIC_HTTP_STATUS_DETAIL
-    else:
-        context_match = _GENERIC_HTTP_STATUS_WITH_CONTEXT_RE.fullmatch(redacted)
-        if context_match is not None:
-            safe_context = _safe_status_context(context_match.group("context"))
-            redacted = _GENERIC_HTTP_STATUS_DETAIL
-            if safe_context is not None:
-                redacted = f"{redacted} Context: {safe_context}"
-    return _truncate_feedback_text(redacted, limit)
-
-
-def _sanitize_bug_report_description(value: str) -> str:
-    """Redact diagnostics from the free-form bug-report description.
-
-    从自由文本 Bug 描述中移除本机路径和传输层空错误文案。
-    """
-
-    redacted = _sanitize_feedback_text(value, limit=_MAX_DESCRIPTION_STRING_LENGTH)
-
-    def _replace_http_status(match: re.Match[str]) -> str:
-        context = match.group("context")
-        safe_context = _safe_status_context(context) if context else None
-        if safe_context is not None:
-            return f"{_GENERIC_HTTP_STATUS_DETAIL} Context: {safe_context}"
-        return _GENERIC_HTTP_STATUS_DETAIL
-
-    normalized = _GENERIC_HTTP_STATUS_FRAGMENT_RE.sub(
-        _replace_http_status,
-        redacted,
-    )
-    return _truncate_feedback_text(normalized, _MAX_DESCRIPTION_STRING_LENGTH)
-
-
-def _sanitize_feedback_jsonish(value: Any, *, depth: int = 0) -> Any:
-    if value is None or isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return _sanitize_feedback_text(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return value if isfinite(value) else str(value)
-    if depth >= _MAX_CLIENT_LOG_DEPTH:
-        return "<truncated:depth>"
-    if isinstance(value, (list, tuple)):
-        items = [
-            _sanitize_feedback_jsonish(item, depth=depth + 1)
-            for item in list(value)[:_MAX_CLIENT_LOG_ARRAY_ITEMS]
-        ]
-        remaining = len(value) - _MAX_CLIENT_LOG_ARRAY_ITEMS
-        if remaining > 0:
-            items.append(f"<truncated:{remaining}>")
-        return items
-    if isinstance(value, dict):
-        sanitized: dict[str, Any] = {}
-        items = list(value.items())
-        for raw_key, raw_value in items[:_MAX_CLIENT_LOG_OBJECT_KEYS]:
-            key = _sanitize_feedback_text(str(raw_key), 120)
-            sanitized[key] = _sanitize_feedback_jsonish(raw_value, depth=depth + 1)
-        remaining = len(items) - _MAX_CLIENT_LOG_OBJECT_KEYS
-        if remaining > 0:
-            sanitized["__truncated_keys"] = remaining
-        return sanitized
-    return _sanitize_feedback_text(str(value))
-
-
-def _sanitize_advanced_params(
-    value: Any, *, depth: int = 0, path: str = ""
-) -> Any:
-    """Dedicated sanitizer for the grouped ``advanced_params`` payload.
-
-    针对分组 ``advanced_params`` 载荷的专用 sanitizer。
-
-    Mirrors :func:`_sanitize_feedback_jsonish` structurally (same scalar
-    handling, same ``<truncated:depth>`` / ``<truncated:N>`` /
-    ``__truncated_keys`` markers, same reuse of
-    :func:`_truncate_feedback_text`) but uses the relaxed
-    ``advanced_params`` limits: depth ≤ 6, array items ≤ 64, object keys
-    ≤ 24. A path-level exception raises the object-key cap to 64 for the
-    ``relief.color_height_map`` sub-object so a full frontend-trimmed color
-    height map (≤ 64 entries) survives backend sanitization without losing
-    keys.
-
-    与 :func:`_sanitize_feedback_jsonish` 结构一致（相同的标量处理、相同的
-    ``<truncated:depth>`` / ``<truncated:N>`` / ``__truncated_keys`` 标记、
-    同样复用 :func:`_truncate_feedback_text`），但使用 ``advanced_params``
-    的放宽上限：深度 ≤ 6、数组元素 ≤ 64、对象 key ≤ 24。对
-    ``relief.color_height_map`` 这一路径做例外处理，将 object key 上限
-    提升到 64，确保前端裁剪后的完整 color height map（最多 64 项）能被
-    后端原样保留。
-
-    Args:
-        value: The value being sanitized (scalar, list, tuple, dict, or
-            other). Unknown types are coerced via ``str()``.
-            需要清洗的值（标量、list、tuple、dict 或其它类型）。未知类型将
-            通过 ``str()`` 强制转换。
-        depth: Current recursion depth. Callers pass ``0`` for the root.
-            当前递归深度。调用方在根层传 ``0``。
-        path: Dotted path of the current node relative to the root (for
-            example ``"relief.color_height_map"``). Used only to apply the
-            ``relief.color_height_map`` object-key exception.
-            当前节点相对根的点号路径（例如 ``"relief.color_height_map"``），
-            仅用于启用 ``relief.color_height_map`` 的 object-key 例外规则。
-
-    Returns:
-        A JSON-safe value: preserved scalars, truncated strings, or
-        sanitized list/dict substructures with truncation markers when
-        limits are exceeded.
-        返回 JSON 友好的值：保留的标量、截断后的字符串、或者携带截断
-        标记的 list/dict 子结构（超出上限时）。
-    """
-    if value is None or isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return _sanitize_feedback_text(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return value if isfinite(value) else str(value)
-    if depth >= _ADV_PARAMS_MAX_DEPTH:
-        return "<truncated:depth>"
-    if isinstance(value, (list, tuple)):
-        items = [
-            _sanitize_advanced_params(
-                item, depth=depth + 1, path=f"{path}[]"
-            )
-            for item in list(value)[:_ADV_PARAMS_MAX_ARRAY_ITEMS]
-        ]
-        remaining = len(value) - _ADV_PARAMS_MAX_ARRAY_ITEMS
-        if remaining > 0:
-            items.append(f"<truncated:{remaining}>")
-        return items
-    if isinstance(value, dict):
-        # Path-level exception: relief.color_height_map allows 64 keys so
-        # the frontend-trimmed color height map survives intact.
-        # 路径级例外：relief.color_height_map 允许 64 个 key，保留前端
-        # 已裁剪的 color height map。
-        max_keys = _ADV_PARAMS_MAX_OBJECT_KEYS
-        if path == "relief.color_height_map":
-            max_keys = _ADV_PARAMS_COLOR_HEIGHT_MAP_MAX_KEYS
-
-        sanitized: dict[str, Any] = {}
-        items = list(value.items())
-        for raw_key, raw_value in items[:max_keys]:
-            key = _sanitize_feedback_text(str(raw_key), 120)
-            child_path = f"{path}.{raw_key}" if path else str(raw_key)
-            sanitized[key] = _sanitize_advanced_params(
-                raw_value, depth=depth + 1, path=child_path
-            )
-        remaining = len(items) - max_keys
-        if remaining > 0:
-            sanitized["__truncated_keys"] = remaining
-        return sanitized
-    return _sanitize_feedback_text(str(value))
-
-
-def _sanitize_client_log_entry(entry: Any) -> dict[str, Any]:
-    if not isinstance(entry, dict):
-        return {"label": "client log", "details": _sanitize_feedback_jsonish(entry)}
-
-    sanitized: dict[str, Any] = {}
-    for key in ("timestamp", "method", "label", "scope", "phase"):
-        value = entry.get(key)
-        if value is not None:
-            sanitized[key] = _sanitize_feedback_text(str(value), 256)
-    elapsed_ms = entry.get("elapsed_ms")
-    if isinstance(elapsed_ms, (int, float)) and isfinite(float(elapsed_ms)):
-        sanitized["elapsed_ms"] = round(float(elapsed_ms), 3)
-    elif elapsed_ms is None:
-        sanitized["elapsed_ms"] = None
-    if "details" in entry:
-        sanitized["details"] = _sanitize_feedback_jsonish(entry["details"])
-    if "label" not in sanitized:
-        sanitized["label"] = "client log"
-    return sanitized
 
 
 class BugReportSessionIds(BaseModel):
@@ -336,8 +49,10 @@ class BugReportSessionIds(BaseModel):
     报告上下文中包含的活跃 session 标识。
     """
 
-    converter: str | None = Field(default=None, max_length=128)
-    single_stage: str | None = Field(default=None, max_length=128)
+    model_config = ConfigDict(extra="allow")
+
+    converter: str | None = Field(default=None)
+    single_stage: str | None = Field(default=None)
 
 
 class BugReportFinalArtifactRef(BaseModel):
@@ -346,10 +61,12 @@ class BugReportFinalArtifactRef(BaseModel):
     指向最近一次生成产物的引用，用于复现（Req 3.x）。
     """
 
-    session_id: str | None = Field(default=None, max_length=128)
-    download_url: str | None = Field(default=None, max_length=1024)
+    model_config = ConfigDict(extra="allow")
+
+    session_id: str | None = Field(default=None)
+    download_url: str | None = Field(default=None)
     artifact_type: Literal["3mf", "zip", "share_card"] | None = None
-    disk_path: str | None = Field(default=None, max_length=2048)
+    disk_path: str | None = Field(default=None)
     source: Literal[
         "converter", "single_stage", "puzzle", "vector", "batch"
     ] | None = None
@@ -361,29 +78,23 @@ class BugReportOriginalImageRef(BaseModel):
     指向用户上传原图的引用，用于复现（Req 2.x）。
     """
 
-    session_id: str | None = Field(default=None, max_length=128)
-    filename: str | None = Field(default=None, max_length=256)
+    model_config = ConfigDict(extra="allow")
+
+    session_id: str | None = Field(default=None)
+    filename: str | None = Field(default=None)
     source: Literal["converter", "single_stage"] | None = None
 
 
 class BugReportWorkshopContext(BaseModel):
-    """Safe Creative Workshop runtime metadata for a bug report.
+    """Complete Creative Workshop diagnostic context.
 
-    Bug 报告中的安全创意工坊运行元数据。
-
-    Project payloads, pixels, palettes, image bytes, package paths,
-    credentials, signing material, and desktop tokens are intentionally
-    outside this schema. Unknown keys are discarded before the report is
-    persisted or uploaded.
-
-    工程载荷、像素、色板、图像字节、安装包路径、凭据、签名材料和桌面令牌
-    均不属于此结构；未知字段会在工单持久化或上传前被丢弃。
+    完整创意工坊诊断上下文，保留客户端提供的附加数据。
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="allow")
 
-    module_id: str = Field(min_length=1, max_length=128)
-    module_version: str = Field(min_length=1, max_length=128)
+    module_id: str = Field(min_length=1)
+    module_version: str = Field(min_length=1)
     install_source: Literal[
         "registry", "github", "local", "seed", "unknown"
     ] = "unknown"
@@ -401,7 +112,7 @@ class BugReportWorkshopContext(BaseModel):
         "unsafe-development",
         "unknown",
     ] = "unknown"
-    error_code: str | None = Field(default=None, max_length=128)
+    error_code: str | None = Field(default=None)
 
 
 class BugReportContext(BaseModel):
@@ -410,29 +121,31 @@ class BugReportContext(BaseModel):
     Bug 报告附带的客户端运行时上下文。
     """
 
-    url: str = Field(max_length=2048)
-    user_agent: str = Field(max_length=1024)
+    model_config = ConfigDict(extra="allow")
+
+    url: str = Field()
+    user_agent: str = Field()
     screen_width: int = Field(ge=0, le=100_000)
     screen_height: int = Field(ge=0, le=100_000)
     device_pixel_ratio: float = Field(ge=0.0, le=10.0)
-    app_version: str = Field(max_length=64)
+    app_version: str = Field()
     language: Literal["zh", "en"]
     theme: Literal["light", "dark"]
-    active_tab: str = Field(max_length=64)
+    active_tab: str = Field()
     active_session_ids: BugReportSessionIds
-    printer_id: str | None = Field(default=None, max_length=128)
-    slicer: str | None = Field(default=None, max_length=128)
-    custom_3mf_template_id: str | None = Field(default=None, max_length=128)
-    nozzle_size: str | None = Field(default=None, max_length=16)
-    device_profile_id: str | None = Field(default=None, max_length=256)
-    build_plate_id: str | None = Field(default=None, max_length=128)
-    color_mode: str | None = Field(default=None, max_length=64)
-    lut_name: str | None = Field(default=None, max_length=256)
-    lut_names: list[str] = Field(default_factory=list, max_length=32)
+    printer_id: str | None = Field(default=None)
+    slicer: str | None = Field(default=None)
+    custom_3mf_template_id: str | None = Field(default=None)
+    nozzle_size: str | None = Field(default=None)
+    device_profile_id: str | None = Field(default=None)
+    build_plate_id: str | None = Field(default=None)
+    color_mode: str | None = Field(default=None)
+    lut_name: str | None = Field(default=None)
+    lut_names: list[str] = Field(default_factory=list)
     source_version: Literal["legacy", "native", "material"] | None = None
-    selected_native_brand_key: str | None = Field(default=None, max_length=128)
-    selected_native_db_names: list[str] = Field(default_factory=list, max_length=128)
-    selected_material_dir_names: list[str] = Field(default_factory=list, max_length=128)
+    selected_native_brand_key: str | None = Field(default=None)
+    selected_native_db_names: list[str] = Field(default_factory=list)
+    selected_material_dir_names: list[str] = Field(default_factory=list)
     material_layer_count: int | None = Field(default=None, ge=0, le=1000)
     material_dynamic_layer_count_enabled: bool | None = None
     material_min_layer_count: int | None = Field(default=None, ge=5, le=10)
@@ -443,7 +156,7 @@ class BugReportContext(BaseModel):
         le=5.0,
     )
     material_layer_height_mm: float | None = Field(default=None, ge=0.0, le=10.0)
-    material_backing_material_dir_name: str | None = Field(default=None, max_length=128)
+    material_backing_material_dir_name: str | None = Field(default=None)
     preserve_upload_filename_for_3mf: bool | None = None
     enable_wipe_tower_auto_placement: bool | None = None
     enable_smooth_vector_preview: bool | None = None
@@ -459,13 +172,6 @@ class BugReportContext(BaseModel):
     active_final_artifact_ref: BugReportFinalArtifactRef | None = None
     workshop: BugReportWorkshopContext | None = None
 
-    # Grouped advanced generation parameters captured from the converter store.
-    # Kept as a free-form dict here; the dedicated sanitizer in
-    # ``submit_bug_report`` enforces depth/size limits before it is persisted
-    # to ticket.json, which keeps this validator cheap and the sanitizer
-    # reusable from the ``action_history`` path.
-    # 采集自 ConverterStore 的分组高级生成参数。此处仅做形状校验（dict 或 null），
-    # 真正的深度/大小裁剪由 submit_bug_report 中的专用 sanitizer 完成，便于复用。
     advanced_params: dict[str, Any] | None = None
 
     @field_validator("lut_names", mode="before")
@@ -481,163 +187,13 @@ class BugReportContext(BaseModel):
         if not isinstance(value, list):
             return []
         normalized: list[str] = []
-        for item in value[:32]:
+        for item in value:
             if not isinstance(item, str):
                 continue
             clean = item.strip()
-            if clean and len(clean) <= 256 and clean not in normalized:
+            if clean and clean not in normalized:
                 normalized.append(clean)
         return normalized
-
-    @field_validator("recent_client_logs", mode="before")
-    @classmethod
-    def _validate_recent_client_logs(cls, value: Any) -> list[dict[str, Any]]:
-        """Keep client-side diagnostic logs bounded and JSON-safe.
-
-        将客户端诊断日志限制在可控大小，并确保内容适合写入 JSON。
-        """
-
-        if not isinstance(value, list):
-            return []
-        return [
-            _sanitize_client_log_entry(item)
-            for item in value[-_MAX_RECENT_CLIENT_LOGS:]
-        ]
-
-    @field_validator("action_history", mode="before")
-    @classmethod
-    def _validate_action_history(cls, value: Any) -> list[dict[str, Any]]:
-        """Bound action history and sanitize every entry.
-
-        限制操作历史长度，并对每条记录做安全裁剪。
-
-        Each entry's nested ``snapshot.advanced_params`` (when present) is
-        extracted before the generic sanitizer runs and is then routed
-        through the dedicated :func:`_sanitize_advanced_params` so the
-        relaxed depth/key limits apply there. The original request payload
-        is never mutated — shallow copies of the entry and snapshot are
-        used for extraction.
-
-        嵌套在 ``snapshot.advanced_params`` 下的高级参数会先被取出，避免
-        受限于通用 sanitizer 的严格深度/key 上限，再通过专用
-        :func:`_sanitize_advanced_params` 单独清洗。清洗过程使用 entry
-        与 snapshot 的浅拷贝，原始请求载荷不会被修改。
-        """
-
-        if not isinstance(value, list):
-            return []
-        tail = value[-_MAX_ACTION_HISTORY_ENTRIES:]
-        sanitized: list[dict[str, Any]] = []
-        for item in tail:
-            if not isinstance(item, dict):
-                continue
-
-            # Work on shallow copies so the incoming Pydantic payload is
-            # never mutated by this pre-processing step.
-            # 使用浅拷贝处理，避免污染原始请求载荷。
-            item_copy: dict[str, Any] = dict(item)
-            extracted_advanced_params: Any = None
-            had_advanced_params = False
-
-            raw_snapshot = item_copy.get("snapshot")
-            if isinstance(raw_snapshot, dict):
-                snapshot_copy = dict(raw_snapshot)
-                if "advanced_params" in snapshot_copy:
-                    had_advanced_params = True
-                    extracted_advanced_params = snapshot_copy.pop(
-                        "advanced_params"
-                    )
-                    item_copy["snapshot"] = snapshot_copy
-
-            sanitized_item = _sanitize_feedback_jsonish(item_copy)  # type: ignore[arg-type]
-
-            if had_advanced_params:
-                if extracted_advanced_params is None:
-                    sanitized_value: Any = None
-                elif isinstance(extracted_advanced_params, dict):
-                    try:
-                        sanitized_value = _sanitize_advanced_params(
-                            extracted_advanced_params
-                        )
-                    except Exception as exc:  # noqa: BLE001 - boundary guard
-                        log.warning(
-                            "Advanced params sanitization failed for "
-                            "action_history entry.",
-                            extra={
-                                "event": "feedback_advanced_params_failed",
-                                "error_type": type(exc).__name__,
-                                "error_message": str(exc),
-                                "surface": "action_history",
-                            },
-                        )
-                        sanitized_value = None
-                else:
-                    log.warning(
-                        "Advanced params sanitization failed for "
-                        "action_history entry.",
-                        extra={
-                            "event": "feedback_advanced_params_failed",
-                            "error_type": "TypeError",
-                            "error_message": (
-                                "advanced_params must be a dict or null; "
-                                f"got {type(extracted_advanced_params).__name__}"
-                            ),
-                            "surface": "action_history",
-                        },
-                    )
-                    sanitized_value = None
-
-                snapshot_out = sanitized_item.get("snapshot")
-                if not isinstance(snapshot_out, dict):
-                    snapshot_out = {}
-                snapshot_out["advanced_params"] = sanitized_value
-                sanitized_item["snapshot"] = snapshot_out
-
-            sanitized.append(sanitized_item)
-        return sanitized
-
-    @field_validator("session_history", mode="before")
-    @classmethod
-    def _validate_session_history(cls, value: Any) -> list[dict[str, Any]]:
-        """Bound session-ring history to ``_MAX_SESSION_HISTORY_ENTRIES`` items.
-
-        限制 session ring 历史长度。
-        """
-
-        if not isinstance(value, list):
-            return []
-        tail = value[-_MAX_SESSION_HISTORY_ENTRIES:]
-        sanitized: list[dict[str, Any]] = []
-        for item in tail:
-            if not isinstance(item, dict):
-                continue
-            sanitized.append(_sanitize_feedback_jsonish(item))  # type: ignore[arg-type]
-        return sanitized
-
-    @field_validator("advanced_params", mode="before")
-    @classmethod
-    def _validate_advanced_params(cls, value: Any) -> dict[str, Any] | None:
-        """Shape-check ``advanced_params`` cheaply; accept ``dict`` or ``None``.
-
-        仅做形状校验：接受 ``dict`` 或 ``None``，其它类型以 422 拒绝。
-
-        This validator intentionally does not recurse into the payload; the
-        dedicated ``_sanitize_advanced_params`` sanitizer (called from
-        ``submit_bug_report``) enforces depth/size/bytes limits before the
-        value is persisted. Keeping the validator cheap lets Pydantic-time
-        validation stay fast and lets the sanitizer be reused from the
-        ``action_history`` snapshot pre-processing path.
-
-        该校验器只做形状判断，不递归遍历载荷；深度/大小限制由专用
-        ``_sanitize_advanced_params`` sanitizer 在 ``submit_bug_report`` 中执行，
-        同时可被 ``action_history`` 中嵌套 snapshot 的预处理复用。
-        """
-
-        if value is None:
-            return None
-        if isinstance(value, dict):
-            return value
-        raise ValueError("advanced_params must be a dict or null")
 
 
 class BugReportRequest(BaseModel):
@@ -646,7 +202,7 @@ class BugReportRequest(BaseModel):
     Bug 报告请求载荷。
     """
 
-    description: str = Field(min_length=1, max_length=10_000)
+    description: str = Field(min_length=1)
     user_email: str | None = Field(default=None, max_length=320)
     context: BugReportContext
     screenshot_data_url: str | None = None
@@ -714,46 +270,6 @@ def _dump_bug_report_request(
     return request.model_dump(mode="json", exclude=exclude)
 
 
-class _BugReportMultiPartParser(MultiPartParser):
-    """Bound multipart file spooling while continuing to parse form fields.
-
-    在流式解析阶段限制文件落盘量，同时继续解析其余表单字段。
-    """
-
-    def __init__(
-        self,
-        headers: Headers,
-        stream: AsyncGenerator[bytes, None],
-        *,
-        max_file_size: int,
-        max_files: int | float,
-        max_fields: int | float,
-        max_part_size: int,
-    ) -> None:
-        super().__init__(
-            headers,
-            stream,
-            max_files=max_files,
-            max_fields=max_fields,
-            max_part_size=max_part_size,
-        )
-        self._max_file_size = max_file_size
-        self._current_file_size = 0
-        self.oversized_file_fields: set[str] = set()
-
-    def on_part_begin(self) -> None:
-        super().on_part_begin()
-        self._current_file_size = 0
-
-    def on_part_data(self, data: bytes, start: int, end: int) -> None:
-        if self._current_part.file is not None:
-            self._current_file_size += end - start
-            if self._current_file_size > self._max_file_size:
-                self.oversized_file_fields.add(self._current_part.field_name)
-                return
-        super().on_part_data(data, start, end)
-
-
 async def _parse_bug_report_submission(
     http_request: Request,
 ) -> tuple[BugReportRequest, UploadFile | None, str | None]:
@@ -774,13 +290,9 @@ async def _parse_bug_report_submission(
     keep_upload_open = False
     try:
         if is_multipart:
-            parser = _BugReportMultiPartParser(
-                http_request.headers,
-                http_request.stream(),
-                max_file_size=MAX_DIRECT_ORIGINAL_IMAGE_BYTES,
-                max_files=1,
-                max_fields=2,
-                max_part_size=_MAX_SCREENSHOT_DATA_URL_LENGTH + 1_000_000,
+            parser = FeedbackMultipartParser(
+                http_request.headers, http_request.stream(),
+                max_files=float("inf"), max_fields=float("inf"), max_part_size=float("inf"),
             )
             try:
                 multipart_form = await parser.parse()
@@ -801,9 +313,9 @@ async def _parse_bug_report_submission(
                 for field_name, value in multipart_form.multi_items()
                 if isinstance(value, UploadFile)
             }
-            unexpected_file_fields = uploaded_fields - {"original_image"}
+            unexpected_file_fields = uploaded_fields - {"original_image", "source_files"}
             if unexpected_file_fields:
-                raise ValueError("Only original_image may be uploaded as a file")
+                raise ValueError("File fields must be original_image or source_files")
             if omission_value is not None and omission_value != "too_large":
                 raise ValueError(
                     "original_image_omission_reason must be 'too_large'"
@@ -815,11 +327,10 @@ async def _parse_bug_report_submission(
                 raise ValueError(
                     "original_image and original_image_omission_reason are exclusive"
                 )
-            if "original_image" in parser.oversized_file_fields:
-                original_upload = None
-                omission_reason = "too_large"
+            source_uploads = [value for value in multipart_form.getlist("source_files") if isinstance(value, UploadFile)]
+            http_request.state.feedback_source_uploads = source_uploads
             request_model = BugReportRequest.model_validate(payload_value)
-            keep_upload_open = original_upload is not None
+            keep_upload_open = original_upload is not None or bool(source_uploads)
             return request_model, original_upload, omission_reason
 
         payload_value = await http_request.json()
@@ -895,20 +406,11 @@ async def _bug_report_submission_dependency(
         submission = await _parse_bug_report_submission(http_request)
         yield submission
     finally:
-        original_upload = submission[1] if submission is not None else None
-        if original_upload is not None:
-            try:
-                await original_upload.close()
-            except OSError as exc:
-                log.warning(
-                    "Bug-report multipart upload cleanup failed.",
-                    extra={
-                        "event": "feedback_attachment_collection_failed",
-                        "attachment_kind": "original_image",
-                        "error_type": type(exc).__name__,
-                        "error_message": str(exc),
-                    },
-                )
+        uploads = list(getattr(http_request.state, "feedback_source_uploads", []))
+        if submission is not None and submission[1] is not None:
+            uploads.append(submission[1])
+        for upload in uploads:
+            await upload.close()
         try:
             await http_request.close()
         except OSError as exc:
@@ -1010,26 +512,6 @@ def _preferred_session_id(context: BugReportContext) -> str | None:
     """
 
     return context.active_session_ids.converter or context.active_session_ids.single_stage
-
-
-def _raise_if_screenshot_too_large(request: BugReportRequest) -> None:
-    if request.screenshot_data_url and len(request.screenshot_data_url) > _MAX_SCREENSHOT_DATA_URL_LENGTH:
-        log.warning(
-            "Bug report screenshot exceeded size limit.",
-            extra={
-                "event": "feedback_screenshot_too_large",
-                "error_type": "PayloadTooLarge",
-                "error_message": "Screenshot data URL exceeded 7,000,000 characters.",
-                "payload_size": len(request.screenshot_data_url),
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Screenshot too large",
-        )
-
-
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _resolve_feedback_root() -> Path:
@@ -1152,32 +634,14 @@ def _relative_ticket_path(ticket_dir: Path) -> str:
         return f"feedback/{ticket_dir.parent.name}/{ticket_dir.name}"
 
 
-def _sanitize_bug_report_context_for_export(context: dict[str, Any]) -> dict[str, Any]:
-    """Remove local-only fields before persisting or forwarding context.
-
-    在持久化或转发反馈上下文前移除只应在本机使用的字段。
-    """
-
-    sanitized = deepcopy(context)
-    final_ref = sanitized.get("active_final_artifact_ref")
-    if isinstance(final_ref, dict):
-        sanitized_ref = dict(final_ref)
-        sanitized_ref.pop("disk_path", None)
-        sanitized["active_final_artifact_ref"] = sanitized_ref
-    return sanitized
-
-
 def _capture_custom_3mf_template(template_id: str) -> dict[str, Any]:
-    from api.feedback_privacy import redact_printer_connections
     from core.custom_3mf_templates import load_template
 
     try:
-        settings = redact_printer_connections(load_template(template_id))
-        encoded = json.dumps(settings, ensure_ascii=False).encode("utf-8")
+        settings = load_template(template_id)
+        json.dumps(settings, ensure_ascii=False)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return {"status": "unavailable", "error_type": type(exc).__name__}
-    if len(encoded) > 256 * 1024:
-        return {"status": "too_large", "byte_length": len(encoded)}
     return {"status": "captured", "settings": settings}
 
 
@@ -1209,6 +673,10 @@ def _capture_custom_3mf_template(template_id: str) -> dict[str, Any]:
                                 "type": "string",
                                 "format": "binary",
                             },
+                            "source_files": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                            },
                             "original_image_omission_reason": {
                                 "type": "string",
                                 "enum": ["too_large"],
@@ -1233,21 +701,17 @@ async def submit_bug_report(
 
     接收用户手动触发的 Bug 报告。
 
-    The handler's synchronous path writes ``ticket.json``, screenshot, and
-    copies the three small attachments (original image, final artifact, LUT)
-    via :func:`api.feedback_assembler.collect_sync_attachments`. The slow
-    work — packing materials.zip, rendering index/summary, sending email —
-    runs via :class:`fastapi.BackgroundTasks` so the HTTP response stays
-    under the p95 2-second budget.
+    Before returning, capture complete sources, session data, and backend
+    diagnostics. File copying runs in worker threads. Material packaging,
+    index/summary rendering, and official-server upload run via BackgroundTasks.
+    Collection time depends on the complete data size.
 
-    同步路径只写 ``ticket.json``、截图、以及通过
-    :func:`api.feedback_assembler.collect_sync_attachments` 复制三个小附件
-    （原图、最终产物、LUT）。慢工作（打包耗材 zip、渲染索引和摘要、发送
-    邮件）由 :class:`fastapi.BackgroundTasks` 调度，保证 HTTP 响应 p95 ≤ 2s。
+    返回前完整保存源文件、会话数据和后端诊断，文件复制在线程中执行。
+    耗材打包、索引摘要渲染和官方服务器上传由后台任务调度，采集耗时取决于数据大小。
 
     Args:
-        http_request: Raw Starlette request injected by FastAPI.
-            FastAPI 注入的原始 Starlette 请求。
+        http_request: Raw Starlette request (used for rate-limit client key).
+            原始 Starlette request（用于限流取客户端 key）。
         background_tasks: FastAPI background scheduler.
             FastAPI 后台任务调度器。
         submission: Parsed JSON or multipart submission.
@@ -1259,7 +723,6 @@ async def submit_bug_report(
     """
 
     request, original_upload, original_omission_reason = submission
-    _raise_if_screenshot_too_large(request)
 
     # Validate screenshot data URL format early — reject before creating ticket.
     # 提前校验截图格式，非法时直接 400，不创建工单。
@@ -1303,45 +766,11 @@ async def submit_bug_report(
 
     request_dump = _dump_bug_report_request(request)
     attachment_context_dump = deepcopy(request_dump.get("context") or {})
-    context_dump = _sanitize_bug_report_context_for_export(attachment_context_dump)
+    context_dump = deepcopy(attachment_context_dump)
     if context_dump.get("custom_3mf_template_id"):
         context_dump["custom_3mf_template_snapshot"] = _capture_custom_3mf_template(
             context_dump["custom_3mf_template_id"]
         )
-
-    # Dedicated sanitization for ``advanced_params``. Pydantic's validator only
-    # shape-checks the field (dict-or-null); the real depth/size enforcement
-    # runs here so it can share the same sanitizer used for action_history
-    # snapshots. On overflow we fall back to the *same* shape the frontend
-    # emits for its size fallback (``AdvancedParamsSizeTrimmed``): a two-key
-    # object ``{"_size_trimmed": True, "_original_byte_length": N}``. We do
-    # not introduce a third variant like ``{"_sanitizer_trimmed": True}``.
-    #
-    # 专用的 ``advanced_params`` 深度/大小裁剪。Pydantic 校验器只做 dict/None
-    # 形状校验，真正的裁剪在这里完成，便于与 action_history 中的嵌套
-    # snapshot 复用同一 sanitizer。超限时回落到与前端一致的 size fallback
-    # 形状（``AdvancedParamsSizeTrimmed``），不引入第三种结构。
-    if context_dump.get("advanced_params") is not None:
-        try:
-            sanitized_ap = _sanitize_advanced_params(context_dump["advanced_params"])
-            ap_json = json.dumps(sanitized_ap, ensure_ascii=False)
-            original_byte_length = len(ap_json.encode("utf-8"))
-            if original_byte_length > _ADV_PARAMS_MAX_TOTAL_BYTES:
-                sanitized_ap = {
-                    "_size_trimmed": True,
-                    "_original_byte_length": original_byte_length,
-                }
-            context_dump["advanced_params"] = sanitized_ap
-        except Exception as exc:  # noqa: BLE001 — sanitizer must never crash submit.
-            log.warning(
-                "Advanced params sanitization failed.",
-                extra={
-                    "event": "feedback_advanced_params_failed",
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc),
-                },
-            )
-            context_dump["advanced_params"] = None
 
     received_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     request_id = getattr(http_request.state, "request_id", None)
@@ -1351,7 +780,7 @@ async def submit_bug_report(
         "ticket_id": ticket_id,
         "received_at_cst": format_received_cst(now),
         "received_at_utc": received_at_utc,
-        "description": _sanitize_bug_report_description(request.description),
+        "description": request.description,
         "user_email": request.user_email,
         "context": context_dump,
         "screenshot_attached": request.screenshot_data_url is not None,
@@ -1462,27 +891,20 @@ async def submit_bug_report(
     session_store = get_session_store()
     try:
         original_ref = request.context.active_original_image_ref
-        direct_upload_allowed = (
-            request.context.active_tab == "converter"
-            and original_ref is not None
-            and original_ref.source == "converter"
-            and bool(original_ref.filename and original_ref.filename.strip())
-        )
         direct_original = await collect_direct_original_upload(
             ticket_dir,
-            original_upload if direct_upload_allowed else None,
+            original_upload,
             session_id=(
                 original_ref.session_id
-                if direct_upload_allowed and original_ref is not None
+                if original_ref is not None
                 else None
             ),
-            omission_reason=(
-                original_omission_reason if direct_upload_allowed else None
-            ),
+            omission_reason=original_omission_reason,
         )
         payload["attachments"]["original_image"] = direct_original
         attachment_payload = {**payload, "context": attachment_context_dump}
-        sync_result = collect_sync_attachments(
+        sync_result = await asyncio.to_thread(
+            collect_sync_attachments,
             ticket_dir=ticket_dir,
             payload=attachment_payload,
             file_registry=file_registry,
@@ -1502,6 +924,22 @@ async def submit_bug_report(
                 "ticket_id": ticket_id,
             },
         )
+
+    payload["attachments"]["source_files"] = await collect_source_uploads(
+        ticket_dir, list(getattr(http_request.state, "feedback_source_uploads", [])),
+    )
+    try:
+        payload["attachments"].update(await asyncio.to_thread(collect_backend_diagnostics,
+            ticket_dir, context_dump, get_file_registry(), get_session_store(),
+        ))
+    except Exception as exc:
+        payload["attachments"]["backend_diagnostics"] = {
+            "status": "failed", "error_type": type(exc).__name__, "error_message": str(exc),
+        }
+        log.warning("Backend diagnostic collection failed.", extra={
+            "event": "feedback_attachment_collection_failed", "attachment_kind": "backend_diagnostics",
+            "ticket_id": ticket_id, "error_type": type(exc).__name__, "error_message": str(exc),
+        })
 
     # Persist the updated manifest before returning so the background task
     # starts from a complete view of sync-phase results.

@@ -22,7 +22,7 @@ const {
   resolveDefaultSavePath,
   setGeneratedFileDirectory,
 } = require("./generated-file-directory.cjs");
-const { assertPortsAvailable, selectBackendEndpoint, validateHealthResponse } = require("./backend-endpoint.cjs");
+const { assertPortsAvailable, selectBackendEndpoint, commitBackendEndpoint, validateHealthResponse } = require("./backend-endpoint.cjs");
 const {
   fetchNativeBedModel,
   isAllowedBedModelIpcSender,
@@ -882,6 +882,7 @@ app.whenReady().then(async () => {
   try {
     backendEndpoint = await selectBackendEndpoint({
       portFile: path.join(app.getPath("userData"), "backend-port.json"),
+      allowEphemeralFallback: true,
     });
     enableManagedDesktopHost(backendEndpoint.port);
     await assertPortsAvailable([FRONTEND_PORT]);
@@ -921,6 +922,10 @@ app.whenReady().then(async () => {
   try {
     await waitForHealth(backendEndpoint.healthUrl, HEALTH_TIMEOUT_MS, backendProc);
     logOk("Backend is healthy");
+    commitBackendEndpoint({
+      portFile: path.join(app.getPath("userData"), "backend-port.json"),
+      endpoint: backendEndpoint,
+    });
   } catch (err) {
     const failureCode = ["startup_backend_timeout", "startup_backend_exited"].includes(err.message)
       ? err.message : "startup_failed";

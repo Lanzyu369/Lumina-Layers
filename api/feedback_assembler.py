@@ -5,8 +5,8 @@ index.md、summary.txt、上传官方反馈服务）+ 启动时清理。
 
 Design (`.kiro/specs/reproducible-bug-reports/design.md` §Components §5):
 
-* Sync path ``collect_sync_attachments`` runs inside the HTTP handler so the
-  response waits only on small file copies (bounded to ~2 s).
+* ``collect_sync_attachments`` copies complete source attachments in a worker
+  thread before the HTTP handler returns; duration depends on the input size.
 * Async path ``finalize_ticket_async`` runs via FastAPI BackgroundTasks; it
   packs ``materials.zip``, renders ``index.md`` / ``summary.txt``, and
   uploads the ticket to the official feedback server. All steps are independently try/except so a
@@ -15,7 +15,7 @@ Design (`.kiro/specs/reproducible-bug-reports/design.md` §Components §5):
 * ``run_startup_cleanup`` purges bulky attachments that outlived their TTL
   and marks abandoned in-flight tickets as ``interrupted``.
 
-同步装配只做小文件拷贝（HTTP 请求内 ≤2 秒），其余大头（耗材 zip、
+请求返回前在线程中完整复制源附件，耗时取决于输入大小；耗材 zip、
 渲染索引、上传工单）放后台任务。启动时清理按 TTL 删除大附件，并把异常残留
 的装配中工单标为 interrupted。
 """
@@ -43,15 +43,13 @@ from api.feedback_mime import guess_mime
 from api.feedback_hosted import submit_ticket_directory
 from api.feedback_index import generate_index_markdown, generate_summary_text
 from api.feedback_materials_bundle import pack_materials
-from api.feedback_privacy import copy_feedback_project_artifact
 from api.feedback_time import now_beijing
 from api.file_bridge import SUPPORTED_UPLOAD_IMAGE_EXTENSIONS
 from api.structured_logging import get_logger
-from config import TEMP_DIR
+from config import MATERIALS_DIR, TEMP_DIR
 from utils.lut_manager import LUTManager
 
 __all__ = [
-    "MAX_DIRECT_ORIGINAL_IMAGE_BYTES",
     "SyncCollectionResult",
     "collect_direct_original_upload",
     "collect_sync_attachments",
@@ -78,12 +76,6 @@ log = get_logger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-MAX_DIRECT_ORIGINAL_IMAGE_BYTES = 100 * 1024 * 1024
-"""Maximum exact browser-source attachment size: 100 MiB.
-
-浏览器直接附带原图的最大尺寸：100 MiB。
-"""
-
 _DIRECT_UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 _IMAGE_EXTENSIONS = SUPPORTED_UPLOAD_IMAGE_EXTENSIONS
@@ -97,6 +89,9 @@ _BULKY_ATTACHMENT_GLOBS = (
     "lut.*",
     "materials.zip",
     "screenshot.*",
+    "source_*",
+    "session-data.zip",
+    "backend-logs.zip",
 )
 _STARTUP_INTERRUPTED_AFTER_MINUTES = 10
 
@@ -134,15 +129,8 @@ def _direct_original_result(
     return result
 
 
-def _direct_upload_suffix(filename: str | None) -> str | None:
-    if not filename:
-        return None
-    suffix = (
-        PureWindowsPath(filename).suffix
-        if "\\" in filename
-        else PurePath(filename).suffix
-    ).lower()
-    return suffix if suffix in SUPPORTED_UPLOAD_IMAGE_EXTENSIONS else None
+def _direct_upload_suffix(filename: str | None) -> str:
+    return Path((filename or "source.bin").replace("\\", "/")).suffix or ".bin"
 
 
 async def collect_direct_original_upload(
@@ -161,7 +149,7 @@ async def collect_direct_original_upload(
         upload: Optional multipart upload. / 可选 multipart 文件。
         session_id: Related converter session when available. / 可用的会话 ID。
         omission_reason: Client-declared omission reason, currently
-            ``"too_large"`` only. / 客户端声明的省略原因，目前仅支持超限。
+            ``"too_large"`` from older clients only. / 兼容旧客户端声明的超限省略。
 
     Returns:
         dict[str, Any]: Attachment manifest fragment. / 附件清单片段。
@@ -172,7 +160,7 @@ async def collect_direct_original_upload(
             session_id=session_id,
             direct_upload_status="too_large",
             error_type="OriginalImageTooLarge",
-            error_message="Original image exceeds the 100 MiB direct-upload limit.",
+            error_message="The older client omitted the original image because of its upload limit.",
         )
     if upload is None:
         return _direct_original_result(
@@ -182,23 +170,6 @@ async def collect_direct_original_upload(
         )
 
     suffix = _direct_upload_suffix(upload.filename)
-    if suffix is None:
-        return _direct_original_result(
-            status="failed",
-            session_id=session_id,
-            direct_upload_status="failed",
-            error_type="UnsupportedOriginalImageType",
-            error_message="Original image type is not supported.",
-        )
-    if upload.size is not None and upload.size > MAX_DIRECT_ORIGINAL_IMAGE_BYTES:
-        return _direct_original_result(
-            status="too_large",
-            session_id=session_id,
-            direct_upload_status="too_large",
-            error_type="OriginalImageTooLarge",
-            error_message="Original image exceeds the 100 MiB direct-upload limit.",
-        )
-
     destination = ticket_dir / f"original{suffix}"
     total_bytes = 0
     destination_created = False
@@ -211,8 +182,6 @@ async def collect_direct_original_upload(
                 if not chunk:
                     break
                 total_bytes += len(chunk)
-                if total_bytes > MAX_DIRECT_ORIGINAL_IMAGE_BYTES:
-                    raise ValueError("OriginalImageTooLarge")
                 written = output.write(chunk)
                 if written != len(chunk):
                     raise OSError(
@@ -224,7 +193,6 @@ async def collect_direct_original_upload(
                 destination.unlink(missing_ok=True)
             except OSError:
                 pass
-        too_large = isinstance(exc, ValueError) and str(exc) == "OriginalImageTooLarge"
         log.warning(
             "Direct original-image upload failed.",
             extra={
@@ -236,15 +204,11 @@ async def collect_direct_original_upload(
             },
         )
         return _direct_original_result(
-            status="too_large" if too_large else "failed",
+            status="failed",
             session_id=session_id,
-            direct_upload_status="too_large" if too_large else "failed",
-            error_type="OriginalImageTooLarge" if too_large else type(exc).__name__,
-            error_message=(
-                "Original image exceeds the 100 MiB direct-upload limit."
-                if too_large
-                else "Original image could not be saved."
-            ),
+            direct_upload_status="failed",
+            error_type=type(exc).__name__,
+            error_message=str(exc),
         )
 
     return {
@@ -361,37 +325,35 @@ def _final_artifact_expected(context: dict[str, Any]) -> bool:
 
 
 def _lut_expected(context: dict[str, Any]) -> bool:
-    source_version = context.get("source_version")
-    return (
-        source_version in {None, "legacy"}
-        and len(_lut_names_from_context(context)) > 0
-    )
+    return len(_lut_names_from_context(context)) > 0
 
 
 def _lut_critical_for_finalize(context: dict[str, Any]) -> bool:
-    return context.get("active_tab") == "converter" and _lut_expected(context)
+    return bool(context.get("source_lut_names")) or (
+        context.get("active_tab") == "converter" and _lut_expected(context)
+    )
 
 
 def _lut_names_from_context(context: dict[str, Any]) -> list[str]:
-    """Return bounded, de-duplicated legacy LUT names from bug context.
+    """Return every selected LUT name, including other workflows.
 
-    从 bug 上下文提取有界、去重的传统 LUT 名称列表。
+    从 bug 上下文提取所有工作流选中的色表名称，去重但不截断。
     """
 
     names: list[str] = []
-    primary = context.get("lut_name")
+    is_legacy = context.get("source_version") not in {"material", "native"}
+    primary = context.get("lut_name") if is_legacy else None
     if _is_non_empty_string(primary):
         names.append(str(primary).strip())
-    raw_names = context.get("lut_names")
-    if isinstance(raw_names, list):
-        for item in raw_names:
-            if not _is_non_empty_string(item):
-                continue
-            clean = str(item).strip()
-            if clean and clean not in names:
-                names.append(clean)
-            if len(names) >= 32:
-                break
+    for field in ("lut_names", "source_lut_names") if is_legacy else ("source_lut_names",):
+        raw_names = context.get(field)
+        if isinstance(raw_names, list):
+            for item in raw_names:
+                if not _is_non_empty_string(item):
+                    continue
+                clean = str(item).strip()
+                if clean and clean not in names:
+                    names.append(clean)
     return names
 
 
@@ -551,7 +513,7 @@ def _collect_final_artifact_from_download_url(
 
     dst = ticket_dir / f"final{suffix}"
     try:
-        copy_feedback_project_artifact(src_path, dst)
+        shutil.copy2(src_path, dst)
         size = dst.stat().st_size
     except (OSError, ValueError) as exc:
         try:
@@ -632,7 +594,7 @@ def _is_lut_name_path_safe(lut_name: object) -> bool:
 
 
 def _safe_lut_preset_root() -> Path:
-    return (REPO_ROOT / "lut-preset").resolve()
+    return Path(LUTManager.LUT_PRESET_DIR).resolve()
 
 
 def _lut_file_within_root(path: Path, root: Path) -> Path | None:
@@ -1075,7 +1037,7 @@ def _collect_final_artifact(
                     suffix = src_path.suffix.lower() or ".3mf"
                     dst = ticket_dir / f"final{suffix}"
                     try:
-                        copy_feedback_project_artifact(src_path, dst)
+                        shutil.copy2(src_path, dst)
                         size = dst.stat().st_size
                     except (OSError, ValueError) as exc:
                         try:
@@ -1107,10 +1069,6 @@ def _collect_final_artifact(
 def _collect_lut(ticket_dir: Path, context: dict[str, Any]) -> dict[str, Any]:
     """Build the ``lut`` attachment dict."""
     base = _empty_lut_attachment()
-    if context.get("source_version") == "material":
-        return base
-    if context.get("source_version") == "native":
-        return base
     lut_names = _lut_names_from_context(context)
     if not lut_names:
         return base
@@ -1151,9 +1109,9 @@ def _collect_single_lut(
     *,
     filename_prefix: str,
 ) -> dict[str, Any]:
-    """Collect one legacy LUT attachment or preset reference.
+    """Copy one selected LUT with its exact bytes, including presets.
 
-    收集一个传统 LUT 附件或预设引用。
+    复制一个所选 LUT 的完整字节，包括预设色表。
     """
 
     if not _is_lut_name_path_safe(lut_name):
@@ -1177,7 +1135,7 @@ def _collect_single_lut(
     is_custom = lut_name.lower().startswith("custom")
     if not is_custom:
         try:
-            rel_parent = found.parent.relative_to(REPO_ROOT / "lut-preset")
+            rel_parent = found.parent.relative_to(_safe_lut_preset_root())
             # Any path segment that includes ``custom`` treats this as a
             # custom-authored LUT (case-insensitive so "Custom"/"custom"
             # sub-folders both match).
@@ -1187,56 +1145,31 @@ def _collect_single_lut(
             )
         except ValueError:
             is_custom = False
-    try:
-        size = found.stat().st_size
-    except OSError as exc:
-        return _failed_lut(
-            lut_name,
-            "custom" if is_custom else "preset",
-            type(exc).__name__,
-            "LUT could not be saved.",
-        )
-    if is_custom:
-        suffix = found.suffix.lower()
-        dst = ticket_dir / f"{filename_prefix}{suffix}"
+    kind = "custom" if is_custom else "preset"
+    preset_relative_path = None
+    if not is_custom:
         try:
-            shutil.copy2(found, dst)
-        except OSError as exc:
-            try:
-                dst.unlink()
-            except OSError:
-                pass
-            return _failed_lut(
-                lut_name,
-                "custom",
-                type(exc).__name__,
-                "LUT could not be saved.",
-            )
-        return {
-            "status": "attached",
-            "kind": "custom",
-            "name": lut_name,
-            "preset_relative_path": None,
-            "filename": dst.name,
-            "size_bytes": size,
-            "metadata": {},
-        }
+            logical_path = found.relative_to(_safe_lut_preset_root()).as_posix()
+        except ValueError:
+            logical_path = LUTManager.logical_lut_path(found)
+        if logical_path is not None:
+            preset_relative_path = f"lut-preset/{logical_path}"
+    destination = ticket_dir / f"{filename_prefix}{found.suffix.lower()}"
     try:
-        logical_path = found.relative_to(_safe_lut_preset_root()).as_posix()
-    except ValueError:
-        logical_path = LUTManager.logical_lut_path(found)
-    if logical_path is None:
-        return _failed_lut(
-            lut_name, "preset", "InvalidAttachmentManifest",
-            "LUT reference is outside configured roots.",
-        )
-    rel = f"lut-preset/{logical_path}"
+        shutil.copy2(found, destination)
+        size = destination.stat().st_size
+    except OSError as exc:
+        try:
+            destination.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return _failed_lut(lut_name, kind, type(exc).__name__, str(exc))
     return {
-        "status": "preset_reference_only",
-        "kind": "preset",
+        "status": "attached",
+        "kind": kind,
         "name": lut_name,
-        "preset_relative_path": rel,
-        "filename": None,
+        "preset_relative_path": preset_relative_path,
+        "filename": destination.name,
         "size_bytes": size,
         "metadata": {},
     }
@@ -1276,8 +1209,8 @@ def _attachment_file_path(
 
 
 
-def _is_positive_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+def _is_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _safe_preset_relative_path(value: Any) -> bool:
@@ -1321,7 +1254,7 @@ def _attachment_metadata_is_valid(
     required_text_fields: tuple[str, ...],
     path: Path | None = None,
 ) -> bool:
-    if not _is_positive_int(attachment.get("size_bytes")):
+    if not _is_nonnegative_int(attachment.get("size_bytes")):
         return _mark_invalid_attachment_manifest(attachment)
     if any(
         not _is_non_empty_string(attachment.get(field))
@@ -1378,8 +1311,6 @@ def _original_image_manifest_matches_file(
     attachment: dict[str, Any],
     path: Path,
 ) -> bool:
-    if path.suffix.lower() not in _IMAGE_EXTENSIONS:
-        return _mark_invalid_attachment_manifest(attachment)
     if attachment.get("mime_type") != guess_mime(path):
         return _mark_invalid_attachment_manifest(attachment)
     return True
@@ -1389,7 +1320,7 @@ def _attached_lut_manifest_matches_file(
     attachment: dict[str, Any],
     path: Path,
 ) -> bool:
-    if attachment.get("kind") != "custom":
+    if attachment.get("kind") not in {"custom", "preset"}:
         return _mark_invalid_attachment_manifest(attachment)
     if path.suffix.lower() not in _LUT_EXTENSIONS:
         return _mark_invalid_attachment_manifest(attachment)
@@ -1617,16 +1548,30 @@ async def finalize_ticket_async(
             attachments = {}
             payload["attachments"] = attachments
 
-        # --- Materials zip ---
+        source_results = attachments.get("source_files") or []
+        session_files = (attachments.get("session_data") or {}).get("files") or []
+        diagnostic_result = attachments.get("backend_diagnostics") or {}
         if (
-            context.get("source_version") == "material"
-            and context.get("selected_material_dir_names")
+            any(entry.get("status") == "failed" for entry in source_results + session_files)
+            or diagnostic_result.get("status") == "failed"
+            or any((attachments.get(kind) or {}).get("status") == "failed"
+                   for kind in ("session_data", "backend_logs"))
         ):
+            partial = True
+
+        # --- Materials zip ---
+        material_dirs = list(dict.fromkeys([
+            *(context.get("source_material_dir_names") or []),
+            *((context.get("selected_material_dir_names") or [])
+              if context.get("source_version") == "material" else []),
+        ]))
+        if material_dirs:
             try:
-                materials_root = REPO_ROOT / "materials"
-                bundle = pack_materials(
+                materials_root = Path(MATERIALS_DIR)
+                bundle = await asyncio.to_thread(
+                    pack_materials,
                     materials_root,
-                    list(context["selected_material_dir_names"]),
+                    material_dirs,
                     ticket_dir / "materials.zip",
                     timeout_s=materials_bundle_timeout_s(),
                 )
@@ -1637,7 +1582,10 @@ async def finalize_ticket_async(
                     "entry_count": bundle.entry_count,
                     "included_dirs": bundle.included_dirs,
                     "excluded_cache_keys": bundle.excluded_cache_keys,
+                    "missing_dirs": [name for name in material_dirs if name not in bundle.included_dirs],
                 }
+                if attachments["materials_bundle"]["missing_dirs"]:
+                    partial = True
                 if bundle.status == "attached":
                     log.info(
                         "Materials bundle packed.",

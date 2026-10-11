@@ -3,14 +3,12 @@
 将已装配的 Bug 报告工单提交到官方反馈服务器。
 
 Clients no longer hold SMTP credentials. After the local ticket directory is
-assembled, the backend uploads the same material the old email carried
-(``ticket.json``, ``index.md``, ``summary.txt`` and attachment files up to
-40 MiB each) to the Lumina Distribution feedback service. The server asks for
+assembled, the backend uploads the complete ticket document, index, summary,
+and every attachment to the Lumina Distribution feedback service. The server asks for
 a small proof of work per submission instead of trusting any client secret.
 
-客户端不再保存 SMTP 凭据。本地工单目录装配完成后，后端把原邮件包含的全部
-资料（``ticket.json``、``index.md``、``summary.txt`` 以及单个不超过 40 MiB
-的附件）上传到 Lumina Distribution 反馈服务；服务端对每次提交要求少量工作量
+客户端不再保存 SMTP 凭据。本地工单目录装配完成后，后端把完整工单、索引、
+摘要与全部附件上传到 Lumina Distribution 反馈服务；服务端对每次提交要求少量工作量
 证明，而不是信任任何客户端密钥。
 """
 
@@ -30,14 +28,12 @@ from typing import Any, Literal
 import httpx
 
 from api.structured_logging import get_logger
+from api.feedback_files import FeedbackFile
 
 __all__ = [
     "BUNDLE_SCHEMA",
     "DEFAULT_FEEDBACK_SERVER_URL",
     "ENV_FEEDBACK_SERVER_URL",
-    "MAX_UPLOAD_ATTACHMENTS",
-    "MAX_UPLOAD_ATTACHMENT_BYTES",
-    "MAX_UPLOAD_BUNDLE_FILE_BYTES",
     "HostedSubmissionError",
     "SubmissionStatus",
     "TicketBundle",
@@ -46,7 +42,6 @@ __all__ = [
     "solve_proof_of_work",
     "submit_ticket_bundle",
     "submit_ticket_directory",
-    "without_attachments",
 ]
 
 log = get_logger(__name__)
@@ -67,40 +62,12 @@ ENV_FEEDBACK_SERVER_URL = "LUMINA_FEEDBACK_SERVER_URL"
 
 ENV_FEEDBACK_SERVER_TIMEOUT_S = "LUMINA_FEEDBACK_SERVER_TIMEOUT_S"
 BUNDLE_SCHEMA = "lumina-feedback-bundle/1"
-MAX_UPLOAD_ATTACHMENT_BYTES = 40 * 1024 * 1024
-# Server limits (feedback-service): 40 attachments, 160 MiB per request. The
-# file budget leaves headroom for the 2 MiB report document and multipart framing.
-# 服务端限制为 40 个附件、单次请求 160 MiB；文件预算为报告文档和分段开销留出余量。
-MAX_UPLOAD_ATTACHMENTS = 40
-MAX_UPLOAD_BUNDLE_FILE_BYTES = 150 * 1024 * 1024
 MAX_PROOF_OF_WORK_BITS = 26
 _DISABLED_VALUES = frozenset(("off", "disabled", "false", "0", "none"))
 _TICKET_TEXT_FILES = frozenset(("ticket.json", "index.md", "summary.txt"))
 _VOLATILE_TICKET_KEYS = ("submission",)
 _ATTEMPTS = 2
 _RETRY_DELAY_S = 2.0
-
-# Must stay aligned with the server allowlist (feedback-service/ticket_bundle.py).
-# 必须与服务端白名单保持一致。
-_NAME_RE = re.compile(
-    r"^(original|final|lut|lut_(?:[0-9]|[12][0-9]|3[0-2])|materials|screenshot)\.([a-z0-9]{1,8})$"
-)
-_KIND_BY_STEM = {
-    "original": "original_image",
-    "final": "final_artifact",
-    "materials": "materials_bundle",
-    "screenshot": "screenshot",
-}
-_EXTENSIONS_BY_KIND = {
-    "original_image": frozenset((
-        "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "tif", "tiff", "heic", "heif",
-        "dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "raf", "pef", "srw", "raw",
-    )),
-    "final_artifact": frozenset(("3mf", "zip")),
-    "lut": frozenset(("npy", "json", "npz", "msgpack")),
-    "materials_bundle": frozenset(("zip",)),
-    "screenshot": frozenset(("png", "jpg", "webp", "gif", "bmp")),
-}
 
 
 class HostedSubmissionError(Exception):
@@ -135,8 +102,8 @@ class TicketBundle:
     Attributes:
         ticket_id: Ticket id. / 工单号。
         document: JSON ``report`` part sent to the server. / 发送给服务端的 JSON 文档。
-        files: Attachments that fit the upload rules. / 符合上传规则的附件。
-        held_back: Files kept only on this device, with reasons. / 仅保留在本机的文件及原因。
+        files: All ticket attachments. / 全部工单附件。
+        held_back: Legacy field; new bundles never omit files. / 兼容旧字段，新工单不省略文件。
     """
 
     ticket_id: str
@@ -168,24 +135,15 @@ def _timeout() -> httpx.Timeout:
     return httpx.Timeout(seconds, connect=min(seconds, 15.0))
 
 
-def _attachment_kind(name: str) -> str | None:
-    match = _NAME_RE.match(name)
-    if match is None:
-        return None
-    stem, extension = match.groups()
-    kind = "lut" if stem.startswith("lut") else _KIND_BY_STEM[stem]
-    return kind if extension in _EXTENSIONS_BY_KIND[kind] else None
-
-
-_UPLOAD_PRIORITY = {"original_image": 0, "lut": 1, "screenshot": 2, "materials_bundle": 3, "final_artifact": 4}
-_LUT_INDEX_RE = re.compile(r"^lut_(\d+)\.")
-
-
-def _upload_priority(path: Path) -> tuple[int, int, str]:
-    """Order files so reproduction inputs win when a server limit is reached."""
-    kind = _attachment_kind(path.name)
-    match = _LUT_INDEX_RE.match(path.name)
-    return (_UPLOAD_PRIORITY.get(kind or "", 5), int(match.group(1)) if match else -1, path.name)
+def _attachment_kind(name: str) -> str:
+    stem = Path(name).stem
+    if stem == "original":
+        return "original_image"
+    if stem == "final":
+        return "final_artifact"
+    if stem == "lut" or re.fullmatch(r"lut_[0-9]+", stem):
+        return "lut"
+    return {"materials": "materials_bundle", "screenshot": "screenshot"}.get(stem, "attachment")
 
 
 def _file_sha256(path: Path) -> str:
@@ -219,28 +177,13 @@ def build_ticket_bundle(ticket_dir: Path, payload: dict[str, Any]) -> TicketBund
     ticket = {key: value for key, value in payload.items() if key not in _VOLATILE_TICKET_KEYS}
     files: list[BundleFile] = []
     held_back: list[dict[str, Any]] = []
-    budget = MAX_UPLOAD_BUNDLE_FILE_BYTES
     candidates = [
         path for path in ticket_dir.iterdir()
         if path.is_file() and not path.is_symlink() and path.name not in _TICKET_TEXT_FILES
     ]
-    for path in sorted(candidates, key=_upload_priority):
+    for path in sorted(candidates):
         size = path.stat().st_size
-        kind = _attachment_kind(path.name)
-        reason = None
-        if kind is None:
-            reason = "unsupported_type"
-        elif size == 0:
-            reason = "empty"
-        elif size > MAX_UPLOAD_ATTACHMENT_BYTES or size > budget or len(files) >= MAX_UPLOAD_ATTACHMENTS:
-            # Over the per-file or whole-request server limit: keep it local
-            # instead of letting the server reject every attachment.
-            # 超过单文件或整次请求的服务端上限时只留在本机，避免整包附件被拒。
-            reason = "too_large"
-        if reason is not None:
-            held_back.append({"name": path.name, "size_bytes": size, "reason": reason})
-            continue
-        budget -= size
+        kind = _attachment_kind(path.name) or "attachment"
         files.append(BundleFile(path.name, kind, path, size, _file_sha256(path)))
     files.sort(key=lambda item: item.name)
     held_back.sort(key=lambda item: item["name"])
@@ -256,19 +199,6 @@ def build_ticket_bundle(ticket_dir: Path, payload: dict[str, Any]) -> TicketBund
         ],
     }
     return TicketBundle(str(payload.get("ticket_id")), document, files, held_back)
-
-
-def without_attachments(bundle: TicketBundle) -> TicketBundle:
-    """Return a text-only copy, marking every file as rejected by the server.
-
-    返回仅含文字资料的副本，并把所有文件标记为被服务端拒绝。
-    """
-    rejected = [
-        {"name": item.name, "size_bytes": item.size_bytes, "reason": "rejected"}
-        for item in bundle.files
-    ]
-    document = {**bundle.document, "attachments": []}
-    return TicketBundle(bundle.ticket_id, document, [], [*bundle.held_back, *rejected])
 
 
 def _leading_zero_bits(digest: bytes) -> int:
@@ -346,8 +276,12 @@ async def _post_bundle(
             ("report", (None, json.dumps(bundle.document, ensure_ascii=False), "application/json")),
         ]
         for item in bundle.files:
-            handle = stack.enter_context(item.path.open("rb"))
+            handle = stack.enter_context(FeedbackFile(item.path, item.size_bytes))
             parts.append(("attachment", (item.name, handle, "application/octet-stream")))
+        canonical = json.dumps(
+            bundle.document, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+        )
+        headers = {**headers, "X-Lumina-Bundle-SHA256": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
         response = await client.post(f"{base_url}/v2/feedback/bundles", files=parts, headers=headers)
     _raise_for_status(response)
     try:
@@ -447,17 +381,7 @@ async def submit_ticket_directory(
     try:
         bundle = await asyncio.to_thread(build_ticket_bundle, ticket_dir, payload)
         section["held_back_attachments"] = bundle.held_back
-        try:
-            receipt = await submit_ticket_bundle(bundle, base_url=base_url, transport=transport)
-        except HostedSubmissionError as exc:
-            if exc.error_type not in {"BundleRejected", "BundleTooLarge"} or not bundle.files:
-                raise
-            # The server refused the attachments (type checks or a stricter size
-            # limit); still deliver the text diagnostics rather than losing the report.
-            # 服务端拒绝附件（类型检查或更严格的大小限制）时，仍然送达文字诊断，避免整份报告丢失。
-            bundle = without_attachments(bundle)
-            section["held_back_attachments"] = bundle.held_back
-            receipt = await submit_ticket_bundle(bundle, base_url=base_url, transport=transport)
+        receipt = await submit_ticket_bundle(bundle, base_url=base_url, transport=transport)
     except (HostedSubmissionError, OSError) as exc:
         error_type = exc.error_type if isinstance(exc, HostedSubmissionError) else type(exc).__name__
         http_status = exc.http_status if isinstance(exc, HostedSubmissionError) else None

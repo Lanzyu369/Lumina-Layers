@@ -9,7 +9,14 @@ import json
 
 import pytest
 
-from api.routers.feedback import _sanitize_advanced_params
+from api.routers.feedback import BugReportRequest
+from tests.test_feedback_router_unit import _payload
+
+
+def _validate_advanced_params(value):
+    payload = _payload()
+    payload["context"]["advanced_params"] = value
+    return BugReportRequest.model_validate(payload).context.advanced_params
 
 
 @pytest.mark.parametrize("count", [0, 1, 27])
@@ -26,7 +33,7 @@ def test_sanitizer_preserves_spatial_edit_count_without_spatial_payload(
         }
     }
 
-    sanitized = _sanitize_advanced_params(payload)
+    sanitized = _validate_advanced_params(payload)
 
     assert sanitized == payload
     serialized = json.dumps(sanitized, sort_keys=True).lower()

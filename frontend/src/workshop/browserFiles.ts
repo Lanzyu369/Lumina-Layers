@@ -3,6 +3,7 @@ import type {
   WorkshopPickedImage,
   WorkshopRaster,
 } from "./types";
+import { rememberFeedbackSource } from "../utils/sourceFileOrigins";
 
 const WORKSHOP_IMAGE_ACCEPT = "image/png,image/jpeg,image/webp";
 const SUPPORTED_IMAGE_TYPES = new Set([
@@ -254,6 +255,7 @@ export function createBrowserWorkshopFileServices(
       if (!file) {
         return null;
       }
+      rememberFeedbackSource(file);
       if (!isSupportedWorkshopImage(file)) {
         throw new WorkshopFileError(
           "unsupported-image-type",

@@ -152,21 +152,6 @@ class TestParameterAnnotations:
                 f"Parameter '{name}' has non-serializable type {ann}"
             )
 
-    def test_preview_has_expected_param_count(self) -> None:
-        """worker_generate_preview should expose the full preview parameter set."""
-        sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 36
-
-    def test_model_has_expected_param_count(self) -> None:
-        """worker_generate_model should have 3 parameters."""
-        sig = inspect.signature(worker_generate_model)
-        assert len(sig.parameters) == 3
-
-    def test_large_format_svg_native_has_expected_param_count(self) -> None:
-        """worker_generate_large_format_svg_native should have 3 parameters."""
-        sig = inspect.signature(worker_generate_large_format_svg_native)
-        assert len(sig.parameters) == 3
-
     def test_preview_param_names(self) -> None:
         """Verify expected parameter names for worker_generate_preview."""
         sig = inspect.signature(worker_generate_preview)

@@ -34,92 +34,20 @@ describe("apiClient", () => {
     apiClient.defaults.adapter = undefined;
   });
 
-  it("redacts server error details from user-facing API failures and logs", async () => {
-    const error = new Error("Request failed");
-    Object.assign(error, {
+  it.each([400, 409, 422, 500, 503])("preserves the original HTTP %s response and logs its diagnostics", async (status) => {
+    const detail = "Traceback: /Users/min/source.svg: WorkerError: invalid geometry";
+    const data = { detail, state: { source: "plate.stl", slots: [1, 2, 3] } };
+    const error = Object.assign(new Error("Request failed"), {
       config: { method: "post", url: "/convert/generate" },
-      response: {
-        status: 500,
-        headers: { "x-request-id": "req-500-debug" },
-        data: { detail: "worker crashed" },
-      },
+      response: { status, data, headers: { "x-request-id": "complete-error" } },
     });
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-    const expectedMessage =
-      "The server hit an internal error. Request ID: req-500-debug.";
     const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
-    expect(rejected).toMatchObject({ message: expectedMessage });
-    expect(rejected.response?.data?.detail).toBe(expectedMessage);
-    expect(JSON.stringify(rejected.response?.data)).not.toContain("worker crashed");
-
-    expect(postClientLog).toHaveBeenCalledWith(
-      "api: request failed",
-      expect.objectContaining({
-        scope: "api",
-        phase: "request-failed",
-        method: "error",
-        details: expect.objectContaining({
-          method: "POST",
-          url: "/convert/generate",
-          status_code: 500,
-          request_id: "req-500-debug",
-          response_detail: {
-            detail_redacted: true,
-            detail_type: "string",
-            detail_length: "worker crashed".length,
-          },
-          error_message: expectedMessage,
-        }),
-      }),
-    );
-    expect(JSON.stringify(vi.mocked(postClientLog).mock.calls)).not.toContain(
-      "worker crashed",
-    );
-    expect(useActionHistoryStore.getState().history.at(-1)?.error).toEqual(
-      expect.objectContaining({
-        status_code: 500,
-        path: "/convert/generate",
-        request_id: "req-500-debug",
-        error_message: expectedMessage,
-      }),
-    );
-    expect(
-      JSON.stringify(useActionHistoryStore.getState().history.at(-1)),
-    ).not.toContain("worker crashed");
-  });
-
-  it("does not expose a mapped validation code when the response status is 500", async () => {
-    useSettingsStore.setState({ language: "zh" });
-    const privateMessage =
-      "Vector validation failed at /Users/min/private/source.png";
-    const error = new Error("Request failed with status code 500");
-    Object.assign(error, {
-      config: { method: "post", url: "/convert/generate" },
-      response: {
-        status: 500,
-        headers: { "x-request-id": "req-500-vector" },
-        data: {
-          detail: {
-            error: "vector_native_requires_svg",
-            message: privateMessage,
-          },
-        },
-      },
-    });
-    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-    const rejected = await apiClient
-      .post("/convert/generate", {})
-      .catch((err) => err);
-
-    const expectedMessage = "服务器发生内部错误。请求 ID：req-500-vector。";
-    expect(rejected).toMatchObject({ message: expectedMessage });
-    expect(rejected.response?.data?.detail).toBe(expectedMessage);
-    expect(JSON.stringify(rejected.response?.data)).not.toContain(privateMessage);
-    expect(JSON.stringify(vi.mocked(postClientLog).mock.calls)).not.toContain(
-      privateMessage,
-    );
+    expect(rejected.message).toBe(detail);
+    expect(rejected.response.data).toBe(data);
+    expect(postClientLog).toHaveBeenCalledWith("api: request failed", expect.objectContaining({
+      details: expect.objectContaining({ response_detail: data, status_code: status, request_id: "complete-error" }),
+    }));
   });
 
   it("keeps suppressed background probes out of client logs and action history", async () => {
@@ -456,86 +384,6 @@ describe("apiClient", () => {
     });
   });
 
-  it("uses readable HTTP fallbacks instead of structured detail error codes", async () => {
-    const error = new Error("Request failed with status code 409");
-    Object.assign(error, {
-      config: { method: "post", url: "/convert/generate" },
-      response: {
-        status: 409,
-        data: {
-          detail: { error: "preview_cache_missing" },
-        },
-      },
-    });
-    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
-    const expectedMessage = "The request conflicts with the current server state.";
-    expect(rejected).toMatchObject({ message: expectedMessage });
-    expect(rejected.response?.data?.detail).toBe(expectedMessage);
-  });
-
-  it("replaces string error codes with readable HTTP fallbacks", async () => {
-    const error = new Error("Request failed with status code 409");
-    Object.assign(error, {
-      config: { method: "post", url: "/convert/generate" },
-      response: {
-        status: 409,
-        data: { detail: "preview_cache_missing" },
-      },
-    });
-    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
-    expect(rejected).toMatchObject({
-      message: "The request conflicts with the current server state.",
-    });
-    expect(rejected.response?.data?.detail).toBe(
-      "The request conflicts with the current server state.",
-    );
-  });
-
-  it("replaces top-level string error codes with readable HTTP fallbacks", async () => {
-    const error = new Error("Request failed with status code 409");
-    Object.assign(error, {
-      config: { method: "post", url: "/convert/generate" },
-      response: {
-        status: 409,
-        data: { message: "preview_cache_missing" },
-      },
-    });
-    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
-    expect(rejected).toMatchObject({
-      message: "The request conflicts with the current server state.",
-    });
-    expect(rejected.response?.data?.message).toBe(
-      "The request conflicts with the current server state.",
-    );
-  });
-
-  it("replaces duplicated detail and message error codes together", async () => {
-    const error = new Error("Request failed with status code 409");
-    Object.assign(error, {
-      config: { method: "post", url: "/convert/generate" },
-      response: {
-        status: 409,
-        data: {
-          detail: "preview_cache_missing",
-          message: "preview-cache-missing",
-        },
-      },
-    });
-    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
-    const expectedMessage = "The request conflicts with the current server state.";
-    expect(rejected).toMatchObject({ message: expectedMessage });
-    expect(rejected.response?.data?.detail).toBe(expectedMessage);
-    expect(rejected.response?.data?.message).toBe(expectedMessage);
-  });
-
   it("uses a readable HTTP fallback when the response has no detail", async () => {
     const error = new Error("Request failed with status code 503");
     Object.assign(error, {
@@ -563,88 +411,6 @@ describe("apiClient", () => {
     });
   });
 
-  it("replaces numeric-only backend details with readable HTTP fallbacks", async () => {
-    const error = new Error("Request failed with status code 500");
-    Object.assign(error, {
-      config: { method: "post", url: "/convert/generate" },
-      response: { status: 500, data: { detail: "500" } },
-    });
-    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-    const expectedMessage =
-      "The server hit an internal error. Try again later, or submit feedback if it keeps happening.";
-    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
-    expect(rejected).toMatchObject({ message: expectedMessage });
-    expect(rejected.response?.data?.detail).toBe(expectedMessage);
-    expect(postClientLog).toHaveBeenCalledWith(
-      "api: request failed",
-      expect.objectContaining({
-        details: expect.objectContaining({
-          status_code: 500,
-          response_detail: {
-            detail_redacted: true,
-            detail_type: "string",
-            detail_length: "500".length,
-          },
-          error_message: expectedMessage,
-        }),
-      }),
-    );
-    expect(useActionHistoryStore.getState().history.at(-1)?.error).toEqual(
-      expect.objectContaining({
-        status_code: 500,
-        path: "/convert/generate",
-        error_message: expectedMessage,
-      }),
-    );
-  });
-
-  it("replaces code-only backend details with readable HTTP fallbacks", async () => {
-    const error = new Error("Request failed with status code 402");
-    Object.assign(error, {
-      config: { method: "post", url: "/convert/generate" },
-      response: { status: 402, data: { detail: "HTTP error 402" } },
-    });
-    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-    const expectedMessage =
-      "This action requires an available quota or payment before it can continue.";
-    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
-    expect(rejected).toMatchObject({ message: expectedMessage });
-    expect(rejected.response?.data?.detail).toBe(expectedMessage);
-  });
-
-  it.each([
-    {
-      status: 402,
-      detail: "HTTP 402 Payment Required",
-      expected:
-        "This action requires an available quota or payment before it can continue.",
-    },
-    {
-      status: 422,
-      detail: "Request failed with status code 422: Unprocessable Entity",
-      expected: "The request is missing required data or contains invalid values.",
-    },
-  ])(
-    "replaces status detail '$detail' with readable HTTP fallbacks",
-    async ({ status, detail, expected }) => {
-      const error = new Error(`Request failed with status code ${status}`);
-      Object.assign(error, {
-        config: { method: "post", url: "/convert/generate" },
-        response: {
-          status,
-          data: { detail },
-        },
-      });
-      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-      const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
-      expect(rejected).toMatchObject({ message: expected });
-      expect(rejected.response?.data?.detail).toBe(expected);
-    },
-  );
-
   it("keeps backend details where numbers are part of the real message", async () => {
     const error = new Error("Request failed with status code 422");
     Object.assign(error, {
@@ -658,147 +424,6 @@ describe("apiClient", () => {
       message: "value must be <= 500",
     });
     expect(rejected.response?.data?.detail).toBe("value must be <= 500");
-  });
-
-  it("redacts unsafe client-error details before they reach visible UI state", async () => {
-    const unsafeDetails = [
-      "failed to open /Users/min/private/source.png",
-      "failed to open C:\\Users\\min\\private\\source.png",
-      "file_path=/Users/min/private/source.png",
-      "file_path=C:\\Users\\min\\private\\source.png",
-      "Traceback (most recent call last): File /Users/min/app.py",
-      "AxiosError: Request failed with status code 422 at /api/convert/generate",
-      "endpoint=/api/convert/generate",
-    ];
-    const expectedMessage =
-      "The request is missing required data or contains invalid values.";
-
-    for (const detail of unsafeDetails) {
-      const error = new Error("Request failed with status code 422");
-      Object.assign(error, {
-        config: { method: "post", url: "/convert/generate" },
-        response: { status: 422, data: { detail } },
-      });
-      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-      const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
-      expect(rejected).toMatchObject({ message: expectedMessage });
-      expect(rejected.response?.data?.detail).toBe(expectedMessage);
-      expect(JSON.stringify(rejected.response?.data)).not.toContain(detail);
-      expect(JSON.stringify(vi.mocked(postClientLog).mock.calls)).not.toContain(detail);
-      expect(postClientLog).toHaveBeenCalledWith(
-        "api: request failed",
-        expect.objectContaining({
-          details: expect.objectContaining({
-            response_detail: expect.objectContaining({
-              detail_redacted: true,
-              detail_redaction_reason: "unsafe_client_error_text",
-            }),
-            error_message: expectedMessage,
-          }),
-        }),
-      );
-      expect(
-        JSON.stringify(useActionHistoryStore.getState().history.at(-1)),
-      ).not.toContain(detail);
-      vi.mocked(postClientLog).mockClear();
-      useActionHistoryStore.getState()._resetForTests();
-    }
-  });
-
-  it("redacts unsafe structured and top-level client-error messages", async () => {
-    const expectedMessage =
-      "The request is missing required data or contains invalid values.";
-    for (const data of [
-      {
-        message: "cannot read /Users/min/private/material.json",
-        file_path: "/Users/min/private/material.json",
-      },
-      {
-        code: "material_load_failed",
-        detail: {
-          error: "material_load_failed",
-          message:
-            "Traceback (most recent call last): File /Users/min/materials.py",
-          file_path: "/Users/min/private/material.json",
-        },
-      },
-      { "/Users/min/private/material.json": "failed" },
-    ]) {
-      const error = new Error("Request failed with status code 422");
-      Object.assign(error, {
-        config: { method: "post", url: "/extractor/material-solver-cache/build" },
-        response: { status: 422, data },
-      });
-      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-      const rejected = await apiClient.post("/extractor/material-solver-cache/build", {}).catch((err) => err);
-      expect(rejected).toMatchObject({ message: expectedMessage });
-      expect(JSON.stringify(rejected.response?.data)).not.toContain("/Users/min");
-      expect(JSON.stringify(rejected.response?.data)).not.toContain("Traceback");
-      expect(JSON.stringify(vi.mocked(postClientLog).mock.calls)).not.toContain(
-        "/Users/min",
-      );
-      const responseDetail =
-        vi.mocked(postClientLog).mock.calls[0]?.[1]?.details?.response_detail;
-      expect(JSON.stringify(responseDetail)).toContain(
-        "unsafe_client_error_text",
-      );
-      expect(JSON.stringify(responseDetail)).not.toContain("/Users/min");
-      expect(
-        JSON.stringify(useActionHistoryStore.getState().history.at(-1)),
-      ).not.toContain("/Users/min");
-      vi.mocked(postClientLog).mockClear();
-      useActionHistoryStore.getState()._resetForTests();
-    }
-  });
-
-  it("redacts server error details even when they mention an upstream status", async () => {
-    const error = new Error("Request failed with status code 500");
-    Object.assign(error, {
-      config: { method: "post", url: "/convert/generate" },
-      response: {
-        status: 500,
-        data: { detail: "upstream dependency returned status 500 while slicing" },
-      },
-    });
-    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
-    const expectedMessage =
-      "The server hit an internal error. Try again later, or submit feedback if it keeps happening.";
-    expect(rejected).toMatchObject({
-      message: expectedMessage,
-    });
-    expect(rejected.response?.data?.detail).toBe(expectedMessage);
-    expect(JSON.stringify(rejected.response?.data)).not.toContain(
-      "upstream dependency returned status 500 while slicing",
-    );
-  });
-
-  it("redacts top-level and structured server error messages", async () => {
-    const expectedMessage =
-      "The server hit an internal error. Try again later, or submit feedback if it keeps happening.";
-    for (const data of [
-      { message: "worker crashed" },
-      { detail: { message: "worker crashed", error: "worker_crashed" } },
-      { detail: ["worker crashed"] },
-    ]) {
-      const error = new Error("Request failed with status code 500");
-      Object.assign(error, {
-        config: { method: "post", url: "/convert/generate" },
-        response: { status: 500, data },
-      });
-      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-      const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
-      expect(rejected).toMatchObject({ message: expectedMessage });
-      expect(JSON.stringify(rejected.response?.data)).not.toContain("worker crashed");
-      expect(JSON.stringify(vi.mocked(postClientLog).mock.calls)).not.toContain(
-        "worker crashed",
-      );
-      vi.mocked(postClientLog).mockClear();
-    }
   });
 
   it("still replaces generic request-failed status details", async () => {
@@ -815,69 +440,6 @@ describe("apiClient", () => {
     await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
       message: "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
     });
-  });
-
-  it("replaces generic framework details with a real user-facing reason", async () => {
-    const error = new Error("Request failed with status code 404");
-    Object.assign(error, {
-      config: { method: "get", url: "/missing-preview.png" },
-      response: { status: 404, data: { detail: "Not Found" } },
-    });
-    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-    await expect(apiClient.get("/missing-preview.png")).rejects.toMatchObject({
-      message: "The requested resource was not found or has expired.",
-    });
-  });
-
-  it("redacts technical API guidance from conflict details", async () => {
-    const error = new Error("Request failed with status code 409");
-    Object.assign(error, {
-      config: { method: "post", url: "/convert/generate" },
-      response: {
-        status: 409,
-        data: {
-          detail: "No preview cache. Call POST /api/convert/preview first.",
-        },
-      },
-    });
-    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
-
-    expect(rejected).toMatchObject({
-      message: "The request conflicts with the current server state.",
-    });
-    expect(rejected.response?.data?.detail).toBe(
-      "The request conflicts with the current server state.",
-    );
-    expect(JSON.stringify(rejected)).not.toContain("Call POST");
-    expect(JSON.stringify(rejected)).not.toContain("/api/convert/preview");
-  });
-
-  it("redacts technical route guidance when the backend omits the /api prefix", async () => {
-    const error = new Error("Request failed with status code 409");
-    Object.assign(error, {
-      config: { method: "post", url: "/convert/generate" },
-      response: {
-        status: 409,
-        data: {
-          detail: "No preview cache. Call POST /convert/preview first.",
-        },
-      },
-    });
-    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
-
-    expect(rejected).toMatchObject({
-      message: "The request conflicts with the current server state.",
-    });
-    expect(rejected.response?.data?.detail).toBe(
-      "The request conflicts with the current server state.",
-    );
-    expect(JSON.stringify(rejected)).not.toContain("Call POST");
-    expect(JSON.stringify(rejected)).not.toContain("/convert/preview");
   });
 
   it("uses a language fallback for unknown client errors without exposing status numbers", async () => {
@@ -906,55 +468,6 @@ describe("apiClient", () => {
     expect(
       apiErrorToVisibleMessage(new Error("Vectorizer dependency missing")),
     ).toBe("Vectorizer dependency missing");
-  });
-
-  it("normalizes status-code errors with API path context for store-level callers", () => {
-    expect(
-      apiErrorToVisibleMessage(
-        new Error("Request failed with status code 500 at /api/files/output-model"),
-      ),
-    ).toBe("The server hit an internal error. Try again later, or submit feedback if it keeps happening.");
-    expect(
-      apiErrorToVisibleMessage(new Error("HTTP 402: /api/convert/generate")),
-    ).toBe(
-      "This action requires an available quota or payment before it can continue.",
-    );
-    expect(
-      apiErrorToVisibleMessage(
-        new Error("AxiosError: Request failed with status code 500"),
-        "操作失败",
-      ),
-    ).toBe("The server hit an internal error. Try again later, or submit feedback if it keeps happening.");
-    expect(
-      apiErrorToVisibleMessage(
-        new Error("HTTP 422: Selected material is missing"),
-      ),
-    ).toBe("Selected material is missing");
-    expect(
-      apiErrorToVisibleMessage(
-        new Error("HTTP 422: Request body is missing material selection"),
-      ),
-    ).toBe("Request body is missing material selection");
-    expect(
-      apiErrorToVisibleMessage(
-        new Error("HTTP 422 Request body is missing material selection"),
-      ),
-    ).toBe("Request body is missing material selection");
-    expect(
-      apiErrorToVisibleMessage(new Error("status 404 Preview cache missing")),
-    ).toBe("Preview cache missing");
-    expect(apiErrorToVisibleMessage(new Error("HTTP 422 format invalid"))).toBe(
-      "format invalid",
-    );
-    expect(apiErrorToVisibleMessage(new Error("HTTP 422 attempt invalid"))).toBe(
-      "attempt invalid",
-    );
-    expect(apiErrorToVisibleMessage(new Error("HTTP 500: worker crashed"))).toBe(
-      "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
-    );
-    expect(apiErrorToVisibleMessage(new Error("value must be <= 500"))).toBe(
-      "value must be <= 500",
-    );
   });
 
   it("normalizes bare network and timeout errors for visible UI callers", () => {
@@ -1102,55 +615,6 @@ describe("apiClient", () => {
     }
   });
 
-  it("redacts unsafe client-error details for failed resource downloads", async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockResolvedValueOnce({
-      ok: false,
-      status: 422,
-      headers: jsonHeaders,
-      json: () =>
-        Promise.resolve({
-          detail: "cannot read /Users/min/private/generated.3mf",
-        }),
-    }) as unknown as typeof fetch;
-
-    try {
-      let caught: unknown;
-      try {
-        await downloadResourceBlob("/api/files/private");
-      } catch (error) {
-        caught = error;
-      }
-      expect(caught).toBeInstanceOf(Error);
-      expect((caught as Error).message).toBe(
-        "The request is missing required data or contains invalid values.",
-      );
-      expect(JSON.stringify((caught as { response?: { data?: unknown } }).response?.data))
-        .not.toContain("/Users/min/private");
-      expect(JSON.stringify(vi.mocked(postClientLog).mock.calls)).not.toContain(
-        "/Users/min/private",
-      );
-      expect(postClientLog).toHaveBeenCalledWith(
-        "api: request failed",
-        expect.objectContaining({
-          details: expect.objectContaining({
-            response_detail: expect.objectContaining({
-              detail_redacted: true,
-              detail_redaction_reason: "unsafe_client_error_text",
-            }),
-            error_message:
-              "The request is missing required data or contains invalid values.",
-          }),
-        }),
-      );
-      expect(
-        JSON.stringify(useActionHistoryStore.getState().history.at(-1)),
-      ).not.toContain("/Users/min/private");
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
   it("turns resource download network failures into readable errors", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi
@@ -1237,85 +701,6 @@ describe("apiClient", () => {
         (caught as Error & { response?: { status: number | null } }).response
           ?.status,
       ).toBeNull();
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  it("redacts server error details for failed resource downloads", async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-      headers: jsonHeaders,
-      json: () => Promise.resolve({ detail: "worker crashed" }),
-    }) as unknown as typeof fetch;
-
-    try {
-      let caught: unknown;
-      try {
-        await downloadResourceBlob("/api/files/broken");
-      } catch (error) {
-        caught = error;
-      }
-      expect(caught).toBeInstanceOf(Error);
-      expect((caught as Error).message).toBe(
-        "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
-      );
-      expect(JSON.stringify((caught as { response?: { data?: unknown } }).response?.data))
-        .not.toContain("worker crashed");
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  it("includes request ids in failed resource download server errors", async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-      headers: {
-        get: (name: string) => {
-          const normalized = name.toLowerCase();
-          if (normalized === "content-type") return "application/json";
-          if (normalized === "x-request-id") return "req-file-500";
-          return null;
-        },
-      },
-      json: () => Promise.resolve({ detail: "worker crashed" }),
-    }) as unknown as typeof fetch;
-
-    try {
-      await expect(downloadResourceBlob("/api/files/broken")).rejects.toThrow(
-        "The server hit an internal error. Request ID: req-file-500.",
-      );
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  it("redacts top-level server error messages for failed resource downloads", async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-      headers: jsonHeaders,
-      json: () => Promise.resolve({ message: "worker crashed" }),
-    }) as unknown as typeof fetch;
-
-    try {
-      let caught: unknown;
-      try {
-        await downloadResourceBlob("/api/files/broken");
-      } catch (error) {
-        caught = error;
-      }
-      expect(caught).toBeInstanceOf(Error);
-      expect((caught as Error).message).toBe(
-        "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
-      );
-      expect(JSON.stringify((caught as { response?: { data?: unknown } }).response?.data))
-        .not.toContain("worker crashed");
     } finally {
       globalThis.fetch = originalFetch;
     }

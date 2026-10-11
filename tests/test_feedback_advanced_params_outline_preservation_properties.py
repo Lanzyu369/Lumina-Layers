@@ -37,8 +37,8 @@ Test Case #3 ("Bug-report ``advanced_params.outline`` non-bug-condition
 round-trip 不变"), this test pins down three layers — any one of them
 breaking will fail this file:
 
-1. **Sanitizer round-trip identity for outline group.** The dedicated
-   ``api.routers.feedback._sanitize_advanced_params`` must not mutate
+1. **Public feedback validation round-trip identity for outline group.**
+   ``api.routers.feedback.BugReportRequest`` must not mutate
    ``outline.enable_outline`` / ``outline.outline_width`` on a
    non-bug-condition input. This is the cheapest, most direct contract
    to preserve and is what ``buildAdvancedParams`` -> backend round-trip
@@ -77,7 +77,14 @@ from fastapi.testclient import TestClient
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from api.routers.feedback import _sanitize_advanced_params
+from api.routers.feedback import BugReportRequest
+from tests.test_feedback_router_unit import _payload as _base_payload
+
+
+def _validate_advanced_params(value):
+    payload = _base_payload()
+    payload["context"]["advanced_params"] = value
+    return BugReportRequest.model_validate(payload).context.advanced_params
 from scripts.load_bug_repro import load_bug_repro
 
 
@@ -343,7 +350,7 @@ def _assert_outline_round_trip_identity(
 
     非 bug-condition 输入下，sanitizer 不得修改 ``outline`` 任何字段。
     """
-    sanitized = _sanitize_advanced_params(advanced_params)
+    sanitized = _validate_advanced_params(advanced_params)
     assert isinstance(sanitized, dict), (
         "sanitizer must return a dict; got %r" % type(sanitized)
     )

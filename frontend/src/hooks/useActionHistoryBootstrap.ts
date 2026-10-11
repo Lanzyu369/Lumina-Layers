@@ -89,7 +89,7 @@ function readSnapshot(): WorkflowSnapshot {
       : null,
     active_tab: widget.activeTab ?? "unknown",
     advanced_params: buildAdvancedParams(converter, widget.activeTab, {
-      maxBytes: 4096,
+      maxBytes: Number.POSITIVE_INFINITY,
       svgPixelsPerMm: settings.svgPixelsPerMm,
       materialDeltaE00Tolerance: settings.materialDeltaE00Tolerance,
       enableWipeTowerAutoPlacement: settings.enableWipeTowerAutoPlacement,

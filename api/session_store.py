@@ -6,6 +6,33 @@ from collections.abc import Mapping
 from typing import Any, Dict, Optional
 
 
+def _snapshot_containers(value: Any, memo: dict[int, Any]) -> Any:
+    identity = id(value)
+    if identity in memo:
+        return memo[identity]
+    if isinstance(value, dict):
+        snapshot = value.copy()
+        memo[identity] = snapshot
+        for key, item in snapshot.items():
+            snapshot[key] = _snapshot_containers(item, memo)
+        return snapshot
+    if isinstance(value, list):
+        snapshot = value[:]
+        memo[identity] = snapshot
+        for index, item in enumerate(snapshot):
+            snapshot[index] = _snapshot_containers(item, memo)
+        return snapshot
+    if isinstance(value, tuple):
+        snapshot = tuple(_snapshot_containers(item, memo) for item in value)
+        memo[identity] = snapshot
+        return snapshot
+    if isinstance(value, set):
+        snapshot = value.copy()
+        memo[identity] = snapshot
+        return snapshot
+    return value
+
+
 class SessionStore:
     """服务端内存 Session 管理器。
 
@@ -82,6 +109,31 @@ class SessionStore:
                 self._temp_files[session_id] = []
             self._renew_lease_locked(session_id)
             self._store[session_id][key] = value
+
+    def get_snapshot(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Return session state with detached nested containers under the lock.
+
+        在锁内复制会话及嵌套容器，避免采集期间请求更新字段改变遍历结构。
+        Domain objects and array buffers retain their original references.
+        领域对象和数组缓冲仍保留原始引用。
+
+        Args:
+            session_id: Owning session identifier. / 所属会话编号。
+
+        Returns:
+            Detached containers, or None for an unavailable session.
+            复制后的容器；会话不可用时返回 None。
+        """
+        with self._lock:
+            self._prune_retired_locked()
+            if (
+                session_id in self._retired_sessions
+                or session_id in self._closing_sessions
+                or session_id not in self._store
+            ):
+                return None
+            self._renew_lease_locked(session_id)
+            return _snapshot_containers(self._store[session_id], {})
 
     def compare_and_set(
         self,

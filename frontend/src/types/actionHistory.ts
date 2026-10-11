@@ -141,10 +141,9 @@ export interface AdvancedParamsGeneration {
  * 浮雕 / 高度图设置（enable_relief 开关及各颜色高度）。
  *
  * When `enable_relief` is `false`, every detail field except
- * `hasHeightmapThumbnail` is forced to `null`. `color_height_map` is capped
- * at 64 entries; overflow sets `color_height_map_truncated: true`.
+ * `hasHeightmapThumbnail` is forced to `null`. Every color height is preserved.
  * `enable_relief` 为 false 时，除 `hasHeightmapThumbnail` 外所有细节字段置 null；
- * color_height_map 超过 64 项会被截断并置 `color_height_map_truncated: true`。
+ * color_height_map 完整保留，不再截断。
  */
 export interface AdvancedParamsRelief {
   enable_relief: boolean;
@@ -218,10 +217,9 @@ export interface AdvancedParamsLoop {
  * 冰箱贴（磁铁嵌入）设置。
  *
  * When `enable_fridge_magnet` is `false`, both `fridge_magnets` and
- * `selectedFridgeMagnetId` are `null`. `fridge_magnets` is capped at 20
- * items; overflow sets `fridge_magnets_truncated: true`.
+ * `selectedFridgeMagnetId` are `null`. Every magnet is preserved.
  * enable_fridge_magnet 为 false 时，fridge_magnets 与 selectedFridgeMagnetId 均为 null；
- * fridge_magnets 超过 20 项会截断并置 fridge_magnets_truncated: true。
+ * fridge_magnets 完整保留，不再截断。
  */
 export interface AdvancedParamsFridgeMagnet {
   enable_fridge_magnet: boolean;
@@ -309,10 +307,9 @@ export interface AdvancedParamsModelSurface {
  *
  * 本次生成采集到的全局颜色映射，以及会话级空间编辑次数标量；不保存掩码或坐标。
  *
- * `replacement_regions` is capped at 32 items; overflow sets
- * `replacement_regions_truncated: true`. An empty list is normalized to
+ * Every replacement, free color, and recipe override is preserved. An empty list is normalized to
  * `null` so consumers can check one condition for "no replacements".
- * replacement_regions 超过 32 项会截断并置 replacement_regions_truncated: true；
+ * 完整保留颜色替换、自由颜色和配方覆写；
  * 空列表统一归一化为 null，便于下游用同一条件判断"无替换"。
  */
 export interface AdvancedParamsColorReplacement {
@@ -332,12 +329,9 @@ export interface AdvancedParamsColorReplacement {
  * history snapshots when `activeTab === "converter"`.
  * 当 Tab 为 converter 时，Bug 反馈与操作历史快照携带的完整高级参数分组对象。
  *
- * Contains exactly 12 feature groups plus two optional bookkeeping keys
- * (`_size_trimmed`, `_dropped_tiers`) added only when the shared builder
- * trimmed the object to fit within the per-call byte budget. The top level
- * never exceeds 14 keys.
- * 包含 12 个功能分组，外加两个可选的裁剪记录键（_size_trimmed、_dropped_tiers），
- * 仅当共享构建器进行了分层裁剪时才会出现；顶层 key 数量不会超过 14。
+ * Contains 12 complete feature groups. Optional truncation fields remain
+ * readable for older saved reports; the builder no longer emits them.
+ * 包含 12 个完整功能分组；保留旧工单裁剪字段的读取兼容，新快照不再生成。
  */
 export interface AdvancedParamsFull {
   dimensions: AdvancedParamsDimensions;
@@ -359,9 +353,8 @@ export interface AdvancedParamsFull {
 }
 
 /**
- * Fallback emitted when even the most aggressive trimming tier cannot fit
- * the advanced-params object under the byte budget.
- * 当所有分层裁剪后仍超出字节上限时回落到的最小结构。
+ * Historical fallback shape retained for older saved reports.
+ * 兼容旧工单中因字节上限而裁剪的历史结构。
  *
  * Consumers should treat this shape as "advanced params were present but
  * too large to serialize in full"; `_original_byte_length` records the

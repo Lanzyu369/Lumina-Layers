@@ -42,6 +42,8 @@ test("selection prefers a free port, generates fresh identities, and fails at bo
 test("persisted port keeps the backend endpoint stable across launches", async t => {
   const portFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "lumina-port-state-")), "backend-port.json");
   const first = await helper().selectBackendEndpoint({ portFile, preferredPort: 8100 });
+  assert.equal(fs.existsSync(portFile), false, "selection cannot commit before backend health");
+  helper().commitBackendEndpoint({ portFile, endpoint: first });
   assert.equal(JSON.parse(fs.readFileSync(portFile, "utf8")).port, first.port);
   const second = await helper().selectBackendEndpoint({ portFile, preferredPort: 8100 });
   assert.equal(second.port, first.port);
@@ -58,15 +60,68 @@ test("required port check releases its probe listener", async () => {
   await helper().assertPortsAvailable([0]);
 });
 
-test("a persisted port collision fails instead of silently changing the storage origin", async t => {
+test("a remembered occupied port recovers without advancing the authoritative storage origin", async t => {
   const portFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "lumina-port-state-")), "backend-port.json");
   const first = await helper().selectBackendEndpoint({ portFile, preferredPort: 8101 });
-  const owner = await server(t, (_req, res) => res.end("foreign"), first.port);
-  await assert.rejects(
-    helper().selectBackendEndpoint({ portFile, preferredPort: 8101 }),
-    new RegExp(`stable_backend_port:${first.port}`),
-  );
+  // This is a persisted version-1 endpoint state.
+  fs.writeFileSync(portFile, JSON.stringify({ schemaVersion: 1, port: first.port }));
+  let requests = 0;
+  const owner = await server(t, (_req, res) => { requests++; res.end("foreign"); }, first.port);
+  const recovered = await helper().selectBackendEndpoint({ portFile, preferredPort: 8101 });
+  assert.notEqual(recovered.port, first.port);
+  assert.equal(recovered.previousOrigin, first.origin);
+  assert.equal(recovered.previousPort, first.port);
+  assert.equal(JSON.parse(fs.readFileSync(portFile, "utf8")).port, first.port);
+  // A failed launch retries from the same source, never from a partly imported target.
+  const retry = await helper().selectBackendEndpoint({ portFile, preferredPort: 8101 });
+  assert.equal(retry.previousOrigin, first.origin);
+  helper().commitBackendEndpoint({ portFile, endpoint: recovered });
+  assert.equal(JSON.parse(fs.readFileSync(portFile, "utf8")).port, recovered.port);
+  assert.equal(requests, 0, "port probing must not fetch foreign HTTP content");
   assert.equal(owner.listening, true);
+});
+
+test("desktop opt-in uses an OS-assigned port after real preferred-range exhaustion", async t => {
+  const owner = await server(t, (_req, res) => res.end("foreign"));
+  const preferredPort = owner.address().port;
+  await assert.rejects(helper().selectBackendEndpoint({ preferredPort, maxAttempts: 1 }), error =>
+    error.code === "backend_port_unavailable");
+  const recovered = await helper().selectBackendEndpoint({ preferredPort, maxAttempts: 1, allowEphemeralFallback: true });
+  assert.notEqual(recovered.port, preferredPort);
+  assert.ok(recovered.port >= 1024 && recovered.port <= 65535);
+  const bound = await server(t, (_req, res) => res.end("owned"), recovered.port);
+  assert.equal(bound.listening, true);
+  assert.equal(owner.listening, true);
+});
+
+test("corrupt and inaccessible port state are not reset or classified as port exhaustion", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "lumina-port-state-errors-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const portFile = path.join(root, "backend-port.json");
+  fs.writeFileSync(portFile, "{broken");
+  await assert.rejects(helper().selectBackendEndpoint({ portFile }), error => error.code === "backend_port_state_invalid");
+  assert.equal(fs.readFileSync(portFile, "utf8"), "{broken");
+  const directory = path.join(root, "directory");
+  fs.mkdirSync(directory);
+  await assert.rejects(helper().selectBackendEndpoint({ portFile: directory }), error => error.code === "backend_port_state_read_failed");
+  assert.equal(fs.statSync(directory).isDirectory(), true);
+});
+
+test("commit refuses to overwrite a changed data origin and reports real write I/O errors", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "lumina-port-commit-errors-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const portFile = path.join(root, "backend-port.json");
+  const endpoint = await helper().selectBackendEndpoint({ portFile });
+  fs.writeFileSync(portFile, JSON.stringify({ schemaVersion: 1, port: 8109 }));
+  assert.throws(() => helper().commitBackendEndpoint({ portFile, endpoint }), error => error.code === "backend_port_state_changed");
+  assert.equal(JSON.parse(fs.readFileSync(portFile, "utf8")).port, 8109);
+  const parentFile = path.join(root, "not-a-directory");
+  const unavailableState = path.join(parentFile, "backend-port.json");
+  const selected = await helper().selectBackendEndpoint({ portFile: unavailableState });
+  fs.writeFileSync(parentFile, "owned-file");
+  assert.throws(() => helper().commitBackendEndpoint({ portFile: unavailableState, endpoint: selected }), error =>
+    error.code === "backend_port_state_read_failed" || error.code === "backend_port_state_write_failed");
+  assert.equal(fs.readFileSync(parentFile, "utf8"), "owned-file");
 });
 
 async function probe(url, id) {

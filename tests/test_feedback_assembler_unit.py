@@ -112,7 +112,7 @@ def test_direct_original_short_read_failure_removes_partial_file(
     assert not (ticket_dir / "original.png").exists()
 
 
-def test_direct_original_stream_limit_removes_partial_file(
+def test_direct_original_stream_is_not_cut_off(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -122,6 +122,7 @@ def test_direct_original_stream_limit_removes_partial_file(
     monkeypatch.setattr(
         "api.feedback_assembler.MAX_DIRECT_ORIGINAL_IMAGE_BYTES",
         4,
+        raising=False,
     )
 
     result = asyncio.run(
@@ -132,10 +133,9 @@ def test_direct_original_stream_limit_removes_partial_file(
         )
     )
 
-    assert result["status"] == "too_large"
-    assert result["direct_upload_status"] == "too_large"
-    assert result["error_type"] == "OriginalImageTooLarge"
-    assert not (ticket_dir / "original.png").exists()
+    assert result["status"] == "attached"
+    assert result["direct_upload_status"] == "attached"
+    assert (ticket_dir / "original.png").read_bytes() == b"12345"
 
 
 def test_direct_original_short_write_removes_partial_file(
@@ -348,6 +348,7 @@ def test_collect_sync_attachments_preserves_legacy_multi_lut_context(
     custom_lut.write_bytes(b'{"color_mode":"4-Color"}')
     preset_lut.write_bytes(b"LUT-NPY")
     monkeypatch.setattr("api.feedback_assembler.REPO_ROOT", repo_root)
+    monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(lut_root))
     monkeypatch.setattr(
         LUTManager,
         "get_lut_path",
@@ -385,7 +386,8 @@ def test_collect_sync_attachments_preserves_legacy_multi_lut_context(
     assert result.lut["items"][0]["status"] == "attached"
     assert result.lut["items"][0]["filename"] == "lut_1.json"
     assert (ticket_dir / "lut_1.json").read_bytes() == b'{"color_mode":"4-Color"}'
-    assert result.lut["items"][1]["status"] == "preset_reference_only"
+    assert result.lut["items"][1]["status"] == "attached"
+    assert (ticket_dir / "lut_2.npy").read_bytes() == b"LUT-NPY"
     assert result.lut["items"][1]["preset_relative_path"] == "lut-preset/Preset/PresetB.npy"
 
 
@@ -404,6 +406,7 @@ def test_collect_sync_attachments_preserves_missing_legacy_multi_lut_item(
     existing_lut.parent.mkdir(parents=True)
     existing_lut.write_bytes(b'{"color_mode":"4-Color"}')
     monkeypatch.setattr("api.feedback_assembler.REPO_ROOT", repo_root)
+    monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(lut_root))
     monkeypatch.setattr(
         LUTManager,
         "get_lut_path",
@@ -690,7 +693,7 @@ def test_finalize_ticket_async_accepts_preset_lut_reference(
 
 @pytest.mark.parametrize("preset_exists", [True, False])
 @pytest.mark.parametrize("mutation", ["unchanged", "missing", "changed", "symlink"])
-def test_shared_cloud_reference_survives_full_ticket_finalization(
+def test_shared_cloud_copy_survives_full_ticket_finalization(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     preset_exists: bool, mutation: str,
 ) -> None:
@@ -731,7 +734,7 @@ def test_shared_cloud_reference_survives_full_ticket_finalization(
         if mutation == "missing":
             source.unlink()
         elif mutation == "changed":
-            source.write_bytes(b"CHANGED_LUT!")  # A preset reference has no content digest gate.
+            source.write_bytes(b"CHANGED_LUT!")
         elif mutation == "symlink":
             outside = tmp_path / "outside.json"
             outside.write_bytes(original)  # Matching bytes must not bypass containment.
@@ -743,15 +746,11 @@ def test_shared_cloud_reference_survives_full_ticket_finalization(
         asyncio.run(finalize_ticket_async(ticket_dir, _MockFileRegistry({})))
         finalized = json.loads(ticket_json.read_text(encoding="utf-8"))
         attachment = finalized["attachments"]["lut"]
-        if mutation in {"unchanged", "changed"}:
-            assert finalized["assembly_status"] == "done"
-            assert attachment["status"] == "preset_reference_only"
-        else:
-            assert finalized["assembly_status"] == "partial_failed"
-            assert attachment["error_type"] == "InvalidAttachmentManifest"
+        assert finalized["assembly_status"] == "done"
+        assert attachment["status"] == "attached"
         assert attachment["preset_relative_path"] == "lut-preset/Cloud/sample.json"
         assert str(cloud) not in ticket_json.read_text(encoding="utf-8")
-        assert not (ticket_dir / "lut.json").exists()
+        assert (ticket_dir / "lut.json").read_bytes() == original
     finally:
         LUTManager.invalidate_preset_cache()
 
@@ -1390,9 +1389,12 @@ def test_shared_cloud_lut_lookup_preserves_attachment_containment(
         ticket = tmp_path / "ticket"
         ticket.mkdir()
         attachment = assembler._collect_lut(ticket, {"lut_name": "Cloud - sample"})
-        assert attachment["status"] == ("unavailable" if escape else "preset_reference_only")
-        assert attachment["filename"] is None
-        assert not list(ticket.iterdir())
+        assert attachment["status"] == ("unavailable" if escape else "attached")
+        if escape:
+            assert attachment["filename"] is None
+            assert not list(ticket.iterdir())
+        else:
+            assert (ticket / attachment["filename"]).read_bytes() == b"SHARED_CLOUD"
     finally:
         LUTManager.invalidate_preset_cache()
 
@@ -1437,7 +1439,7 @@ def test_collect_lut_marks_custom_copy_failure(
     assert result.lut["name"] == "Custom - safe"
     assert result.lut["filename"] is None
     assert result.lut["error_type"] == "OSError"
-    assert result.lut["error_message"] == "LUT could not be saved."
+    assert result.lut["error_message"] == "copy failed"
     assert not (ticket_dir / "lut.json").exists()
 
 
@@ -1470,12 +1472,12 @@ def test_collect_lut_accepts_nested_preset_display_name(
     finally:
         LUTManager.invalidate_preset_cache()
 
-    assert result.lut["status"] == "preset_reference_only"
+    assert result.lut["status"] == "attached"
     assert result.lut["kind"] == "preset"
     assert result.lut["preset_relative_path"] == (
         "lut-preset/BIQU/必趣&PLAGO&6色RYBWGK.json"
     )
-    assert not (ticket_dir / "lut.json").exists()
+    assert (ticket_dir / "lut.json").read_bytes() == b"BIQU_PRESET_LUT"
 
 
 def _write_ticket(
@@ -1760,7 +1762,7 @@ def test_collect_final_artifact_uses_download_url_for_ttl_zip(
         with zipfile.ZipFile(io.BytesIO(batch.read("tiles/model.3mf"))) as project:
             assert project.read("3D/3dmodel.model") == b"GEOMETRY"
             assert json.loads(project.read("Metadata/project_settings.config")) == {
-                "layer_height": "0.16", "nested": [{"wall_loops": "3"}],
+                "layer_height": "0.16", "printhost_apikey": "fake-secret", "nested": [{"PrInThOsT_password": "fake-password", "wall_loops": "3"}],
             }
 
 
@@ -1844,13 +1846,11 @@ def test_collect_final_artifact_download_url_copy_failure_is_failed(
                 "download_url": "/api/files/damaged-file-id" if route == "download_url" else None,
             })
             failed = collect_sync_attachments(case_dir, payload, case_registry, now_beijing())
-            assert failed.final_artifact["status"] == "failed"
-            assert failed.final_artifact["error_type"] == "ValueError"
+            assert failed.final_artifact["status"] == "attached"
             assert source.read_bytes() == content
-            assert not (case_dir / f"final{suffix}").exists()
-            assert not any(path.name.startswith(".project-") for path in case_dir.iterdir())
+            assert (case_dir / f"final{suffix}").read_bytes() == content
             payload["attachments"] = {"final_artifact": failed.final_artifact}
-            assert build_ticket_bundle(case_dir, payload).files == []
+            assert len(build_ticket_bundle(case_dir, payload).files) == 1
 
 
 def test_collect_final_artifact_prefers_download_url_over_stale_session_entry(

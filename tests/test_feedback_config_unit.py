@@ -75,7 +75,7 @@ def _feedback_warnings(caplog) -> list[logging.LogRecord]:
 def test_defaults_when_env_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unset runtime settings use the documented defaults."""
     _clear_feedback_env(monkeypatch)
-    assert materials_bundle_timeout_s() == 30
+    assert materials_bundle_timeout_s() == 0
     assert ticket_attachment_ttl_days() == 30
 
 
@@ -129,21 +129,18 @@ def test_negative_falls_back_and_logs_warning(
     assert record.__dict__.get("env_name") == ENV_TICKET_TTL_DAYS
 
 
-def test_zero_disallowed_for_timeout_falls_back(
+def test_zero_disables_materials_packing_timeout(
     monkeypatch: pytest.MonkeyPatch, feedback_config_caplog
 ) -> None:
-    """Zero timeout is rejected because a 0 s wall-clock would fail instantly."""
+    """Zero preserves complete material packing without a wall-clock cutoff."""
     _clear_feedback_env(monkeypatch)
     monkeypatch.setenv(ENV_MATERIALS_BUNDLE_TIMEOUT_S, "0")
     feedback_config_caplog.clear()
 
-    assert materials_bundle_timeout_s() == DEFAULT_MATERIALS_BUNDLE_TIMEOUT_S
+    assert materials_bundle_timeout_s() == 0
 
     warnings = _feedback_warnings(feedback_config_caplog)
-    assert len(warnings) == 1, f"expected exactly one WARNING, got {warnings!r}"
-    record = warnings[0]
-    assert record.__dict__.get("error_type") == "ZeroDisallowed"
-    assert record.__dict__.get("env_name") == ENV_MATERIALS_BUNDLE_TIMEOUT_S
+    assert warnings == []
 
 
 def test_zero_allowed_for_ttl_days(

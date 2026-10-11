@@ -22,7 +22,7 @@ log = get_logger(__name__)
 
 ENV_MATERIALS_BUNDLE_TIMEOUT_S = "LUMINA_FEEDBACK_MATERIALS_BUNDLE_TIMEOUT_S"
 ENV_TICKET_TTL_DAYS = "LUMINA_FEEDBACK_TICKET_TTL_DAYS"
-DEFAULT_MATERIALS_BUNDLE_TIMEOUT_S = 30
+DEFAULT_MATERIALS_BUNDLE_TIMEOUT_S = 0
 DEFAULT_TICKET_TTL_DAYS = 30
 
 
@@ -157,17 +157,17 @@ def _parse_nonnegative_int(
 def materials_bundle_timeout_s() -> int:
     """Return the materials ZIP packing timeout in seconds.
 
-    Invalid or nonpositive values use the 30-second default with a warning.
-    返回耗材 ZIP 打包超时秒数；非法值、负数或零回退到 30 秒并记录警告。
+    Invalid or negative values use the default with a warning; zero disables the timeout.
+    返回耗材 ZIP 打包超时秒数；零表示不限制耗时，非法值或负数回退并记录警告。
 
     Returns:
-        int: Positive packing timeout, re-read from the environment each call.
-            每次读取环境变量所得的正整数超时秒数。
+        int: Packing timeout, re-read from the environment each call; zero disables it.
+            每次读取环境变量所得的非负整数超时秒数。
     """
     return _parse_nonnegative_int(
         ENV_MATERIALS_BUNDLE_TIMEOUT_S,
         DEFAULT_MATERIALS_BUNDLE_TIMEOUT_S,
-        allow_zero=False,
+        allow_zero=True,
         purpose="materials bundle timeout (s)",
     )
 

@@ -79,7 +79,7 @@ async function fixture(t, platform, mode = "healthy") {
       assertPortsAvailable: async () => {},
       selectBackendEndpoint: async () => {
         if (mode === "port-busy") throw new Error("port_in_use");
-        return { port: 8001, origin: "http://127.0.0.1:8001", healthUrl: "http://127.0.0.1:8001/api/health", instanceId: "source-test" };
+        return { port: 8001, origin: "http://127.0.0.1:8001", healthUrl: "http://127.0.0.1:8001/api/health", instanceId: "source-test", previousPort: null, previousOrigin: null };
       },
     },
     child_process: {
@@ -123,6 +123,7 @@ async function fixture(t, platform, mode = "healthy") {
   await until(() => healthCallback || app.quitted);
   const mainWindow = () => windows.find(w => w.options.title === "Lumina Studio 2");
   return { app, children, dialogs, errors, commands, signals, ipcMain, mainWindow,
+    portStatePath: path.join(root, "backend-port.json"),
     async healthy() {
       const response = new EventEmitter();
       Object.assign(response, { statusCode: 200, headers: { "content-type": "application/json" } });
@@ -141,7 +142,9 @@ for (const platform of ["win32", "darwin"]) {
     assert.equal(path.basename(f.children[0].args[0]), "api_server.py");
     assert.equal(f.children[0].options.env.LUMINA_API_PORT, "8001");
     assert.equal(f.children[0].options.env.LUMINA_MATERIAL_REGISTRY_URL, "https://custom.example/materials");
+    assert.equal(fs.existsSync(f.portStatePath), false);
     await f.healthy();
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.portStatePath, "utf8")), { schemaVersion: 1, port: 8001 });
     assert.equal(f.children.length, 2);
     assert.equal(path.basename(f.children[1].args[0]), "vite.js");
     assert.equal(f.children[1].options.env.VITE_API_PROXY_TARGET, "http://127.0.0.1:8001");

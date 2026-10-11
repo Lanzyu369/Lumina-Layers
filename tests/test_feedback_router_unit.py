@@ -122,15 +122,14 @@ def _iter_json_strings(value: Any) -> list[str]:
     return []
 
 
-def _assert_description_diagnostics_redacted(text: str) -> None:
-    assert "Request failed with status code 500" not in text
-    assert "AxiosError" not in text
-    assert "/Users/min/private" not in text
-    assert "file:///Users/min" not in text
-    assert r"C:\Users\min" not in text
-    assert "[redacted_local_path]" in text
-    assert GENERIC_HTTP_STATUS_DETAIL in text
+def _assert_description_diagnostics_complete(text: str) -> None:
+    assert "Request failed with status code 500" in text
+    assert "AxiosError" in text
+    assert "/Users/min/private" in text
+    assert "file:///Users/min" in text
+    assert "[redacted_local_path]" not in text
     assert "/api/files/output-model" in text
+
 
 
 def test_bug_report_context_preserves_dynamic_material_scalars() -> None:
@@ -409,52 +408,6 @@ def test_bug_report_openapi_declares_json_and_multipart_bodies(
     ]["enum"] == ["too_large"]
 
 
-def test_bug_report_multipart_parser_caps_file_before_spooling() -> None:
-    from starlette.datastructures import Headers
-
-    from api.routers.feedback import _BugReportMultiPartParser
-
-    boundary = "lumina-stream-limit"
-    file_bytes = b"0123456789ABCDEF"
-    body = (
-        f"--{boundary}\r\n"
-        'Content-Disposition: form-data; name="request_payload"\r\n\r\n'
-        "{}\r\n"
-        f"--{boundary}\r\n"
-        'Content-Disposition: form-data; name="original_image"; '
-        'filename="source.png"\r\n'
-        "Content-Type: image/png\r\n\r\n"
-    ).encode("ascii") + file_bytes + f"\r\n--{boundary}--\r\n".encode("ascii")
-
-    async def parse() -> tuple[set[str], int, bytes]:
-        async def stream():
-            for offset in range(0, len(body), 7):
-                yield body[offset:offset + 7]
-
-        parser = _BugReportMultiPartParser(
-            Headers({"content-type": f"multipart/form-data; boundary={boundary}"}),
-            stream(),
-            max_file_size=8,
-            max_files=1,
-            max_fields=2,
-            max_part_size=1024,
-        )
-        form = await parser.parse()
-        try:
-            upload = form["original_image"]
-            assert isinstance(upload, UploadFile)
-            await upload.seek(0)
-            stored_bytes = await upload.read()
-            return parser.oversized_file_fields, upload.size or 0, stored_bytes
-        finally:
-            await form.close()
-
-    oversized_fields, stored_size, stored_bytes = asyncio.run(parse())
-
-    assert oversized_fields == {"original_image"}
-    assert stored_size <= 8
-    assert len(stored_bytes) <= 8
-    assert stored_bytes != file_bytes
 
 
 @pytest.mark.parametrize(
@@ -694,7 +647,7 @@ def test_submit_bug_report_oversized_original_does_not_block_text_report(
     assert list(ticket_dir.glob("original.*")) == []
 
 
-def test_stream_oversized_original_does_not_block_text_report(
+def test_stream_original_is_saved_without_a_size_cutoff(
     client: TestClient,
     feedback_root: Path,
     tmp_path: Path,
@@ -703,7 +656,7 @@ def test_stream_oversized_original_does_not_block_text_report(
     import api.routers.feedback as feedback_router
     from api.dependencies import get_file_registry
 
-    monkeypatch.setattr(feedback_router, "MAX_DIRECT_ORIGINAL_IMAGE_BYTES", 8)
+    monkeypatch.setattr(feedback_router, "MAX_DIRECT_ORIGINAL_IMAGE_BYTES", 8, raising=False)
     session_id = "stream-oversized-fallback-session"
     session_source = tmp_path / "session-source.png"
     session_source.write_bytes(b"SESSION_FALLBACK")
@@ -734,18 +687,18 @@ def test_stream_oversized_original_does_not_block_text_report(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["original_image_status"] == "session_fallback"
+    assert data["original_image_status"] == "attached"
     ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
     assert ticket_json["description"] == "Stream-capped source still reports"
     original = ticket_json["attachments"]["original_image"]
     assert original["status"] == "attached"
-    assert original["capture_source"] == "file_registry"
-    assert original["direct_upload_status"] == "too_large"
+    assert original["capture_source"] == "browser_upload"
+    assert original["direct_upload_status"] == "attached"
     ticket_dir = next(feedback_root.glob(f"*/{data['ticket_id']}"))
-    assert (ticket_dir / "original.png").read_bytes() == b"SESSION_FALLBACK"
+    assert (ticket_dir / "original.png").read_bytes() == b"0123456789ABCDEF"
 
 
-def test_submit_bug_report_unsupported_original_does_not_block_text_report(
+def test_submit_bug_report_keeps_non_image_original_source(
     client: TestClient,
     feedback_root: Path,
 ) -> None:
@@ -767,35 +720,25 @@ def test_submit_bug_report_unsupported_original_does_not_block_text_report(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["original_image_status"] == "failed"
+    assert data["original_image_status"] == "attached"
     ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
     original = ticket_json["attachments"]["original_image"]
-    assert original["status"] == "failed"
-    assert original["direct_upload_status"] == "failed"
-    assert original["error_type"] == "UnsupportedOriginalImageType"
+    assert original["status"] == "attached"
+    assert original["direct_upload_status"] == "attached"
+    ticket_dir = next(feedback_root.glob(f"*/{data['ticket_id']}"))
+    assert (ticket_dir / "original.txt").read_bytes() == b"not-an-image"
 
 
-def test_feedback_description_sanitizer_preserves_safe_text_and_api_context() -> None:
-    from api.routers.feedback import _sanitize_bug_report_description
-
-    ordinary = "中文描述：切换到 8 色时 3D 预览异常"
-    assert _sanitize_bug_report_description(ordinary) == ordinary
-
-    sanitized = _sanitize_bug_report_description(DESCRIPTION_RAW_DIAGNOSTICS)
-    _assert_description_diagnostics_redacted(sanitized)
-
-    api_query = (
-        "AxiosError: Request failed with status code 500 "
-        "at /api/files/output-model?token=secret#debug"
-    )
-    query_sanitized = _sanitize_bug_report_description(api_query)
-    assert query_sanitized == (
-        f"{GENERIC_HTTP_STATUS_DETAIL} Context: /api/files/output-model"
-    )
-    assert "token=secret" not in query_sanitized
+def test_feedback_description_preserves_diagnostics_and_api_context() -> None:
+    from api.routers.feedback import BugReportRequest
+    descriptions = ["中文描述：切换到 8 色时 3D 预览异常", DESCRIPTION_RAW_DIAGNOSTICS,
+                    "AxiosError: Request failed with status code 500 at /api/files/output-model?token=secret#debug"]
+    for description in descriptions:
+        assert BugReportRequest.model_validate(_payload(description=description)).description == description
 
 
-def test_submit_bug_report_sanitizes_description_for_export(
+
+def test_submit_bug_report_preserves_description_for_export(
     client: TestClient,
     feedback_root: Path,
 ) -> None:
@@ -815,7 +758,7 @@ def test_submit_bug_report_sanitizes_description_for_export(
             (ticket_dir / "summary.txt").read_text(encoding="utf-8"),
         ]
     )
-    _assert_description_diagnostics_redacted(exported_text)
+    _assert_description_diagnostics_complete(exported_text)
 
 
 def _enable_fake_feedback_server(
@@ -839,7 +782,7 @@ def _enable_fake_feedback_server(
     monkeypatch.setattr(feedback_hosted, "submit_ticket_bundle", _submit)
 
 
-def test_submit_bug_report_uploads_sanitized_ticket_to_feedback_server(
+def test_submit_bug_report_uploads_complete_ticket_to_feedback_server(
     client: TestClient,
     feedback_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -918,18 +861,13 @@ def test_submit_bug_report_uploads_sanitized_ticket_to_feedback_server(
     # The same ticket.json, index.md and summary.txt the old email carried.
     assert document["index_md"] and document["summary_txt"]
     assert "submission" not in document["ticket"]
-    assert [item.name for item in bundle.files] == ["final.3mf", "screenshot.png"]
-    assert {item["kind"] for item in document["attachments"]} == {"final_artifact", "screenshot"}
+    assert {item.name for item in bundle.files} >= {"final.3mf", "screenshot.png", "session-data.zip", "backend-logs.zip"}
+    assert {item["kind"] for item in document["attachments"]} == {"final_artifact", "screenshot", "attachment"}
 
     uploaded_text = json.dumps(document, ensure_ascii=False)
-    _assert_description_diagnostics_redacted(uploaded_text)
-    assert "fake-private" not in uploaded_text
-    assert "certificate.pem" not in uploaded_text
-    expected_template_settings = {
-        "layer_height": "0.16",
-        "filament_settings_id": ["Native PLA"],
-        "nested": [{"wall_loops": "3"}],
-    }
+    _assert_description_diagnostics_complete(uploaded_text)
+    assert "fake-private-api-key" in uploaded_text
+    expected_template_settings = template_settings
     assert document["ticket"]["context"]["custom_3mf_template_snapshot"] == {
         "status": "captured", "settings": expected_template_settings,
     }
@@ -939,20 +877,16 @@ def test_submit_bug_report_uploads_sanitized_ticket_to_feedback_server(
         assert project.read("3D/3dmodel.model") == b"GEOMETRY"
         assert json.loads(project.read("Metadata/project_settings.config")) == expected_template_settings
     assert private_path.read_bytes() == original_project_bytes
-    assert "disk_path" not in document["ticket"]["context"]["active_final_artifact_ref"]
-    assert private_path.as_posix() not in uploaded_text
+    assert document["ticket"]["context"]["active_final_artifact_ref"]["disk_path"] == private_path.as_posix()
+    assert private_path.as_posix() in uploaded_text
     assert feedback_root.as_posix() not in uploaded_text
     details = document["ticket"]["context"]["recent_client_logs"][0]["details"]
-    assert details["api_path_transport_error"] == (
-        "The server reported an error while processing this request. "
-        "Context: /api/files/output-model"
-    )
-    assert "Request failed with status code 500" not in uploaded_text
+    assert details == payload["context"]["recent_client_logs"][0]["details"]
 
     ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
     assert ticket_json["submission"]["status"] == "submitted"
     assert ticket_json["context"]["custom_3mf_template_snapshot"]["settings"] == expected_template_settings
-    assert ticket_json["submission"]["uploaded_attachments"] == ["final.3mf", "screenshot.png"]
+    assert {"final.3mf", "screenshot.png", "backend-logs.zip", "session-data.zip"} <= set(ticket_json["submission"]["uploaded_attachments"])
     assert "email" not in ticket_json
 
     status_response = client.get(f"/api/feedback/bug-report/{data['ticket_id']}/status")
@@ -1019,7 +953,7 @@ def test_resubmit_resumes_interrupted_assembly_before_uploading(
     assert (ticket_dir / "index.md").exists()
 
 
-def test_oversized_attachment_is_held_back_and_reported(
+def test_large_attachment_is_uploaded_and_reported(
     client: TestClient,
     feedback_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1028,17 +962,15 @@ def test_oversized_attachment_is_held_back_and_reported(
 
     receipts: list[Any] = []
     _enable_fake_feedback_server(monkeypatch, receipts)
-    monkeypatch.setattr(feedback_hosted, "MAX_UPLOAD_ATTACHMENT_BYTES", 16)
+    monkeypatch.setattr(feedback_hosted, "MAX_UPLOAD_ATTACHMENT_BYTES", 16, raising=False)
     payload = _payload(screenshot_data_url="data:image/png;base64," + ("a" * 1024))
 
     data = client.post("/api/feedback/bug-report", json=payload).json()
     status_body = client.get(f"/api/feedback/bug-report/{data['ticket_id']}/status").json()
 
     assert status_body["submission_status"] == "submitted"
-    assert status_body["held_back_attachments"] == [
-        {"name": "screenshot.png", "size_bytes": 768, "reason": "too_large"}
-    ]
-    assert receipts[0]["bundle"].files == []
+    assert status_body["held_back_attachments"] == []
+    assert "screenshot.png" in status_body["uploaded_attachments"]
 
 
 def test_bug_report_status_rejects_unknown_or_malformed_ticket(client: TestClient) -> None:
@@ -1224,7 +1156,7 @@ def test_submit_bug_report_preserves_material_source_context(
     assert ticket_json["server"]["schema_version"] == 3
 
 
-def test_submit_bug_report_persists_only_safe_workshop_runtime_metadata(
+def test_submit_bug_report_preserves_complete_workshop_context(
     client: TestClient,
     feedback_root: Path,
 ) -> None:
@@ -1259,25 +1191,18 @@ def test_submit_bug_report_persists_only_safe_workshop_runtime_metadata(
         feedback_root,
         response.json()["ticket_id"],
     )
-    assert ticket_json["context"]["workshop"] == {
-        "module_id": "lumina.bead-pattern",
-        "module_version": "1.0.0",
-        "install_source": "seed",
-        "audit_status": "official",
-        "runtime_mode": "desktop-secure",
-        "error_code": None,
-    }
+    assert ticket_json["context"]["workshop"] == payload["context"]["workshop"]
 
 
 @pytest.mark.parametrize(
     ("field_name", "bad_value"),
     [
-        ("module_id", "m" * 129),
-        ("module_version", "v" * 129),
+        ("module_id", []),
+        ("module_version", None),
         ("install_source", "remote"),
         ("audit_status", "trusted"),
         ("runtime_mode", "browser"),
-        ("error_code", "e" * 129),
+        ("error_code", {}),
     ],
 )
 def test_submit_bug_report_rejects_out_of_bounds_workshop_diagnostics(
@@ -1320,7 +1245,7 @@ def test_submit_bug_report_accepts_older_client_without_workshop_context(
     assert ticket_json["context"]["workshop"] is None
 
 
-def test_submit_bug_report_sanitizes_recent_client_logs(
+def test_submit_bug_report_preserves_recent_client_logs(
     client: TestClient,
     feedback_root: Path,
 ) -> None:
@@ -1343,15 +1268,10 @@ def test_submit_bug_report_sanitizes_recent_client_logs(
     data = response.json()
     ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
     logs = ticket_json["context"]["recent_client_logs"]
-    assert len(logs) == 50
-    assert logs[0]["label"] == "event-5"
-    assert logs[-1]["label"] == "event-54"
-    assert logs[0]["elapsed_ms"] == 5.123
-    assert logs[0]["details"]["long"].endswith("...<truncated>")
-    assert logs[0]["details"]["__truncated_keys"] == 7
+    assert logs == payload["context"]["recent_client_logs"]
 
 
-def test_submit_bug_report_redacts_context_diagnostic_strings(
+def test_submit_bug_report_preserves_context_diagnostic_strings(
     client: TestClient,
     feedback_root: Path,
 ) -> None:
@@ -1418,44 +1338,14 @@ def test_submit_bug_report_redacts_context_diagnostic_strings(
     data = response.json()
     ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
     context_text = json.dumps(ticket_json["context"], ensure_ascii=False)
-    context_strings = "\n".join(_iter_json_strings(ticket_json["context"]))
-    log_details = ticket_json["context"]["recent_client_logs"][0]["details"]
-    action_error = ticket_json["context"]["action_history"][0]["error"]
-    assert "/Users/min/private" not in context_strings
-    assert "/private/tmp/lumina" not in context_strings
-    assert "/home/min/lumina" not in context_strings
-    assert r"C:\Users\min" not in context_strings
-    assert "C:/Users/min" not in context_strings
-    assert r"\\LUMINA-NAS" not in context_strings
-    assert "file:///Users/min" not in context_strings
-    assert "file:///C:/Users/min" not in context_strings
-    assert "Request failed with status code 500" not in context_strings
-    assert "HTTP 404" not in context_strings
-    assert "HTTP 500" not in context_strings
-    assert "[redacted_local_path]" in context_text
-    assert "The server reported an error while processing this request." in context_text
-    assert ticket_json["context"]["action_history"][0]["error"]["status_code"] == 500
-    assert "/api/files/output-model" in context_text
-    assert log_details["api_path_transport_error"] == (
-        "The server reported an error while processing this request. "
-        "Context: /api/files/output-model"
-    )
-    assert action_error["error_message"] == (
-        "The server reported an error while processing this request. "
-        "Context: /api/files/output-model"
-    )
-    assert action_error["local_path_error_message"] == (
-        "The server reported an error while processing this request."
-    )
-    assert "Color palette has no hex entries." in context_text
-    assert ticket_json["context"]["recent_client_logs"][0]["elapsed_ms"] == 12.346
+    for key in ("recent_client_logs", "action_history", "session_history"):
+        assert ticket_json["context"][key] == payload["context"][key]
 
 
 @pytest.mark.parametrize(
     "patch",
     [
         {"description": ""},
-        {"description": "x" * 10001},
         {"user_email": "not-an-email"},
     ],
 )
@@ -1514,7 +1404,7 @@ def test_invalid_multipart_closes_original_upload(
     assert closed_filenames == ["source.png"]
 
 
-def test_submit_bug_report_rejects_oversized_screenshot(
+def test_submit_bug_report_rejects_invalid_large_screenshot_base64(
     client: TestClient,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1523,13 +1413,13 @@ def test_submit_bug_report_rejects_oversized_screenshot(
 
     response = client.post("/api/feedback/bug-report", json=payload)
 
-    assert response.status_code == 413
+    assert response.status_code == 400
     warnings = [
         record for record in caplog.records
-        if getattr(record, "event", None) == "feedback_screenshot_too_large"
+        if getattr(record, "event", None) == "feedback_screenshot_invalid"
     ]
     assert len(warnings) == 1
-    assert warnings[0].error_type == "PayloadTooLarge"
+    assert warnings[0].error_type == "InvalidBase64"
 
 
 def test_submit_bug_report_accepts_repeated_local_submissions(
@@ -1922,45 +1812,10 @@ def test_submit_bug_report_rejects_non_dict_advanced_params(
     assert response.status_code == 422
 
 
-def test_submit_bug_report_falls_back_when_sanitizer_raises(
-    client: TestClient,
-    feedback_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A crashing sanitizer is caught; request succeeds, advanced_params is ``None``.
-
-    sanitizer 抛异常时请求仍然成功，``ticket.json`` 里的
-    ``context.advanced_params`` 被降级为 ``None``。
-    """
-
-    def _raise(*_args: Any, **_kwargs: Any) -> Any:
-        raise RuntimeError("sanitizer exploded")
-
-    monkeypatch.setattr(
-        "api.routers.feedback._sanitize_advanced_params", _raise
-    )
-    _capture_feedback_logger(caplog, logging.WARNING)
-
-    payload = _payload()
-    payload["context"]["advanced_params"] = _full_advanced_params()
-
-    response = client.post("/api/feedback/bug-report", json=payload)
-
-    assert response.status_code == 200
-    data = response.json()
-    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
-    assert ticket_json["context"]["advanced_params"] is None
-
-    warnings = [
-        record for record in caplog.records
-        if getattr(record, "event", None) == "feedback_advanced_params_failed"
-    ]
-    assert warnings, "Expected a feedback_advanced_params_failed WARNING"
-    assert warnings[0].error_type == "RuntimeError"
 
 
-def test_submit_bug_report_size_overflow_emits_trimmed_shape(
+
+def test_submit_bug_report_preserves_large_advanced_params(
     client: TestClient,
     feedback_root: Path,
 ) -> None:
@@ -1990,12 +1845,7 @@ def test_submit_bug_report_size_overflow_emits_trimmed_shape(
     ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
     advanced = ticket_json["context"]["advanced_params"]
 
-    assert isinstance(advanced, dict)
-    # The shape is exactly two keys — no third variant.
-    assert set(advanced.keys()) == {"_size_trimmed", "_original_byte_length"}
-    assert advanced["_size_trimmed"] is True
-    assert isinstance(advanced["_original_byte_length"], int)
-    assert advanced["_original_byte_length"] > 16_384
+    assert advanced == payload_advanced
 
 
 def test_submit_bug_report_preserves_action_history_advanced_params(

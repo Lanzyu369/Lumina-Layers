@@ -229,7 +229,7 @@ def test_submit_returns_logical_dump_path_for_external_feedback_root(
     assert feedback_root.as_posix() not in dump_path
 
 
-def test_submit_redacts_final_artifact_disk_path_from_persisted_payload(
+def test_submit_preserves_final_artifact_disk_path_as_diagnostics(
     populated_client: tuple[TestClient, Path],
     tmp_path: Path,
 ) -> None:
@@ -254,7 +254,7 @@ def test_submit_redacts_final_artifact_disk_path_from_persisted_payload(
     ticket_dir = ticket_json.parent
     persisted = json.loads(ticket_json.read_text(encoding="utf-8"))
     active_ref = persisted["context"]["active_final_artifact_ref"]
-    assert "disk_path" not in active_ref
-    assert private_path.as_posix() not in json.dumps(persisted, ensure_ascii=False)
+    assert active_ref["disk_path"] == private_path.as_posix()
+    assert private_path.as_posix() in json.dumps(persisted, ensure_ascii=False)
     with zipfile.ZipFile(ticket_dir / "final.3mf") as project:
         assert project.read("3D/3dmodel.model") == b"3MFDATA_SENTINEL"

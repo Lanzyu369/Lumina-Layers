@@ -56,6 +56,7 @@ export interface BugReportContextPayload {
   active_session_ids: {
     converter: string | null;
     single_stage: string | null;
+    extractor?: string | null;
   };
   printer_id?: string;
   slicer?: string;
@@ -117,13 +118,16 @@ export interface BugReportContextPayload {
    */
   advanced_params?: AdvancedParams | null;
   /**
-   * Host-bound Creative Workshop runtime metadata. This deliberately
-   * excludes the source image, project payload, matrix, palette, object
-   * URLs, package paths, credentials, and signing material.
+   * Complete workflow store snapshots; binary source bytes travel separately
+   * in multipart attachments.
    *
-   * 创意工坊的宿主绑定运行信息；刻意不包含原图、工程载荷、矩阵、色板、
-   * 对象 URL、安装包路径、凭据或签名材料。
+   * 完整工作流状态快照；源文件二进制字节通过 multipart 附件发送。
    */
+  workflow_state?: Record<string, unknown>;
+  source_file_ids?: string[];
+  source_lut_names?: string[];
+  source_material_dir_names?: string[];
+  /** Compact Workshop summary; workflow_state also preserves the full store. */
   workshop?: WorkshopBugReportContext | null;
 }
 
@@ -190,19 +194,17 @@ export interface BugReportStatusResponse {
   held_back_attachments: BugReportHeldBackAttachment[];
 }
 
-export const MAX_BUG_REPORT_ORIGINAL_IMAGE_BYTES = 100 * 1024 * 1024;
-
 export async function submitBugReport(
   payload: BugReportRequestPayload,
   originalImage: File | null = null,
+  sourceFiles: ReadonlyArray<File> = [],
 ): Promise<BugReportResponse> {
-  if (originalImage) {
+  if (originalImage || sourceFiles.length > 0) {
     const form = new FormData();
     form.append("request_payload", JSON.stringify(payload));
-    if (originalImage.size <= MAX_BUG_REPORT_ORIGINAL_IMAGE_BYTES) {
-      form.append("original_image", originalImage, originalImage.name);
-    } else {
-      form.append("original_image_omission_reason", "too_large");
+    if (originalImage) form.append("original_image", originalImage, originalImage.name);
+    for (const file of sourceFiles) {
+      if (file !== originalImage) form.append("source_files", file, file.name);
     }
     const { data } = await apiClient.post<BugReportResponse>(
       "/feedback/bug-report",

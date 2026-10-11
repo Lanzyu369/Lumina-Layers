@@ -96,7 +96,7 @@ describe("clientLog", () => {
     vi.useRealTimers();
   });
 
-  it("stores and posts sanitized client logs", () => {
+  it("stores and posts full client logs", () => {
     postClientLog("preview: failed", {
       elapsedMs: 12.3456,
       method: "warn",
@@ -121,7 +121,7 @@ describe("clientLog", () => {
       }),
     );
     expect(logs[0].details).toEqual({
-      reason: `${"x".repeat(1200)}...<truncated>`,
+      reason: "x".repeat(1300),
       nested: { keep: true },
     });
     expect(fetch).toHaveBeenCalledWith(
@@ -275,7 +275,7 @@ describe("clientLog", () => {
     expect(getRecentClientLogs()).toHaveLength(2);
   });
 
-  it("redacts local file paths from buffered and relayed diagnostics", () => {
+  it("preserves local file paths from buffered and relayed diagnostics", () => {
     postClientLog("generate: response received", {
       method: "log",
       scope: "generate",
@@ -297,25 +297,25 @@ describe("clientLog", () => {
     const relayBody = String(vi.mocked(fetch).mock.calls[0]?.[1]?.body ?? "");
     const consoleLine = String(vi.mocked(console.log).mock.calls[0]?.[0] ?? "");
 
-    expect(serializedLog).not.toContain("/Users/min");
-    expect(serializedLog).not.toContain("E:/tmp");
-    expect(serializedLog).not.toContain("/private/tmp");
-    expect(serializedLog).not.toContain("/tmp/lumina");
-    expect(relayBody).not.toContain("/Users/min");
-    expect(relayBody).not.toContain("E:/tmp");
-    expect(relayBody).not.toContain("/private/tmp");
-    expect(relayBody).not.toContain("/tmp/lumina");
-    expect(consoleLine).not.toContain("/Users/min");
+    expect(serializedLog).toContain("/Users/min");
+    expect(serializedLog).toContain("E:/tmp");
+    expect(serializedLog).toContain("/private/tmp");
+    expect(serializedLog).toContain("/tmp/lumina");
+    expect(relayBody).toContain("/Users/min");
+    expect(relayBody).toContain("E:/tmp");
+    expect(relayBody).toContain("/private/tmp");
+    expect(relayBody).toContain("/tmp/lumina");
+    expect(consoleLine).toContain("/Users/min");
     expect(consoleLine).not.toContain("E:/tmp");
     expect(consoleLine).not.toContain("/private/tmp");
     expect(consoleLine).not.toContain("/tmp/lumina");
-    expect(serializedLog).toContain("<redacted:local-path>");
-    expect(consoleLine).toContain("<redacted:local-path>");
+
+
     expect(serializedLog).toContain("/api/files/output-model");
     expect(relayBody).toContain("/api/files/output-model");
   });
 
-  it("redacts local file paths from diagnostic object keys", () => {
+  it("preserves local file paths from diagnostic object keys", () => {
     postClientLog("generate: keyed path diagnostic", {
       method: "error",
       scope: "generate",
@@ -336,31 +336,30 @@ describe("clientLog", () => {
     const relayKeys = collectObjectKeys(relayPayload.details).join("\n");
     const consoleLine = String(vi.mocked(console.error).mock.calls[0]?.[0] ?? "");
 
-    expect(serializedLog).not.toContain("/Users/min");
-    expect(relayBody).not.toContain("/Users/min");
+    expect(serializedLog).toContain("/Users/min");
+    expect(relayBody).toContain("/Users/min");
     expect(consoleLine).not.toContain("/Users/min");
-    expect(logKeys).not.toContain("/Users/min");
-    expect(logKeys).not.toContain("C:\\Users\\min");
-    expect(relayKeys).not.toContain("/Users/min");
-    expect(relayKeys).not.toContain("C:\\Users\\min");
-    expect(serializedLog).toContain("<redacted:local-path>");
-    expect(relayBody).toContain("<redacted:local-path>");
-    expect(logKeys).toContain("<redacted:local-path>");
-    expect(relayKeys).toContain("<redacted:local-path>");
+    expect(logKeys).toContain("/Users/min");
+    expect(logKeys).toContain("C:\\Users\\min");
+    expect(relayKeys).toContain("/Users/min");
+    expect(relayKeys).toContain("C:\\Users\\min");
+
+
+
+
   });
 
-  it("exports only the newest bounded logs for bug reports", () => {
+  it("exports all collected logs for bug reports", () => {
     for (let index = 0; index < 600; index += 1) {
       postClientLog(`event-${index}`, { elapsedMs: index });
     }
 
-    // Buffer cap is 500; the 100 oldest are evicted.
-    // 缓冲容量 500，最早的 100 条被裁掉。
+    // Retain the full run even after hundreds of events.
     const logs = getRecentClientLogs();
 
-    expect(logs).toHaveLength(500);
-    expect(logs[0].label).toBe("event-100");
-    expect(logs[499].label).toBe("event-599");
+    expect(logs).toHaveLength(600);
+    expect(logs[0].label).toBe("event-0");
+    expect(logs[599].label).toBe("event-599");
   });
 
   it("captures uncaught browser errors into the same buffer", () => {
@@ -474,7 +473,7 @@ describe("clientLog", () => {
     expect(labels.indexOf("old-event-a")).toBeLessThan(labels.indexOf("live-event"));
   });
 
-  it("redacts local file paths when importing persisted client logs", () => {
+  it("preserves local file paths when importing persisted client logs", () => {
     _storage._map.set(
       CLIENT_LOG_SESSION_STORAGE_KEY,
       JSON.stringify([
@@ -500,16 +499,16 @@ describe("clientLog", () => {
     const serializedLog = JSON.stringify(logs[0]);
     const logKeys = collectObjectKeys(logs[0]?.details).join("\n");
 
-    expect(serializedLog).not.toContain("/Users/min");
-    expect(serializedLog).not.toContain("C:\\tmp");
-    expect(serializedLog).not.toContain("/private/tmp");
-    expect(logKeys).not.toContain("/Users/min");
-    expect(logKeys).not.toContain("C:\\Users\\min");
-    expect(serializedLog).toContain("<redacted:local-path>");
-    expect(logKeys).toContain("<redacted:local-path>");
+    expect(serializedLog).toContain("/Users/min");
+    expect(JSON.parse(serializedLog).details.nested.file_path).toBe("C:\\tmp\\upload.png");
+    expect(serializedLog).toContain("/private/tmp");
+    expect(logKeys).toContain("/Users/min");
+    expect(logKeys).toContain("C:\\Users\\min");
+
+
   });
 
-  it("dedupes identical persisted+live entries by (timestamp, label, scope, phase)", () => {
+  it("preserves repeated persisted entries with the same timestamp and label", () => {
     const shared = {
       timestamp: "2026-05-11T10:00:00.000Z",
       method: "warn",
@@ -526,10 +525,17 @@ describe("clientLog", () => {
     loadPersistedLogs();
     const merged = getRecentClientLogs(500);
 
-    // Two identical persisted entries collapse to one after merge-dedupe.
-    // 两条完全相同的持久化记录会被合并去重。
     const matching = merged.filter((entry) => entry.label === "preview: failed");
-    expect(matching).toHaveLength(1);
+    expect(matching).toHaveLength(2);
+  });
+
+  it("preserves different diagnostics with the same timestamp and label", () => {
+    const entries = ["first", "second", "second"].map((message) => ({
+      timestamp: "2026-10-10T00:00:00Z", method: "error", label: "failure", elapsed_ms: null, details: { message },
+    }));
+    _storage._map.set(CLIENT_LOG_SESSION_STORAGE_KEY, JSON.stringify(entries));
+    loadPersistedLogs();
+    expect(getRecentClientLogs()).toEqual(entries);
   });
 
   it("downgrades gracefully when sessionStorage throws a quota error", () => {
@@ -546,8 +552,8 @@ describe("clientLog", () => {
     }
 
     expect(_storage._setItemSpy).toHaveBeenCalled();
-    // Retry happened at least once, so there are two calls total.
-    expect(_storage._setItemSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(_storage._setItemSpy).toHaveBeenCalledTimes(1);
+    expect(getRecentClientLogs()).toHaveLength(CLIENT_LOG_FLUSH_PUSH_THRESHOLD);
   });
 
   it("disables persistence on non-quota setItem failure and stops retrying", () => {
