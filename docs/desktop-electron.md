@@ -50,6 +50,14 @@ python scripts/build_3mf_native_wheels.py `
 生成目录仅受控更新原生 wheel，其他文件保留。完成后再执行下面的
 `pip install -r requirements.txt`；原生依赖的构建流程也按此顺序安装。
 
+SVG 运行时固定使用独立项目发布的 `lumina-svg-core==0.3.1`（AGPLv3）。
+`requirements-native-svg.txt` 会从 GitHub Releases 选择匹配 Python、系统和架构的安装包。
+支持 Python 3.12～3.14；Linux x86-64 要求 glibc 2.28+，Mac 的 Python 3.12/3.13
+安装包要求 macOS 12+，3.14 要求 macOS 14+。没有兼容 wheel 时会从发行源码包构建，
+需要 Git 和 C++17 编译器。已有开发环境可单独执行
+`python -m pip install --upgrade -r requirements-native-svg.txt`。
+桌面构建会拒绝旧版本，并将新版的 `_build_info.json`、两个原生扩展及许可证一同打包。
+
 ## 2. 环境准备（一次性）
 
 按顺序执行以下四步；打包 Windows 安装版时还需要第 5 步。任何一步缺了，客户端都会在启动链路或构建链路的对应环节失败。下面先列 Windows PowerShell 命令：

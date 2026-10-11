@@ -305,10 +305,11 @@ def test_native_svg_workflow_covers_all_release_realities() -> None:
     ):
         assert job_or_probe in workflow
     assert (
-        "python -m pip wheel ./native/lumina-svg-core "
-        "--no-deps --wheel-dir wheelhouse"
+        "python -m pip download --no-index --only-binary=:all: --no-deps "
+        "-r requirements-native-svg.txt --dest wheelhouse"
     ) in workflow
-    assert "if: runner.os != 'Linux'" in workflow
+    assert 'checksums[wheel.name]' in workflow
+    assert "pip wheel ./native/lumina-svg-core" not in workflow
     assert "pyinstaller --noconfirm --clean lumina_studio.spec" in workflow
     assert (
         "actions/upload-artifact@"
@@ -317,10 +318,11 @@ def test_native_svg_workflow_covers_all_release_realities() -> None:
     for pinned_action in (
         "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
         "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-        "pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074",
     ):
         assert pinned_action in workflow
-    assert "cd native/lumina-svg-core" in workflow
+    assert "pytest tests --ignore=tests/test_distribution_contract.py" in workflow
+    assert 'lumina_svg_core.__version__ == "0.3.1"' in workflow
+    assert "lumina_svg_core/_build_info.json" in workflow
     assert '"shapely>=2,<3"' in workflow
     for path_filter in (
         '"core/**"',

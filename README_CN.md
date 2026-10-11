@@ -269,6 +269,12 @@ python start_all.py
 启动器会同时启动后端和前端。在浏览器中打开启动器显示的前端地址
 （默认：`http://localhost:4174`）。
 
+SVG 分析固定使用独立项目发布的 `lumina-svg-core==0.3.1`（AGPLv3）。
+`requirements-native-svg.txt` 会从 GitHub Releases 选择匹配 Python 3.12～3.14、
+系统和架构的安装包。Linux x86-64 要求 glibc 2.28+；Mac 的 Python 3.12/3.13
+包要求 macOS 12+，3.14 要求 macOS 14+。没有兼容 wheel 时会从发行源码包构建，
+需要 Git 和 C++17 编译器。详见[发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.1/docs/DISTRIBUTIONS.md)。
+
 本地或桌面安装必须先用固定提交的公开 Fat Cat 根项目和已打补丁的
 `neroued-3mf` 源码生成 `wheelhouse/3mf`，不要复制其他操作系统或 CPU 架构的
 wheel。Fat Cat 源码固定为提交 `673b1b694dd7c3369f5094fb8ddbf77fdb869d90`，

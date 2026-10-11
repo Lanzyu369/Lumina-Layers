@@ -14,8 +14,11 @@
   retired `VITE_ALLOW_ALL_HOSTS` variable no longer bypasses the host allowlist.
 - PostgreSQL backends and migrations remain opt-in. Provision a database
   independently and follow the [server backend guide](server-mode-scaffold.md).
-- Native SVG wheels and checks run on Windows, macOS and host Linux. Linux
-  wheels use the Ubuntu 24.04 system ABI; an older glibc host needs a source build.
+- Native SVG uses the independent AGPL-3.0-only `lumina-svg-core` 0.3.1 release.
+  Studio CI installs and verifies the published wheels on Windows, both Mac
+  architectures and Linux. Linux x86-64 wheels use manylinux_2_28 / glibc 2.28+;
+  Python 3.12/3.13 Mac wheels require macOS 12+, and Python 3.14 requires 14+.
+  Unsupported wheel targets need the release source archive and a C++17 toolchain.
 - Linux cgroup CPU/memory limits and the optional local GEOS dense-buffer
   runtime remain independent of deployment packaging.
 - The Studio repository's Windows desktop build uses `scripts/build_desktop.py`
@@ -46,7 +49,9 @@ Linux 资源限额检测、可选 PostgreSQL 后端及本地 GEOS 构建均继�
 官方 Windows/macOS 内测流水线位于私有 Lumina-Distribution 仓库，其覆盖脚本
 需要同步 FatCat 依赖及选择器资源合同后才能集成本分支。旧 Gradio
 启动文件的打包流程及本体内置 3MF 模板文件已移除，元数据配置来自 FatCat。
-Linux 原生组件改为直接在 Ubuntu 24.04 主机上构建；较旧 glibc 系统需要源码构建。
+SVG 使用独立项目发布的 AGPLv3 运行时 `lumina-svg-core` 0.3.1，CI 安装并核验
+发布包。Linux x86-64 要求 glibc 2.28+；Mac 的 Python 3.12/3.13 包要求 macOS 12+，
+3.14 要求 macOS 14+。没有兼容 wheel 的平台需要从发行源码包构建。
 
 2026-10-06 起移除 Docker 构建、部署、定时自动更新、数据库容器配置、
 相关 CI 及公网测试访问旁路。旧开关 `LUMINA_ALLOW_PUBLIC_GRAY_API` 和

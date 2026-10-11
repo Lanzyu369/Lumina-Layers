@@ -34,6 +34,9 @@ from scripts.fatcat_packaging_contract import (  # noqa: E402
     FATCAT_WRITER_VERSION,
     validate_fatcat_packaging_contract,
 )
+from scripts.native_svg_packaging_contract import (  # noqa: E402
+    validate_native_svg_runtime_version,
+)
 
 FRONTEND_DIR = ROOT / "frontend"
 ELECTRON_DIR = ROOT / "electron"
@@ -71,7 +74,10 @@ def run(cmd, cwd=None, env_extra=None):
 
 
 def check_core_geometry_dependencies_available() -> None:
-    """Fail packaging when slicer-safe vector triangulation is unavailable."""
+    """Require the pinned SVG runtime and slicer-safe vector triangulation.
+
+    要求指定版本的 SVG 运行时和切片安全的矢量三角化依赖。
+    """
 
     missing = []
     for module_name in CORE_GEOMETRY_REQUIRED_MODULES:
@@ -82,13 +88,17 @@ def check_core_geometry_dependencies_available() -> None:
 
     if not missing:
         native = importlib.import_module("lumina_svg_core")
-        if not callable(getattr(native, "project_regions_to_grid", None)):
+        try:
+            validate_native_svg_runtime_version(native)
+        except RuntimeError as exc:
+            missing.append(("lumina_svg_core", exc))
+        if not missing and not callable(getattr(native, "project_regions_to_grid", None)):
             missing.append(("lumina_svg_core.project_regions_to_grid", RuntimeError(
-                "Rebuild requirements-native-svg.txt from this checkout; the installed native library is stale."
+                "Reinstall requirements-native-svg.txt; the installed native library is incomplete."
             )))
-        elif not callable(getattr(native, "canonicalize_grid_regions", None)):
+        elif not missing and not callable(getattr(native, "canonicalize_grid_regions", None)):
             missing.append(("lumina_svg_core.canonicalize_grid_regions", RuntimeError(
-                "Rebuild requirements-native-svg.txt from this checkout; the installed native library is stale."
+                "Reinstall requirements-native-svg.txt; the installed native library is incomplete."
             )))
 
     if not missing:

@@ -23,6 +23,7 @@ from scripts.fatcat_packaging_contract import (
     FATCAT_ADAPTER_MODULE,
     FATCAT_MODULE,
 )
+from scripts.native_svg_packaging_contract import validate_native_svg_runtime_version
 
 block_cipher = None
 ROOT = Path.cwd()
@@ -32,6 +33,7 @@ NEROUED_3MF_PACKAGE = "neroued_3mf"
 NEROUED_3MF_HIDDENIMPORTS = ("neroued_3mf", "neroued_3mf._neroued_3mf")
 FATCAT_METADATA_MODULE = FATCAT_MODULE
 LUMINA_SVG_CORE_PACKAGE = "lumina_svg_core"
+validate_native_svg_runtime_version(importlib.import_module(LUMINA_SVG_CORE_PACKAGE))
 LUMINA_SVG_CORE_EXTENSION = "lumina_svg_core._lumina_svg_core"
 LUMINA_SVG_COMPENSATION_EXTENSION = "lumina_svg_core._lumina_svg_compensation"
 COLORCHECKER_DATA_DIR = ROOT / "core" / "colorchecker" / "data"

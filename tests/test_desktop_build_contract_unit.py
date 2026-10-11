@@ -9,6 +9,8 @@ import runpy
 import sys
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 FAKE_NATIVE_EXTENSION_PATH = Path("/tmp") / (
     f"_lumina_svg_core{EXTENSION_SUFFIXES[0]}"
@@ -148,6 +150,14 @@ def test_pyinstaller_spec_explicitly_bundles_native_svg_extension(
         str(FAKE_NATIVE_EXTENSION_PATH.resolve()),
         "lumina_svg_core",
     ) in namespace["backend_binaries"]
+
+
+def test_direct_pyinstaller_spec_rejects_the_old_svg_runtime(monkeypatch) -> None:
+    import lumina_svg_core
+
+    monkeypatch.setattr(lumina_svg_core, "__version__", "0.3.0")
+    with pytest.raises(RuntimeError, match="0.3.1"):
+        _load_spec_namespace(monkeypatch)
 
 
 def test_pyinstaller_spec_bundles_colorchecker_reference_data(monkeypatch) -> None:

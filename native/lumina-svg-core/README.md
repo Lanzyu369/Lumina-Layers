@@ -1,5 +1,11 @@
 # lumina-svg-core
 
+> Historical 0.3.0 source and benchmark snapshot. Lumina Studio now installs
+> the independent repository's [0.3.1 release](https://github.com/lumina-layer-studio/lumina-svg-core/releases/tag/v0.3.1)
+> through `requirements-native-svg.txt`. Engine development and wheel builds
+> belong to that repository; this snapshot remains for existing benchmark
+> fixtures and compatibility checks.
+
 `lumina-svg-core` is an Apache-2.0, print-oriented native SVG geometry engine.
 It uses a fixed LunaSVG/PlutoVG layout front end and Clipper2 integer polygon
 kernel, then exposes immutable NumPy-compatible buffers through pybind11.
