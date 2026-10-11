@@ -105,7 +105,8 @@ headers.
 - `frontend/src/workshop/runtime/WorkshopFrame.tsx`: sandbox iframe,
   handshake, candidate health, and teardown.
 - `frontend/src/workshop/runtime/rpcHost.ts`: identity, permission, rate,
-  timeout, duplicate-request, and payload enforcement.
+  timeout, in-flight duplicate-request, and payload enforcement. Completed
+  request IDs are released; a frame has no lifetime request-count quota.
 - `frontend/src/workshop/runtime/handlers.ts`: host-owned capability handlers.
 - `frontend/src/workshop/projectStorage.ts`: module namespaces, 64 MiB record,
   256 MiB module quota, 1 MiB recipe quota, and snapshots.

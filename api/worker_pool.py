@@ -104,18 +104,9 @@ def _resolve_max_tasks_per_child() -> int | None:
 def _normalize_windows_output_stream(stream: Any) -> Any:
     """Return a writable UTF-8 stream for a Windows worker process.
 
-    PyInstaller windowed executables intentionally expose ``None`` for the
-    standard streams.  Workers still need a harmless target because logging
-    libraries may inspect or write to those streams during initialization.
+    Workers inherit the parent's log path and normalize console encoding.
     """
 
-    if stream is None:
-        return open(  # noqa: SIM115 - process-lifetime fallback stream.
-            os.devnull,
-            "w",
-            encoding="utf-8",
-            errors="replace",
-        )
     reconfigure = getattr(stream, "reconfigure", None)
     if callable(reconfigure):
         try:
@@ -123,12 +114,6 @@ def _normalize_windows_output_stream(stream: Any) -> Any:
         except (OSError, ValueError):
             pass
     return stream
-
-
-def _worker_smoke_task() -> int:
-    """Return the worker PID for the frozen-runtime CI smoke test."""
-
-    return os.getpid()
 
 
 def _worker_init() -> None:

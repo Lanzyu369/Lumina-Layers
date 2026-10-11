@@ -351,6 +351,17 @@ def test_s09_trims_template_filament_slots_for_material_archive(tmp_path) -> Non
     assert captured["preserve_template_filament_slots"] is False
 
 
+@pytest.fixture
+def capture_export_logs(caplog):
+    target_logger = logging.getLogger("lumina.core.pipeline.s09_export_3mf")
+    target_logger.addHandler(caplog.handler)
+    try:
+        yield
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+
+@pytest.mark.usefixtures("capture_export_logs")
 def test_s09_empty_scene_error_log_has_actionable_fields(tmp_path, caplog) -> None:
     empty_scene = trimesh.Scene()
     ctx = _make_minimal_s09_ctx(tmp_path, scene=empty_scene)
@@ -384,6 +395,7 @@ def test_s09_empty_scene_error_log_has_actionable_fields(tmp_path, caplog) -> No
     assert record.out_path == str(tmp_path / "empty-scene.3mf")
 
 
+@pytest.mark.usefixtures("capture_export_logs")
 def test_s09_writer_error_log_has_actionable_fields(tmp_path, caplog) -> None:
     ctx = _make_minimal_s09_ctx(tmp_path)
 

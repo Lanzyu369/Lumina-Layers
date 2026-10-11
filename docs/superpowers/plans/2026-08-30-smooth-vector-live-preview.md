@@ -627,4 +627,4 @@ Never push to `dev-refactor`, never force-push, and do not merge.
 
 - [ ] **Step 5: Open one independent PR against `dev-refactor`**
 
-Use an English-first, Chinese-second PR body. State explicitly that the PR is separate from #585, preserves #586’s lightweight-preview authority, changes no 3MF geometry, and includes the default-on Settings fallback. Report exact head SHA, PR URL, test matrix, R4C1 measurements, and limitations to the user.
+State explicitly in the PR description that the PR is separate from #585, preserves #586’s lightweight-preview authority, changes no 3MF geometry, and includes the default-on Settings fallback. Report exact head SHA, PR URL, test matrix, R4C1 measurements, and limitations to the user.

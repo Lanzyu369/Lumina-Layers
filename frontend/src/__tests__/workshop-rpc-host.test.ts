@@ -284,6 +284,36 @@ describe("createWorkshopRpcHost", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  it("releases request IDs after a completed call", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const host = createWorkshopRpcHost(hostOptions({ "ui.getState": handler }));
+
+    const first = await host.dispatch(request("ui.getState", {}, "reused"));
+    const second = await host.dispatch(request("ui.getState", {}, "reused"));
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(2);
+    host.close();
+  });
+
+  it("keeps a long-lived frame usable beyond 10,000 completed calls", async () => {
+    let now = 0;
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const host = createWorkshopRpcHost({
+      ...hostOptions({ "ui.getState": handler }),
+      now: () => now,
+    });
+
+    for (let index = 0; index < 10_001; index += 1) {
+      now += 1000;
+      const response = await host.dispatch(request("ui.getState", {}, `long-lived-${index}`));
+      expect(response.ok).toBe(true);
+    }
+    expect(handler).toHaveBeenCalledTimes(10_001);
+    host.close();
+  });
+
   it("rejects unknown methods and wrong protocol versions", async () => {
     const host = createWorkshopRpcHost(hostOptions({}));
 

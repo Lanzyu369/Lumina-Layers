@@ -109,7 +109,7 @@ Expected: collection fails because `core.model_surface.validation` does not exis
 
 - [ ] **Step 3: Implement the validation module**
 
-Implement these stable constants and public functions with explicit type hints and bilingual Google-style docstrings:
+Implement these stable constants and public functions with explicit type hints and descriptions of their public behavior:
 
 ```python
 MODEL_SURFACE_MESH_NOT_WATERTIGHT = "model_surface_mesh_not_watertight"
@@ -560,8 +560,8 @@ after the final code change.
 
 - [ ] **Step 2: Commit any final verified adjustment**
 
-Stage only explicit model-surface files. Use Conventional Commits and an English-first,
-Chinese-second body. Do not stage runtime logs, downloaded models, generated 3MF files, `.venv`,
+Stage only explicit model-surface files. Use Conventional Commits. Do not stage
+runtime logs, downloaded models, generated 3MF files, `.venv`,
 or `node_modules`.
 
 - [ ] **Step 3: Push the topic branch**
@@ -580,7 +580,7 @@ Use title:
 fix(model-surface): validate geometry before surface generation
 ```
 
-The English-first, Chinese-second PR body must include root cause, exact product changes, RED/GREEN
+The PR description must include root cause, exact product changes, RED/GREEN
 evidence, Chrome/Electron results, focused gates, the missing original `UwU Ghast.stl` limitation,
 and explicit reproduction steps with both real local models.
 

@@ -271,12 +271,10 @@ class LuminaImageProcessor:
         )
         rgb_arr, mask_transparent = self._extract_rgba_arrays(img)
         rgb_arr = self._maybe_apply_auto_dynamic_range(rgb_arr)
-        matched_rgb, material_matrix, bg_ref, debug_data = self._run_mode_pipeline(
+        matched_rgb, material_matrix, debug_data = self._run_mode_pipeline(
             modeling_mode, rgb_arr, target_h, target_w, quantize_colors, blur_kernel, smooth_sigma
         )
         matched_rgb, material_matrix = self._apply_cleanup(modeling_mode, matched_rgb, material_matrix)
-        # bg_ref is no longer used post auto_bg removal; suppress unused warning
-        del bg_ref
         # Result contract keys: 'matched_rgb', 'material_matrix', 'mask_solid',
         # 'dimensions', 'pixel_scale', 'mode_info', 'quantized_image'.
         result = self._finalize_process_result(
@@ -411,8 +409,8 @@ class LuminaImageProcessor:
             return self._process_high_fidelity_mode(
                 rgb_arr, target_h, target_w, quantize_colors, blur_kernel, smooth_sigma
             )
-        matched_rgb, material_matrix, bg_ref = self._process_pixel_mode(rgb_arr, target_h, target_w)
-        return matched_rgb, material_matrix, bg_ref, None
+        matched_rgb, material_matrix = self._process_pixel_mode(rgb_arr, target_h, target_w)
+        return matched_rgb, material_matrix, None
 
     def _build_process_result(
         self,
@@ -576,7 +574,7 @@ class LuminaImageProcessor:
         High-fidelity mode image processing with filtering, quantization and LUT matching.
 
         Returns:
-            tuple: (matched_rgb, material_matrix, quantized_image, debug_data)
+            tuple: (matched_rgb, material_matrix, debug_data)
         """
         quantized_image, unique_colors, rgb_processed = self._prepare_high_fidelity_images(
             rgb_arr, quantize_colors, blur_kernel, smooth_sigma
@@ -595,7 +593,7 @@ class LuminaImageProcessor:
         debug_data = self._build_high_fidelity_debug_data(
             quantized_image, unique_colors, rgb_processed, blur_kernel, smooth_sigma
         )
-        return matched_rgb, material_matrix, quantized_image, debug_data
+        return matched_rgb, material_matrix, debug_data
 
     def _prepare_high_fidelity_images(self, rgb_arr, quantize_colors, blur_kernel, smooth_sigma):
         """Run filtering + quantization and compute unique colors."""
@@ -702,11 +700,11 @@ class LuminaImageProcessor:
         Pixel art mode: deduplicate colors then match, no smoothing.
 
         Returns:
-            tuple: (matched_rgb, material_matrix, bg_reference)
+            tuple: (matched_rgb, material_matrix)
         """
         self._log_pixel_mode_step("start")
         flat_rgb = rgb_arr.reshape(-1, 3)
-        unique_colors, _inverse = np.unique(flat_rgb, axis=0, return_inverse=True)
+        unique_colors = np.unique(flat_rgb, axis=0)
         self._last_unique_colors = int(len(unique_colors))
         self._log_pixel_mode_step("dedup", pixel_count=len(flat_rgb), unique_count=len(unique_colors))
         unique_match = self._match_pixel_unique_colors(unique_colors)
@@ -721,7 +719,7 @@ class LuminaImageProcessor:
             self.layer_count,
         )
         self._log_pixel_mode_step("complete")
-        return matched_rgb, material_matrix, rgb_arr
+        return matched_rgb, material_matrix
 
     def _match_pixel_unique_colors(self, unique_colors):
         unique_match = match_colors_to_lut(

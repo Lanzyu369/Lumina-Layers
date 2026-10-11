@@ -2,7 +2,7 @@
 
 ## 概述
 
-图像转换系统已完成模块化重构。原 `converter.py`（4523行）和 `image_processing.py`（930行）被拆分为独立的 step 模块，原文件保留为薄包装层确保向后兼容。
+图像转换系统已完成模块化重构。转换与图像处理由独立的 step 模块承担。`converter.py` 保留公共转换入口和兼容编辑操作，`image_processing.py` 负责图像处理编排。
 
 系统包含两条流水线：
 
@@ -23,14 +23,39 @@ core/pipeline/
 ├── p01-p06_*.py             ← 图像处理子流水线步骤
 └── processing_ops/          ← 原子图像处理操作
     ├── __init__.py
-    ├── background_remover.py
     ├── bilateral_filter.py
     ├── ...
     └── wireframe_extractor.py
 
-core/converter.py            ← 薄包装层（保留原有函数签名，委托给 pipeline）
+core/converter.py            ← 公共转换入口与兼容编辑操作
 core/image_processing.py     ← 薄编排层（保留原有 API，委托给 p01-p06）
 ```
+
+图像透明掩码和目标尺寸计算由实际使用的 `core/image_processing.py` 维护，独立的旧 helper 已移除。
+颜色推荐、选区元数据和高亮掩码计算由 `core/pipeline/pipeline_utils.py` 维护；旧 API 导入路径仅作兼容重导出。
+
+### 转换工作区的请求与状态
+
+`api/routers/converter/generation_params.py` 维护普通生成、大画幅和拼图共用的工作进程参数。
+各路由仍负责校验、编辑快照、会话与临时文件，保留拼图轮廓、大画幅分片和材料缓存等流程差异。
+批量工作进程的公开参数签名保持原样。
+
+前端仍只有一个 `useConverterStore`，其字段、动作和对外导入入口保持兼容。
+`frontend/src/stores/converter/` 按以下职责组织代码：
+
+| 文件 | 职责 |
+| --- | --- |
+| `types.ts` | 作品状态、选区和动作的类型定义 |
+| `sources.ts` | LUT、原生数据库与材料档案的选择规则和来源参数 |
+| `requests.ts` | 预览、生成、批量请求的公共参数、浮雕高度和设备选项 |
+| `editorState.ts` | 编辑结果、选区、历史与配方数据的状态投影和复制 |
+| `previewArtifacts.ts` | GLB 轮询、矢量渲染重建和分层预览；拥有对应取消序号与队列 |
+| `generationActions.ts` | 普通、大画幅、拼图和批量生成；拥有生成请求序号及下载失效处理 |
+| `store.ts` | 状态装配、输入与编辑动作、编辑提交确认和设置持久化 |
+
+生成动作通过同一个状态的 getter/setter 和编辑确认函数取得当前作品信息。
+来源选择、请求组装和编辑结果投影不另建作品状态；派生预览不反向导入 store。
+切换会话、取消任务和丢弃迟到响应的判断仍在负责异步工作的模块内完成。
 
 ---
 
@@ -151,10 +176,8 @@ core/image_processing.py     ← 薄编排层（保留原有 API，委托给 p01
 | 文件                        | 职责                                          |
 | --------------------------- | --------------------------------------------- |
 | `__init__.py`               | 包初始化，导出所有操作函数                    |
-| `background_remover.py`     | 去除图片背景（透明/白色背景处理）             |
 | `bilateral_filter.py`       | 双边滤波：保边去噪                            |
 | `median_filter.py`          | 中值滤波：去除椒盐噪声                        |
-| `image_scaler.py`           | 图像缩放：按目标尺寸缩放图片                  |
 | `kmeans_quantizer.py`       | K-Means 量化：将图像颜色减少到指定数量        |
 | `lut_loader.py`             | LUT 加载器：读取 .npy 格式的 LUT 调色板文件   |
 | `lut_color_matcher.py`      | LUT 颜色匹配：将像素颜色匹配到最近的 LUT 颜色 |
@@ -168,6 +191,9 @@ core/image_processing.py     ← 薄编排层（保留原有 API，委托给 p01
 ---
 
 ## 五、兼容层
+
+`core.converter` 的 LUT 颜色模式和图片类型判断直接重导出 `pipeline_utils` 的实现。
+颜色数量及配方层数的推断使用已有 `ColorMode` 注册表，兼容入口不再维护第二套判断阶梯。
 
 原文件保留为薄包装层，确保所有外部导入（api/、ui/、workers/）无需修改。
 
@@ -217,10 +243,10 @@ image_path + lut_path
 
 | 文件                                       | 职责                                  |
 | ------------------------------------------ | ------------------------------------- |
-| `tests/test_pipeline_step_properties.py`   | step 模块的 Property-Based 测试       |
+| `tests/test_pipeline_step_inputs_unit.py`  | step 缺失输入处理与可选配方跳过测试   |
 | `tests/test_pipeline_step_modules_unit.py` | step 模块的单元测试                   |
 | `tests/test_coordinator_properties.py`     | coordinator 的 Property-Based 测试    |
-| `tests/test_processing_ops_properties.py`  | processing_ops 的 Property-Based 测试 |
+| `tests/test_processing_ops_properties.py`  | 图像处理属性与真实处理结果契约测试   |
 | `tests/test_processing_ops_unit.py`        | processing_ops 的单元测试             |
 | `tests/test_backward_compat_properties.py` | 向后兼容性的 Property-Based 测试      |
 
@@ -231,7 +257,7 @@ image_path + lut_path
 python -m pytest tests/ -v
 
 # 只运行 pipeline 相关测试
-python -m pytest tests/test_pipeline_step_properties.py tests/test_pipeline_step_modules_unit.py tests/test_coordinator_properties.py tests/test_processing_ops_properties.py tests/test_processing_ops_unit.py tests/test_backward_compat_properties.py -v
+python -m pytest tests/test_pipeline_step_inputs_unit.py tests/test_pipeline_step_modules_unit.py tests/test_coordinator_properties.py tests/test_processing_ops_properties.py tests/test_processing_ops_unit.py tests/test_backward_compat_properties.py -v
 
 # 带统计信息
 python -m pytest tests/ --hypothesis-show-statistics

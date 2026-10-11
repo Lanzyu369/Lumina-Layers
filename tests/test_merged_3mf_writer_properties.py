@@ -28,7 +28,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import trimesh
 
-from config import TEMP_DIR
 from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
@@ -79,6 +78,7 @@ def _make_source_3mf(
         preview_colors=preview_colors,
         settings={},
         color_mode="4-Color",
+        enable_wipe_tower_auto_placement=False,
     )
 
     # Compute actual bbox from the scene.
@@ -91,79 +91,48 @@ def _make_source_3mf(
 # ---------------------------------------------------------------------------
 
 _hex_color_strategy = st.from_regex(r"#[0-9A-Fa-f]{6}", fullmatch=True)
-_ascii_name_strategy = st.text(
-    alphabet=st.characters(whitelist_categories=("L", "N"), whitelist_characters="_- "),
+_material_name_strategy = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_- 红绿蓝白黑耗材",
     min_size=1,
     max_size=20,
 )
 
 
 @st.composite
-def _merged_items_strategy(draw: st.DrawFn) -> list[tuple[MergedItem, float, float]]:
-    """Generate N ∈ [2, 5] MergedItems with source 3MFs.
-
-    Returns list of (MergedItem, source_min_z, source_max_z) tuples.
-    """
+def _merged_items_strategy(draw: st.DrawFn) -> list[dict]:
+    """Generate pure input data; file creation belongs in the test body."""
     n = draw(st.integers(min_value=2, max_value=5))
-    os.makedirs(TEMP_DIR, exist_ok=True)
-
-    # A global slot ID identifies the same material in every input item.
     palette_ids = draw(st.lists(
         st.integers(min_value=0, max_value=16), min_size=1, max_size=8, unique=True,
     ))
     palette_names = draw(st.lists(
-        _ascii_name_strategy, min_size=len(palette_ids), max_size=len(palette_ids), unique=True,
+        _material_name_strategy, min_size=len(palette_ids), max_size=len(palette_ids), unique=True,
     ))
     global_palette = {
         slot_id: MaterialSlot(
             slot_id=slot_id, slot_name=name,
-            preview_color=draw(_hex_color_strategy), material_id=draw(_ascii_name_strategy),
+            preview_color=draw(_hex_color_strategy), material_id=draw(_material_name_strategy),
         )
         for slot_id, name in zip(palette_ids, palette_names)
     }
-    items: list[tuple[MergedItem, float, float]] = []
-    for idx in range(n):
-        num_slots = draw(st.integers(min_value=1, max_value=min(4, len(palette_ids))))
-        slot_ids = draw(
-            st.lists(
-                st.sampled_from(palette_ids),
-                min_size=num_slots,
-                max_size=num_slots,
-                unique=True,
-            )
-        )
-        slots = tuple(
-            replace(global_palette[sid], source_slot_index=index)
-            for index, sid in enumerate(slot_ids)
-        )
-
-        # Use slot_names for the 3MF fixture.
-        slot_names = [s.slot_name for s in slots]
-        preview_colors = {s.slot_name: _hex_to_rgba(s.preview_color) for s in slots}
-
-        # Random offsets to ensure min_x/min_y != 0 for some items.
-        offset_x = draw(st.floats(min_value=-20.0, max_value=50.0, allow_nan=False, allow_infinity=False))
-        offset_y = draw(st.floats(min_value=-20.0, max_value=50.0, allow_nan=False, allow_infinity=False))
-        z_height = draw(st.floats(min_value=1.0, max_value=10.0, allow_nan=False, allow_infinity=False))
-
-        src_path, _min_x, _min_y, min_z, max_z = _make_source_3mf(
-            TEMP_DIR, slot_names, preview_colors, offset_x, offset_y, z_height
-        )
-
-        tx = draw(st.floats(min_value=0.0, max_value=200.0, allow_nan=False, allow_infinity=False))
-        ty = draw(st.floats(min_value=0.0, max_value=200.0, allow_nan=False, allow_infinity=False))
-
-        item = MergedItem(
-            source_filename=f"item_{idx}.png",
-            source_3mf_path=src_path,
-            slots=slots,
-            tx_mm=tx,
-            ty_mm=ty,
-        )
-        items.append((item, min_z, max_z))
-
+    items = []
+    for _ in range(n):
+        slot_ids = draw(st.lists(
+            st.sampled_from(palette_ids),
+            min_size=1, max_size=min(4, len(palette_ids)), unique=True,
+        ))
+        items.append({
+            "slots": tuple(
+                replace(global_palette[sid], source_slot_index=index)
+                for index, sid in enumerate(slot_ids)
+            ),
+            "offset_x": draw(st.floats(-20.0, 50.0)),
+            "offset_y": draw(st.floats(-20.0, 50.0)),
+            "z_height": draw(st.floats(1.0, 10.0)),
+            "tx": draw(st.floats(0.0, 200.0)),
+            "ty": draw(st.floats(0.0, 200.0)),
+        })
     return items
-
 
 def _hex_to_rgba(hex_color: str) -> tuple[int, int, int, int]:
     """Convert '#RRGGBB' to (R, G, B, 255)."""
@@ -340,236 +309,168 @@ def _parse_merged_3mf(path: Path) -> dict:
 
 @settings(max_examples=50, deadline=None)
 @given(items_data=_merged_items_strategy())
-def test_p6_count_consistency(items_data: list[tuple[MergedItem, float, float]]) -> None:
-    """P6: build_item == object == model_instance == assemble_item == N."""
-    items = [item for item, _, _ in items_data]
-    N = len(items)
-
-    os.makedirs(TEMP_DIR, exist_ok=True)
-    fd, out_path = tempfile.mkstemp(suffix=".3mf", dir=TEMP_DIR, prefix="pbt_merged_")
-    os.close(fd)
-
-    try:
-        writer = MergedBambu3MFWriter()
-        writer.write(items, Path(out_path), plate_width_mm=300.0, plate_depth_mm=300.0)
-
-        result = _parse_merged_3mf(Path(out_path))
-        assert result["build_item_count"] == N, (
-            f"build_item_count={result['build_item_count']} != N={N}"
-        )
-        assert result["object_count"] == N, (
-            f"object_count={result['object_count']} != N={N}"
-        )
-        assert result["config_object_count"] == N, (
-            f"config_object_count={result['config_object_count']} != N={N}"
-        )
-        assert result["model_instance_count"] == N, (
-            f"model_instance_count={result['model_instance_count']} != N={N}"
-        )
-        assert result["assemble_item_count"] == N, (
-            f"assemble_item_count={result['assemble_item_count']} != N={N}"
-        )
-    finally:
-        _cleanup_items(items, out_path)
-
-
-@settings(max_examples=50, deadline=None)
-@given(items_data=_merged_items_strategy())
-def test_p7_structural_fingerprint(items_data: list[tuple[MergedItem, float, float]]) -> None:
-    """P7: Merged 3MF has correct structural shape (rels, config, model)."""
-    items = [item for item, _, _ in items_data]
-    N = len(items)
-
-    os.makedirs(TEMP_DIR, exist_ok=True)
-    fd, out_path = tempfile.mkstemp(suffix=".3mf", dir=TEMP_DIR, prefix="pbt_merged_")
-    os.close(fd)
-
-    try:
-        writer = MergedBambu3MFWriter()
-        writer.write(items, Path(out_path), plate_width_mm=300.0, plate_depth_mm=300.0)
-
-        result = _parse_merged_3mf(Path(out_path))
-
-        # FatCat links both source model objects and every emitted settings part.
-        assert result["object_relationship_count"] == N, (
-            f"object_relationship_count={result['object_relationship_count']} != N={N}"
-        )
-        metadata_parts = {
-            "Metadata/model_settings.config", "Metadata/project_settings.config",
-            "Metadata/slice_info.config", "Metadata/lumina_wipe_tower_placement.json",
-            "Metadata/filament_sequence.json", "Metadata/cut_information.xml",
-        }
-        assert result["metadata_relationship_targets"] == metadata_parts
-        assert result["root_metadata"].get("Application", "").startswith("BambuStudio-")
-        assert result["root_metadata"].get("BambuStudio:3mfVersion") == "1"
-        assert result["object_relationship_targets"] == {
-            f"3D/Objects/object_{idx}.model" for idx in range(1, N + 1)
-        }
-        assert "3D/3dmodel.model" in result["top_relationship_targets"]
-        assert (
-            "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"
-            in result["top_relationship_types"]
-        )
-        assert result["content_type_defaults"] == {"config", "json", "model", "png", "rels", "xml"}
-        assert result["content_type_overrides"] == {
-            "/3D/3dmodel.model", *("/" + path for path in metadata_parts),
-            *(f"/3D/Objects/object_{idx}.model" for idx in range(1, N + 1)),
-        }
-        assert result["project_settings"].get("filament_colour")
-        assert result["has_plate"]
-
-        # Verify ZIP contains expected entries.
-        with zipfile.ZipFile(out_path, "r") as zf:
-            names = set(zf.namelist())
-            assert "3D/3dmodel.model" in names
-            assert "3D/_rels/3dmodel.model.rels" in names
-            assert "Metadata/model_settings.config" in names
-            assert "Metadata/project_settings.config" in names
-            assert "Metadata/slice_info.config" in names
-            assert "[Content_Types].xml" in names
-            assert "_rels/.rels" in names
-            assert result["top_relationship_targets"].issubset(names)
-            for idx in range(1, N + 1):
-                assert f"3D/Objects/object_{idx}.model" in names
-    finally:
-        _cleanup_items(items, out_path)
-
-
-@settings(max_examples=50, deadline=None)
-@given(items_data=_merged_items_strategy())
-def test_p8_slots_round_trip(items_data: list[tuple[MergedItem, float, float]]) -> None:
-    """P8: Preserve native material identities and remap each part's extruder.
-
-    保留原生材料身份与颜色，并将各部件的耗材索引映射到合并后的全局槽位。
-    """
-    items = [item for item, _, _ in items_data]
-
-    os.makedirs(TEMP_DIR, exist_ok=True)
-    fd, out_path = tempfile.mkstemp(suffix=".3mf", dir=TEMP_DIR, prefix="pbt_merged_")
-    os.close(fd)
-
-    try:
-        writer = MergedBambu3MFWriter()
-        writer.write(items, Path(out_path), plate_width_mm=300.0, plate_depth_mm=300.0)
-
-        result = _parse_merged_3mf(Path(out_path))
-
-        identity_keys = ("filament_settings_id", "filament_type", "filament_vendor")
-        expected_by_id = {}
-        for item in items:
-            with zipfile.ZipFile(item.source_3mf_path) as source:
-                project = json.loads(source.read("Metadata/project_settings.config"))
-            for slot in item.slots:
-                expected = {
-                    key: project[key][slot.source_slot_index] for key in identity_keys
-                }
-                expected["filament_colour"] = slot.preview_color.upper()
-                if slot.slot_id in expected_by_id:
-                    assert expected_by_id[slot.slot_id] == expected
-                expected_by_id[slot.slot_id] = expected
-
-        output_ids = sorted(expected_by_id)
-        for key in identity_keys:
-            assert result["project_settings"][key] == [
-                expected_by_id[slot_id][key] for slot_id in output_ids
-            ]
-        assert [
-            colour.upper() for colour in result["project_settings"]["filament_colour"]
-        ] == [expected_by_id[slot_id]["filament_colour"] for slot_id in output_ids]
-        extruder_by_id = {slot_id: index + 1 for index, slot_id in enumerate(output_ids)}
-        for idx, item in enumerate(items):
-            parts = result["parts_per_item"][idx]
-            assert len(parts) == len(item.slots)
-            assert {part["name"]: int(part["extruder"]) for part in parts} == {
-                slot.slot_name: extruder_by_id[slot.slot_id] for slot in item.slots
-            }
-    finally:
-        _cleanup_items(items, out_path)
-
-
-@settings(max_examples=50, deadline=None)
-@given(items_data=_merged_items_strategy())
-def test_p9_xy_translation(items_data: list[tuple[MergedItem, float, float]]) -> None:
-    """P9: Each object's XY bbox min matches (tx_mm, ty_mm) within 1e-3 mm."""
-    items = [item for item, _, _ in items_data]
-
-    os.makedirs(TEMP_DIR, exist_ok=True)
-    fd, out_path = tempfile.mkstemp(suffix=".3mf", dir=TEMP_DIR, prefix="pbt_merged_")
-    os.close(fd)
-
-    try:
-        writer = MergedBambu3MFWriter()
-        writer.write(items, Path(out_path), plate_width_mm=300.0, plate_depth_mm=300.0)
-
-        result = _parse_merged_3mf(Path(out_path))
-
-        for idx, item in enumerate(items):
-            data = result["per_item_data"][idx]
-            assert abs(data["world_min_x"] - item.tx_mm) < 1e-3, (
-                f"Item {idx}: world_min_x={data['world_min_x']:.6f} != "
-                f"tx_mm={item.tx_mm:.6f}"
+def test_merged_3mf_preserves_structure_materials_and_geometry(items_data: list[dict]) -> None:
+    """Check all five contracts on each real source and merged package."""
+    with tempfile.TemporaryDirectory(prefix="lumina-merged-property-") as tmp_dir:
+        items = []
+        source_z_ranges = []
+        for index, spec in enumerate(items_data):
+            slots = spec["slots"]
+            source, _, _, min_z, max_z = _make_source_3mf(
+                tmp_dir,
+                [slot.slot_name for slot in slots],
+                {slot.slot_name: _hex_to_rgba(slot.preview_color) for slot in slots},
+                spec["offset_x"], spec["offset_y"], spec["z_height"],
             )
-            assert abs(data["world_min_y"] - item.ty_mm) < 1e-3, (
-                f"Item {idx}: world_min_y={data['world_min_y']:.6f} != "
-                f"ty_mm={item.ty_mm:.6f}"
-            )
-    finally:
-        _cleanup_items(items, out_path)
+            items.append(MergedItem(
+                source_filename=f"item_{index}.png", source_3mf_path=source,
+                slots=slots, tx_mm=spec["tx"], ty_mm=spec["ty"],
+            ))
+            source_z_ranges.append((min_z, max_z))
+        out_path = Path(tmp_dir) / "merged.3mf"
+        MergedBambu3MFWriter().write(
+            items, out_path, plate_width_mm=300.0, plate_depth_mm=300.0,
+        )
+        result = _parse_merged_3mf(out_path)
+        _assert_count_consistency(result, len(items))
+        _assert_structural_fingerprint(result, len(items), out_path)
+        _assert_slots_round_trip(result, items)
+        _assert_xy_translation(result, items)
+        _assert_z_range_preserved(result, source_z_ranges)
 
 
-@settings(max_examples=50, deadline=None)
-@given(items_data=_merged_items_strategy())
-def test_p10_z_range_preserved(items_data: list[tuple[MergedItem, float, float]]) -> None:
-    """P10: Each object's Z range matches source 3MF within 1e-6 mm."""
-    items = [item for item, _, _ in items_data]
-    source_z_ranges = [(min_z, max_z) for _, min_z, max_z in items_data]
-
-    os.makedirs(TEMP_DIR, exist_ok=True)
-    fd, out_path = tempfile.mkstemp(suffix=".3mf", dir=TEMP_DIR, prefix="pbt_merged_")
-    os.close(fd)
-
-    try:
-        writer = MergedBambu3MFWriter()
-        writer.write(items, Path(out_path), plate_width_mm=300.0, plate_depth_mm=300.0)
-
-        result = _parse_merged_3mf(Path(out_path))
-
-        # NOTE: The 3MF XML format serializes vertex coordinates with limited
-        # decimal precision (typically 5-6 significant digits after the decimal
-        # point). The spec says 1e-6 mm tolerance, but the actual achievable
-        # precision through XML round-trip is ~1e-5. We use 1e-4 as a
-        # conservative bound that still validates the Z-preservation invariant
-        # without being broken by XML float serialization artifacts.
-        Z_TOL = 1e-4
-        for idx in range(len(items)):
-            data = result["per_item_data"][idx]
-            expected_min_z, expected_max_z = source_z_ranges[idx]
-            assert abs(data["local_min_z"] - expected_min_z) < Z_TOL, (
-                f"Item {idx}: min_z={data['local_min_z']:.8f} != "
-                f"expected={expected_min_z:.8f}"
-            )
-            assert abs(data["local_max_z"] - expected_max_z) < Z_TOL, (
-                f"Item {idx}: max_z={data['local_max_z']:.8f} != "
-                f"expected={expected_max_z:.8f}"
-            )
-    finally:
-        _cleanup_items(items, out_path)
+def _assert_count_consistency(result: dict, N: int) -> None:
+    'P6: build_item == object == model_instance == assemble_item == N.'
+    assert result["build_item_count"] == N, (
+        f"build_item_count={result['build_item_count']} != N={N}"
+    )
+    assert result["object_count"] == N, (
+        f"object_count={result['object_count']} != N={N}"
+    )
+    assert result["config_object_count"] == N, (
+        f"config_object_count={result['config_object_count']} != N={N}"
+    )
+    assert result["model_instance_count"] == N, (
+        f"model_instance_count={result['model_instance_count']} != N={N}"
+    )
+    assert result["assemble_item_count"] == N, (
+        f"assemble_item_count={result['assemble_item_count']} != N={N}"
+    )
 
 
-# ---------------------------------------------------------------------------
-# Cleanup helper
-# ---------------------------------------------------------------------------
+def _assert_structural_fingerprint(result: dict, N: int, out_path: Path) -> None:
+    'P7: Merged 3MF has correct structural shape (rels, config, model).'
+
+    # FatCat links both source model objects and every emitted settings part.
+    assert result["object_relationship_count"] == N, (
+        f"object_relationship_count={result['object_relationship_count']} != N={N}"
+    )
+    metadata_parts = {
+        "Metadata/model_settings.config", "Metadata/project_settings.config",
+        "Metadata/slice_info.config", "Metadata/lumina_wipe_tower_placement.json",
+        "Metadata/filament_sequence.json", "Metadata/cut_information.xml",
+    }
+    assert result["metadata_relationship_targets"] == metadata_parts
+    assert result["root_metadata"].get("Application", "").startswith("BambuStudio-")
+    assert result["root_metadata"].get("BambuStudio:3mfVersion") == "1"
+    assert result["object_relationship_targets"] == {
+        f"3D/Objects/object_{idx}.model" for idx in range(1, N + 1)
+    }
+    assert "3D/3dmodel.model" in result["top_relationship_targets"]
+    assert (
+        "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"
+        in result["top_relationship_types"]
+    )
+    assert result["content_type_defaults"] == {"config", "json", "model", "png", "rels", "xml"}
+    assert result["content_type_overrides"] == {
+        "/3D/3dmodel.model", *("/" + path for path in metadata_parts),
+        *(f"/3D/Objects/object_{idx}.model" for idx in range(1, N + 1)),
+    }
+    assert result["project_settings"].get("filament_colour")
+    assert result["has_plate"]
+
+    # Verify ZIP contains expected entries.
+    with zipfile.ZipFile(out_path, "r") as zf:
+        names = set(zf.namelist())
+        assert "3D/3dmodel.model" in names
+        assert "3D/_rels/3dmodel.model.rels" in names
+        assert "Metadata/model_settings.config" in names
+        assert "Metadata/project_settings.config" in names
+        assert "Metadata/slice_info.config" in names
+        assert "[Content_Types].xml" in names
+        assert "_rels/.rels" in names
+        assert result["top_relationship_targets"].issubset(names)
+        for idx in range(1, N + 1):
+            assert f"3D/Objects/object_{idx}.model" in names
 
 
-def _cleanup_items(items: list[MergedItem], out_path: str) -> None:
-    """Best-effort cleanup of source 3MFs and merged output."""
+def _assert_slots_round_trip(result: dict, items: list[MergedItem]) -> None:
+    "P8: Preserve native material identities and remap each part's extruder."
+
+    identity_keys = ("filament_settings_id", "filament_type", "filament_vendor")
+    expected_by_id = {}
     for item in items:
-        try:
-            if item.source_3mf_path.exists():
-                item.source_3mf_path.unlink()
-        except OSError:
-            pass
-    try:
-        Path(out_path).unlink(missing_ok=True)
-    except OSError:
-        pass
+        with zipfile.ZipFile(item.source_3mf_path) as source:
+            project = json.loads(source.read("Metadata/project_settings.config"))
+        for slot in item.slots:
+            expected = {
+                key: project[key][slot.source_slot_index] for key in identity_keys
+            }
+            expected["filament_colour"] = slot.preview_color.upper()
+            if slot.slot_id in expected_by_id:
+                assert expected_by_id[slot.slot_id] == expected
+            expected_by_id[slot.slot_id] = expected
+
+    output_ids = sorted(expected_by_id)
+    for key in identity_keys:
+        assert result["project_settings"][key] == [
+            expected_by_id[slot_id][key] for slot_id in output_ids
+        ]
+    assert [
+        colour.upper() for colour in result["project_settings"]["filament_colour"]
+    ] == [expected_by_id[slot_id]["filament_colour"] for slot_id in output_ids]
+    extruder_by_id = {slot_id: index + 1 for index, slot_id in enumerate(output_ids)}
+    for idx, item in enumerate(items):
+        parts = result["parts_per_item"][idx]
+        assert len(parts) == len(item.slots)
+        assert {part["name"]: int(part["extruder"]) for part in parts} == {
+            slot.slot_name: extruder_by_id[slot.slot_id] for slot in item.slots
+        }
+
+
+def _assert_xy_translation(result: dict, items: list[MergedItem]) -> None:
+    "P9: Each object's XY bbox min matches (tx_mm, ty_mm) within 1e-3 mm."
+
+    for idx, item in enumerate(items):
+        data = result["per_item_data"][idx]
+        assert abs(data["world_min_x"] - item.tx_mm) < 1e-3, (
+            f"Item {idx}: world_min_x={data['world_min_x']:.6f} != "
+            f"tx_mm={item.tx_mm:.6f}"
+        )
+        assert abs(data["world_min_y"] - item.ty_mm) < 1e-3, (
+            f"Item {idx}: world_min_y={data['world_min_y']:.6f} != "
+            f"ty_mm={item.ty_mm:.6f}"
+        )
+
+
+def _assert_z_range_preserved(result: dict, source_z_ranges: list[tuple[float, float]]) -> None:
+    "P10: Each object's Z range matches source 3MF within 1e-6 mm."
+
+    # NOTE: The 3MF XML format serializes vertex coordinates with limited
+    # decimal precision (typically 5-6 significant digits after the decimal
+    # point). The spec says 1e-6 mm tolerance, but the actual achievable
+    # precision through XML round-trip is ~1e-5. We use 1e-4 as a
+    # conservative bound that still validates the Z-preservation invariant
+    # without being broken by XML float serialization artifacts.
+    Z_TOL = 1e-4
+    for idx in range(len(source_z_ranges)):
+        data = result["per_item_data"][idx]
+        expected_min_z, expected_max_z = source_z_ranges[idx]
+        assert abs(data["local_min_z"] - expected_min_z) < Z_TOL, (
+            f"Item {idx}: min_z={data['local_min_z']:.8f} != "
+            f"expected={expected_min_z:.8f}"
+        )
+        assert abs(data["local_max_z"] - expected_max_z) < Z_TOL, (
+            f"Item {idx}: max_z={data['local_max_z']:.8f} != "
+            f"expected={expected_max_z:.8f}"
+        )

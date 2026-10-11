@@ -10,8 +10,7 @@ resolution and quantize-colors clamp helpers — extracted in Phase 0 Sub-PR C
 Helpers do **not** emit structured-logging events directly with hard-coded
 names; they accept the caller's logger and an ``event_prefix`` so the
 caller's existing event taxonomy (``s01_*`` vs ``p01_*``) is preserved
-byte-for-byte. This protects the FROZEN canonical 14/30 INFO budget per
-``AGENTS.md`` Logging Governance.
+so raster and preview diagnostics remain searchable by their workflow.
 
 公共点：
 - ``_validate_vector_svg_input(ctx, *, image_path, modeling_mode)``

@@ -28,8 +28,3 @@ The build directory retains the complete cloned source and upstream `COPYING`;
 keep them together with this patch and the build script when distributing the
 modified library. Activation remains optional and is not part of default
 installation or CI.
-
-Desktop/PyInstaller packaging deliberately does not enable or bundle this
-modified library yet. Desktop continues to use stock Shapely until shared-library
-replacement, notice, license, and corresponding-source distribution are handled
-and verified for that package.

@@ -9,13 +9,7 @@ import sys
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 
-# Handle PyInstaller bundled resources
-if getattr(sys, "frozen", False):
-    # Running as compiled executable - use current working directory
-    _BASE_DIR = os.getcwd()
-else:
-    # Running as script
-    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 OUTPUT_DIR = os.path.join(_BASE_DIR, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -75,17 +69,12 @@ def _resolve_materials_dir() -> str:
     """Resolve the writable material library root.
     解析可写耗材库根目录。
 
-    Distribution builds can point this at a runtime data directory through
-    ``LUMINA_MATERIALS_DIR``. Frozen desktop builds default to the user's app
-    data directory so upgrades do not overwrite local materials.
-    分发版可通过 ``LUMINA_MATERIALS_DIR`` 指向运行时数据目录。桌面打包版默认
-    使用用户数据目录，避免应用升级覆盖本地耗材。
+    ``LUMINA_MATERIALS_DIR`` overrides the repository's material directory.
+    ``LUMINA_MATERIALS_DIR`` 可指定仓库目录之外的耗材存储位置。
     """
     override = os.environ.get("LUMINA_MATERIALS_DIR", "").strip()
     if override:
         return os.path.abspath(os.path.expanduser(override))
-    if getattr(sys, "frozen", False):
-        return os.path.join(_desktop_user_data_dir(), "materials")
     return os.path.join(_BASE_DIR, "materials")
 
 
@@ -94,8 +83,8 @@ os.makedirs(MATERIALS_DIR, exist_ok=True)
 
 
 def get_asset_path(relative_path: str) -> str:
-    """Resolve asset file path for both script and PyInstaller frozen modes.
-    解析资源文件路径，兼容脚本运行和 PyInstaller 打包模式。
+    """Resolve a source asset file path.
+    解析源码资源文件路径。
 
     Args:
         relative_path (str): Relative path under assets/, e.g. 'smart_8color_stacks.npy'.
@@ -107,18 +96,12 @@ def get_asset_path(relative_path: str) -> str:
     Raises:
         FileNotFoundError: If the asset file cannot be found. (找不到资源文件时抛出)
     """
-    candidates = []
     asset_rel = os.path.join("assets", relative_path)
-
-    if getattr(sys, "frozen", False):
-        # PyInstaller bundled: check _MEIPASS first, then CWD
-        candidates.append(os.path.join(sys._MEIPASS, asset_rel))
-        candidates.append(os.path.join(os.getcwd(), asset_rel))
-    else:
-        # Script mode: check project root, then parent dir
-        candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), asset_rel))
-        candidates.append(os.path.join(os.getcwd(), asset_rel))
-        candidates.append(os.path.join("..", asset_rel))
+    candidates = [
+        os.path.join(_BASE_DIR, asset_rel),
+        os.path.join(os.getcwd(), asset_rel),
+        os.path.join("..", asset_rel),
+    ]
 
     for path in candidates:
         if os.path.exists(path):
@@ -521,7 +504,7 @@ class BedManager:
 
     @classmethod
     def get_choices(cls):
-        """Return list of (label, label) tuples for Gradio Radio/Dropdown."""
+        """Return list of (label, label) tuples for bed-size selectors."""
         return [(b[0], b[0]) for b in cls.BEDS]
 
     @classmethod

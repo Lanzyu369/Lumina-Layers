@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
-vi.mock("../../api/system", () => ({
-  clearCache: vi.fn(),
-  getMachineRegistryAssetUrl: (path: string) => `/api/system/machine-registry/assets/${path}`,
-  getPrinters: vi.fn(),
-  getSlicers: vi.fn(),
-  saveSettings: vi.fn(),
-}));
+vi.mock("../../api/system", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/system")>();
+  return {
+    ...actual,
+    clearCache: vi.fn(),
+    getPrinters: vi.fn(),
+    getCustom3mfTemplates: vi.fn().mockResolvedValue([]),
+    getSlicers: vi.fn(),
+    saveSettings: vi.fn(),
+  };
+});
 
 vi.mock("../../utils/retryAsync", () => ({
   retryAsync: vi.fn((operation: () => Promise<unknown>) => operation()),

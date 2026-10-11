@@ -727,44 +727,6 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
   });
 });
 
-// **Feature: extractor-calibration-tab, Property 10: 标签页切换状态持久性**
-// **Validates: Requirements 9.3**
-describe("Feature: extractor-calibration-tab, Property 10: 标签页切换状态持久性", () => {
-  it("For any ExtractorStore state, simulating tab switch preserves all state fields", () => {
-    fc.assert(
-      fc.property(arbExtractorMutation, arbCorners0to4, (mutation, corners) => {
-        // Set up arbitrary state
-        const store = useExtractorStore.getState();
-        store.setColorMode(mutation.color_mode);
-        store.setPage(mutation.page);
-        store.setOffsetX(mutation.offset_x);
-        store.setOffsetY(mutation.offset_y);
-        store.setZoom(mutation.zoom);
-        store.setDistortion(mutation.distortion);
-        store.setVignetteCorrection(mutation.vignette_correction);
-        useExtractorStore.setState({ corner_points: [...corners] });
-
-        // Snapshot before tab switch
-        const before = snapshotExtractorState();
-
-        // Simulate tab switch: extractor -> converter -> extractor
-        // (Zustand stores are global singletons, tab switching only changes
-        //  which component renders, not the store state)
-        // No store action needed — just verify state persists.
-
-        // Snapshot after simulated tab switch
-        const after = snapshotExtractorState();
-
-        // Cleanup
-        resetExtractorStore();
-
-        return JSON.stringify(before) === JSON.stringify(after);
-      }),
-      { numRuns: 100 },
-    );
-  });
-});
-
 describe("Extractor corner nudge tool", () => {
   it("addCornerPoint sets active_corner_index to the newly placed corner", () => {
     const store = useExtractorStore.getState();

@@ -1,7 +1,7 @@
 #ifndef LUMINA_SVG_CORE_CLIPPER_SAFETY_H
 #define LUMINA_SVG_CORE_CLIPPER_SAFETY_H
 
-#include "complexity_budget.h"
+#include "geometry_limits.h"
 #include <clipper2/clipper.h>
 #include <algorithm>
 #include <cmath>

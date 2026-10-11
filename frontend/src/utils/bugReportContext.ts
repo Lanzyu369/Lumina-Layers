@@ -20,7 +20,6 @@ import { useLutCompareStore } from "../stores/lutCompareStore";
 import { useLutDetailsStore } from "../stores/lutDetailsStore";
 import { useSlicerStore } from "../stores/slicerStore";
 import { useEyedropperStore } from "../stores/eyedropperStore";
-import { useAboutStore } from "../stores/aboutStore";
 import { useTutorialStore } from "../stores/tutorialStore";
 import { useErrorTicketPromptStore } from "../stores/errorTicketPromptStore";
 import { useWidgetStore } from "../stores/widgetStore";
@@ -313,7 +312,6 @@ export function collectBugReportContext(): BugReportContextPayload {
       slicer: captureWorkflowState(useSlicerStore.getState()),
       widget: captureWorkflowState(widget),
       eyedropper: captureWorkflowState(useEyedropperStore.getState()),
-      about: captureWorkflowState(useAboutStore.getState()),
       tutorial: captureWorkflowState(useTutorialStore.getState()),
       error_prompt: captureWorkflowState(useErrorTicketPromptStore.getState()),
     },

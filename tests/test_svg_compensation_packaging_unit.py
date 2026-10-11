@@ -1,4 +1,4 @@
-"""Wheel/desktop packaging must include the adopted compensation extension."""
+"""Native SVG wheels include and execute the compensation extension."""
 
 import importlib.util
 import json
@@ -37,13 +37,7 @@ def test_installed_wheel_exercises_real_compensation():
     verifier.verify_installed_compensation()
 
 
-def test_desktop_requires_compensation_even_in_split_editable_install():
-    specification = (ROOT / "lumina_studio.spec").read_text(encoding="utf-8")
-    assert '"lumina_svg_core._lumina_svg_compensation"' in specification
-    assert "LUMINA_SVG_COMPENSATION_EXTENSION" in specification
-
-
-def test_frozen_entry_point_exercises_compensation_before_server_start():
+def test_cli_exercises_compensation_before_server_start():
     completed = subprocess.run(
         [sys.executable, str(ROOT / "api_server.py"), "--svg-hole-compensation-self-test"],
         cwd=ROOT, capture_output=True, text=True, timeout=30,

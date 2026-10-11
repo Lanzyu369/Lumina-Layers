@@ -307,8 +307,8 @@ class _FrontendStaticFiles(StaticFiles):
 
 
 def _configure_frontend_dist(app: FastAPI) -> None:
-    """Serve the built React SPA for packaged desktop installations.
-    为桌面打包版提供已构建的 React SPA。
+    """Serve a built React SPA from the configured directory.
+    提供指定目录中已构建的 React SPA。
     """
     if not _env_enabled("LUMINA_SERVE_FRONTEND_DIST"):
         return

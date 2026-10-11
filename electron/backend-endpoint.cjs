@@ -66,7 +66,18 @@ async function availablePort(port) {
   });
 }
 
-/** Select without committing: health and storage handover must succeed first. */
+/** Check required local ports without terminating their owners. */
+async function assertPortsAvailable(ports) {
+  for (const port of ports) {
+    await new Promise((resolve, reject) => {
+      const server = net.createServer();
+      server.once("error", error => reject(new Error(`port_in_use:${port}:${error.code}`)));
+      server.listen(port, "127.0.0.1", () => server.close(resolve));
+    });
+  }
+}
+
+/** Select a loopback endpoint; commit it only after owned backend health succeeds. */
 async function selectBackendEndpoint({ preferredPort = 8000, maxAttempts = 100, portFile, allowEphemeralFallback = false } = {}) {
   if (!Number.isInteger(preferredPort) || preferredPort < 1024 || preferredPort > 65535 ||
       !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 100 || typeof allowEphemeralFallback !== "boolean") {
@@ -92,7 +103,7 @@ async function selectBackendEndpoint({ preferredPort = 8000, maxAttempts = 100, 
   throw portError("backend_port_unavailable");
 }
 
-/** Commit only after owned health and storage transfer succeed. 后端健康及存储迁移成功后才提交数据来源。 */
+/** Persist the selected endpoint only after owned backend health succeeds. */
 function commitBackendEndpoint({ portFile, endpoint }) {
   if (!endpoint || !validatePort(endpoint.port) || endpoint.origin !== `http://127.0.0.1:${endpoint.port}` ||
       !(endpoint.previousPort === null || validatePort(endpoint.previousPort))) {
@@ -145,4 +156,4 @@ function validateHealthResponse(response, instanceId, done) {
   });
 }
 
-module.exports = { selectBackendEndpoint, commitBackendEndpoint, validateHealthResponse };
+module.exports = { assertPortsAvailable, selectBackendEndpoint, commitBackendEndpoint, validateHealthResponse };

@@ -276,9 +276,7 @@ class TestProperty8ProgressCallbackInvocation:
     使用 mock progress 函数记录调用，mock 所有步骤模块使其快速返回。
     """
 
-    @given(data=st.data())
-    @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-    def test_raster_pipeline_calls_progress(self, data):
+    def test_raster_pipeline_calls_progress(self):
         """光栅管道执行时应至少调用一次 progress 回调，进度值在 [0.0, 1.0]。"""
         from core.pipeline.coordinator import run_raster_pipeline
 
@@ -312,9 +310,7 @@ class TestProperty8ProgressCallbackInvocation:
                 f"进度值应在 [0.0, 1.0] 之间，实际为 {val}"
             )
 
-    @given(data=st.data())
-    @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-    def test_preview_pipeline_calls_progress(self, data):
+    def test_preview_pipeline_calls_progress(self):
         """预览管道执行时应至少调用一次 progress 回调，进度值在 [0.0, 1.0]。"""
         from core.pipeline.coordinator import run_preview_pipeline
 
@@ -346,9 +342,7 @@ class TestProperty8ProgressCallbackInvocation:
                 f"进度值应在 [0.0, 1.0] 之间，实际为 {val}"
             )
 
-    @given(data=st.data())
-    @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-    def test_no_progress_callback_does_not_crash(self, data):
+    def test_no_progress_callback_does_not_crash(self):
         """ctx 中不包含 progress 回调时，管道不应崩溃。"""
         from core.pipeline.coordinator import run_raster_pipeline
 
@@ -371,9 +365,7 @@ class TestProperty8ProgressCallbackInvocation:
         # 不应有错误
         assert "error" not in result or result.get("error") is None
 
-    @given(data=st.data())
-    @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-    def test_progress_values_are_monotonically_nondecreasing(self, data):
+    def test_progress_values_are_monotonically_nondecreasing(self):
         """光栅管道的 progress 值应单调非递减。"""
         from core.pipeline.coordinator import run_raster_pipeline
 
@@ -397,6 +389,8 @@ class TestProperty8ProgressCallbackInvocation:
         finally:
             for p in patches:
                 p.stop()
+
+        assert len(progress_calls) >= 2, "progress 回调应有可比较的进度值"
 
         # 验证进度值单调非递减
         for i in range(1, len(progress_calls)):

@@ -1477,17 +1477,13 @@ def test_vector_outline_real_3mf_filament_arrays_match_base_palette() -> None:
                 "Metadata/model_settings.config"
             ).decode("utf-8")
 
-    # (a) project_settings.config — filament arrays must be exactly 8 entries.
-    # 项目设置 — filament_* 必须正好 8 项。Bed temperature key shape varies
-    # across printer templates so we keep this guard focused on the three
-    # filament-aligned arrays the original P2 review called out.
-    # bed temperature 字段在不同机型模板里 shape 不一致，这里只断言 review
-    # 明确点名的三个 filament 对齐数组。
+    # The palette has eight materials; grouped native nozzle settings can have
+    # several values per material. Check those against the native profiles.
     project_settings = json.loads(project_settings_raw)
     for filament_key in (
         "filament_colour",
         "filament_type",
-        "nozzle_temperature",
+        "filament_settings_id",
     ):
         actual = project_settings.get(filament_key)
         assert isinstance(actual, list), (
@@ -1499,6 +1495,15 @@ def test_vector_outline_real_3mf_filament_arrays_match_base_palette() -> None:
             f"got {len(actual)} entries: {actual}. This is the exact P2 "
             f"regression shape — the writer was emitting 9 entries."
         )
+    from tests.fatcat_material_assertions import assert_native_materials
+
+    assert_native_materials(
+        project_settings,
+        slicer_id="BambuStudio",
+        machine_uid="bambu-lab:h2d",
+        nozzle_uid="nozzle:0.4mm",
+        material_types=["PLA"] * len(_8COLOR_MAX_SLOT_NAMES),
+    )
 
     # (b) model_settings.config — object list should contain Outline AND
     # all 8 base slots. Bambu Studio reads this XML to populate the object

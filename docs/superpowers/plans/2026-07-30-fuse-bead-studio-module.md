@@ -21,7 +21,7 @@ This plan creates a sibling repository:
 - Initial module version: `1.0.0`
 - Package asset: `lumina.bead-pattern-1.0.0.lumina-workshop`
 
-It starts only after the host acceptance checkpoint in `docs/superpowers/plans/2026-07-30-installable-creative-workshop-host.md` passes. Before execution, register both repository changes in the online tracking spreadsheet. Create the new repository as public with no generated README, then clone it and use a fresh branch:
+It starts only after the host acceptance checkpoint in `docs/superpowers/plans/2026-07-30-installable-creative-workshop-host.md` passes. Create the new repository as public with no generated README, then clone it and use a fresh branch:
 
 ```bash
 gh repo create lumina-layer-studio/Lumina-Fuse-Bead-Studio --public --clone=false
@@ -1351,7 +1351,7 @@ gh pr create \
   --body-file /tmp/fuse-bead-module-pr.md
 ```
 
-The PR body is English first and Chinese second. It includes the exact SDK release dependency, package hash from CI, host validator result, browser/Electron acceptance evidence, and remaining seed-release dependency.
+The PR description includes the exact SDK release dependency, package hash from CI, host validator result, browser/Electron acceptance evidence, and remaining seed-release dependency.
 
 - [ ] **Step 7: Tag the reviewed merge commit and verify immutable assets**
 

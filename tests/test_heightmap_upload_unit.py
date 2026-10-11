@@ -149,6 +149,29 @@ def _delete_externalized_preview_cache_field(
 class TestValidHeightmapUpload:
     """Verify valid heightmap upload returns 200 with expected fields."""
 
+    def test_transparent_pixels_and_absent_colors_do_not_raise_relief(self) -> None:
+        session_id = _setup_session_with_preview(_test_store, 2, 2)
+        cache = _test_store.get(session_id)["preview_cache"]
+        cache["mask_solid"][0, 1] = False
+        cache["color_palette"].append({"hex": "#FFFFFF", "color": (255, 255, 255)})
+        pixels = np.array([[0, 255], [255, 255]], dtype=np.uint8)
+        buf = io.BytesIO()
+        Image.fromarray(pixels).save(buf, format="PNG")
+
+        response = client.post(
+            "/api/convert/upload-heightmap",
+            files={"heightmap": ("heightmap.png", buf.getvalue(), "image/png")},
+            data={"session_id": session_id, "max_relief_height": "2.0"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["color_height_map"] == {
+            "ff0000": 0.08, "00ff00": 2.0, "ffffff": 0.08,
+        }
+        assert _test_store.get(session_id)["heightmap_color_height_map"] == (
+            response.json()["color_height_map"]
+        )
+
     def test_uint16_png_preserves_thumbnail_cache_and_color_heights(self) -> None:
         session_id = _setup_session_with_preview(_test_store)
         pixels = np.empty((100, 100), dtype=np.uint16)

@@ -286,62 +286,6 @@ def test_cli_reports_missing_slicers_as_unavailable_not_passed(
     }
 
 
-def test_native_svg_workflow_covers_all_release_realities() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-
-    for platform_id in (
-        "linux-x86_64",
-        "windows-amd64",
-        "macos-arm64",
-        "macos-x86_64",
-    ):
-        assert platform_id in workflow
-    for job_or_probe in (
-        "windows-onefile-reality",
-        "product-artifacts",
-        "--native-svg-self-test",
-        "verify_native_svg_slicer_outputs.py",
-        "lumina-native-svg-reality",
-    ):
-        assert job_or_probe in workflow
-    assert (
-        "python -m pip wheel ./native/lumina-svg-core "
-        "--no-deps --wheel-dir wheelhouse"
-    ) in workflow
-    assert "if: runner.os != 'Linux'" in workflow
-    assert "pyinstaller --noconfirm --clean lumina_studio.spec" in workflow
-    assert (
-        "actions/upload-artifact@"
-        "ea165f8d65b6e75b540449e92b4886f43607fa02 # v4"
-    ) in workflow
-    for pinned_action in (
-        "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-        "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-        "pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074",
-    ):
-        assert pinned_action in workflow
-    assert "cd native/lumina-svg-core" in workflow
-    assert '"shapely>=2,<3"' in workflow
-    for path_filter in (
-        '"core/**"',
-        '"api/**"',
-        '"utils/bambu_3mf_writer.py"',
-        '"scripts/build_desktop.py"',
-    ):
-        assert path_filter in workflow
-    for bundled_notice in (
-        "LICENSE",
-        "THIRD_PARTY_NOTICES.md",
-        "Clipper2.txt",
-        "FreeType-Project.txt",
-        "LunaSVG.txt",
-        "PlutoVG.txt",
-        "pybind11.txt",
-        "stb.txt",
-    ):
-        assert bundled_notice in workflow
-
-
 def test_checked_in_reality_report_is_portable_and_material_complete() -> None:
     report_text = CHECKED_IN_REPORT.read_text(encoding="utf-8")
     report = json.loads(report_text)

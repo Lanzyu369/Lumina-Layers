@@ -2,7 +2,7 @@
 
 The machine registry stores only the upstream STL **filename** in each
 machine's `bed_model` field. Lumina Studio does not copy third-party slicer
-models into this repository or its desktop package.
+models into this repository.
 
 At runtime, the backend resolves that basename inside the matching slicer's
 installed profile directory and serves it only for the corresponding slicer

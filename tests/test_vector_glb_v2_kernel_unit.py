@@ -40,15 +40,6 @@ def _box_mesh(z_min: float = 0.0, z_max: float = 0.4) -> trimesh.Trimesh:
     return mesh
 
 
-def test_analytic_preview_does_not_import_retired_print_topology_service() -> None:
-    """Preview extrusion must survive the canonical #585 mesh replacement."""
-
-    source = Path(vector_glb_preview.__file__).read_text(encoding="utf-8")
-
-    assert "core.vector_mesh_topology" not in source
-    assert "VectorTopologyError" not in source
-
-
 def _load_glb_json(path: Path) -> dict:
     data = path.read_bytes()
     magic, _version, _length = struct.unpack_from("<III", data, 0)

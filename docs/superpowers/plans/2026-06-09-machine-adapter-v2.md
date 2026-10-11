@@ -28,7 +28,7 @@ Branch:
 Min/feat/machine-adapter-v2
 ```
 
-Before implementation, register this planned change in the online tracking spreadsheet. Do not touch `materials/` in this workstream.
+Do not touch `materials/` in this workstream.
 
 ## File Structure
 

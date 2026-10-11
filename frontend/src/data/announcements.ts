@@ -633,8 +633,8 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         category: { zh: "预览 & 交互", en: "Preview & Interaction" },
         items: [
           {
-            zh: "6 月 27 日：SVG 矢量预览和建模速度提升，复杂图形等待时间更短，打包版本也带上了默认 3D 预览依赖。",
-            en: "June 27: SVG vector previews and model preparation are faster for complex artwork, and 3D preview support is steadier in packaged builds.",
+            zh: "6 月 27 日：SVG 矢量预览和建模速度提升，复杂图形等待时间更短。",
+            en: "June 27: SVG vector previews and model preparation are faster for complex artwork.",
           },
           {
             zh: "6 月 27 日：高度图浮雕现在能正常显示 3D 几何，不会只看到空白或缺少浮雕形状。",

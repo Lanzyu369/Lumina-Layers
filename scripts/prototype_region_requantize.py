@@ -131,7 +131,7 @@ def _local_requantize_region(
     region_pixels = original_source_rgb[ys, xs]  # (N, 3)
     patch_img = region_pixels.reshape(-1, 1, 3)
     locally_quantized = quantize_colors(
-        patch_img, local_quantize_colors, skip_post_blur=True
+        patch_img, local_quantize_colors
     ).reshape(-1, 3)
 
     # Unique-colour pass through the material solver.

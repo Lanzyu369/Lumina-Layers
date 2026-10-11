@@ -209,7 +209,8 @@ def test_session_archive_maps_file_ids_and_reports_missing_sources(tmp_path: Pat
         "active_session_ids": {},
     }, registry, None)
     inventory = sections["session_data"]["files"]
-    captured = next(item for item in inventory if item.get("status") == "attached")
+    captured = next(item for item in inventory if file_id in item.get("file_ids", []))
+    assert captured["status"] == "attached"
     assert captured["file_ids"] == [file_id]
     assert captured["session_ids"] == ["colorchecker-session"]
     missing = next(item for item in inventory if "expired-file-id" in item.get("file_ids", []))

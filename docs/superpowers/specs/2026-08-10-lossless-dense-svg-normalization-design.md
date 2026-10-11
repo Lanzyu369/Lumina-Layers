@@ -310,7 +310,6 @@ second unrelated build command. Product integration must cover:
 - local macOS arm64 proof and build;
 - Windows x64 desktop build;
 - Linux x64 Docker build;
-- PyInstaller binary discovery and inclusion;
 - a clean-runtime import test with no `.scratch` path;
 - GEOS LGPL notice, source-version record, patch file, and source-availability
   instructions.

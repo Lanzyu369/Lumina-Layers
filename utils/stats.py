@@ -12,7 +12,6 @@ class Stats:
     """Usage statistics (local counter)"""
     _file = os.path.join(OUTPUT_DIR, "lumina_stats.txt")
     _cache_dirs = [
-        os.path.join(OUTPUT_DIR, ".gradio_cache"),
         os.path.join(OUTPUT_DIR, "cache"),
         os.path.join(OUTPUT_DIR, "temp"),
         os.path.join(OUTPUT_DIR, "previews"),

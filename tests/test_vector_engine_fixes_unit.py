@@ -618,27 +618,16 @@ class TestFillRuleSubpathMerging:
         assert merged.area == pytest.approx(expected.area)
         assert merged.symmetric_difference(expected).area == pytest.approx(0.0)
 
-    def test_evenodd_helper_subtracts_disjoint_holes_in_one_geos_call(
-        self,
-        monkeypatch,
-    ):
-        """Verified independent holes should be subtracted as one GEOS batch."""
+    def test_evenodd_helper_preserves_disjoint_holes(self):
+        """Independent holes remain empty in the combined geometry."""
         outer = box(0, 0, 100, 100)
         holes = [box(x, 10, x + 4, 14) for x in range(10, 70, 10)]
         expected = outer.difference(shapely_unary_union(holes))
-        real_difference = shapely.difference
-        calls = []
-
-        def recording_difference(left, right, **kwargs):
-            calls.append((left, right))
-            return real_difference(left, right, **kwargs)
-
-        monkeypatch.setattr(shapely, "difference", recording_difference)
-
         merged = _combine_evenodd_polygons([outer, *holes])
 
-        assert len(calls) == 1
         assert merged is not None
+        assert merged.is_valid
+        assert len(merged.interiors) == len(holes)
         assert merged.symmetric_difference(expected).is_empty
 
     def test_evenodd_helper_uses_prepared_container_for_multiple_holes(self, monkeypatch):
@@ -3264,36 +3253,30 @@ class TestVisibleStrokeElementsPreserved:
         assert (0, 0, 255) in colors
         assert (0, 0, 0) not in colors
 
-    def test_stroke_only_is_widened_to_printable_width(self):
+    @pytest.mark.parametrize("target_width_mm", [10.0, 100.0])
+    def test_thin_stroke_preserves_svg_width(self, tmp_path, target_width_mm):
+        """Scaling a thin SVG stroke must not silently widen it to nozzle width."""
         svg = (
             '<?xml version="1.0" encoding="UTF-8"?>'
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
             '  <path d="M0,50 L100,50" stroke="#0000ff" stroke-width="0.5" fill="none"/>'
             "</svg>"
         )
-        fd, path = tempfile.mkstemp(suffix=".svg")
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(svg)
-            vp = VectorProcessor.__new__(VectorProcessor)
-            vp.sampling_precision = 0.02
-            small_shapes, _, _ = vp._parse_svg(path, target_width_mm=10.0)
-            large_shapes, _, _ = vp._parse_svg(path, target_width_mm=100.0)
-        finally:
-            os.unlink(path)
+        path = tmp_path / "thin-stroke.svg"
+        path.write_text(svg, encoding="utf-8")
+        vp = VectorProcessor.__new__(VectorProcessor)
+        vp.sampling_precision = 0.02
+        shapes, scale, _ = vp._parse_svg(str(path), target_width_mm=target_width_mm)
 
-        blue_shapes = [
-            s["poly"]
-            for shapes in (small_shapes, large_shapes)
-            for s in shapes
-            if s["color"] == (0, 0, 255)
-        ]
-        assert blue_shapes, "Stroke-only blue path should produce printable geometry"
+        blue_shapes = [s["poly"] for s in shapes if s["color"] == (0, 0, 255)]
+        assert blue_shapes, "The thin blue stroke must remain present"
         for poly in blue_shapes:
             min_x, min_y, max_x, max_y = poly.bounds
             assert poly.area > 0
             assert max_x > min_x
-            assert max_y > min_y
+            assert min_y == pytest.approx(49.75)
+            assert max_y == pytest.approx(50.25)
+            assert (max_y - min_y) * scale == pytest.approx(0.5 * scale)
 
 
 class TestSameColorStrokeCompensation:

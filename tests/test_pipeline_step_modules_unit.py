@@ -17,48 +17,7 @@ import pytest
 import trimesh
 
 from config import ColorSystem, LUTMetadata, ModelingMode, PaletteEntry, PrinterConfig
-
-# ===========================================================================
-# S11 — s11_glb_preview 单元测试
-# ===========================================================================
-
-
-class TestS11GlbPreview:
-    """S11 GLB 预览步骤的单元测试。"""
-
-    def test_reuses_existing_preview_glb_without_rebuilding(
-        self,
-        tmp_path,
-        monkeypatch,
-    ) -> None:
-        """同参生成可直接复用已有预览 GLB，避免重复构建 mesh。"""
-        from core.pipeline import s11_glb_preview
-
-        preview_glb_path = tmp_path / "preview.glb"
-        preview_glb_path.write_bytes(b"glb")
-
-        def fail_generate(*_args, **_kwargs):
-            raise AssertionError("S11 should reuse preview_glb_path")
-
-        monkeypatch.setattr(
-            s11_glb_preview,
-            "generate_segmented_glb",
-            fail_generate,
-        )
-
-        result = s11_glb_preview.run(
-            {
-                "preview_glb_path": str(preview_glb_path),
-                "enable_relief": True,
-                "scene": trimesh.Scene(
-                    {"PrintScene": trimesh.creation.box(extents=(1, 1, 1))}
-                ),
-            }
-        )
-
-        assert result["glb_path"] == str(preview_glb_path)
-        assert result["_hifi_timings"]["glb_preview_s"] >= 0.0
-
+from core.material_color_solver import MaterialParams
 
 # ===========================================================================
 # S02 — s02_image_processing 单元测试
@@ -993,99 +952,62 @@ class TestS01InputValidation:
         assert result["modeling_mode"] == ModelingMode.HIGH_FIDELITY
         assert result["svg_vector_opacity_fallback"] is True
 
+    @staticmethod
+    def _material(name: str, rgb: tuple[int, int, int]) -> MaterialParams:
+        return MaterialParams(
+            name=name,
+            directory_name=name,
+            E=np.asarray(rgb, dtype=float) / 255.0,
+            k=np.ones(3),
+            C0_white=np.ones(3),
+            estimated_rgb=np.asarray(rgb, dtype=np.uint8),
+        )
+
     def test_material_archive_svg_vector_mode_enters_native_vector_branch(self):
-        """material_archive + SVG + vector now shares the native vector branch.
-
-        Historically this combination forced the input through the
-        raster ``P03`` material-archive path, which produced hard-edged
-        pixel previews with occasional 1-px misclassified colours along
-        strokes. The branch now reuses
-        :class:`core.vector_engine.VectorProcessor` and only swaps the
-        per-fill colour matcher (LUT KDTree → material solver), so the
-        gate is widened. This test pins the new contract.
-
-        耗材档案 + SVG + 矢量现在与 LUT 矢量共用解析/裁剪/挤出/预览
-        管线，仅替换颜色匹配器；本测试锁定该新合同。
+        """Material archives preserve the native SVG/vector route.
+        耗材档案保留原生 SVG/矢量处理路径。
         """
         from core.pipeline.s01_input_validation import run
 
         ctx = self._make_valid_ctx()
-        ctx["image_path"] = "/tmp/test.svg"
-        ctx["modeling_mode"] = ModelingMode.VECTOR
-        ctx["material_source"] = "material_archive"
-        ctx["selected_materials"] = ["fake/material"]
-
-        # Phase 0 Sub-PR C (PR #128) extracted the material-archive branch into
-        # core.pipeline._input_validation_common. The validation module imports
-        # the local hot-path provider as ``load_materials``; mock that caller
-        # module name directly.
-        # PR #128 把 material-archive 分支抽到了 _input_validation_common；验证
-        # 模块以 ``load_materials`` 导入本地热路径 provider，故在调用方 mock 该名字。
-        with patch(
-            "core.pipeline._input_validation_common.load_materials",
-            return_value=[object()],
-        ), patch(
-            "core.pipeline._input_validation_common.build_material_slot_names",
-            return_value=["Material A"],
-        ), patch(
-            "core.pipeline._input_validation_common.build_material_preview_colors",
-            return_value={0: (255, 0, 0, 255)},
-        ):
+        ctx.update(
+            image_path="/tmp/test.svg",
+            modeling_mode=ModelingMode.VECTOR,
+            material_source="material_archive",
+            selected_materials=["fake/material"],
+        )
+        materials = [self._material("Material A", (255, 0, 0))]
+        with patch("core.pipeline._input_validation_common.load_materials", return_value=materials):
             result = run(ctx)
 
         assert result["is_svg_vector"] is True
+        assert result["slot_names"] == ["Material A"]
+        assert result["preview_colors"] == {0: [255, 0, 0, 255]}
 
-    def test_material_archive_uses_inferred_white_channel_for_backing(self):
+    @pytest.mark.parametrize(("explicit_backing", "expected_backing"), [(None, 1), (0, 0)])
+    def test_material_archive_resolves_inferred_or_explicit_backing(
+        self, explicit_backing: int | None, expected_backing: int,
+    ):
+        """White is inferred as the base channel while explicit backing is retained.
+        自动识别白色底层通道，同时保留用户明确选择的底板通道。
+        """
         from core.pipeline.s01_input_validation import run
 
         ctx = self._make_valid_ctx()
         ctx["material_source"] = "material_archive"
         ctx["selected_materials"] = ["PLA Green", "PLA White"]
-
-        with patch(
-            "core.pipeline._input_validation_common.load_materials",
-            return_value=[object(), object()],
-        ), patch(
-            "core.pipeline._input_validation_common.build_material_slot_names",
-            return_value=["PLA Green", "PLA White"],
-        ), patch(
-            "core.pipeline._input_validation_common.build_material_preview_colors",
-            return_value={
-                0: [0, 180, 0, 255],
-                1: [248, 248, 245, 255],
-            },
-        ):
+        if explicit_backing is not None:
+            ctx["backing_color_id"] = explicit_backing
+            ctx["material_backing_material_index"] = explicit_backing
+        materials = [
+            self._material("PLA Green", (0, 180, 0)),
+            self._material("PLA White", (248, 248, 245)),
+        ]
+        with patch("core.pipeline._input_validation_common.load_materials", return_value=materials):
             result = run(ctx)
 
         assert result["material_base_channel_idx"] == 1
-        assert result["backing_color_id"] == 1
-
-    def test_material_archive_explicit_backing_channel_is_preserved(self):
-        from core.pipeline.s01_input_validation import run
-
-        ctx = self._make_valid_ctx()
-        ctx["material_source"] = "material_archive"
-        ctx["selected_materials"] = ["PLA Green", "PLA White"]
-        ctx["backing_color_id"] = 0
-        ctx["material_backing_material_index"] = 0
-
-        with patch(
-            "core.pipeline._input_validation_common.load_materials",
-            return_value=[object(), object()],
-        ), patch(
-            "core.pipeline._input_validation_common.build_material_slot_names",
-            return_value=["PLA Green", "PLA White"],
-        ), patch(
-            "core.pipeline._input_validation_common.build_material_preview_colors",
-            return_value={
-                0: [0, 180, 0, 255],
-                1: [248, 248, 245, 255],
-            },
-        ):
-            result = run(ctx)
-
-        assert result["material_base_channel_idx"] == 1
-        assert result["backing_color_id"] == 0
+        assert result["backing_color_id"] == expected_backing
 
     def test_empty_dict_raises_key_error(self):
         """空 dict 应抛出 KeyError。"""

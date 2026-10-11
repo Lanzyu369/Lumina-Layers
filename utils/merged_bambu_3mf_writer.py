@@ -70,20 +70,10 @@ class MaterialSlot:
     """Material slot identity inside :class:`MergedItem`.
     :class:`MergedItem` 中的材料 slot 身份描述。
 
-    The first four fields are aligned with
-    :class:`api.schemas.batch_sidecar.MaterialSlot` so that the parent
-    process can hand sidecar slots straight into a :class:`MergedItem`
-    without a translation step. This dataclass is deliberately NOT a
-    Pydantic model: the ``utils`` layer must not pull in Pydantic as a
-    transitive dependency, and merge-stage writers do not need
-    request-style validation (the sidecar producer is the validation
-    boundary).
-
-    四个字段的含义与 :class:`api.schemas.batch_sidecar.MaterialSlot`
-    一一对齐，让父进程可以把 sidecar slots 直接喂给
-    :class:`MergedItem` 而无需翻译层。本 dataclass 故意不是 Pydantic
-    模型：``utils`` 层不应引入 Pydantic 传递依赖，合并阶段 writer 也
-    不需要请求级校验（sidecar 生产侧才是校验边界）。
+    The batch worker writes the first four fields to its JSON sidecar.
+    The parent process constructs these slots before merged export.
+    批量 worker 把前四个字段写入 JSON sidecar，父进程据此构建合并导出
+    所需的材料槽位。
 
     Attributes:
         slot_id: 0-based slot index in the slicer. Uniqueness within a
@@ -309,11 +299,7 @@ def _apply_transform_xyz(
 
 
 def _validate_slots(slots: Sequence[MaterialSlot]) -> None:
-    """Validate slots per task 10 rules.
-
-    校验 slots 字段：长度 ≥ 1、``slot_id`` 唯一、四元组字段非空（空字符串
-    视为非空但记 WARNING，不抛错）。``slot_id`` **不**强求连续。
-    """
+    """Require a nonempty sequence of MaterialSlot values with unique IDs."""
 
     if len(slots) < 1:
         raise MergedWriteError("MergedItem.slots must contain at least one slot")

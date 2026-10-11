@@ -66,13 +66,11 @@ P1 and one test-isolation P2; both are also recorded below.
 - Real Bambu Studio and OrcaSlicer runs: both passed twice with stable
   normalized toolpath fingerprints and qualifying model extrusion for tools
   0 through 4.
-- Clean CPython 3.12 wheel and sdist installs each passed all 393 tests. The
-  production macOS arm64 PyInstaller onefile probe executed the native backend
-  and contained the extension plus all required license texts.
+- Clean CPython 3.12 wheel and sdist installs each passed all 393 tests.
 - Hosted run
   [`33375769683`](https://github.com/lumina-layer-studio/Lumina-studio/actions/runs/33375769683)
   completed every wheel build/install/probe, Docker product probe,
-  product-artifact workflow, and Windows production onefile build/probe.
+  and the product-artifact workflow.
   Every native-SVG job then failed only at `actions/upload-artifact` because
   the repository artifact-storage quota was exhausted; the run is therefore
   not represented as a green CI conclusion.
@@ -84,8 +82,7 @@ P1 and one test-isolation P2; both are also recorded below.
 - No real SVG at or above 50 MiB was available locally, so the separate 2 GiB
   RSS / 256 MiB swap gate remains pending rather than being substituted with a
   smaller file.
-- Windows, macOS x86_64, Linux wheel, Docker, and Windows production onefile
-  functional steps passed in hosted run `33375769683`; artifact retention and
+- Windows, macOS x86_64, Linux wheel and Docker functional steps passed in hosted run `33375769683`; artifact retention and
   the overall required-check conclusions remain blocked by GitHub's exhausted
   artifact-storage quota.
 - Moving `lumina-svg-core` to a separate repository/package index still needs

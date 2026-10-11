@@ -187,6 +187,13 @@ class TestCalibrationGenerateSingleStageKitCanary:
 class _FiveColorQueryEngine:
     color_count = 5
 
+    def __init__(self):
+        self._lut_metadata = config.LUTMetadata(
+            palette=[
+                config.PaletteEntry(color=name) for name in self.get_color_names()
+            ]
+        )
+
     def accepted_selection_lengths(self):
         return (5,)
 
@@ -218,6 +225,7 @@ class _FiveColorQueryEngine:
 
 class _FiveColorBaseColorsEngine(_FiveColorQueryEngine):
     def __init__(self, stack_lut):
+        super().__init__()
         self.stack_lut = stack_lut
 
     def get_combinations(self):

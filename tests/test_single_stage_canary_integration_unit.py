@@ -669,7 +669,7 @@ class TestUpdateGradientCardMaterialCanary:
         archive_path.write_text(json.dumps({"ok": True}), encoding="utf-8")
         params_path.write_text(json.dumps({"ok": True}), encoding="utf-8")
         monkeypatch.setattr(
-            "core.single_stage.materials.MATERIALS_DIR",
+            "core.single_stage.material_files.MATERIALS_DIR",
             str(materials_root),
         )
 

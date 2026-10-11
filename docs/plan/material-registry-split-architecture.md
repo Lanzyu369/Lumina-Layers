@@ -170,7 +170,7 @@ Lumina 主仓库构建时消费某个固定版本的耗材 release artifact。
 当前本仓库需要的改造点：
 
 - `config.py` 的 `MATERIALS_DIR` 需要支持环境变量覆盖和桌面用户数据目录，不应只依赖当前工作目录。
-- Electron/PyInstaller 打包脚本需要引入 seed artifact，而不是直接依赖仓库内完整 `materials/`。
+- 源码运行时可导入 seed artifact，无需在仓库中保存完整 `materials/`。
 - `.gitignore` 和 PR #242 当前把 `material-registry-packages/` 放进主仓库的策略需要调整：主仓库不应长期持有官方耗材包集合。
 
 ## 单 Registry 发布与读取
@@ -344,18 +344,18 @@ Lumina clients
 - `seed/lumina-materials-seed.zip` 可被 Lumina 导入并生成 `_sync/index.json`。
 - CI 对乱码标记、hash mismatch、缺失必需文件、local-only 文件入包全部失败。
 
-### 阶段 4：Lumina 构建消费耗材 seed
+### 阶段 4：Lumina 导入耗材 seed
 
 修改方向：
 
-- Electron/PyInstaller 构建脚本下载/校验 seed artifact。
+- 耗材导入流程读取并校验 seed artifact。
 - 应用首次启动时把 seed 安装到可写 `materials/`。
-- 应用升级时不覆盖已有本地耗材。
+- 重复导入不覆盖已有本地耗材。
 
 验收：
 
-- 新安装离线启动后能看到 seed 耗材。
-- 用户删除/修改本地耗材后，应用升级不会静默恢复覆盖。
+- 导入后离线启动仍能看到 seed 耗材。
+- 用户删除或修改本地耗材后，启动不会静默恢复覆盖。
 - 未配置远端 Registry 时，本地校准保存流程仍通过。
 
 ### 阶段 5：单 Registry 发布可靠性
@@ -429,19 +429,6 @@ python scripts/validate_packages.py --archive seed/lumina-materials-seed.zip
 - `usage_stats.json`、`_solver_cache/` 入包失败。
 - 重复 `material_id + revision_id` 失败。
 - package 不可变：已发布 revision 文件内容变化失败。
-
-### 打包验证
-
-```powershell
-python scripts/build_desktop.py
-```
-
-需要新增：
-
-- 指定 seed artifact 的构建参数。
-- 构建后检查安装包包含 seed，但不包含 Registry 写入密钥。
-- 首次启动生成可写 `materials/`。
-- 无网络启动仍能列出 seed 耗材。
 
 ## 已确认与待确认问题
 

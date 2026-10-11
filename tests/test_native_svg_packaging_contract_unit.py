@@ -62,49 +62,6 @@ def test_cibuildwheel_installs_test_dependencies_with_the_wheel() -> None:
     assert "test-requires" not in cibuildwheel
 
 
-def test_pyinstaller_collects_native_svg_as_a_required_binary() -> None:
-    spec = (ROOT / "lumina_studio.spec").read_text(encoding="utf-8")
-
-    assert 'LUMINA_SVG_CORE_PACKAGE = "lumina_svg_core"' in spec
-    assert '"lumina_svg_core._lumina_svg_core"' in spec
-    assert "lumina_svg_core_datas" in spec
-    assert "lumina_svg_core_binaries" in spec
-    assert "lumina_svg_core_hiddenimports" in spec
-    assert "collect_all(LUMINA_SVG_CORE_PACKAGE)" in spec
-    assert "console=True" in spec
-
-    native_cmake = (
-        ROOT / "native" / "lumina-svg-core" / "CMakeLists.txt"
-    ).read_text(encoding="utf-8")
-    assert "FILES LICENSE THIRD_PARTY_NOTICES.md" in native_cmake
-    assert "DIRECTORY THIRD_PARTY_LICENSES" in native_cmake
-
-
-def test_desktop_build_requires_native_svg_before_pyinstaller() -> None:
-    build_script = (
-        ROOT / "scripts" / "build_desktop.py"
-    ).read_text(encoding="utf-8")
-
-    assert '"lumina_svg_core"' in build_script
-    assert '"canonicalize_grid_regions"' in build_script
-    dependency_check_index = build_script.rindex(
-        "check_core_geometry_dependencies_available()"
-    )
-    pyinstaller_index = build_script.index("pyinstaller lumina_studio.spec")
-    assert dependency_check_index < pyinstaller_index
-
-
-def test_windows_onefile_notice_check_compares_normalized_archive_names() -> None:
-    workflow = (
-        ROOT / ".github" / "workflows" / "native-svg-core.yml"
-    ).read_text(encoding="utf-8")
-
-    assert "pyi-archive_viewer --list --brief" in workflow
-    assert ".Trim().Replace('\\', '/')" in workflow
-    assert "-notcontains $requiredEntry" in workflow
-    assert "-match $requiredEntry" not in workflow
-
-
 def _geometry_outcome() -> NativeSvgGeometry:
     geometry = box(0.0, 0.0, 10.0, 5.0)
     return NativeSvgGeometry(
@@ -136,6 +93,10 @@ def test_api_server_native_self_test_reports_stable_public_geometry(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     api_server = importlib.import_module("api_server")
+    # Process logging is covered by the actual CLI subprocess below.
+    monkeypatch.setattr(
+        "api.structured_logging.configure_structured_logging", lambda: None,
+    )
     monkeypatch.setattr(
         "core.native_svg_adapter.analyze_native_svg",
         lambda *_args, **_kwargs: _geometry_outcome(),
@@ -165,6 +126,9 @@ def test_api_server_native_self_test_rejects_fallback(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     api_server = importlib.import_module("api_server")
+    monkeypatch.setattr(
+        "api.structured_logging.configure_structured_logging", lambda: None,
+    )
     monkeypatch.setattr(
         "core.native_svg_adapter.analyze_native_svg",
         lambda *_args, **_kwargs: NativeSvgFallback(

@@ -53,7 +53,8 @@ def _native_profile_names(
     data_root: Path,
     index: dict,
     material_types: list[str],
-) -> list[str]:
+    plate_temperature_key: str | None = None,
+) -> list[str] | None:
     options = source["filament_profile_options"]
     profiles = {
         item["name"]: _resolved_profile(data_root, index, item["path"])
@@ -68,6 +69,13 @@ def _native_profile_names(
         family = _material_family(requested_type)
         matching = []
         for name, profile in profiles.items():
+            compatible = profile.get("compatible_printers")
+            if compatible and source["source_machine_profile_name"] not in compatible:
+                continue
+            if plate_temperature_key is not None:
+                temperatures = profile.get(plate_temperature_key)
+                if temperatures and all(float(value) <= 0 for value in temperatures):
+                    continue
             native_type = profile.get("filament_type", [])
             if not isinstance(native_type, list):
                 native_type = [native_type]
@@ -87,9 +95,7 @@ def _native_profile_names(
             elif len(matching) == 1:
                 selected.append(matching[0])
             else:
-                raise AssertionError(
-                    f"native source has no unique {requested_type!r} profile for slot {slot}: {matching}"
-                )
+                return None
     return selected
 
 
@@ -121,7 +127,16 @@ def assert_native_materials(
     ]
     assert len(matches) == 1, (slicer_id, machine_uid, nozzle_uid)
     source = matches[0]
-    names = _native_profile_names(source, data_root, index, list(material_types))
+    target = _native_target(slicer_id)
+    plate = next(
+        row for row in target["build_plate_bindings"]
+        if row["project_value"] == project["curr_bed_type"]
+    )
+    names = _native_profile_names(
+        source, data_root, index, list(material_types),
+        f"{plate['sidecar_value']}_temp",
+    )
+    assert names is not None, "selected plate needs an explicit native material preset"
     profiles_by_name = {
         item["name"]: _resolved_profile(data_root, index, item["path"])
         for item in source["filament_profile_options"]
@@ -136,7 +151,6 @@ def assert_native_materials(
         for profile in profiles
     ]
 
-    target = _native_target(slicer_id)
     snapshot = target["package_dialect"]["filament_snapshot"]
     defaults = snapshot.get("native_schema_defaults", {}).get("values", {})
     if defaults:
@@ -218,7 +232,7 @@ def native_plate_binding(*, slicer_id, build_plate_id):
 
 
 def native_materials_support_plate(*, slicer_id, machine_uid, nozzle_uid, material_types, plate_value):
-    """Derive support independently from exact native compatibility and plate temperatures."""
+    """Check the selected native presets, rather than any preset in their family."""
     import fatcat_metadata
 
     package_root = Path(fatcat_metadata.__file__).parent / "fatcat_metadata_data"
@@ -229,13 +243,39 @@ def native_materials_support_plate(*, slicer_id, machine_uid, nozzle_uid, materi
     target = _native_target(slicer_id)
     binding = next(row for row in target["build_plate_bindings"] if row["project_value"] == plate_value)
     key = binding["sidecar_value"] + "_temp"
-    profiles = [_resolved_profile(data_root, index, option["path"])
-                for option in source["filament_profile_options"] if "path" in option]
-    for material_type in material_types:
-        candidates = [profile for profile in profiles
-                      if _material_family(str(profile.get("filament_type", [""])[0])) == _material_family(material_type)
-                      and (not profile.get("compatible_printers") or source["source_machine_profile_name"] in profile["compatible_printers"])]
-        assert candidates, (slicer_id, machine_uid, nozzle_uid, material_type)
-        if all(profile.get(key) and all(str(value) == "0" for value in profile[key]) for profile in candidates):
-            return False
-    return True
+    return _native_profile_names(
+        source, data_root, index, list(material_types), key,
+    ) is not None
+
+
+def native_material_profile_gap(
+    *, slicer_id: str, machine_uid: str, nozzle_uid: str,
+    material_types: list[str], plate_value: str,
+) -> tuple[str, str] | None:
+    """Find a source field that cannot be completed from recorded native data.
+
+    找出原生预设中缺失且没有已记录默认值可补齐的字段。
+    """
+    import fatcat_metadata
+
+    data_root = Path(fatcat_metadata.__file__).parent / "fatcat_metadata_data" / "native_project_sources"
+    index = json.loads((data_root / "source-index.json").read_text(encoding="utf-8"))
+    source = next(row for row in index["sources"] if row["slicer_id"] == slicer_id
+                  and row["machine_uid"] == machine_uid and row["nozzle_uid"] == nozzle_uid)
+    target = _native_target(slicer_id)
+    binding = next(row for row in target["build_plate_bindings"] if row["project_value"] == plate_value)
+    names = _native_profile_names(
+        source, data_root, index, list(material_types), binding["sidecar_value"] + "_temp",
+    )
+    assert names is not None, "check material/plate availability first"
+    paths = {row["name"]: row["path"] for row in source["filament_profile_options"] if "path" in row}
+    profiles = [_resolved_profile(data_root, index, paths[name]) for name in names]
+    snapshot = target["package_dialect"]["filament_snapshot"]
+    defaults = snapshot.get("native_schema_defaults", {}).get("values", {})
+    keys = set().union(*(set(profile) for profile in profiles))
+    keys -= _STRUCTURAL_KEYS | set(snapshot.get("ignored_native_profile_keys", ())) | set(defaults)
+    for key in sorted(keys):
+        for name, profile in zip(names, profiles):
+            if key not in profile:
+                return name, key
+    return None

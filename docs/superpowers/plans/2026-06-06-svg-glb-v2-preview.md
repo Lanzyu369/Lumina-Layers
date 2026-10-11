@@ -17,8 +17,6 @@
 
 ## Scope And Safety
 
-Before implementation, remind the user to register this planned change in the online tracking spreadsheet for traceability.
-
 Do not touch:
 
 - `materials/**`

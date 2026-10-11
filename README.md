@@ -264,13 +264,15 @@ cd Lumina-studio
 ```bash
 # Python 3.12+ requires current-platform native 3MF wheels first. Clone
 # https://github.com/MOVIBALE/fatcat-metadata and check out
-# 673b1b694dd7c3369f5094fb8ddbf77fdb869d90, then follow the desktop guide to
+# 496902366387a044a020c740160c708569dd9982, then follow the desktop guide to
 # prepare the pinned neroued source and apply Lumina's B7 patch.
 # python scripts/build_3mf_native_wheels.py \
 #   --fatcat-root ../fatcat-metadata \
 #   --neroued-source ../neroued-3mf \
 #   --install
 python -m pip install -r requirements.txt
+# For development/tests: python -m pip install -r requirements-dev.txt
+# Optional PostgreSQL backend: python -m pip install -r requirements-postgres.txt
 corepack enable
 cd frontend
 pnpm install
@@ -284,7 +286,7 @@ by the launcher (default: `http://localhost:4174`).
 For a local or desktop install, build `wheelhouse/3mf` from the pinned public
 Fat Cat root and patched `neroued-3mf` source before installing; do not reuse
 wheels from another OS or CPU. The required public source commit is
-`673b1b694dd7c3369f5094fb8ddbf77fdb869d90`, recorded as `FATCAT_SOURCE_COMMIT`
+`496902366387a044a020c740160c708569dd9982`, recorded as `FATCAT_SOURCE_COMMIT`
 in `scripts/fatcat_packaging_contract.py`.
 
 Prusa export targets **PrusaSlicer 3.0.0-alpha12**, a preview format. In Settings,
@@ -314,7 +316,7 @@ cd electron; pnpm install; cd ..
 cd electron; pnpm start
 ```
 
-The desktop shell spawns the Python backend and the Vite dev server automatically — no separate launcher needed, but its Python dependencies above are still required. For packaging the Windows installer and troubleshooting, see the [Desktop (Electron) guide](docs/desktop-electron.md).
+The desktop shell spawns the Python backend and the Vite dev server automatically — no separate launcher needed, but its Python dependencies above are still required. See the [Desktop (Electron) guide](docs/desktop-electron.md) for development and troubleshooting.
 
 ### Configuration
 
@@ -426,10 +428,11 @@ Open the frontend address printed by the launcher.
 | --------------- | --------------------------------------- |
 | Core Logic      | Python (NumPy for voxel manipulation)   |
 | Geometry Engine | Trimesh (Mesh generation & Export)      |
-| UI Framework    | Gradio 4.0+                             |
+| Backend API     | FastAPI                                |
+| UI Framework    | React + TypeScript                     |
 | Vision Stack    | OpenCV (Perspective & Color Extraction) |
 | Color Matching  | SciPy KDTree                            |
-| 3D Preview      | Gradio Model3D (GLB format)             |
+| 3D Preview      | Three.js + React Three Fiber (GLB)      |
 
 
 

@@ -93,6 +93,10 @@ class _FakeSwatchEngine:
             (0, 255, 255),
         ]
         self._color_names = ["Red", "Green", "Blue", "Yellow", "Magenta", "Cyan"]
+        self._lut_metadata = LUTMetadata(
+            palette=[PaletteEntry(color=name) for name in self._color_names],
+            max_color_layers=expected_selection_length,
+        )
         self._query_results = {
             (0, 1, 2, 3, 4): SimpleNamespace(
                 found=True,

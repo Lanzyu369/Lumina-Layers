@@ -3,7 +3,7 @@
  * 浮动 Widget 工作区工具函数。
  */
 
-import type { WidgetId, WidgetLayoutState, SnapResult } from '../types/widget';
+import type { WidgetId, WidgetLayoutState } from '../types/widget';
 import type { WorkspaceMode } from '../types/workspace';
 
 // ===== 常量 =====
@@ -90,74 +90,14 @@ export function resolveWidgetHeight(
   return measuredHeights?.get(widget.id) ?? EXPANDED_HEIGHT;
 }
 
-/**
- * Clamp widget position within container bounds.
- * 将 Widget 位置约束在容器边界内。
- *
- * Args:
- *   position ({ x: number; y: number }): The raw widget position. (原始 Widget 位置)
- *   containerWidth (number): Container width in pixels. (容器宽度)
- *   containerHeight (number): Container height in pixels. (容器高度)
- *   widgetWidth (number): Widget width, defaults to WIDGET_WIDTH. (Widget 宽度)
- *   headerHeight (number): Minimum visible height, defaults to COLLAPSED_HEIGHT. (最小可见高度)
- *
- * Returns:
- *   { x: number; y: number }: Clamped position within bounds. (约束后的位置)
- */
-export function clampPosition(
-  position: { x: number; y: number },
-  containerWidth: number,
-  containerHeight: number,
-  widgetWidth: number = WIDGET_WIDTH,
-  headerHeight: number = COLLAPSED_HEIGHT
-): { x: number; y: number } {
-  const maxX = Math.max(0, containerWidth - widgetWidth);
-  const maxY = Math.max(0, containerHeight - headerHeight);
-
-  return {
-    x: Math.min(Math.max(0, position.x), maxX),
-    y: Math.min(Math.max(0, position.y), maxY),
-  };
-}
-
-/**
- * Always snap widget to the nearest screen edge (left or right).
- * 始终将 Widget 吸附到最近的屏幕边缘（左或右）。
- *
- * Widgets are never free-floating — they always belong to an edge stack.
- * Widget 不允许自由浮动，始终属于某个边缘堆叠。
- *
- * Args:
- *   widgetLeft (number): Left edge x-coordinate of the widget. (Widget 左边缘 x 坐标)
- *   widgetRight (number): Right edge x-coordinate of the widget. (Widget 右边缘 x 坐标)
- *   containerWidth (number): Container width in pixels. (容器宽度)
- *   widgetTop (number): Top edge y-coordinate of the widget. (Widget 顶部 y 坐标)
- *   _threshold (number): Unused, kept for API compatibility. (未使用，保留 API 兼容性)
- *
- * Returns:
- *   SnapResult: Snap result — always snaps to nearest edge. (吸附结果，始终吸附到最近边缘)
- */
+/** Select the nearest edge; an exact midpoint belongs to the left stack. */
 export function computeSnap(
   widgetLeft: number,
   widgetRight: number,
-  containerWidth: number,
-  widgetTop: number,
-  _threshold: number = SNAP_THRESHOLD,
-  widgetWidth: number = WIDGET_WIDTH
-): SnapResult {
-  void _threshold;
-  // Always snap: pick the nearest edge based on widget center position
+  containerWidth: number
+): 'left' | 'right' {
   const widgetCenter = (widgetLeft + widgetRight) / 2;
-  const snapToLeft = widgetCenter <= containerWidth / 2;
-
-  return {
-    shouldSnap: true,
-    edge: snapToLeft ? 'left' : 'right',
-    snappedPosition: {
-      x: snapToLeft ? 0 : containerWidth - widgetWidth,
-      y: widgetTop,
-    },
-  };
+  return widgetCenter <= containerWidth / 2 ? 'left' : 'right';
 }
 
 /**

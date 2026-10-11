@@ -252,13 +252,15 @@ cd Lumina-studio
 ```bash
 # Python 3.12+ 需要先为当前平台构建原生 3MF wheel。先克隆
 # https://github.com/MOVIBALE/fatcat-metadata 并检出
-# 673b1b694dd7c3369f5094fb8ddbf77fdb869d90，再按桌面指南准备固定版本的
+# 496902366387a044a020c740160c708569dd9982，再按桌面指南准备固定版本的
 # neroued 源码并应用 Lumina 的 B7 补丁：
 # python scripts/build_3mf_native_wheels.py \
 #   --fatcat-root ../fatcat-metadata \
 #   --neroued-source ../neroued-3mf \
 #   --install
 python -m pip install -r requirements.txt
+# 开发/测试另装：python -m pip install -r requirements-dev.txt
+# 可选 PostgreSQL 后端另装：python -m pip install -r requirements-postgres.txt
 corepack enable
 cd frontend
 pnpm install
@@ -271,7 +273,7 @@ python start_all.py
 
 本地或桌面安装必须先用固定提交的公开 Fat Cat 根项目和已打补丁的
 `neroued-3mf` 源码生成 `wheelhouse/3mf`，不要复制其他操作系统或 CPU 架构的
-wheel。Fat Cat 源码固定为提交 `673b1b694dd7c3369f5094fb8ddbf77fdb869d90`，
+wheel。Fat Cat 源码固定为提交 `496902366387a044a020c740160c708569dd9982`，
 与 `scripts/fatcat_packaging_contract.py` 中的 `FATCAT_SOURCE_COMMIT` 保持一致。
 
 Prusa 导出使用 **PrusaSlicer 3.0.0-alpha12** 预览版格式。在设置中选择 PrusaSlicer
@@ -299,7 +301,7 @@ cd electron; pnpm install; cd ..
 cd electron; pnpm start
 ```
 
-桌面外壳会自动拉起 Python 后端和 Vite 开发服务器，无需单独先跑启动器，但仍必须先安装上面的 Python 依赖。打包 Windows 安装程序与故障排查见[桌面客户端（Electron）指南](docs/desktop-electron.md)。
+桌面外壳会自动拉起 Python 后端和 Vite 开发服务器，无需单独先跑启动器，但仍必须先安装上面的 Python 依赖。开发与故障排查见[桌面客户端（Electron）指南](docs/desktop-electron.md)。
 
 ### 配置
 
@@ -410,10 +412,11 @@ python start_all.py
 |------|------|
 | 核心逻辑 | Python（NumPy用于体素操作） |
 | 几何引擎 | Trimesh（网格生成与导出） |
-| UI框架 | Gradio 4.0+ |
+| 后端API | FastAPI |
+| UI框架 | React + TypeScript |
 | 视觉栈 | OpenCV（透视与颜色提取） |
 | 色彩匹配 | SciPy KDTree |
-| 3D预览 | Gradio Model3D（GLB格式） |
+| 3D预览 | Three.js + React Three Fiber（GLB格式） |
 
 ---
 

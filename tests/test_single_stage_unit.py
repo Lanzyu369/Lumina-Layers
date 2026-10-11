@@ -17,18 +17,19 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import api.file_bridge as file_bridge
-import core.single_stage.materials as materials_module
 from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.routers.calibration import SINGLE_STAGE_KIT_GENERATION_FAILED_DETAIL
 from api.routers.single_stage import (
     MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL,
-    get_material_cache_evictor,
 )
 from api.session_store import SessionStore
 from config import PaletteEntry
 from core.single_stage import (
+    material_library,
+    material_package,
+    material_sync,
     GradientCardStageAResult,
     MaterialArchiveDeleteResult,
     MaterialArchiveExportResult,
@@ -112,15 +113,11 @@ def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
 
 def _client_with_registry(
     registry: FileRegistry,
-    *,
-    evictor=None,
 ) -> tuple[TestClient, SessionStore]:
     app = create_app()
     store = SessionStore(ttl=1800)
     app.dependency_overrides[get_session_store] = lambda: store
     app.dependency_overrides[get_file_registry] = lambda: registry
-    if evictor is not None:
-        app.dependency_overrides[get_material_cache_evictor] = lambda: evictor
     return (
         TestClient(
             app,
@@ -2370,7 +2367,7 @@ def test_extractor_update_gradient_card_material_route_persists_edits(
         brand="Generic",
     )
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
 
@@ -2399,8 +2396,7 @@ def test_extractor_update_gradient_card_material_rolls_back_when_registration_fa
     tmp_path: Path,
 ) -> None:
     registry = _SecondPathFailingRegistry()
-    evicted: list[str] = []
-    client, _ = _client_with_registry(registry, evictor=evicted.append)
+    client, _ = _client_with_registry(registry)
     materials_root = tmp_path / "materials"
     archive_path, stage_a_path = _write_updatable_material_archive(
         materials_root,
@@ -2409,9 +2405,20 @@ def test_extractor_update_gradient_card_material_rolls_back_when_registration_fa
         brand="Generic",
     )
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
+
+    register_path = registry.register_path
+
+    def cache_material_before_registering(*args: object, **kwargs: object) -> str:
+        cached = material_library.list_saved_stage_a_material_archives(
+            materials_dir=str(materials_root),
+        )
+        assert cached[0]["material_name"] == "PLA Matte"
+        return register_path(*args, **kwargs)
+
+    monkeypatch.setattr(registry, "register_path", cache_material_before_registering)
 
     response = client.patch(
         "/api/extractor/gradient-card-materials/pla-basic",
@@ -2430,15 +2437,18 @@ def test_extractor_update_gradient_card_material_rolls_back_when_registration_fa
     assert archive_payload["brand"] == "Generic"
     stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
     assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Basic"
-    assert evicted == ["pla-basic"]
+    restored = material_library.list_saved_stage_a_material_archives(
+        materials_dir=str(materials_root),
+    )
+    assert restored[0]["material_name"] == "PLA Basic"
+    assert restored[0]["brand"] == "Generic"
 
 
 def test_extractor_update_gradient_card_material_restores_existing_archive_on_core_failure(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    evicted: list[str] = []
-    client, _ = _client_with_registry(FileRegistry(), evictor=evicted.append)
+    client, _ = _client_with_registry(FileRegistry())
     materials_root = tmp_path / "materials"
     archive_path, stage_a_path = _write_updatable_material_archive(
         materials_root,
@@ -2447,7 +2457,7 @@ def test_extractor_update_gradient_card_material_restores_existing_archive_on_co
         brand="Generic",
     )
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
 
@@ -2486,7 +2496,6 @@ def test_extractor_update_gradient_card_material_restores_existing_archive_on_co
     assert archive_payload["brand"] == "Generic"
     stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
     assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Basic"
-    assert evicted == ["pla-basic"]
 
 
 def test_extractor_update_gradient_card_material_route_rejects_blank_name(
@@ -2497,7 +2506,7 @@ def test_extractor_update_gradient_card_material_route_rejects_blank_name(
     materials_root = tmp_path / "materials"
     _write_updatable_material_archive(materials_root, "pla-basic")
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
 
@@ -2521,7 +2530,7 @@ def test_extractor_update_gradient_card_material_route_overrides_estimated_rgb(
         material_name="PLA Basic",
     )
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
 
@@ -2549,7 +2558,7 @@ def test_extractor_update_gradient_card_material_route_rejects_invalid_estimated
     materials_root = tmp_path / "materials"
     _write_updatable_material_archive(materials_root, "pla-basic")
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
 
@@ -2572,7 +2581,7 @@ def test_extractor_update_gradient_card_material_route_missing_archive(
     materials_root = tmp_path / "materials"
     materials_root.mkdir()
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
 
@@ -3123,7 +3132,7 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
     saved_stage_a_path = archive_path.parent / "stage_A_parameters.json"
     saved_stage_a_path.write_text(json.dumps(params_payload), encoding="utf-8")
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(tmp_path / "materials"),
     )
 
@@ -3395,15 +3404,14 @@ def test_extractor_save_gradient_card_material_removes_new_archive_when_registra
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     registry = _RegisterPathFailingRegistry()
-    evicted: list[str] = []
-    client, store = _client_with_registry(registry, evictor=evicted.append)
+    client, store = _client_with_registry(registry)
     session_id = _seed_gradient_card_material_session(store)
     materials_root = tmp_path / "materials"
     material_dir = materials_root / "Bambu Lab" / "PLA Basic"
     archive_path = material_dir / "material.json"
     stage_a_path = material_dir / "stage_A_parameters.json"
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
 
@@ -3479,7 +3487,6 @@ def test_extractor_save_gradient_card_material_removes_new_archive_when_registra
     assert registry.paths == [str(archive_path)]
     assert not material_dir.exists()
     assert not (materials_root / "Bambu Lab").exists()
-    assert evicted == ["Bambu Lab/PLA Basic"]
     records = [
         record
         for record in caplog.records
@@ -3496,8 +3503,7 @@ def test_extractor_save_gradient_card_material_restores_existing_archive_on_regi
     tmp_path: Path,
 ) -> None:
     registry = _SecondPathFailingRegistry()
-    evicted: list[str] = []
-    client, store = _client_with_registry(registry, evictor=evicted.append)
+    client, store = _client_with_registry(registry)
     session_id = _seed_gradient_card_material_session(store)
     materials_root = tmp_path / "materials"
     archive_path, stage_a_path = _write_updatable_material_archive(
@@ -3507,7 +3513,7 @@ def test_extractor_save_gradient_card_material_restores_existing_archive_on_regi
         brand="Generic",
     )
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
 
@@ -3580,15 +3586,13 @@ def test_extractor_save_gradient_card_material_restores_existing_archive_on_regi
     assert archive_payload["brand"] == "Generic"
     stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
     assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Basic"
-    assert evicted == ["pla-basic"]
 
 
 def test_extractor_save_gradient_card_material_restores_existing_archive_on_core_failure(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    evicted: list[str] = []
-    client, store = _client_with_registry(FileRegistry(), evictor=evicted.append)
+    client, store = _client_with_registry(FileRegistry())
     session_id = _seed_gradient_card_material_session(store)
     materials_root = tmp_path / "materials"
     archive_path, stage_a_path = _write_updatable_material_archive(
@@ -3598,7 +3602,7 @@ def test_extractor_save_gradient_card_material_restores_existing_archive_on_core
         brand="Generic",
     )
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
 
@@ -3649,22 +3653,20 @@ def test_extractor_save_gradient_card_material_restores_existing_archive_on_core
     assert archive_payload["brand"] == "Generic"
     stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
     assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Basic"
-    assert evicted == ["pla-basic"]
 
 
 def test_extractor_save_gradient_card_material_removes_new_archive_on_core_failure(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    evicted: list[str] = []
-    client, store = _client_with_registry(FileRegistry(), evictor=evicted.append)
+    client, store = _client_with_registry(FileRegistry())
     session_id = _seed_gradient_card_material_session(store)
     materials_root = tmp_path / "materials"
     material_dir = materials_root / "Bambu Lab" / "PLA Basic"
     archive_path = material_dir / "material.json"
     stage_a_path = material_dir / "stage_A_parameters.json"
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
 
@@ -3716,7 +3718,6 @@ def test_extractor_save_gradient_card_material_removes_new_archive_on_core_failu
     assert not stage_a_path.exists()
     assert not material_dir.exists()
     assert not (materials_root / "Bambu Lab").exists()
-    assert evicted == ["Bambu Lab/PLA Basic"]
 
 
 @pytest.mark.parametrize(
@@ -4063,7 +4064,7 @@ def test_list_saved_stage_a_material_archives_reuses_cached_scan(
         encoding="utf-8",
     )
     calls = 0
-    original_builder = materials_module._saved_material_library_item_from_archive
+    original_builder = material_library._saved_material_library_item_from_archive
 
     def counting_builder(
         target_root: Path,
@@ -4075,19 +4076,19 @@ def test_list_saved_stage_a_material_archives_reuses_cached_scan(
         return original_builder(target_root, material_dir, archive_payload)
 
     monkeypatch.setattr(
-        materials_module,
+        material_library,
         "_saved_material_library_item_from_archive",
         counting_builder,
     )
 
-    first = materials_module.list_saved_stage_a_material_archives(
+    first = material_library.list_saved_stage_a_material_archives(
         materials_dir=str(materials_root),
     )
-    second = materials_module.list_saved_stage_a_material_archives(
+    second = material_library.list_saved_stage_a_material_archives(
         materials_dir=str(materials_root),
     )
     first[0]["material_name"] = "Mutated"
-    third = materials_module.list_saved_stage_a_material_archives(
+    third = material_library.list_saved_stage_a_material_archives(
         materials_dir=str(materials_root),
     )
 
@@ -4108,7 +4109,7 @@ def test_gradient_card_material_delete_rejects_untrusted_origin(
     materials_root = tmp_path / "materials"
     _write_updatable_material_archive(materials_root, "pla-basic")
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
     logger = _capture_single_stage_warning_logger(caplog)
@@ -4206,7 +4207,7 @@ def test_gradient_card_material_delete_allows_local_frontend_origin(
     materials_root = tmp_path / "materials"
     _write_updatable_material_archive(materials_root, "pla-basic")
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
 
@@ -4228,7 +4229,7 @@ def test_gradient_card_material_delete_allows_local_origin_even_when_fetch_site_
     materials_root = tmp_path / "materials"
     _write_updatable_material_archive(materials_root, "pla-basic")
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
 
@@ -4276,7 +4277,7 @@ def test_gradient_card_material_delete_allows_direct_local_request(
     materials_root = tmp_path / "materials"
     _write_updatable_material_archive(materials_root, "pla-basic")
     monkeypatch.setattr(
-        "core.single_stage.materials.MATERIALS_DIR",
+        "core.single_stage.material_files.MATERIALS_DIR",
         str(materials_root),
     )
 
@@ -5175,7 +5176,7 @@ def test_material_sync_status_reports_matching_local_material_without_sync_index
             archive.read("lumina_material_bundle.json").decode("utf-8")
         )["packages"][0]
 
-    status = materials_module.get_material_sync_status(materials_dir=str(materials_root))
+    status = material_sync.get_material_sync_status(materials_dir=str(materials_root))
 
     assert status["index_state"] == "missing"
     assert status["installed_count"] == 1
@@ -5232,7 +5233,7 @@ def test_material_sync_status_count_excludes_missing_index_entries(
         encoding="utf-8",
     )
 
-    status = materials_module.get_material_sync_status(materials_dir=str(materials_root))
+    status = material_sync.get_material_sync_status(materials_dir=str(materials_root))
 
     assert status["index_state"] == "ready"
     assert status["installed_count"] == 0
@@ -5271,15 +5272,15 @@ def test_material_sync_status_reuses_cached_local_signature_scan(
         ]
 
     monkeypatch.setattr(
-        materials_module,
+        material_sync,
         "_local_material_sync_entries",
         fake_local_entries,
     )
 
-    first_status = materials_module.get_material_sync_status(
+    first_status = material_sync.get_material_sync_status(
         materials_dir=str(materials_root),
     )
-    second_status = materials_module.get_material_sync_status(
+    second_status = material_sync.get_material_sync_status(
         materials_dir=str(materials_root),
     )
 
@@ -5317,15 +5318,15 @@ def test_material_sync_status_cache_invalidates_after_index_write(
         ]
 
     monkeypatch.setattr(
-        materials_module,
+        material_sync,
         "_local_material_sync_entries",
         fake_local_entries,
     )
 
-    first_status = materials_module.get_material_sync_status(
+    first_status = material_sync.get_material_sync_status(
         materials_dir=str(materials_root),
     )
-    materials_module._write_material_sync_index(
+    material_sync._write_material_sync_index(
         materials_root,
         {
             "schema_version": "1.0",
@@ -5336,7 +5337,7 @@ def test_material_sync_status_cache_invalidates_after_index_write(
             "local_overrides": {},
         },
     )
-    second_status = materials_module.get_material_sync_status(
+    second_status = material_sync.get_material_sync_status(
         materials_dir=str(materials_root),
     )
 
@@ -5875,10 +5876,10 @@ def test_import_saved_stage_a_material_archives_rejects_drive_relative_zip_membe
 def test_material_bundle_manifest_rejects_windows_drive_relative_path_under_posix_semantics(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(materials_module, "Path", PurePosixPath)
+    monkeypatch.setattr(material_package, "Path", PurePosixPath)
 
     with pytest.raises(ValueError, match="Unsafe material bundle file path"):
-        materials_module._safe_manifest_relative_path("C:material.json")
+        material_package._safe_manifest_relative_path("C:material.json")
 
 
 def test_import_saved_stage_a_material_archives_skips_same_v2_revision(
@@ -6067,6 +6068,7 @@ def test_generate_material_swatch_cleans_output_when_registry_fails(
                 directory_name="pla-basic",
                 name="PLA Basic",
                 estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+                material_type=None,
             )
         ],
     )
@@ -6124,6 +6126,7 @@ def test_generate_material_swatch_hides_export_failure_detail(
                 directory_name="pla-basic",
                 name="PLA Basic",
                 estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+                material_type=None,
             )
         ],
     )
@@ -6194,6 +6197,7 @@ def test_generate_material_swatch_preserves_download_when_preview_registration_f
                 directory_name="pla-basic",
                 name="PLA Basic",
                 estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+                material_type=None,
             )
         ],
     )
@@ -6277,6 +6281,7 @@ def test_generate_material_swatch_preserves_download_when_preview_encoding_fails
                 directory_name="pla-basic",
                 name="PLA Basic",
                 estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+                material_type=None,
             )
         ],
     )
@@ -6412,7 +6417,7 @@ def test_gradient_card_material_import_route_rejects_invalid_stage_a_solver_para
     tmp_path: Path,
 ) -> None:
     materials_root = tmp_path / "materials"
-    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    monkeypatch.setattr("core.single_stage.material_files.MATERIALS_DIR", str(materials_root))
     client, _, _ = _client_with_state()
     uploaded_zip = io.BytesIO()
     with zipfile.ZipFile(uploaded_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:

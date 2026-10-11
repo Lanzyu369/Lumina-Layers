@@ -157,7 +157,7 @@ def test_voxel_matrix_structure(size, max_height, backing_color_id):
     对于任意 Height_Matrix 和对应的 material_matrix、mask_solid，
     _build_relief_voxel_matrix 在高度图模式下生成的体素矩阵应满足结构约束。
     """
-    from core.converter import _build_relief_voxel_matrix
+    from core.pipeline.s06_voxel_building import _build_relief_voxel_matrix
 
     target_h, target_w = size, size
 
@@ -231,131 +231,6 @@ def test_voxel_matrix_structure(size, max_height, backing_color_id):
                     assert full_matrix[z, y, x] == -1, (
                         f"像素 ({y},{x}) z={z} 应为 -1（空气）, got {full_matrix[z, y, x]}"
                     )
-
-
-# ============================================================================
-# Property 1: 模式选择决策矩阵正确性
-# Feature: fix-2-5d-relief-mode, Property 1: 模式选择决策矩阵正确性
-# **Validates: Requirements 2.2, 2.3, 2.4**
-# ============================================================================
-
-
-def _simulate_branch_selection(
-    enable_relief: bool,
-    height_mode: str,
-    heightmap_path: str | None,
-    color_height_map: dict | None,
-) -> str:
-    """Simulate the branch selection logic from converter.py.
-
-    Mirrors the explicit height_mode decision matrix implemented in
-    convert_image_to_3d (task 1.1).  Returns one of:
-      - "heightmap"     – heightmap relief branch
-      - "color_height"  – color-height-map relief branch
-      - "flat"          – standard flat mode
-      - "flat_warning"  – flat mode with warning (heightmap mode but no path)
-    """
-    # Phase 1: heightmap loading decision (mirrors converter.py lines ~930-954)
-    heightmap_height_matrix = None
-    if enable_relief and height_mode == "heightmap" and heightmap_path is not None:
-        # In real code this loads the heightmap; simulate success
-        heightmap_height_matrix = np.ones((4, 4), dtype=np.float32)
-    elif enable_relief and height_mode == "heightmap" and heightmap_path is None:
-        # Warning path – fall through with heightmap_height_matrix = None
-        pass
-
-    # Phase 2: voxel matrix branch selection (mirrors converter.py lines ~956-990)
-    if heightmap_height_matrix is not None:
-        return "heightmap"
-    elif enable_relief and height_mode == "color" and color_height_map:
-        return "color_height"
-    else:
-        # Distinguish the warning sub-case for assertion clarity
-        if enable_relief and height_mode == "heightmap" and heightmap_path is None:
-            return "flat_warning"
-        return "flat"
-
-
-def _expected_branch(
-    enable_relief: bool,
-    height_mode: str,
-    heightmap_path: str | None,
-    color_height_map: dict | None,
-) -> str:
-    """Return the expected branch according to the design decision matrix."""
-    if not enable_relief:
-        return "flat"
-    if height_mode == "color":
-        if color_height_map:
-            return "color_height"
-        return "flat"
-    if height_mode == "heightmap":
-        if heightmap_path is not None:
-            return "heightmap"
-        return "flat_warning"
-    # Unknown height_mode falls to flat
-    return "flat"
-
-
-# Strategy: generate realistic input combinations
-_height_mode_st = st.sampled_from(["color", "heightmap"])
-_heightmap_path_st = st.one_of(st.none(), st.just("/fake/heightmap.png"))
-_color_height_map_st = st.one_of(
-    st.none(),
-    st.just({}),
-    st.dictionaries(
-        keys=st.from_regex(r"#[0-9a-f]{6}", fullmatch=True),
-        values=st.floats(0.5, 10.0, allow_nan=False, allow_infinity=False),
-        min_size=1,
-        max_size=4,
-    ),
-)
-
-
-@settings(max_examples=200)
-@given(
-    enable_relief=st.booleans(),
-    height_mode=_height_mode_st,
-    heightmap_path=_heightmap_path_st,
-    color_height_map=_color_height_map_st,
-)
-def test_decision_matrix_correctness(
-    enable_relief: bool,
-    height_mode: str,
-    heightmap_path: str | None,
-    color_height_map: dict | None,
-) -> None:
-    """Property 1: 模式选择决策矩阵正确性
-
-    For any combination of (enable_relief, height_mode, heightmap_path,
-    color_height_map), the converter branch selection must strictly follow
-    the decision matrix defined in the design document:
-
-    | enable_relief | height_mode | heightmap_path | color_height_map | 结果              |
-    |---------------|-------------|----------------|------------------|-------------------|
-    | False         | 任意        | 任意           | 任意             | flat 模式         |
-    | True          | "color"     | 任意（忽略）   | 非空             | color_height 分支 |
-    | True          | "color"     | 任意（忽略）   | 空               | flat 模式         |
-    | True          | "heightmap" | 有效路径       | 任意（忽略）     | heightmap 分支    |
-    | True          | "heightmap" | None           | 任意             | flat 模式 + 警告  |
-
-    **Validates: Requirements 2.2, 2.3, 2.4**
-    """
-    # Normalise empty dict to falsy for the decision matrix (matches Python
-    # truthiness used in the converter: ``if color_height_map:``)
-    actual = _simulate_branch_selection(
-        enable_relief, height_mode, heightmap_path, color_height_map
-    )
-    expected = _expected_branch(
-        enable_relief, height_mode, heightmap_path, color_height_map
-    )
-
-    assert actual == expected, (
-        f"Decision matrix mismatch!\n"
-        f"  enable_relief={enable_relief}, height_mode={height_mode!r}, "
-        f"heightmap_path={heightmap_path!r}, color_height_map={color_height_map!r}\n"
-        f"  expected={expected!r}, actual={actual!r}"
-    )
 
 
 # ============================================================================

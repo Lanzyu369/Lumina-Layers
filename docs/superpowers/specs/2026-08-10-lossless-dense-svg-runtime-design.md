@@ -18,9 +18,7 @@ guarded. Missing libraries, an invalid manifest, load failures, null C API
 results, or invalid polygonal output all fall back to the current Shapely path.
 
 The first server target is Docker/Linux, where the pinned library can be built
-from source for the image architecture. Desktop packaging remains on the
-existing Shapely fallback until replacement-library and corresponding-source
-distribution are explicitly wired and verified.
+from source for the image architecture.
 
 ## Evidence behind the decision
 
@@ -124,8 +122,7 @@ and exports the manifest path for runtime discovery.
 The Docker image intentionally retains the cloned corresponding GEOS source,
 the tracked modification patch, build scripts, and upstream `COPYING` file.
 This provides the complete modified-library source inside the distributed
-image. Desktop/PyInstaller builds do not include or enable the modified library
-in this change.
+image.
 
 ## Failure and fallback behavior
 
@@ -160,11 +157,6 @@ GEOS identifies itself as LGPL software and documents the stable C API and
 re-entrant API used here. The modified Docker library remains dynamically
 loaded. The image retains the license, complete pinned source, tracked patch,
 and build scripts.
-
-Desktop distribution is deliberately excluded until packaging also provides
-prominent notice, the LGPL license, replacement of the shared library, and
-equivalent access to corresponding modified source. This design is an
-engineering boundary, not a substitute for release counsel review.
 
 ## Rejected alternatives
 
@@ -206,8 +198,7 @@ The runtime integration is complete only when:
 5. both supplied SVGs complete full analysis and model generation without
    material/surface/hole/dimension changes;
 6. Docker builds and loads the verified runtime manifest;
-7. no custom library is accidentally enabled in desktop packaging;
-8. focused vector, logging, build-contract, and performance tests pass.
+7. focused vector, logging, build-contract, and performance tests pass.
 
 After these gates, profile parse, occlusion, color matching, and mesh stages and
 continue toward a first-preview target of 30 seconds, with 15 seconds as the

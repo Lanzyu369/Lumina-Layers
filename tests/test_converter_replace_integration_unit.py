@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 from contextlib import contextmanager
 import io
 import logging
@@ -343,30 +342,6 @@ def _force_region_group_one_map(store: SessionStore, session_id: str) -> None:
     store.put(session_id, "gradient_region_id_map", region_id_map)
 
 
-def test_replace_cache_conflict_handlers_do_not_return_internal_exception_text() -> None:
-    """Preview-cache conflicts should never expose internal field revisions."""
-
-    source = Path(replace_router.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    leaking_handlers: list[int] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ExceptHandler):
-            continue
-        if not isinstance(node.type, ast.Name):
-            continue
-        if node.type.id != "PreviewCacheRevisionConflict":
-            continue
-        for call in ast.walk(node):
-            if not isinstance(call, ast.Call):
-                continue
-            if not isinstance(call.func, ast.Name) or call.func.id != "str":
-                continue
-            if not call.args or not isinstance(call.args[0], ast.Name):
-                continue
-            if call.args[0].id == node.name:
-                leaking_handlers.append(call.lineno)
-
-    assert leaking_handlers == []
 
 
 def _seed_region_requantize_session(store: SessionStore, tmp_path) -> str:

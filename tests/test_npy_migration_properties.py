@@ -270,13 +270,11 @@ def test_multi_format_load_equivalence(data):
 
     rgb, stacks = data
 
-    # 为 .npy 保存需要的默认 metadata
-    metadata = LUTManager.infer_default_metadata("test", "/tmp/test.json", len(rgb))
-
     with tempfile.TemporaryDirectory() as tmpdir:
         # 保存为 .npy
         npy_path = os.path.join(tmpdir, "test_equiv.npy")
         np.save(npy_path, rgb)
+        metadata = LUTManager.infer_default_metadata("test", npy_path, len(rgb))
 
         # 保存为 .json
         json_path = os.path.join(tmpdir, "test_equiv.json")

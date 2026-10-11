@@ -16,7 +16,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Any, Iterator, Sequence
 from urllib.parse import quote
 
-from core.single_stage.materials import validate_material_bundle_archive
+from core.single_stage.material_package import validate_material_bundle_archive
 
 _MATERIAL_BUNDLE_MANIFEST_FILENAME = "lumina_material_bundle.json"
 _MATERIAL_REGISTRY_CATALOG_SCHEMA_VERSION = "1.0"

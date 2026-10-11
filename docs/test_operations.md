@@ -1,145 +1,61 @@
 # Test Operations Guide
 
-## 1) Test Layers (default workflow)
+Set up the native runtime using [desktop-electron.md](desktop-electron.md), then install test tools with `python -m pip install -r requirements-dev.txt`. PostgreSQL integration is optional: it uses `requirements-postgres.txt` and an explicitly configured disposable database.
 
-### `smoke` (pre-commit fast gate)
-- Command: `python scripts/run_smoke_tests.py`
-- Includes:
-  - Backend smoke: `pytest -m smoke`
-  - Frontend core vitest subset
-  - Frontend lint
-- Use when:
-  - Before push
-  - During iterative fixes
-- Output contract:
-  - prints gate start/end time, total duration, failure summary, and next-step commands.
+## Choose checks for the change
 
-### `full` (release-level regression)
-- Command: `python scripts/run_full_tests.py`
-- Includes:
-  - Backend full pytest
-  - Frontend full vitest
-  - Frontend lint
-- Use when:
-  - Before merge/release
-  - After refactor touches shared flows
-- Output contract:
-  - same structured summary as smoke (start/end/duration/failure summary/recovery commands).
+Run these commands from the repository root:
 
-### `watch` (local realtime feedback)
-- Command: `python scripts/run_realtime_tests.py`
-- Behavior:
-  - Periodic backend smoke
-  - Vitest watch for core suites
-  - Optional periodic lint
-  - Live terminal status panel + log files under `.cache/test-dashboard/`
-- Useful flags:
-  - `--no-lint`
-  - `--smoke-interval 60`
-  - `--lint-interval 180`
+- `python -m pytest tests/test_<affected>_unit.py -q`: a focused backend suite.
+- `python scripts/run_vitest.py run src/<affected>.test.ts`: a focused frontend suite.
+- `python scripts/run_smoke_tests.py`: backend smoke tests, the frontend core subset, and lint.
+- `python scripts/run_full_tests.py`: all backend `test_*.py` files (including native integration), release-marked checks, all frontend tests, the TypeScript/Vite build, and lint.
 
-### `profile-stage3` (local perf baseline for S06/S07/S11)
-- Command: `python scripts/profile_stage3.py`
-- Outputs:
-  - `artifacts/perf_baseline.json`
-  - `docs/perf_baseline.md`
-- Policy:
-  - local machine baseline is authoritative for P2 stage-3 v4
-  - regression thresholds: `warn=+15%`, `fail=+30%` vs median baseline
-  - report includes warm hotspot ranking (top 3 segments per dataset) for diagnosis-first iteration.
+Documentation-only edits do not need runtime tests. Use the full suite when requested or when affected shared workflows need broader coverage. Do not make it an obligation for every task.
 
-### `perf-regression-check` (baseline guard)
-- Command: `python scripts/check_perf_regression.py`
-- Optional refresh command:
-  - `python scripts/check_perf_regression.py --regenerate-current`
-- Optional cold-start mode:
-  - `python scripts/check_perf_regression.py --use-cold-start`
-- Exit code contract:
-  - `0=PASS`, `1=WARN`, `2=FAIL`
-- Output:
-  - regressed metrics (`dataset.metric`), regression percentage, and suggested action.
-- Policy:
-  - default gate compares `warm median` (run2/run3)
-  - `cold-start` (run1) is tracked for startup-path observability, not default blocking signal.
-  - when `total_s` regresses, script prints top segment diagnostics to point to S07- or S11-dominant side.
+Always use `scripts/run_vitest.py` for non-watch frontend tests so the wrapper can clean up test workers. From `frontend/`, use `pnpm build` and `pnpm lint` for build/lint checks.
 
-### Performance triage path
-- `python scripts/profile_stage3.py --also-write-latest`
-- `python scripts/check_perf_regression.py`
-- read warm hotspot top3 from `docs/perf_baseline.md`
-- apply narrow optimization to dominant segment
-- rerun profile + regression check
+For URL behavior, run `python scripts/run_vitest.py run src/__tests__/resource-url.test.ts`. For error responses and logging, use:
 
-## 2) Hypothesis & asyncio stability rules
+```sh
+python -m pytest tests/test_api_errors_unit.py tests/test_structured_logging_unit.py tests/test_logger_unit.py -q
+```
 
-### Hypothesis defaults
-- Repo baseline is configured in `tests/conftest.py`:
-  - profile: `max_examples=100`
-  - `deadline=None`
-  - `suppress_health_check=[HealthCheck.too_slow]`
-- Prefer these defaults for most property tests.
+Logging workflow checks are described in [logging-guide.md](logging-guide.md).
 
-### When to use `deadline=None` explicitly
-- Use for property tests that:
-  - involve image/matrix operations
-  - involve filesystem or process-pool boundaries
-  - have known high runtime variance
+## Live feedback
 
-### When to use `suppress_health_check=[HealthCheck.too_slow]`
-- Use only when variability is expected and deterministic speed is not the test target.
-- Do not suppress unrelated health checks unless justified.
+Use `python scripts/run_realtime_tests.py` when a live test dashboard is wanted. It periodically runs backend smoke checks, frontend watch tests, and optional lint; logs go under `.cache/test-dashboard/`.
 
-### asyncio usage boundary
-- `pytest.ini` uses `asyncio_mode=auto`.
-- For pure async unit tests, explicit `@pytest.mark.asyncio` is still allowed and recommended for clarity.
-- Do not mix blocking event-loop calls and async fixtures in one test without clear isolation.
+Useful options are `--no-lint`, `--smoke-interval 60`, and `--lint-interval 180`. Stop the dashboard when finished; ordinary verification does not need a watch process.
 
-## 3) Fast failure triage
+## Performance checks
 
-### A. Environment/setup failure
-- Symptoms:
-  - import/module not found
-  - plugin/runner initialization errors
-- First commands:
-  - `pip install -r requirements.txt`
-  - `cd frontend && pnpm install`
-  - `python -m pytest tests/test_logging_exception_governance_unit.py -q`
+For performance changes, use the existing profiling tools:
 
-### B. Smoke failed, full not run yet
-- Path:
-  1. Re-run failing command printed by smoke script.
-  2. Run `python scripts/run_realtime_tests.py --no-lint`.
-  3. Fix and re-run smoke.
+```sh
+python scripts/profile_stage3.py --also-write-latest
+python scripts/check_perf_regression.py
+```
 
-### C. Full failed after smoke passed
-- Path:
-  1. Re-run only failed suite:
-     - backend: `python -m pytest tests -q`
-     - frontend: `python scripts/run_vitest.py run`
-  2. Check contract guardrails:
-     - `python -m pytest tests/test_logging_exception_governance_unit.py -q`
-     - `python scripts/run_vitest.py run src/__tests__/resource-url.test.ts src/__tests__/url-localhost-guard.test.ts`
-  3. Re-run full gate.
+The profile writes `artifacts/perf_baseline.json` and `docs/perf_baseline.md`. Keep a reproducible workload and environment; do not generate a historical baseline from current output just to make a check pass.
 
-### D. Contract drift suspicion (URL / exception boundary)
-- URL drift checks:
-  - `python scripts/run_vitest.py run src/__tests__/resource-url.test.ts src/__tests__/url-localhost-guard.test.ts`
-- Exception governance check:
-  - `python -m pytest tests/test_logging_exception_governance_unit.py -q`
-- If behavior changed intentionally, update:
-  - ADR docs under `docs/adr/`
-  - governance/report docs
+The regression check compares warm medians (runs 2 and 3) by default. Thresholds come from the baseline file, with defaults of +15% for WARN and +30% for FAIL. Exit codes are `0=PASS`, `1=WARN`, and `2=FAIL`. Use the reported hotspot segments to investigate regressions.
 
-## 4) New test checklist (recommended)
-- Unit tests:
-  - deterministic and fast
-- Property tests:
-  - bounded generators
-  - explicit assumptions for domain constraints
-  - avoid over-broad random blobs unless necessary
-- Async tests:
-  - isolate side effects
-  - clear timeout expectations
-- Before submit:
-  - smoke must pass
-  - full must pass for shared or refactor changes
+Use `--regenerate-current` to collect current measurements and `--use-cold-start` when deliberately investigating startup behavior. Cold-start data is separate from the default warm comparison.
+
+## Useful regression coverage
+
+Test observable results and known failure paths. Do not test variable spelling, helper existence, copies of the implementation, or arbitrary test-count targets.
+
+Keep property generators within real input constraints. The Hypothesis profile in `tests/conftest.py` uses 100 examples, no deadline, and suppresses the too-slow health check; do not suppress unrelated health checks merely to pass a test.
+
+Async tests use `asyncio_mode=auto` from `pytest.ini`. Isolate filesystem/process side effects and make timeout expectations explicit.
+
+If behavior intentionally changes, update affected callers, regression tests, and current documentation. A separate ADR, governance report, or tracking form is not required.
+
+## When a check fails
+
+Re-run the failing command printed by the runner, preferably narrowing it to the failing file or case. Inspect the actual input, error, and environment before changing code.
+
+For missing dependencies, check the runtime setup, `requirements-dev.txt`, and `pnpm install` in `frontend/`. After fixing a failure, re-run the affected checks and any broader suite requested for the task.

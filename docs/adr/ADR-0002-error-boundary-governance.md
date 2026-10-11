@@ -1,25 +1,20 @@
-# ADR-0002: Error Boundary Governance (Catch-All Policy)
+# ADR-0002: Error Boundaries
 
 ## Status
-Accepted (2026-04-01)
+Superseded (2026-10-11) by the current [logging guide](../logging-guide.md)
+and [repository guidelines](../../AGENTS.md). The original decision was
+accepted on 2026-04-01.
 
-## Context
-- The repository had widespread broad exception handling, reducing diagnosability and consistency.
-- Governance was introduced and reduced catch-all handling in governed paths to one point.
+## Rationale
+- Broad exception handling previously obscured failure causes and made responses inconsistent.
+- The useful requirement is to preserve diagnostics and translate errors at the boundary that owns them.
+- Fixed exception counts and source allowlists did not express those guarantees and have been retired.
 
-## Decision
-- Default policy: no broad catch-all in governed API/core hot paths.
-- Single design-retained allowlist point:
-  - `api/app.py` request middleware top-level `except Exception`.
-- Reason for retention:
-  - Guarantees structured request-level failure logging and correlation before re-raise.
+## Current contract
+- Core code raises domain errors; API boundaries translate them through `api.errors.to_http_exception()`.
+- Broad catches belong at explicit application or external-library boundaries, with actionable diagnostics or a defined fallback.
+- Required operations retain failure semantics. Cleanup and optional-feature fallbacks preserve data and explain any degraded result.
 
-## Consequences
-- Route/core layers must prefer explicit exceptions and domain mapping.
-- Catch-all expansion is blocked unless governance baseline and docs are explicitly revised.
-
-## Enforcement
-- Governance test: `tests/test_logging_exception_governance_unit.py`
-- Governance baseline:
-  - `print(` in scope: `0`
-  - `except Exception` in scope: `1`
+## Verification
+Use the relevant error-response, cleanup and structured-log tests for the changed
+behavior. The logging guide documents the existing checks and current usage.

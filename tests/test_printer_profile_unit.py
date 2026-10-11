@@ -317,3 +317,15 @@ def test_a1_mini_waiting_temperature_compensation_is_marked_as_flush(
 
     assert flush_start >= 0
     assert flush_end > marker_offset
+
+
+def test_orca_native_tower_defaults_reach_placement() -> None:
+    """Placement must include the ribs and spacing used by the real slicer."""
+    from utils.fatcat_metadata import read_project_layout
+
+    template = load_export_project_settings("bambu-p1s", slicer="OrcaSlicer")
+    layout = read_project_layout(template, slicer_id="OrcaSlicer")
+
+    assert layout["uses_rib_wall"] is True
+    assert layout["tower_rib_width"] == pytest.approx(8.0)
+    assert layout["tower_infill_spacing_ratio"] == pytest.approx(1.5)
