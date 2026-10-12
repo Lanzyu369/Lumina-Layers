@@ -635,9 +635,6 @@ export default function SettingsPanel() {
                     wikiPath={WIKI_DOCS.deviceAndSlicer}
                   />
                 </h3>
-                <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                  {t("settings.current_device_description")}
-                </p>
               </div>
 
               {slicerOptionsError && (
@@ -914,12 +911,9 @@ export default function SettingsPanel() {
                       </h3>
                       <HelpDot
                         title={t("settings.completion_notifications_heading")}
-                        description={t("settings.completion_notifications_hint")}
+                        description={`${t("settings.completion_notifications_description")}\n\n${t("settings.completion_notifications_hint")}`}
                       />
                     </div>
-                    <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                      {t("settings.completion_notifications_description")}
-                    </p>
                   </div>
                   <Switch
                     checked={enableCompletionNotifications}
@@ -950,12 +944,13 @@ export default function SettingsPanel() {
                 className="flex items-start justify-between gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
               >
                 <div className="min-w-0">
-                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                    {t("settings.preserve_upload_filename_heading")}
+                  <h3 className="flex items-center gap-1.5 text-base font-semibold text-slate-900 dark:text-slate-50">
+                    <span>{t("settings.preserve_upload_filename_heading")}</span>
+                    <HelpDot
+                      title={t("settings.preserve_upload_filename_heading")}
+                      description={t("settings.preserve_upload_filename_description")}
+                    />
                   </h3>
-                  <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    {t("settings.preserve_upload_filename_description")}
-                  </p>
                 </div>
                 <Switch
                   checked={preserveUploadFilenameFor3mf}
@@ -976,9 +971,6 @@ export default function SettingsPanel() {
                       wikiPath={WIKI_DOCS.wittyLoading}
                     />
                   </h3>
-                  <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    {t("settings.witty_loading_desc")}
-                  </p>
                 </div>
                   <Switch
                     checked={enableWittyLoading}
@@ -1000,25 +992,21 @@ export default function SettingsPanel() {
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                      {t("settings.solver_cache_density_heading")}
+                    <h3 className="flex items-center gap-1.5 text-base font-semibold text-slate-900 dark:text-slate-50">
+                      <span>{t("settings.solver_cache_density_heading")}</span>
+                      <HelpDot
+                        title={t("settings.solver_cache_density_heading")}
+                        description={`${t("settings.solver_cache_density_description")}\n\n${t("settings.solver_cache_density_tip")}`}
+                        wikiPath={WIKI_DOCS.solverCacheDensity}
+                        placement="left"
+                      />
                     </h3>
-                    <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                      {t("settings.solver_cache_density_description")}
-                    </p>
                   </div>
-                  <WikiTooltip
-                    title={t("settings.solver_cache_density_heading")}
-                    description={t("settings.solver_cache_density_tip")}
-                    wikiPath={WIKI_DOCS.solverCacheDensity}
-                    placement="left"
-                  >
-                    <Switch
-                      checked={enableSolverCacheGridSelection}
-                      onChange={setEnableSolverCacheGridSelection}
-                      ariaLabel={t("settings.solver_cache_density_heading")}
-                    />
-                  </WikiTooltip>
+                  <Switch
+                    checked={enableSolverCacheGridSelection}
+                    onChange={setEnableSolverCacheGridSelection}
+                    ariaLabel={t("settings.solver_cache_density_heading")}
+                  />
                 </div>
                 {enableSolverCacheGridSelection ? (
                   <div
@@ -1040,9 +1028,6 @@ export default function SettingsPanel() {
                         label: t(`settings.solver_cache_density_option_${grid}`),
                       }))}
                     />
-                    <StatusBanner tone="info">
-                      {t("settings.solver_cache_density_tip")}
-                    </StatusBanner>
                   </div>
                 ) : (
                   <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
@@ -1059,13 +1044,10 @@ export default function SettingsPanel() {
                   <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
                     {t("settings.material_delta_e00_tolerance_heading")}
                   </h3>
-                  <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    {t("settings.material_delta_e00_tolerance_description")}
-                  </p>
                 </div>
                 <Slider
                   label={t("settings.material_delta_e00_tolerance_label")}
-                  tooltip={t("settings.material_delta_e00_tolerance_hint")}
+                  tooltip={`${t("settings.material_delta_e00_tolerance_description")}\n\n${t("settings.material_delta_e00_tolerance_hint")}`}
                   value={materialDeltaE00Tolerance}
                   min={MATERIAL_DELTA_E00_TOLERANCE_MIN}
                   max={MATERIAL_DELTA_E00_TOLERANCE_MAX}
@@ -1085,13 +1067,13 @@ export default function SettingsPanel() {
                     {t("settings.svg_pixels_per_mm_heading")}
                   </h3>
                   <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    {t("settings.svg_pixels_per_mm_description")}
+                    {t("settings.svg_pixels_per_mm_scope")}
                   </p>
                 </div>
                 <div className="grid gap-3 min-[960px]:grid-cols-[minmax(0,1fr)_max-content]">
                   <Slider
                     label={t("settings.svg_pixels_per_mm_label")}
-                    tooltip={t("settings.svg_pixels_per_mm_tip")}
+                    tooltip={`${t("settings.svg_pixels_per_mm_tip")}\n\n${t("settings.svg_pixels_per_mm_default_hint")}`}
                     wikiPath={WIKI_DOCS.svgRasterDensity}
                     value={svgPixelsPerMm}
                     min={SVG_PIXELS_PER_MM_MIN}
@@ -1110,9 +1092,6 @@ export default function SettingsPanel() {
                     className="w-full min-[960px]:w-auto min-[960px]:min-w-max min-[960px]:self-end"
                   />
                 </div>
-                <StatusBanner tone="info">
-                  {t("settings.svg_pixels_per_mm_default_hint")}
-                </StatusBanner>
               </div>
 
               <SvgHoleCompensationSettings />
@@ -1123,25 +1102,21 @@ export default function SettingsPanel() {
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                      {t("settings.auto_replace_gradient_heading")}
+                    <h3 className="flex items-center gap-1.5 text-base font-semibold text-slate-900 dark:text-slate-50">
+                      <span>{t("settings.auto_replace_gradient_heading")}</span>
+                      <HelpDot
+                        title={t("settings.auto_replace_gradient_heading")}
+                        description={`${t("settings.auto_replace_gradient_description")}\n\n${t("settings.auto_replace_gradient_tip")}`}
+                        wikiPath={WIKI_DOCS.autoGradientReplacement}
+                        placement="left"
+                      />
                     </h3>
-                    <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                      {t("settings.auto_replace_gradient_description")}
-                    </p>
                   </div>
-                  <WikiTooltip
-                    title={t("settings.auto_replace_gradient_heading")}
-                    description={t("settings.auto_replace_gradient_tip")}
-                    wikiPath={WIKI_DOCS.autoGradientReplacement}
-                    placement="left"
-                  >
-                    <Switch
-                      checked={autoReplaceGradientBanding}
-                      onChange={setAutoReplaceGradientBanding}
-                      ariaLabel={t("settings.auto_replace_gradient_heading")}
-                    />
-                  </WikiTooltip>
+                  <Switch
+                    checked={autoReplaceGradientBanding}
+                    onChange={setAutoReplaceGradientBanding}
+                    ariaLabel={t("settings.auto_replace_gradient_heading")}
+                  />
                 </div>
               </div>
 
@@ -1156,13 +1131,10 @@ export default function SettingsPanel() {
                     </h3>
                     <HelpDot
                       title={t("settings.smooth_vector_preview_heading")}
-                      description={t("settings.smooth_vector_preview_hint")}
+                      description={`${t("settings.smooth_vector_preview_description")}\n\n${t("settings.smooth_vector_preview_hint")}`}
                       ariaLabel={t("settings.smooth_vector_preview_help_aria")}
                     />
                   </div>
-                  <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    {t("settings.smooth_vector_preview_description")}
-                  </p>
                 </div>
                 <Switch
                   checked={enableSmoothVectorPreview}
@@ -1187,9 +1159,6 @@ export default function SettingsPanel() {
                       wikiPath={WIKI_DOCS.cacheMaintenance}
                     />
                   </h3>
-                  <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    {t("settings.cache_summary")}
-                  </p>
                 </div>
                 <div className="flex flex-col gap-3 rounded-[22px] border border-slate-200/75 bg-slate-100/55 p-4 dark:border-slate-700/75 dark:bg-slate-900/45 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-sm text-slate-600 dark:text-slate-300">

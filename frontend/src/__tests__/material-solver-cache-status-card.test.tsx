@@ -394,8 +394,12 @@ describe("MaterialSolverCacheStatusCard", () => {
       );
     });
 
-    const [rebuildButton, deleteButton] =
-      within(runtimeSection).getAllByRole("button");
+    const rebuildButton = within(runtimeSection).getByRole("button", {
+      name: "重建智能缓存",
+    });
+    const deleteButton = within(runtimeSection).getByRole("button", {
+      name: "删除智能缓存",
+    });
     await act(async () => {
       fireEvent.click(rebuildButton);
     });
@@ -455,7 +459,9 @@ describe("MaterialSolverCacheStatusCard", () => {
     const runtimeSection = await screen.findByTestId(
       "material-solver-runtime-section",
     );
-    const chartsButton = within(runtimeSection).getAllByRole("button")[2];
+    const chartsButton = within(runtimeSection).getByRole("button", {
+      name: "查看配方覆盖图",
+    });
     await act(async () => {
       fireEvent.click(chartsButton);
     });

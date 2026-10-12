@@ -249,7 +249,9 @@ Image-to-Vector tab (`VectorizerPanel.tsx`) is the canonical reference:
 #### Key Rules (关键规则)
 
 - **Do not** use native `title` attribute or custom `?`/`ⓘ` spans; always use `HelpDot` (for Switch) or the `tooltip` prop (for Slider/Checkbox/Dropdown/RadioGroup)
-- **Do not** add hint text as a visible paragraph below the control; use the tooltip popover
+- Keep static explanations, parameter guidance, and optional detail in the tooltip popover; do not repeat them in a visible paragraph below the control.
+- Keep current status, unavailable-option reasons, compatibility limits, validation errors, and action-critical warnings visible. Do not make users open a tooltip to find out why an action is unavailable or unsafe.
+- When inline text and a help icon both appear, the inline text states the current result or constraint briefly; the tooltip supplies the explanation and detail. Do not reuse the same explanation in both places.
 - Hint text must be bilingual (`zh` + `en`) in `translations.ts` with a `*_hint` suffix key
 - The ⓘ icon visual style is fixed in `HelpDot` (stroke-style `InfoIcon`, no background); do not recreate it inline
 - Every control that has a hint **must** display a visible ⓘ icon — never use a hidden/implicit-only tooltip

@@ -203,7 +203,7 @@ export default function FridgeMagnetSettings() {
       {enableFridgeMagnet ? (
         <div className={mutedSectionCardClass}>
           <p className="text-xs text-slate-600 dark:text-slate-300">
-            {t("fridge_magnet_mode_hint")}
+            {t("fridge_magnet_mode_active_status")}
           </p>
           <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-500 dark:text-slate-400">
             <div className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-700/80">

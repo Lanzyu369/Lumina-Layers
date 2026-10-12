@@ -26,6 +26,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import Button from "./ui/Button";
 import Dropdown from "./ui/Dropdown";
+import HelpDot from "./ui/HelpDot";
 import { LutColorDistributionCharts } from "./LutDetailsPanel";
 
 interface MaterialSolverCacheStatusCardProps {
@@ -456,12 +457,13 @@ export default function MaterialSolverCacheStatusCard({
     >
       <header className="flex items-start justify-between gap-2">
         <div className="flex flex-col gap-1 min-w-0">
-          <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-            {t("basic_material_cache_section_title")}
+          <h4 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800 dark:text-slate-100">
+            <span>{t("basic_material_cache_section_title")}</span>
+            <HelpDot
+              title={t("basic_material_cache_section_title")}
+              description={t("basic_material_cache_section_description")}
+            />
           </h4>
-          <p className="text-[11px] leading-snug text-slate-500 dark:text-slate-400">
-            {t("basic_material_cache_section_description")}
-          </p>
         </div>
         <StatusPill tone={statusTone} label={statusText} />
       </header>
@@ -563,12 +565,13 @@ export default function MaterialSolverCacheStatusCard({
       >
         <header className="flex items-start justify-between gap-2">
           <div className="flex min-w-0 flex-col gap-1">
-            <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-              {t("basic_material_runtime_section_title")}
+            <h4 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800 dark:text-slate-100">
+              <span>{t("basic_material_runtime_section_title")}</span>
+              <HelpDot
+                title={t("basic_material_runtime_section_title")}
+                description={t("basic_material_runtime_section_description")}
+              />
             </h4>
-            <p className="text-[11px] leading-snug text-slate-500 dark:text-slate-400">
-              {t("basic_material_runtime_section_description")}
-            </p>
           </div>
           <StatusPill
             tone={runtimeStatusTone}

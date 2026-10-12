@@ -494,9 +494,6 @@ export default function ExtractorCanvas() {
           />
         </svg>
         <p className="text-sm">{t("ext_canvas_upload_hint")}</p>
-        <p className="text-xs text-slate-500 dark:text-slate-600">
-          {t("ext_canvas_upload_hint_en")}
-        </p>
       </div>
     );
   }

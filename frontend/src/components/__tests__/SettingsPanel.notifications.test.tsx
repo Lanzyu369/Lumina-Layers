@@ -136,21 +136,36 @@ describe("SettingsPanel completion notifications", () => {
     vi.unstubAllGlobals();
   });
 
-  it("shows an accessible inline help trigger for the notification label", async () => {
+  it("keeps permission status visible and opens explanations without requesting permission", async () => {
     renderPanel();
 
     const notificationSection = await screen.findByTestId(
       "settings-completion-notifications-section",
     );
     expect(
-      within(notificationSection).getByText(
+      within(notificationSection).queryByText(
         translations["settings.completion_notifications_description"].zh,
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      within(notificationSection).getByText(
+        translations["settings.completion_notifications_default"].zh,
       ),
     ).toBeInTheDocument();
     const helpTrigger = within(notificationSection).getByRole("button", {
       name: translations["settings.completion_notifications_heading"].zh,
     });
-    expect(helpTrigger.querySelector("svg")).toBeInTheDocument();
+    fireEvent.click(helpTrigger);
+
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveTextContent(
+      translations["settings.completion_notifications_description"].zh,
+    );
+    expect(tooltip).toHaveTextContent(
+      translations["settings.completion_notifications_hint"].zh,
+    );
+    expect(requestPermissionMock).not.toHaveBeenCalled();
+    expect(useSettingsStore.getState().enableCompletionNotifications).toBe(false);
   });
 
   it("enables the persisted setting after permission is granted", async () => {

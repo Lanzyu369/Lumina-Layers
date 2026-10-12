@@ -6,6 +6,7 @@ import {
   pickGeneratedFileDirectory,
 } from "../../integrations/electron";
 import Button from "../ui/Button";
+import HelpDot from "../ui/HelpDot";
 
 /**
  * Desktop-only setting for the folder generated-file save dialogs open in.
@@ -44,12 +45,13 @@ export default function GeneratedFileDirectorySetting() {
       className="flex flex-col gap-3 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
     >
       <div className="min-w-0">
-        <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-          {t("settings.generated_file_directory_heading")}
+        <h3 className="flex items-center gap-1.5 text-base font-semibold text-slate-900 dark:text-slate-50">
+          <span>{t("settings.generated_file_directory_heading")}</span>
+          <HelpDot
+            title={t("settings.generated_file_directory_heading")}
+            description={t("settings.generated_file_directory_description")}
+          />
         </h3>
-        <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-          {t("settings.generated_file_directory_description")}
-        </p>
       </div>
       <p
         data-testid="settings-generated-file-directory-value"

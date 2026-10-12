@@ -129,7 +129,9 @@ describe("AdvancedSettings — LUT-Constrained K-Means toggle", () => {
     expect(
       screen.queryByRole("slider", { name: /暗色彩度门槛/ }),
     ).not.toBeInTheDocument();
-    expect(screen.getByText(/精确 CIEDE2000/)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "动态叠层模式下，色相保护和暗色彩度修正不可用。",
+    );
   });
 
   it("restores hue availability outside material mode without resurrecting it on return", () => {

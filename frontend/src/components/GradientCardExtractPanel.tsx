@@ -947,9 +947,6 @@ export default function GradientCardExtractPanel() {
                 wikiPath={WIKI_DOCS.gradientCardExtraction}
               />
             </h3>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              {t("mat_gradient_upload_desc")}
-            </p>
           </div>
             <div className="flex flex-col gap-3 mt-auto">
               <div className="flex flex-col gap-1">
@@ -972,13 +969,13 @@ export default function GradientCardExtractPanel() {
                   ? t("mat_gradient_verification_name_label")
                   : t("mat_gradient_material_name_label")}
               </h3>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {isVerificationMode
-                  ? tRuntime("mat_gradient_verification_name_desc", {
-                      count: verificationRunCount,
-                    })
-                  : t("mat_gradient_material_name_placeholder")}
-              </p>
+              {isVerificationMode && (
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  {tRuntime("mat_gradient_verification_name_desc", {
+                    count: verificationRunCount,
+                  })}
+                </p>
+              )}
             </div>
             <div className="flex flex-col gap-4 flex-1">
               <input
@@ -1033,12 +1030,14 @@ export default function GradientCardExtractPanel() {
                 style={{ background: "var(--surface-panel)" }}
               >
                 <div className="flex flex-col gap-2">
-                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                    {t("ext_cc_dialog_title")}
+                  <h3 className="flex items-center gap-1.5 text-base font-semibold text-slate-900 dark:text-slate-50">
+                    <span>{t("ext_cc_dialog_title")}</span>
+                    <HelpDot
+                      title={t("ext_cc_dialog_title")}
+                      description={t("mat_gradient_colorchecker_hint")}
+                      wikiPath={WIKI_DOCS.colorcheckerCalibration}
+                    />
                   </h3>
-                  <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
-                    {t("mat_gradient_colorchecker_hint")}
-                  </p>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <Button

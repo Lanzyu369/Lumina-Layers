@@ -3,6 +3,7 @@ import type { KeyboardEvent } from "react";
 
 import type { BuildPlateInfo } from "../../api/types";
 import { useI18n } from "../../i18n/context";
+import HelpDot from "../ui/HelpDot";
 
 interface BuildPlateSelectorProps {
   label: string;
@@ -66,12 +67,10 @@ export default function BuildPlateSelector({
       className="border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
     >
       <div className="mb-3">
-        <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-          {label}
+        <h4 className="flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-slate-50">
+          <span>{label}</span>
+          <HelpDot title={label} description={hint} />
         </h4>
-        <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-          {hint}
-        </p>
       </div>
       <div
         role="radiogroup"
