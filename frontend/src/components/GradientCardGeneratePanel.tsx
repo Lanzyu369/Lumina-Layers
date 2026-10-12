@@ -61,9 +61,6 @@ export default function GradientCardGeneratePanel() {
                   wikiPath={WIKI_DOCS.gradientCardGeneration}
                 />
               </h3>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {t("mat_gradient_generate_section_desc")}
-              </p>
             </div>
 
             <div className="flex flex-col gap-4 flex-1">
@@ -131,9 +128,6 @@ export default function GradientCardGeneratePanel() {
               <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
                 {t("mat_gradient_generate_notice_title")}
               </h3>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {t("mat_gradient_generate_notice_desc")}
-              </p>
             </div>
 
             <div className="rounded-2xl border border-blue-200/80 bg-blue-50/50 p-4 text-sm leading-6 text-blue-800 dark:border-blue-900/30 dark:bg-blue-900/20 dark:text-blue-200 flex-1">

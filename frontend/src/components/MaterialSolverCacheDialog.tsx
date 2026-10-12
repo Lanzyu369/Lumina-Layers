@@ -64,9 +64,6 @@ export default function MaterialSolverCacheDialog({
                     <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100">
                       {t("basic_material_cache_section_title")}
                     </h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      {t("basic_material_cache_section_description")}
-                    </p>
                   </div>
                   <button
                     type="button"

@@ -993,14 +993,14 @@ function EmptyCard({
   emptyMessage,
 }: {
   title: string;
-  description: string;
+  description?: string;
   emptyMessage: string;
 }) {
   return (
     <section className={`${cardPadClass} flex flex-col gap-4`}>
       <div>
         <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{title}</h3>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{description}</p>
+        {description && <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{description}</p>}
       </div>
       <div className={`${wellPadClass} px-4 py-5 text-sm leading-6 text-slate-500 dark:text-slate-400`}>
         {emptyMessage}
@@ -1214,7 +1214,6 @@ export default function LutDetailsPanel() {
             <div className="flex flex-col gap-5">
               <EmptyCard
                 title={t("lut_details_summary_title")}
-                description={t("lut_details_no_detail")}
                 emptyMessage={t("lut_details_no_detail")}
               />
               <EmptyCard

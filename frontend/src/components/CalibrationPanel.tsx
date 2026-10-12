@@ -90,11 +90,13 @@ export default function CalibrationPanel() {
             {showEightColorFullExport && (
               <div className={`${mutedSectionCardClass} flex items-start justify-between gap-4`}>
                 <div className="space-y-1">
-                  <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
-                    {t("cal_8color_full_export_label")}
-                  </p>
-                  <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
-                    {t("cal_8color_full_export_hint")}
+                  <p className="flex items-center gap-1.5 text-sm font-medium text-slate-900 dark:text-slate-100">
+                    <span>{t("cal_8color_full_export_label")}</span>
+                    <HelpDot
+                      title={t("cal_8color_full_export_label")}
+                      description={t("cal_8color_full_export_hint")}
+                      wikiPath={WIKI_DOCS.calibrationBoard}
+                    />
                   </p>
                 </div>
                 <Switch

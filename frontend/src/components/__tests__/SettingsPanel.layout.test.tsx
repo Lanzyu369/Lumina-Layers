@@ -287,7 +287,7 @@ describe("SettingsPanel information architecture", () => {
     ).toBeInTheDocument();
   });
 
-  it("offers the default-off uploaded filename switch under General", () => {
+  it("offers uploaded filename help without toggling the default-off setting", async () => {
     renderPanel();
 
     const navigation = screen.getByRole("navigation", { name: "设置分类" });
@@ -298,14 +298,18 @@ describe("SettingsPanel information architecture", () => {
     const filenameSection = screen.getByTestId(
       "settings-preserve-upload-filename-section",
     );
-    expect(
-      within(filenameSection).getByText(
-        "开启后，普通单件生成会把“海报.png”下载为“海报.3mf”。默认关闭；批量、拼图和大画幅继续使用原有名称。",
-      ),
-    ).toBeInTheDocument();
     const filenameSwitch = within(filenameSection).getByRole("switch", {
       name: "导出 3MF 时沿用上传文件名",
     });
+    expect(filenameSwitch).not.toBeChecked();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    fireEvent.click(within(filenameSection).getByRole("button", {
+      name: "导出 3MF 时沿用上传文件名",
+    }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "开启后，普通单件生成会把“海报.png”下载为“海报.3mf”。默认关闭；批量、拼图和大画幅继续使用原有名称。",
+    );
     expect(filenameSwitch).not.toBeChecked();
 
     fireEvent.click(filenameSwitch);

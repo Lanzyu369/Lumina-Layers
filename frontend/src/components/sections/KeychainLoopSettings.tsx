@@ -40,7 +40,7 @@ export default function KeychainLoopSettings() {
       )}
       {enableFridgeMagnet && !add_loop && (
         <p className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400">
-          {t("fridge_magnet_mode_hint")}
+          {t("fridge_magnet_loop_disabled_status")}
         </p>
       )}
       {add_loop && (

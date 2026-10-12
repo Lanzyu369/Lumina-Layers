@@ -69,13 +69,7 @@ export default function AdvancedSettings() {
       <Checkbox
         label={t("adv_hue_protection")}
         wikiPath={WIKI_DOCS.hueProtection}
-        tooltip={
-          dynamicMaterialLayerCountActive
-            ? t("adv_hue_protection_dynamic_hint")
-            : use_lut_constrained
-              ? t("adv_hue_protection_disabled_hint")
-              : t("adv_hue_protection_hint")
-        }
+        tooltip={t("adv_hue_protection_hint")}
         disabled={use_lut_constrained || dynamicMaterialLayerCountActive}
         checked={
           hue_enable &&
@@ -84,9 +78,13 @@ export default function AdvancedSettings() {
         }
         onChange={setHueEnable}
       />
-      {dynamicMaterialLayerCountActive && (
-        <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
-          {t("adv_hue_protection_dynamic_hint")}
+      {(dynamicMaterialLayerCountActive || use_lut_constrained) && (
+        <p role="status" className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+          {t(
+            dynamicMaterialLayerCountActive
+              ? "adv_hue_protection_dynamic_status"
+              : "adv_hue_protection_disabled_status",
+          )}
         </p>
       )}
       {hue_enable && !use_lut_constrained && !dynamicMaterialLayerCountActive && (

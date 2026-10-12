@@ -100,7 +100,7 @@ export default function Custom3mfTemplateSettings() {
     <div className="space-y-3 border-t panel-divider pt-5">
       <Dropdown
         label={t("settings.template_title")}
-        tooltip={t("settings.template_hint")}
+        tooltip={`${t("settings.template_summary")}\n\n${t("settings.template_hint")}`}
         value={selectedId ?? ""}
         disabled={busy}
         options={options}
@@ -116,8 +116,8 @@ export default function Custom3mfTemplateSettings() {
         </p>
       )}
       {missing && <StatusBanner tone="warning">{t("settings.template_missing")}</StatusBanner>}
-      <p className="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-        {t("settings.template_summary")}
+      <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+        {t("settings.template_compatibility_note")}
       </p>
       <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">
         {t("settings.template_excluded")}

@@ -414,11 +414,13 @@ export default function ExtractorPanel() {
                 <div className="rounded-[22px] border border-slate-200/80 bg-slate-100/70 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-900/55">
                   <div className="flex items-start justify-between gap-2">
                     <div className="space-y-1">
-                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-                        {t("ext_8color_full_export_label")}
-                      </p>
-                      <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
-                        {t("ext_8color_full_export_hint")}
+                      <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                        <span>{t("ext_8color_full_export_label")}</span>
+                        <HelpDot
+                          title={t("ext_8color_full_export_label")}
+                          description={t("ext_8color_full_export_hint")}
+                          wikiPath={WIKI_DOCS.calibrationBoard}
+                        />
                       </p>
                     </div>
                     <Switch
@@ -673,9 +675,6 @@ export default function ExtractorPanel() {
                     <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
                       {t("ext_cc_dialog_title")}
                     </h3>
-                    <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                      {t("ext_colorchecker_hint")}
-                    </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {colorchecker_phase === "done" ? (

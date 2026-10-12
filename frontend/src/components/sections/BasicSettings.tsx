@@ -1146,9 +1146,6 @@ export default function BasicSettings() {
                 {t("basic_image_rotation_apply")}
               </button>
             </div>
-            <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
-              {t("basic_image_rotation_hint")}
-            </p>
           </div>
 
           <CropModal
@@ -1255,7 +1252,7 @@ export default function BasicSettings() {
                 onChange={(v) => setMaterialMaxLayerCount(Math.round(v))}
               />
               <StatusBanner tone="info">
-                {t("basic_material_dynamic_range_hint")}
+                {t("basic_material_dynamic_range_status")}
               </StatusBanner>
             </>
           ) : (
@@ -1484,9 +1481,6 @@ export default function BasicSettings() {
                       checked={model_only}
                       onChange={setModelOnly}
                     />
-                  </div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    {t("basic_model_runtime_defaults_hint")}
                   </div>
                 </div>
               )}

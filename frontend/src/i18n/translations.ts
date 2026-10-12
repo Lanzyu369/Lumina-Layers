@@ -2202,6 +2202,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "冰箱贴模式会强制切换为单面结构，并禁用拼图、大画幅和挂件环。",
     en: "Fridge magnet mode forces single-sided structure and disables puzzle, large-format, and keychain loop modes.",
   },
+  fridge_magnet_mode_active_status: {
+    zh: "拼图、大画幅和挂件环已禁用。",
+    en: "Puzzle, large-format, and keychain loop modes are disabled.",
+  },
+  fridge_magnet_loop_disabled_status: {
+    zh: "冰箱贴模式下，挂件环不可用。",
+    en: "The keychain loop is unavailable in fridge magnet mode.",
+  },
   fridge_magnet_summary_structure: {
     zh: "当前结构",
     en: "Structure",
@@ -3100,6 +3108,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "仅控制高保真模式下 SVG 转为像素图时的清晰度；矢量模式不受影响。",
     en: "Controls SVG rasterization clarity only in High-Fidelity mode; Vector mode is unaffected.",
   },
+  "settings.svg_pixels_per_mm_scope": {
+    zh: "仅适用于高保真模式下的 SVG；矢量模式不受影响。",
+    en: "Only applies to SVG in High-Fidelity mode; Vector mode is unaffected.",
+  },
   "settings.svg_pixels_per_mm_label": {
     zh: "采样密度",
     en: "Sampling density",
@@ -3197,6 +3209,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.template_summary": {
     zh: "导入当前切片软件保存的单盘 3MF 项目，沿用其中的耗材和全局工艺设置。模板须与所选打印机、喷嘴和切片软件匹配；不匹配时会报错。",
     en: "Import a single-plate 3MF saved by the selected slicer to reuse its material and global process settings. The template must match the selected printer, nozzle and slicer; mismatches produce an error.",
+  },
+  "settings.template_compatibility_note": {
+    zh: "模板须匹配当前打印机、喷嘴和切片软件，不匹配时会报错。",
+    en: "The template must match the current printer, nozzle, and slicer; mismatches produce an error.",
   },
   "settings.template_hint": {
     zh: "保留模板的速度、加速度、温度、流量、回抽和冷却设置。模型使用模板耗材槽位，槽位数量按生成流程保留或收紧。Lumina 按模型需要覆盖层高、线宽、墙层、顶底壳层和填充率；擦料塔按下方自动摆放选项处理。原模型、局部参数和修改器不导入。",
@@ -4897,6 +4913,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "动态模式会在设定范围内自动加载并评估候选；单一层数的穷举缓存入口暂不显示。",
     en: "Dynamic mode automatically loads and evaluates candidates across the configured range; the single-layer-count cache control is hidden.",
   },
+  basic_material_dynamic_range_status: {
+    zh: "动态叠层模式已启用，单一层数的缓存入口已隐藏。",
+    en: "Dynamic-layer mode is enabled; the single-layer-count cache control is hidden.",
+  },
   basic_material_layer_height_label: {
     zh: "\u5c42\u9ad8",
     en: "Layer Height",
@@ -5728,6 +5748,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   adv_hue_protection_dynamic_hint: {
     zh: "动态有效叠层模式由精确 CIEDE2000 统一评分，色相保护和暗色彩度修正不会参与计算。",
     en: "Dynamic effective-layer mode is scored entirely by exact CIEDE2000; hue protection and dark-chroma adjustments are not applied.",
+  },
+  adv_hue_protection_dynamic_status: {
+    zh: "动态叠层模式下，色相保护和暗色彩度修正不可用。",
+    en: "Hue protection and dark-chroma adjustments are unavailable in dynamic-layer mode.",
+  },
+  adv_hue_protection_disabled_status: {
+    zh: "高精度匹配已接管色相保护，无需手动启用。",
+    en: "High-precision matching handles hue protection automatically; no manual setting is needed.",
   },
   adv_auto_dynamic_range: {
     zh: "自动动态范围（实验性功能）",

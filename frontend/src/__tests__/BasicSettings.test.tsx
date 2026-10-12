@@ -803,7 +803,7 @@ describe("BasicSettings", () => {
     expect(
       screen.getByRole("slider", { name: "最大有效叠层数" }),
     ).toHaveAttribute("max", "10");
-    expect(screen.getByText(/范围内自动加载/)).toBeInTheDocument();
+    expect(screen.getByText(/单一层数的缓存入口已隐藏/)).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "穷举缓存…" }),
     ).not.toBeInTheDocument();
