@@ -1,7 +1,7 @@
 # Native metadata dependencies for the selected slicer export routes.
 #
 # Public source: https://github.com/MOVIBALE/fatcat-metadata
-# Pin: ddabc1e5484661e1776f924b3c29557e27c470d7; build from its root pyproject.toml.
+# Pin: 63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b; build from its root pyproject.toml.
 # The build applies reference/fatcat-patches/fatcat-native-export-compatibility.patch
 # for native purge-chute comments and Orca's effective tower footprint defaults.
 # Run scripts/build_3mf_native_wheels.py --install before installing requirements.

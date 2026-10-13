@@ -57,6 +57,7 @@ from utils.slicer_3mf_support import (
     DEFAULT_EXPORT_SETTINGS,
     resolve_export_device as _resolve_export_device,
     build_wipe_tower_placement_request as _build_wipe_tower_placement_request,
+    build_wipe_tower_patch_settings as _build_wipe_tower_patch_settings,
     build_wipe_tower_placement_metadata_payload as _build_wipe_tower_placement_metadata_payload,
 )
 from utils.fatcat_metadata import (
@@ -1308,21 +1309,10 @@ class Slicer3MFWriter:
             project_layout=project_layout,
         )
         # Patching tower fields preserves the bed and layer facts reused below.
-        if placement is not None:
+        if self.enable_wipe_tower_auto_placement:
             final_project = patch_wipe_tower(
                 final_project,
-                {
-                    "enabled": True,
-                    "width_mm": placement.tower_width,
-                    "rotation_deg": placement.tower_rotation,
-                    "positions": [
-                        {
-                            "plate_index": 0,
-                            "x_mm": placement.tower_x,
-                            "y_mm": placement.tower_y,
-                        }
-                    ],
-                },
+                _build_wipe_tower_patch_settings(placement),
                 composed_project["wipe_tower_dialect"],
             )
         build_item_properties = composed_project.get("build_item_properties")

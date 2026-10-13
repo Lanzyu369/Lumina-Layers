@@ -40,9 +40,9 @@ class MeshMetadataEntry(Protocol):
 
 
 class ProjectLayout(TypedDict):
-    """Numeric facts returned by FatCat's layout reader.
+    """Layout facts and native tower styles returned by FatCat's reader.
 
-    FatCat 布局读取器返回的数值事实，不包含原生配置的任意扩展字段。
+    FatCat 返回的布局事实和原生塔形状，不包含原生配置的任意扩展字段。
     """
 
     printable_area: list[list[float]]
@@ -71,6 +71,7 @@ class ProjectLayout(TypedDict):
     bed_type: str | None
     tower_cyclic_toolchanges: NotRequired[bool]
     tower_square_rib_body: NotRequired[bool | None]
+    tower_wall_types: NotRequired[list[str]]
     tower_preview_x_guard_enabled: NotRequired[bool]
     tower_preview_x_guard_margin: NotRequired[float]
 
@@ -1144,10 +1145,10 @@ def patch_wipe_tower(
     settings: Mapping[str, Any],
     dialect: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Patch computed wipe-tower coordinates through Fat Cat's fixed API.
+    """Apply computed tower placement and native style through FatCat's API.
 
-    通过 Fat Cat 固定的擦料塔字段接口写回布局结果；只传递本次明确计算的
-    坐标、宽度和旋转，不重新合成整份项目设置。
+    通过 FatCat 擦料塔接口写回计算出的坐标、宽度、旋转和可选原生塔形状，
+    不重新合成整份项目设置。
     """
 
     fatcat = _load_fatcat()

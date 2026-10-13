@@ -252,7 +252,7 @@ cd Lumina-studio
 ```bash
 # Python 3.12+ 需要先为当前平台构建原生 3MF wheel。先克隆
 # https://github.com/MOVIBALE/fatcat-metadata 并检出
-# ddabc1e5484661e1776f924b3c29557e27c470d7，再按桌面指南准备固定版本的
+# 63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b，再按桌面指南准备固定版本的
 # neroued 源码并应用 Lumina 的 B7 补丁：
 # python scripts/build_3mf_native_wheels.py \
 #   --fatcat-root ../fatcat-metadata \
@@ -279,7 +279,7 @@ SVG 分析固定使用独立项目发布的 `lumina-svg-core==0.3.1`（AGPLv3）
 
 本地或桌面安装必须先用固定提交的公开 Fat Cat 根项目和已打补丁的
 `neroued-3mf` 源码生成 `wheelhouse/3mf`，不要复制其他操作系统或 CPU 架构的
-wheel。Fat Cat 源码固定为提交 `ddabc1e5484661e1776f924b3c29557e27c470d7`，
+wheel。Fat Cat 源码固定为提交 `63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b`，
 与 `scripts/fatcat_packaging_contract.py` 中的 `FATCAT_SOURCE_COMMIT` 保持一致。
 
 Prusa 导出使用 **PrusaSlicer 3.0.0-alpha12** 预览版格式。在设置中选择 PrusaSlicer

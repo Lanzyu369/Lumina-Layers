@@ -26,6 +26,17 @@ class CoreValidationError(CoreError):
         super().__init__(detail=detail, error_type="core_validation_error")
 
 
+class WipeTowerLayoutError(CoreValidationError):
+    """Report a model-and-tower layout that cannot be safely exported.
+
+    报告无法安全导出的模型与擦料塔布局；调用方应调整打印板或摆放选项。
+    """
+
+    def __init__(self, detail: str):
+        super().__init__(detail)
+        self.error_type = "wipe_tower_layout_unavailable"
+
+
 class CoreDependencyError(CoreError):
     """Raised when optional dependencies or external resources are unavailable."""
 

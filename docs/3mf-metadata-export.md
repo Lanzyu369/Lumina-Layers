@@ -66,7 +66,7 @@ validation stays at the existing SDK, source parser and writer boundaries.
 FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`, version
 `0.1.0+lumina.1` (upstream `0.1.0` with the tracked native export patch). Lumina builds from the public
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) root
-project at source revision `ddabc1e5484661e1776f924b3c29557e27c470d7` and pins
+project at source revision `63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b` and pins
 the writer contract in
 `scripts/fatcat_packaging_contract.py`; build and installation steps are in
 [the desktop setup guide](desktop-electron.md).
@@ -75,7 +75,7 @@ FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`，构�
 `0.1.0+lumina.1`（上游 `0.1.0` 加仓库保存的原生导出修正补丁）。
 Lumina 从公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) 的根项目构建，
-源码提交固定为 `ddabc1e5484661e1776f924b3c29557e27c470d7`，并在
+源码提交固定为 `63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b`，并在
 `scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
 [桌面环境指南](desktop-electron.md)。
 
@@ -109,6 +109,20 @@ FatCat 统一写入独立项目预设名称，保留原生来源与已合成的�
 原生 0.20mm 名称时让用户误以为实际层高也是 0.20mm。单件用户模板保留自身预设名称。
 
 ## Current Selection and Composition
+
+Automatic tower placement first preserves the selected native body style. If
+it cannot fit safely, the shared single/batch/puzzle solver may select a
+rectangular body only when FatCat declares that native style. FatCat writes
+the style through its tower API and records the native process difference.
+Model dimensions, layer settings, materials and purge volumes are retained.
+When no safe layout fits, or the printable area is absent, automatic export
+stops with an actionable error. Turning automatic placement off retains the
+manual layout path.
+
+自动摆塔优先保留原生塔形状；放不下时，单件、批量及拼图共用的求解器只尝试
+FatCat 明确声明支持的矩形塔。塔形状由 FatCat 原生接口写入并记录工艺差异，
+保留模型尺寸、层设置、材料和冲刷量。所有支持形状均无安全解或缺少打印区域时，
+自动导出停止并给出可操作错误；关闭自动摆放后仍可自行安排布局。
 
 Lumina maps its selected registry entry to FatCat's public native-source catalog by
 exact slicer, source profile name, and nozzle identity. The resulting stable machine

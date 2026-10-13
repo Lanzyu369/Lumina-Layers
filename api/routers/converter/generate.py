@@ -28,6 +28,7 @@ from pydantic import BaseModel, StrictBool, ValidationError
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.editor_commit import get_editor_content_revision
+from api.errors import to_http_exception
 from api.export_device_validation import validate_export_device_selection
 from api.file_bridge import ensure_png_tempfile
 from api.file_registry import FileRegistry
@@ -71,7 +72,7 @@ from api.workers.converter_workers import (
     worker_generate_model_surface_overlay,
 )
 from core.batch_layout import LayoutResult, XYBBox, layout_shelf_by_row
-from core.errors import CachedPreviewAnalysisError
+from core.errors import CachedPreviewAnalysisError, WipeTowerLayoutError
 from core.model_surface.types import ModelSurfaceError
 from core.naming import generate_preserved_upload_3mf_filename
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
@@ -2925,6 +2926,8 @@ async def convert_generate(
             lut_path,
             worker_params,
         )
+    except WipeTowerLayoutError as exc:
+        raise to_http_exception(exc, "3MF layout") from exc
     except ModelSurfaceError as exc:
         detail = public_model_surface_error_detail(exc)
         if detail is None:
@@ -3440,6 +3443,8 @@ async def _generate_large_format_svg_native(
             )
         finally:
             _remove_temp_path(native_heightmap_path)
+    except WipeTowerLayoutError as exc:
+        raise to_http_exception(exc, "large-format 3MF layout") from exc
     except LargeFormatCachedAnalysisError as e:
         _log_large_format_failure(
             session_id=sid,
@@ -4130,6 +4135,9 @@ async def _generate_large_format_raster(
             except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
                 _discard_pending_awaitables(futures, future_index + 1)
                 _handle_core_error(e, "large-format tile generation")
+            except WipeTowerLayoutError as exc:
+                _discard_pending_awaitables(futures, future_index + 1)
+                raise to_http_exception(exc, "large-format tile layout") from exc
             except ROUTER_HANDLED_ERRORS as e:
                 errors.append(f"{label}: {e}")
 
@@ -4559,7 +4567,10 @@ async def convert_generate_large_format(
                     detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
                 ) from fallback_exc
             except Exception as fallback_exc:  # noqa: BLE001 - recovery boundary
-                if native_fallback_error is None:
+                if native_fallback_error is None or (
+                    isinstance(fallback_exc, HTTPException)
+                    and 400 <= fallback_exc.status_code < 500
+                ):
                     raise
                 fallback_error_message = (
                     str(fallback_exc.detail)
@@ -5249,7 +5260,10 @@ async def convert_batch(
                         results.append(BatchItemResult(
                             filename=filename, status="failed", error=BATCH_ITEM_FAILED_DETAIL,
                         ))
-                except (BrokenProcessPool, DynamicMaterialCandidateError, DynamicMaterialSolverError):
+                except (
+                    BrokenProcessPool, DynamicMaterialCandidateError,
+                    DynamicMaterialSolverError, WipeTowerLayoutError,
+                ):
                     raise
                 except ROUTER_HANDLED_ERRORS as exc:
                     _log_batch_item_failure(
@@ -5267,6 +5281,8 @@ async def convert_batch(
         raise HTTPException(status_code=503, detail=BATCH_GENERATION_FAILED_DETAIL) from exc
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as exc:
         _handle_core_error(exc, "batch material generation")
+    except WipeTowerLayoutError as exc:
+        raise to_http_exception(exc, "batch 3MF layout") from exc
     finally:
         # Release returned artifacts on cancellation or any fatal failure.
         if not workers_completed:
@@ -5411,7 +5427,7 @@ async def convert_batch(
         download_url = f"/api/files/{download_id}"
 
     except Exception as exc:
-        # Failure path: log, cleanup, raise HTTP 500
+        # Keep cleanup shared by layout validation and unexpected failures.
         _safe_log(
             "error",
             "batch_merge_3mf_failed",
@@ -5428,6 +5444,8 @@ async def convert_batch(
             except Exception:
                 pass
         _remove_temp_path(temp_native_bundle_path)
+        if isinstance(exc, WipeTowerLayoutError):
+            raise to_http_exception(exc, "batch 3MF layout") from exc
         raise HTTPException(
             status_code=500,
             detail=BATCH_MERGE_FAILED_DETAIL,
