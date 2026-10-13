@@ -9,6 +9,7 @@ import os
 from typing import TYPE_CHECKING, Any, Mapping
 
 from api.structured_logging import get_logger
+from core.errors import WipeTowerLayoutError
 from core.wipe_tower_placement import (
     Rect, WIPE_TOWER_MANUAL_WARNING_CODE,
     WipeTowerPlacementRequest, WipeTowerPlacementResult,
@@ -257,6 +258,7 @@ def build_wipe_tower_placement_request(
         tower_brim=0.0 if uses_native_tower_envelope else tower_brim,
         tower_infill_spacing_ratio=layout["tower_infill_spacing_ratio"],
         cyclic_toolchanges=bool(layout.get("tower_cyclic_toolchanges", False)),
+        tower_wall_types=tuple(layout.get("tower_wall_types", ())),
         tower_rib_width=(
             layout["tower_rib_width"]
             if uses_rib_wall and not uses_native_tower_envelope else 0.0
@@ -302,6 +304,47 @@ def build_wipe_tower_placement_request(
             if uses_anycubic_tower_interface else 0.0
         ),
     )
+
+
+def build_wipe_tower_patch_settings(
+    placement: WipeTowerPlacementResult | None,
+) -> dict[str, Any]:
+    """Translate a safe placement into FatCat's native tower request.
+
+    将安全摆放结果转换为 FatCat 原生塔请求；自动布局无解时停止导出。
+
+    Args:
+        placement: Shared solver result. 共享布局求解结果。
+
+    Returns:
+        The native tower request. 原生塔参数请求。
+
+    Raises:
+        WipeTowerLayoutError: No safe automatic layout fits.
+            自动布局没有安全解。
+    """
+
+    if placement is None:
+        raise WipeTowerLayoutError(
+            "Automatic layout requires a printable area from the selected printer. "
+            "Select a valid printer profile or disable automatic layout for manual placement."
+        )
+    if placement.requires_manual_adjustment:
+        raise WipeTowerLayoutError(
+            "Automatic layout cannot fit the model and wipe tower on this plate. "
+            "Choose a larger plate or disable automatic layout to place them manually."
+        )
+    settings: dict[str, Any] = {
+        "enabled": True,
+        "width_mm": placement.tower_width,
+        "rotation_deg": placement.tower_rotation,
+        "positions": [{
+            "plate_index": 0, "x_mm": placement.tower_x, "y_mm": placement.tower_y,
+        }],
+    }
+    if placement.tower_wall_type is not None:
+        settings["wall_type"] = placement.tower_wall_type
+    return settings
 
 
 def build_wipe_tower_placement_metadata_payload(

@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from PIL import Image
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
+from api.errors import to_http_exception
 from api.export_device_validation import validate_export_device_selection
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import (
@@ -50,6 +51,7 @@ from api.workers.converter_workers import (
 )
 from config import ModelingMode as CoreModelingMode
 from config import TEMP_DIR
+from core.errors import WipeTowerLayoutError
 from core.puzzle import (
     PuzzleLayout,
     PuzzleLayoutConfig,
@@ -1526,6 +1528,8 @@ async def generate_puzzle(
             errors.append(f"{piece.label}: generation failed")
         except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as exc:
             _handle_core_error(exc, "puzzle piece generation")
+        except WipeTowerLayoutError as exc:
+            raise to_http_exception(exc, "puzzle piece layout") from exc
         except ROUTER_HANDLED_ERRORS as exc:
             errors.append(f"{piece.label}: {exc}")
 
@@ -1641,6 +1645,8 @@ async def generate_puzzle(
             ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
         )
         combined_registered = True
+    except WipeTowerLayoutError as exc:
+        raise to_http_exception(exc, "puzzle 3MF layout") from exc
     except ROUTER_HANDLED_ERRORS as exc:
         log.error(
             "Puzzle 3MF assembly failed",

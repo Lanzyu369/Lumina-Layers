@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from typing import Callable, Iterable, Sequence
 
@@ -124,6 +124,7 @@ class WipeTowerPlacementRequest:
     tower_preview_x_guard_enabled: bool = False
     tower_preview_x_guard_margin: float = 0.0
     cyclic_toolchanges: bool = False
+    tower_wall_types: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,7 @@ class WipeTowerPlacementResult:
     requires_manual_adjustment: bool
     warning_code: str | None
     reason: str
+    tower_wall_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -828,7 +830,7 @@ def _layout_is_safe(
     )
 
 
-def solve_wipe_tower_placement(
+def _solve_tower_body_placement(
     request: WipeTowerPlacementRequest,
 ) -> WipeTowerPlacementResult:
     """Find an automatic horizontal/vertical tower layout for the current model.
@@ -1168,6 +1170,34 @@ def solve_wipe_tower_placement(
         adapted=True,
         requires_manual_adjustment=True,
         reason="no_safe_layout_without_scaling_or_disabling_tower",
+    )
+
+
+def solve_wipe_tower_placement(
+    request: WipeTowerPlacementRequest,
+) -> WipeTowerPlacementResult:
+    """Place the current native tower, then try a supported rectangular body.
+
+    优先保留原生塔形状；无安全位置时，仅尝试目标明确支持的矩形塔。
+    两种形状复用同一求解器，保留模型尺寸、冲刷量与擦料塔启用状态。
+    """
+
+    current = _solve_tower_body_placement(request)
+    if (
+        not current.requires_manual_adjustment
+        or not request.tower_square_rib_body
+        or "rectangle" not in request.tower_wall_types
+    ):
+        return current
+
+    rectangular = _solve_tower_body_placement(replace(
+        request, tower_square_rib_body=False, tower_rib_width=0.0,
+    ))
+    if rectangular.requires_manual_adjustment:
+        return current
+    return replace(
+        rectangular, tower_wall_type="rectangle",
+        reason=f"{rectangular.reason}_rectangle",
     )
 
 

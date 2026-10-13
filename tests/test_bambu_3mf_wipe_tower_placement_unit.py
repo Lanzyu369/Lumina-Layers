@@ -10,6 +10,7 @@ import pytest
 import trimesh
 
 from config import list_printer_profiles
+from core.errors import WipeTowerLayoutError
 from core.machine_registry import load_machine_registry, resolve_machine_registry_root
 from core.wipe_tower_placement import (
     Rect,
@@ -104,15 +105,6 @@ def _assert_native_a1_rib_has_no_space(writer: BambuStudio3MFWriter) -> None:
     separation = request.model_tower_clearance - 2 * request.edge_clearance
     assert request.model_bounds.width + 2 * model_margin + tower_min + separation > 180
     assert request.model_bounds.height + 2 * model_margin + tower_min + separation > 180
-
-
-def _use_rectangular_a1_source(writer: BambuStudio3MFWriter) -> None:
-    # The old strip regressions used a rectangular source. Retain those
-    # feasible-source guarantees alongside the actual native rib no-fit case.
-    source = writer._get_base_config_template()
-    source["prime_tower_rib_wall"] = "0"
-    writer._custom_template = source
-    writer._wipe_tower_placement_cache = None
 
 
 def _auto_placement_profile_slicer_cases() -> tuple[
@@ -484,24 +476,17 @@ def test_a1_mini_uses_vertical_strip_for_tall_model(
     placement = writer._get_wipe_tower_placement()
 
     assert placement is not None
+    assert placement.requires_manual_adjustment is False
+    assert placement.warning_code is None
     if slicer == "BambuStudio":
-        assert placement.requires_manual_adjustment is True
-        assert placement.warning_code == "wipe_tower_manual_adjustment_required"
-        assert placement.reason == "no_safe_layout_without_scaling_or_disabling_tower"
+        assert placement.tower_wall_type == "rectangle"
+        assert placement.reason == "adapted_right_rectangle"
         _assert_native_a1_rib_has_no_space(writer)
     else:
-        assert placement.requires_manual_adjustment is False
-        assert placement.warning_code is None
+        assert placement.tower_wall_type is None
         assert placement.reason == "adapted_right"
     assert placement.adapted is True
-    assert placement.model_bounds.width == pytest.approx(100.0)
-    assert placement.model_bounds.height == pytest.approx(155.0)
-    assert _layout_is_safe(placement, _placement_request(writer)) is (slicer == "OrcaSlicer")
-    if slicer == "BambuStudio":
-        _use_rectangular_a1_source(writer)
-        placement = writer._get_wipe_tower_placement()
     settings = _project_settings(writer)
-    assert placement is not None and not placement.requires_manual_adjustment
     assert _layout_is_safe(placement, _placement_request(writer))
     assert placement.model_bounds.width == pytest.approx(100.0)
     assert placement.model_bounds.height == pytest.approx(155.0)
@@ -514,6 +499,12 @@ def test_a1_mini_uses_vertical_strip_for_tall_model(
     assert set(settings["different_settings_to_system"][0].split(";")) >= {
         "prime_tower_width", "wipe_tower_rotation_angle", "wipe_tower_x", "wipe_tower_y",
     }
+    if slicer == "BambuStudio":
+        assert writer._get_base_config_template()["prime_tower_rib_wall"] == "1"
+        assert settings["prime_tower_rib_wall"] == "0"
+        assert "prime_tower_rib_wall" in (
+            settings["different_settings_to_system"][0].split(";")
+        )
 
 
 def test_a1_mini_adapted_strip_keeps_visible_physical_edge_clearance() -> None:
@@ -527,17 +518,12 @@ def test_a1_mini_adapted_strip_keeps_visible_physical_edge_clearance() -> None:
     placement = writer._get_wipe_tower_placement()
 
     assert placement is not None
-    assert placement.requires_manual_adjustment is True
-    assert placement.warning_code == "wipe_tower_manual_adjustment_required"
-    assert placement.reason == "no_safe_layout_without_scaling_or_disabling_tower"
+    assert placement.requires_manual_adjustment is False
+    assert placement.warning_code is None
+    assert placement.tower_wall_type == "rectangle"
+    assert placement.reason.endswith("_rectangle")
     assert placement.adapted is True
-    assert placement.model_bounds.width == pytest.approx(110.0)
-    assert placement.model_bounds.height == pytest.approx(124.0)
-    assert _layout_is_safe(placement, _placement_request(writer)) is False
     _assert_native_a1_rib_has_no_space(writer)
-    _use_rectangular_a1_source(writer)
-    placement = writer._get_wipe_tower_placement()
-    assert placement is not None and not placement.requires_manual_adjustment
     assert _layout_is_safe(placement, _placement_request(writer))
     assert placement.model_bounds.width == pytest.approx(110.0)
     assert placement.model_bounds.height == pytest.approx(124.0)
@@ -582,16 +568,11 @@ def test_a1_mini_uses_nearest_feasible_width_when_30_mm_would_squeeze_model() ->
     placement = writer._get_wipe_tower_placement()
 
     assert placement is not None
-    assert placement.requires_manual_adjustment is True
-    assert placement.warning_code == "wipe_tower_manual_adjustment_required"
-    assert placement.reason == "no_safe_layout_without_scaling_or_disabling_tower"
-    assert placement.model_bounds.width == pytest.approx(130.0)
-    assert placement.model_bounds.height == pytest.approx(146.6)
-    assert _layout_is_safe(placement, _placement_request(writer)) is False
+    assert placement.requires_manual_adjustment is False
+    assert placement.warning_code is None
+    assert placement.tower_wall_type == "rectangle"
+    assert placement.reason.endswith("_rectangle")
     _assert_native_a1_rib_has_no_space(writer)
-    _use_rectangular_a1_source(writer)
-    placement = writer._get_wipe_tower_placement()
-    assert placement is not None and not placement.requires_manual_adjustment
     assert _layout_is_safe(placement, _placement_request(writer))
     assert placement.model_bounds.width == pytest.approx(130.0)
     assert placement.model_bounds.height == pytest.approx(146.6)
@@ -620,8 +601,10 @@ def test_orca_multicolor_project_collapses_dual_variant_filament_arrays(
     )
     _add_material_boxes(
         writer,
-        width=110.0,
-        depth=124.0,
+        # Palette normalization needs a feasible footprint for every count;
+        # automatic layout rejection is covered by its dedicated cases.
+        width=40.0,
+        depth=40.0,
         count=material_count,
     )
 
@@ -731,7 +714,7 @@ def test_kobra_3_v2_reserves_anycubic_native_tower_envelope() -> None:
     assert placement.tower_bounds.left - model_brim_right >= 8.0 - 1e-6
 
 
-def test_impossible_layout_still_exports_with_tower_and_embedded_warning(tmp_path: Path) -> None:
+def test_impossible_automatic_layout_rejects_colliding_export(tmp_path: Path) -> None:
     output_path = tmp_path / "manual-adjustment-required.3mf"
     writer = BambuStudio3MFWriter(
         str(output_path),
@@ -740,27 +723,11 @@ def test_impossible_layout_still_exports_with_tower_and_embedded_warning(tmp_pat
     )
     _add_material_boxes(writer, width=179.0, depth=179.0)
 
-    exported_path = writer.export()
-
-    assert Path(exported_path).is_file()
-    with zipfile.ZipFile(exported_path) as package:
-        settings = json.loads(package.read("Metadata/project_settings.config"))
-        placement = json.loads(package.read("Metadata/lumina_wipe_tower_placement.json"))
-        model_root = ET.fromstring(package.read("3D/3dmodel.model"))
-
-    assert settings["enable_prime_tower"] == "1"
-    assert float(settings["prime_tower_width"]) > 0.0
-    assert placement["requires_manual_adjustment"] is True
-    assert placement["warning_code"] == "wipe_tower_manual_adjustment_required"
-    assert read_wipe_tower_placement_warnings(exported_path) == [
-        "wipe_tower_manual_adjustment_required"
-    ]
-
-    namespace = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
-    build_item = model_root.find("m:build/m:item", namespace)
-    assert build_item is not None
-    transform = [float(value) for value in build_item.attrib["transform"].split()]
-    assert transform[:9] == pytest.approx([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
+    with pytest.raises(
+        WipeTowerLayoutError, match="cannot fit the model and wipe tower",
+    ):
+        writer.export()
+    assert not output_path.exists()
 
 
 def test_safe_export_embeds_no_manual_warning(tmp_path: Path) -> None:
@@ -777,7 +744,7 @@ def test_safe_export_embeds_no_manual_warning(tmp_path: Path) -> None:
     assert read_wipe_tower_placement_warnings(output_path) == []
 
 
-def test_missing_printable_area_exports_with_manual_warning(
+def test_missing_printable_area_rejects_automatic_export(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -792,17 +759,6 @@ def test_missing_printable_area_exports_with_manual_warning(
     template.pop("printable_area", None)
     writer._custom_template = template
 
-    writer.export()
-
-    with zipfile.ZipFile(output_path) as package:
-        placement = json.loads(
-            package.read("Metadata/lumina_wipe_tower_placement.json")
-        )
-
-    assert placement["available"] is False
-    assert placement["requires_manual_adjustment"] is True
-    assert placement["warning_code"] == "wipe_tower_manual_adjustment_required"
-    assert placement["reason"] == "printable_area_unavailable"
-    assert read_wipe_tower_placement_warnings(output_path) == [
-        "wipe_tower_manual_adjustment_required"
-    ]
+    with pytest.raises(WipeTowerLayoutError, match="requires a printable area"):
+        writer.export()
+    assert not output_path.exists()

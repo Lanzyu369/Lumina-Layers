@@ -34,6 +34,7 @@ from utils.slicer_3mf_support import (
     DEFAULT_EXPORT_SETTINGS,
     build_wipe_tower_placement_metadata_payload,
     build_wipe_tower_placement_request,
+    build_wipe_tower_patch_settings,
     resolve_export_device,
 )
 
@@ -1131,21 +1132,10 @@ class MergedSlicer3MFWriter:
             build_transforms=build_transforms,
         )
         items, build_transforms = self._translate_sources(items, build_transforms, group_translation)
-        if placement is not None:
+        if enable_wipe_tower_auto_placement:
             final_project = patch_wipe_tower(
                 final_project,
-                {
-                    "enabled": True,
-                    "width_mm": placement.tower_width,
-                    "rotation_deg": placement.tower_rotation,
-                    "positions": [
-                        {
-                            "plate_index": 0,
-                            "x_mm": placement.tower_x,
-                            "y_mm": placement.tower_y,
-                        }
-                    ],
-                },
+                build_wipe_tower_patch_settings(placement),
                 project_result["wipe_tower_dialect"],
             )
 
