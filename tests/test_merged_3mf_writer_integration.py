@@ -24,6 +24,7 @@ import pytest
 import trimesh
 
 from config import TEMP_DIR
+from core.errors import WipeTowerLayoutError
 from utils.bambu_3mf_writer import (
     export_scene_with_bambu_metadata,
     read_wipe_tower_placement_warnings,
@@ -48,6 +49,7 @@ def _make_source_3mf(
     printer_id: str = "bambu-h2d",
     slicer: str = "BambuStudio",
     enable_base_layer_height_modifier: bool = False,
+    enable_wipe_tower_auto_placement: bool = True,
     backing_infill_density_percent: int = 100,
     base_height_mm: float = 0.8,
     color_height_mm: float = 2.4,
@@ -82,6 +84,7 @@ def _make_source_3mf(
         printer_id=printer_id,
         slicer=slicer,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
+        enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
         base_height_mm=base_height_mm,
         color_height_mm=color_height_mm,
         face_orientation="down",
@@ -150,6 +153,8 @@ class TestMergedWriterBambuCompatibility:
                 Path(out_path),
                 plate_width_mm=200.0,
                 plate_depth_mm=200.0,
+                # Preserve this fixture's origin; layout has separate cases.
+                enable_wipe_tower_auto_placement=False,
             )
 
             with zipfile.ZipFile(out_path, "r") as zf:
@@ -472,6 +477,7 @@ class TestMergedWriterBambuCompatibility:
                 Path(out_path),
                 plate_width_mm=300.0,
                 plate_depth_mm=300.0,
+                enable_wipe_tower_auto_placement=False,
             )
 
             source_coordinates, _source_faces = mesh_coordinates(source)
@@ -720,11 +726,15 @@ class TestMergedWriterBambuCompatibility:
             for path in (src1, src2, Path(out_path)):
                 path.unlink(missing_ok=True)
 
-    def test_impossible_merged_layout_embeds_manual_warning(self) -> None:
+    def test_impossible_merged_layout_rejects_colliding_export(
+        self, tmp_path: Path,
+    ) -> None:
         source = _make_source_3mf(
             width_mm=179.0,
             depth_mm=179.0,
             printer_id="bambu-a1-mini",
+            # Construct the source without requiring its own automatic fit.
+            enable_wipe_tower_auto_placement=False,
         )
         item = MergedItem(
             source_filename="full-bed.png",
@@ -733,24 +743,19 @@ class TestMergedWriterBambuCompatibility:
             tx_mm=0.5,
             ty_mm=0.5,
         )
-        fd, out_path = tempfile.mkstemp(
-            suffix=".3mf",
-            dir=TEMP_DIR,
-            prefix="integ_wipe_manual_",
-        )
-        os.close(fd)
+        out_path = tmp_path / "no-fit-merged.3mf"
 
         try:
-            MergedBambu3MFWriter().write(
-                [item],
-                Path(out_path),
-                plate_width_mm=180.0,
-                plate_depth_mm=180.0,
-            )
-
-            assert read_wipe_tower_placement_warnings(out_path) == [
-                "wipe_tower_manual_adjustment_required"
-            ]
+            with pytest.raises(
+                WipeTowerLayoutError, match="cannot fit the model and wipe tower",
+            ):
+                MergedBambu3MFWriter().write(
+                    [item],
+                    out_path,
+                    plate_width_mm=180.0,
+                    plate_depth_mm=180.0,
+                )
+            assert not out_path.exists()
         finally:
             source.unlink(missing_ok=True)
             Path(out_path).unlink(missing_ok=True)
@@ -816,6 +821,7 @@ class TestMergedWriterBambuCompatibility:
                 Path(out_path),
                 plate_width_mm=200.0,
                 plate_depth_mm=200.0,
+                enable_wipe_tower_auto_placement=False,
             )
 
             with (
@@ -905,6 +911,7 @@ class TestMergedWriterBambuCompatibility:
                 Path(out_path),
                 plate_width_mm=200.0,
                 plate_depth_mm=200.0,
+                enable_wipe_tower_auto_placement=False,
             )
 
             with zipfile.ZipFile(out_path, "r") as zf:
