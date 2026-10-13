@@ -577,6 +577,8 @@ def build_builtin_project_settings_request(
     用 Lumina 明确的机器、材料和工艺事实构造 Fat Cat 内置源请求。
     """
 
+    from core.machine_process_overlay import LUMINA_PROJECT_PRESET_NAME
+
     if not materials:
         raise ValueError("Fat Cat built-in metadata requires at least one material")
     colours = [material.get("colour", "#808080") for material in materials]
@@ -591,6 +593,7 @@ def build_builtin_project_settings_request(
         request.pop("build_plate_uid", None)
     request.update({
         "project_source": "fatcat_native",
+        "project_preset_name": LUMINA_PROJECT_PRESET_NAME,
         "hardware_mode": "preserve_source",
         "machine_uid": target.machine_uid,
         "nozzle_uid": target.nozzle_uid,
@@ -633,6 +636,8 @@ def build_merged_project_settings_request(
     将源项目设置和槽位身份传给 C++，由 Fat Cat 合成批量项目设置。
     """
 
+    from core.machine_process_overlay import LUMINA_PROJECT_PRESET_NAME
+
     merge_sources: list[dict[str, Any]] = []
     for source_index, (source_id, project, slots) in enumerate(sources):
         source: dict[str, Any] = {
@@ -663,6 +668,7 @@ def build_merged_project_settings_request(
         "material_mode": "preserve_template",
         "enable_prime_tower": "1",
         "merge_sources": merge_sources,
+        "project_preset_name": LUMINA_PROJECT_PRESET_NAME,
     }
     if target.build_plate_uid:
         request["build_plate_uid"] = target.build_plate_uid

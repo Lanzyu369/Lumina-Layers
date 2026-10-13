@@ -264,7 +264,7 @@ cd Lumina-studio
 ```bash
 # Python 3.12+ requires current-platform native 3MF wheels first. Clone
 # https://github.com/MOVIBALE/fatcat-metadata and check out
-# 496902366387a044a020c740160c708569dd9982, then follow the desktop guide to
+# ddabc1e5484661e1776f924b3c29557e27c470d7, then follow the desktop guide to
 # prepare the pinned neroued source and apply Lumina's B7 patch.
 # python scripts/build_3mf_native_wheels.py \
 #   --fatcat-root ../fatcat-metadata \
@@ -293,7 +293,7 @@ Git and a C++17 toolchain. See the [upstream distribution guide](https://github.
 For a local or desktop install, build `wheelhouse/3mf` from the pinned public
 Fat Cat root and patched `neroued-3mf` source before installing; do not reuse
 wheels from another OS or CPU. The required public source commit is
-`496902366387a044a020c740160c708569dd9982`, recorded as `FATCAT_SOURCE_COMMIT`
+`ddabc1e5484661e1776f924b3c29557e27c470d7`, recorded as `FATCAT_SOURCE_COMMIT`
 in `scripts/fatcat_packaging_contract.py`.
 
 Prusa export targets **PrusaSlicer 3.0.0-alpha12**, a preview format. In Settings,

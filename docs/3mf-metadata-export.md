@@ -66,7 +66,7 @@ validation stays at the existing SDK, source parser and writer boundaries.
 FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`, version
 `0.1.0+lumina.1` (upstream `0.1.0` with the tracked native export patch). Lumina builds from the public
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) root
-project at source revision `496902366387a044a020c740160c708569dd9982` and pins
+project at source revision `ddabc1e5484661e1776f924b3c29557e27c470d7` and pins
 the writer contract in
 `scripts/fatcat_packaging_contract.py`; build and installation steps are in
 [the desktop setup guide](desktop-electron.md).
@@ -75,7 +75,7 @@ FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`，构�
 `0.1.0+lumina.1`（上游 `0.1.0` 加仓库保存的原生导出修正补丁）。
 Lumina 从公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) 的根项目构建，
-源码提交固定为 `496902366387a044a020c740160c708569dd9982`，并在
+源码提交固定为 `ddabc1e5484661e1776f924b3c29557e27c470d7`，并在
 `scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
 [桌面环境指南](desktop-electron.md)。
 
@@ -91,12 +91,22 @@ FatCat's declared aliases replace matching product defaults, while conflicting
 explicit aliases still produce an error. Saved user-template settings remain opaque
 source data rather than being reinterpreted as new process overrides.
 
+Built-in exports and merges pass the product name `Lumina` through FatCat's
+`project_preset_name` request field. FatCat writes an independent project preset
+name while retaining the original native source and all composed process values.
+The displayed project name therefore does not claim the source's original layer
+height. Imported single-project templates retain their own preset name.
+
 当前源码固定值包含上述八种软件的元数据版本。具体打印速度来自原生工艺配置，
 Lumina 不再发送历史 `print_speed` 总速度占位值；具体速度修改遵循目标软件的
 FatCat 合同，Bambu 家族不支持的总速度请求会报错。明确请求的不支持参数仍会
 报错，不会静默忽略。明确指定任一首层高度名称会替换默认值；两个名称
 下明确提供矛盾值时仍会报错。用户模板中的设置继续作为原始来源数据保留，
 不会被重新解释成新的工艺修改请求。
+
+内置导出和合并通过 project_preset_name 向 FatCat 传入项目名称 Lumina。
+FatCat 统一写入独立项目预设名称，保留原生来源与已合成的工艺参数，避免显示
+原生 0.20mm 名称时让用户误以为实际层高也是 0.20mm。单件用户模板保留自身预设名称。
 
 ## Current Selection and Composition
 

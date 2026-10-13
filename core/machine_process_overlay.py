@@ -5,6 +5,9 @@ from typing import Any, Mapping
 from config import format_native_nozzle_size
 
 
+LUMINA_PROJECT_PRESET_NAME = "Lumina"
+
+
 PROTECTED_LUMINA_PROCESS_SETTINGS: dict[str, Any] = {
     "layer_height": "0.08",
     "initial_layer_height": "0.08",
