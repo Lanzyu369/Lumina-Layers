@@ -1,7 +1,7 @@
 import Dropdown from "../ui/Dropdown";
 import WikiTooltip from "../ui/WikiTooltip";
 import Checkbox from "../ui/Checkbox";
-import { cx } from "../ui/panelPrimitives";
+import { cx, dependentGroupClass } from "../ui/panelPrimitives";
 
 interface LegacyLutOption {
   label: string;
@@ -134,7 +134,7 @@ export default function LegacyLutSelector({
         onClick={onRefresh}
         disabled={refreshing}
         aria-label={labels.refreshTooltip}
-        className="inline-flex size-5 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-slate-200"
+        className="ghost-control inline-flex size-5 items-center justify-center rounded-full text-slate-500 dark:text-slate-400"
       >
         <span
           className={cx("text-[13px] leading-none", refreshing && "animate-spin")}
@@ -150,7 +150,7 @@ export default function LegacyLutSelector({
     <button
       type="button"
       onClick={onUploadClick}
-      className="inline-flex min-h-11 w-full items-center justify-center rounded-2xl border border-slate-200/80 bg-slate-100/75 px-3 text-sm font-medium text-slate-700 shadow-[var(--shadow-control)] transition-colors hover:bg-slate-200/70 hover:text-slate-900 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-800/75 dark:hover:text-slate-50"
+      className="inline-flex min-h-11 w-full items-center justify-center rounded-[10px] border border-transparent bg-[var(--surface-well)] px-3 text-sm font-medium text-slate-700 transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:text-slate-200"
     >
       {labels.upload}
     </button>
@@ -183,7 +183,7 @@ export default function LegacyLutSelector({
       )}
 
       {manufacturer ? (
-        <div className="flex min-w-0 flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
+        <div className={cx(dependentGroupClass, "min-w-0")}>
           <div className="text-xs text-slate-500 dark:text-slate-400">
             {labels.brandInfo ?? "Brand Info"}:
             <span className="ml-1 text-slate-700 dark:text-slate-200">

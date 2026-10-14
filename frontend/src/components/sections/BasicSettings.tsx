@@ -1160,6 +1160,8 @@ export default function BasicSettings() {
         </>
       )}
 
+      <div className={cardDividerClass} aria-hidden="true" />
+
       <div data-tutorial="color-source">
         <RadioGroup
           label={t("basic_source_version_label")}
@@ -1493,6 +1495,8 @@ export default function BasicSettings() {
           )}
         </>
       ) : null}
+
+      <div className={cardDividerClass} aria-hidden="true" />
 
       <div data-tutorial="output-size" className="flex flex-col gap-4">
         <Slider

@@ -37,7 +37,7 @@ export default function MaterialSolverCacheDialog({
     <>
       <Button
         label={t("basic_material_cache_open_button")}
-        variant="secondary"
+        variant="ghost"
         onClick={() => setOpen(true)}
         disabled={disabled}
         className="px-3 text-xs"
@@ -67,7 +67,7 @@ export default function MaterialSolverCacheDialog({
                   </div>
                   <button
                     type="button"
-                    className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+                    className="ghost-control rounded-lg p-1.5 text-slate-400"
                     onClick={() => setOpen(false)}
                     aria-label={t("basic_material_picker_close")}
                   >
