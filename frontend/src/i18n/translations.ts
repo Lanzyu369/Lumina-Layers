@@ -11000,4 +11000,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "Lumina Box 工作区",
     en: "Lumina Box workspace",
   },
+  lumina_box_serial_device_not_functioning: {
+    zh: "Windows 无法初始化仪器的 USB 串口（错误 31）。请重新连接 USB；若更换数据线和电脑接口后仍失败，请重启电脑后重试。",
+    en: "Windows could not initialize the instrument's USB serial port (error 31). Reconnect USB. If another data cable and computer port do not help, restart the computer and try again.",
+  },
+  lumina_box_workspace_disconnecting: {
+    zh: "正在释放上一页的设备连接，请稍候…",
+    en: "Releasing the previous page's device connection…",
+  },
+  lumina_box_workspace_switch_failed: {
+    zh: "设备连接尚未释放，请稍后重试切换。",
+    en: "The device connection has not been released. Try switching again shortly.",
+  },
 };
