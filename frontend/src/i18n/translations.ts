@@ -11012,4 +11012,68 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "设备连接尚未释放，请稍后重试切换。",
     en: "The device connection has not been released. Try switching again shortly.",
   },
+  lumina_box_bg_fit_list_failed: { zh: "无法读取历史色卡，请重新选择采集记录。", en: "Could not load previous charts. Select the collection again." },
+  lumina_box_bg_fit_poll_failed: { zh: "暂时无法更新计算进度，正在重试。", en: "Calculation progress is temporarily unavailable. Retrying." },
+  lumina_box_bg_fit_result_failed: { zh: "无法读取色卡，请重新选择这次结果。", en: "Could not load the chart. Select this result again." },
+  lumina_box_bg_fit_start_failed: { zh: "无法开始计算，请确认样片读数已采齐后重试。", en: "Could not start calculating. Complete sample readings, then retry." },
+  lumina_box_bg_validate_failed: { zh: "预测检查未完成，请重试。读数会保留。", en: "The prediction check did not complete. Retry; measurements are kept." },
+  lumina_box_material_continue: { zh: "重采耗材档案", en: "Remeasure material profile" },
+  lumina_box_material_continue_choose: { zh: "选择要重采的耗材档案", en: "Choose a profile to remeasure" },
+  lumina_box_stack_actions: { zh: "操作", en: "Actions" },
+  lumina_box_stack_delete_failed: {
+    zh: "删除失败，这条记录仍然保留，请重试。",
+    en: "The record was not deleted. It is still saved; try again.",
+  },
+  lumina_box_stack_export_failed: {
+    zh: "导出失败，已保存的记录未受影响，请重试。",
+    en: "The export failed. Saved records are unchanged; try again.",
+  },
+  lumina_box_stack_letter_b: { zh: "B 蓝", en: "B Blue" },
+  lumina_box_stack_letter_c: { zh: "C 青", en: "C Cyan" },
+  lumina_box_stack_letter_g: { zh: "G 绿", en: "G Green" },
+  lumina_box_stack_letter_k: { zh: "K 黑", en: "K Black" },
+  lumina_box_stack_letter_m: { zh: "M 品红", en: "M Magenta" },
+  lumina_box_stack_letter_r: { zh: "R 红", en: "R Red" },
+  lumina_box_stack_letter_w: { zh: "W 白", en: "W White" },
+  lumina_box_stack_letter_y: { zh: "Y 黄", en: "Y Yellow" },
+  lumina_box_stack_list_failed: {
+    zh: "无法读取样片列表，请刷新重试。",
+    en: "The sample list could not be loaded. Refresh to retry.",
+  },
+  lumina_box_stack_load_failed: {
+    zh: "无法读取这条样片记录，请重试。",
+    en: "This sample record could not be loaded. Try again.",
+  },
+  lumina_box_stack_pending_title: {
+    zh: "读数尚未保存",
+    en: "Readings waiting to be saved",
+  },
+  lumina_box_stack_saving: {
+    zh: "正在保存，配方已暂时锁定",
+    en: "Saving; recipe inputs are temporarily locked",
+  },
+  lumina_box_stack_serial_connected: {
+    zh: "已连接；更换配方后直接测量，读数会保存为新的样片记录。",
+    en: "Connected. Change the recipe and measure; each reading is saved as a new sample record.",
+  },
+  lumina_box_stack_serial_disconnected: {
+    zh: "未连接；连接后在 BOX 选择任意厚度，使用 AUTO 或反射测量即可保存样片。",
+    en: "Disconnected. After connecting, choose any BOX thickness and measure in AUTO or reflection mode to save a sample.",
+  },
+  lumina_box_stack_serial_legacy_connected: {
+    zh: "已连接（兼容采集）；AUTO 或反射读数会直接保存为样片记录。",
+    en: "Connected in compatibility mode. AUTO or reflection readings are saved as sample records.",
+  },
+  lumina_box_stack_unsupported_mode: {
+    zh: "该读数仅含透射，未保存。请切换 AUTO 或反射模式重新测量。",
+    en: "This transmission-only reading was not saved. Switch to AUTO or reflection mode and measure again.",
+  },
+  lumina_box_workspace_material_capture: {
+    zh: "耗材采集",
+    en: "Material capture",
+  },
+  lumina_box_workspace_stack_samples: {
+    zh: "叠色样片",
+    en: "Printed stack samples",
+  },
 };

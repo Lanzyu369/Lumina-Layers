@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LuminaBoxLineDecoder, parseLuminaBoxFrame, type LuminaBoxMeasurement } from "../api/luminaBoxSerial";
+import { applyLuminaBoxMeasurement } from "../utils/luminaBoxCapture";
 
 const measurement: LuminaBoxMeasurement = {
   protocol: "lumina-box", version: 1, type: "measurement", measurement_id: "boot-1-1",
@@ -80,5 +81,34 @@ describe("Lumina Box wired protocol", () => {
     expect(parseLuminaBoxFrame('{"protocol":"lumina-box",bad}')).toEqual({ kind: "invalid" });
     const decoder = new LuminaBoxLineDecoder();
     expect(decoder.push(new TextEncoder().encode(JSON.stringify(measurement)))).toEqual([]);
+  });
+});
+
+describe("Lumina Box measurement placement", () => {
+  const rows = ["3.00", "0.160000", "0.08"].map((thickness, index) => ({
+    id: `row-${index}`, thickness,
+    reflectance: { x: "1", y: "2", z: "3" },
+    transmittance: { x: "4", y: "5", z: "6" },
+  }));
+
+  it("fills all six fields in the matching thickness after rows are reordered", () => {
+    const result = applyLuminaBoxMeasurement(rows, measurement);
+    expect(result.result).toBe("applied");
+    expect(result.samples[0]).toBe(rows[0]);
+    expect(result.samples[2]).toBe(rows[2]);
+    expect(result.samples[1]).toEqual({ id: "row-1", thickness: "0.160000", reflectance: { x: "0", y: "21.2", z: "100" }, transmittance: { x: "31.2", y: "42", z: "37" } });
+    expect(rows[1].reflectance.x).toBe("1");
+  });
+
+  it.each(["reflect", "transmit"] as const)("preserves the other modality in %s mode", (mode) => {
+    const result = applyLuminaBoxMeasurement(rows, { ...measurement, mode });
+    const unchanged = mode === "reflect" ? "transmittance" : "reflectance";
+    expect(result.samples[1][unchanged]).toBe(rows[1][unchanged]);
+  });
+
+  it("refuses missing or ambiguous thickness without changing data", () => {
+    expect(applyLuminaBoxMeasurement(rows, { ...measurement, thickness_mm: 0.24 })).toEqual({ result: "thickness_missing", samples: rows });
+    const duplicateRows = [...rows, { ...rows[1], id: "duplicate", thickness: "0.16" }];
+    expect(applyLuminaBoxMeasurement(duplicateRows, measurement)).toEqual({ result: "thickness_ambiguous", samples: duplicateRows });
   });
 });

@@ -364,6 +364,127 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     );
   });
 
+  it("persists and synchronizes Lumina Box diffuser backing percentages", async () => {
+    const { settingsStoreModule, systemApi } = await loadStores();
+    const { useSettingsStore } = settingsStoreModule;
+
+    expect(useSettingsStore.getState().luminaBoxMeasurementBackingPercentXYZ).toEqual([
+      "19.8",
+      "19.7",
+      "24.7",
+    ]);
+    useSettingsStore
+      .getState()
+      .setLuminaBoxMeasurementBackingPercentXYZ(["31.2", "32", "33"]);
+
+    const persisted = JSON.parse(localStorage.getItem("lumina-settings") ?? "{}");
+    expect(persisted.state.luminaBoxMeasurementBackingPercentXYZ).toEqual([
+      "31.2",
+      "32",
+      "33",
+    ]);
+
+    await useSettingsStore.getState().syncToBackend();
+    expect(systemApi.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ measurement_backing_percent_xyz: [31.2, 32, 33] }),
+    );
+  });
+
+  it("hydrates the Lumina Box diffuser backing only when no local choice exists", async () => {
+    const { settingsStoreModule } = await loadStores();
+    const { useSettingsStore, DEFAULT_SETTINGS, deriveBackendDeviceSettingsPatch } = settingsStoreModule;
+
+    useSettingsStore.getState().hydrateDeviceSettingsFromBackend({
+      measurement_backing_percent_xyz: [17.5, 18.5, 19.5],
+    });
+    expect(useSettingsStore.getState().luminaBoxMeasurementBackingPercentXYZ).toEqual([
+      "17.5",
+      "18.5",
+      "19.5",
+    ]);
+
+    expect(
+      deriveBackendDeviceSettingsPatch(
+        { ...DEFAULT_SETTINGS, luminaBoxMeasurementBackingPercentXYZ: ["31.2", "32", "33"] },
+        { measurement_backing_percent_xyz: [17.5, 18.5, 19.5] },
+        { luminaBoxMeasurementBackingPercentXYZ: ["31.2", "32", "33"] },
+      ),
+    ).toEqual({});
+  });
+
+  it("retains and synchronizes diffuser-free capture across reloads", async () => {
+    const { settingsStoreModule, systemApi } = await loadStores();
+    const { useSettingsStore } = settingsStoreModule;
+
+    useSettingsStore.getState().hydrateDeviceSettingsFromBackend({
+      measurement_backing_percent_xyz: [0, 0, 0],
+    });
+    expect(useSettingsStore.getState().luminaBoxMeasurementBackingPercentXYZ).toEqual([
+      "0", "0", "0",
+    ]);
+    await useSettingsStore.getState().syncToBackend();
+    expect(systemApi.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ measurement_backing_percent_xyz: [0, 0, 0] }),
+    );
+    const persisted = JSON.parse(localStorage.getItem("lumina-settings") ?? "{}");
+    expect(persisted.state.luminaBoxMeasurementBackingPercentXYZ).toEqual(["0", "0", "0"]);
+
+    useSettingsStore.setState({ luminaBoxMeasurementBackingPercentXYZ: ["19.8", "19.7", "24.7"] });
+    localStorage.setItem("lumina-settings", JSON.stringify(persisted));
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().luminaBoxMeasurementBackingPercentXYZ).toEqual([
+      "0", "0", "0",
+    ]);
+    useSettingsStore.getState().hydrateDeviceSettingsFromBackend({
+      measurement_backing_percent_xyz: [19.8, 19.7, 24.7],
+    });
+    expect(useSettingsStore.getState().luminaBoxMeasurementBackingPercentXYZ).toEqual([
+      "0", "0", "0",
+    ]);
+  });
+
+  it.each([
+    ["", "", ""],
+    [" ", "0", "0"],
+    ["0", "19.7", "24.7"],
+    ["-1", "19.7", "24.7"],
+    ["NaN", "19.7", "24.7"],
+    ["101", "19.7", "24.7"],
+  ])("does not synchronize an invalid diffuser snapshot %s/%s/%s", async (x, y, z) => {
+    const { settingsStoreModule, systemApi } = await loadStores();
+    settingsStoreModule.useSettingsStore.getState()
+      .setLuminaBoxMeasurementBackingPercentXYZ([x, y, z]);
+    await settingsStoreModule.useSettingsStore.getState().syncToBackend();
+    expect(systemApi.saveSettings).toHaveBeenCalled();
+    expect(systemApi.saveSettings).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ measurement_backing_percent_xyz: expect.anything() }),
+    );
+  });
+
+  it("keeps a persisted Lumina Box diffuser choice during repeated backend hydration", async () => {
+    localStorage.setItem(
+      "lumina-settings",
+      JSON.stringify({
+        state: {
+          luminaBoxMeasurementBackingPercentXYZ: ["31.2", "32", "33"],
+        },
+        version: 1,
+      }),
+    );
+
+    const settingsStoreModule = await import("../stores/settingsStore");
+    const { useSettingsStore } = settingsStoreModule;
+    useSettingsStore.getState().hydrateDeviceSettingsFromBackend({
+      measurement_backing_percent_xyz: [17.5, 18.5, 19.5],
+    });
+
+    expect(useSettingsStore.getState().luminaBoxMeasurementBackingPercentXYZ).toEqual([
+      "31.2",
+      "32",
+      "33",
+    ]);
+  });
+
   it("syncToBackend includes cross-version user-interface preferences", async () => {
     const { settingsStoreModule, systemApi } = await loadStores();
 

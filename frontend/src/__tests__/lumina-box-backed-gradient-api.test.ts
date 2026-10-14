@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import apiClient from "../api/client";
 import * as api from "../api/luminaBoxBackedGradient";
-import { gradientDataset } from "./fixtures/backedGradient";
+import { gradientDataset, gradientRun } from "./fixtures/backedGradient";
 
 vi.mock("../api/client", async (original) => ({ ...(await original<typeof import("../api/client")>()),
   default: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
@@ -28,6 +28,12 @@ describe("backed-gradient API", () => {
     expect(payload).toEqual(before);
   });
 
+  it("starts the complete one-click flow with the seven-thickness flag", async () => {
+    post.mockResolvedValueOnce({ data: { run: gradientRun } });
+    await expect(api.startBackedGradientFit("dataset-1", true)).resolves.toEqual(gradientRun);
+    expect(post).toHaveBeenCalledExactlyOnceWith(`${base}/datasets/dataset-1/fit-runs`, { include_validation_thickness: true }, { timeout: 15000 });
+  });
+
   it("retains the full portable import/export envelope", async () => {
     const envelope = { schema_version: "1.0", kind: "lumina_box_backed_gradient_export", dataset } as const;
     get.mockResolvedValueOnce({ data: envelope }); post.mockResolvedValueOnce({ data: { dataset } });
@@ -42,6 +48,14 @@ describe("backed-gradient API", () => {
     await api.deleteBackedGradientCapture("dataset-1", "reading/1");
     expect(post).toHaveBeenCalledWith(`${base}/datasets/dataset-1/selection`, { record_id: "reading/1" }, { timeout: 15000 });
     expect(remove).toHaveBeenCalledWith(`${base}/datasets/dataset-1/captures/reading%2F1`, { timeout: 15000 });
+  });
+
+  it("requests a Blob only for browser fit exports", async () => {
+    const blob = new Blob(["data"]); get.mockResolvedValueOnce({ data: blob });
+    await expect(api.downloadBackedGradientFit("fit/a", "png")).resolves.toBe(blob);
+    expect(get).toHaveBeenCalledWith(`${base}/fit-runs/fit%2Fa/exports/png`, { timeout: 15000, responseType: "blob" });
+    expect(api.getBackedGradientExportUrl("data/a")).toContain("/api/extractor/lumina-box/backed-gradient/datasets/data%2Fa/export");
+    expect(api.getBackedGradientFitExportUrl("fit/a", "json")).toContain("/api/extractor/lumina-box/backed-gradient/fit-runs/fit%2Fa/exports/json");
   });
 
   it("propagates save failures without returning a success receipt", async () => {
