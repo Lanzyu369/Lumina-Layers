@@ -669,7 +669,7 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
           <DragOverlay>
             {activeWidgetId ? (
               <div
-                className="z-40 border border-slate-200/80 bg-slate-50/92 opacity-90 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-950/92"
+                className="panel-card z-40 opacity-90"
                 style={{ width: widgetWidth, height: COLLAPSED_HEIGHT, borderRadius: WIDGET_PANEL_RADIUS }}
               >
                 <div className="px-3 py-2 text-sm font-medium text-slate-600 dark:text-slate-300">

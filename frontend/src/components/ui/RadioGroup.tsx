@@ -53,12 +53,10 @@ export default function RadioGroup({
             <label
               key={opt.value}
               className={cx(
-                "flex items-center gap-3 text-sm",
+                "flex items-center gap-3 py-2 text-sm",
                 workstationChoiceRowClass,
-                isActive && workstationChoiceRowActiveClass,
-                isDisabled
-                  ? workstationChoiceRowDisabledClass
-                  : "cursor-pointer hover:border-slate-300 hover:bg-white/75 dark:hover:border-slate-600 dark:hover:bg-slate-900/75"
+                !isDisabled && workstationChoiceRowActiveClass,
+                isDisabled && workstationChoiceRowDisabledClass,
               )}
             >
               <input

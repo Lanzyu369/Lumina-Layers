@@ -32,12 +32,10 @@ export default function Checkbox({
   wikiPath,
 }: CheckboxProps) {
   const labelClass = cx(
-    "flex items-center gap-3 text-sm",
+    "flex items-center gap-3 py-2 text-sm",
     workstationChoiceRowClass,
-    checked && workstationChoiceRowActiveClass,
-    disabled
-      ? workstationChoiceRowDisabledClass
-      : "cursor-pointer hover:border-slate-300 hover:bg-white/75 dark:hover:border-slate-600 dark:hover:bg-slate-900/75",
+    !disabled && workstationChoiceRowActiveClass,
+    disabled && workstationChoiceRowDisabledClass,
   );
 
   return (
@@ -53,7 +51,7 @@ export default function Checkbox({
         <span
           aria-hidden="true"
           className={cx(
-            "flex h-5 w-5 shrink-0 items-center justify-center rounded-xl border transition-all duration-200",
+            "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-all duration-200",
             checked
               ? "border-blue-500 bg-blue-500"
               : "border-slate-300/80 bg-white dark:border-slate-600/80 dark:bg-slate-800"

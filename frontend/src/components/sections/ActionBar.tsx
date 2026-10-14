@@ -2,6 +2,7 @@ import { useMemo, useState, useRef, useEffect, useCallback } from "react"
 import { createPortal } from "react-dom"
 import { buildLayerImagesSourceKey, resolveConverterSourceSelection, useConverterStore } from "../../stores/converter"
 import Button from "../ui/Button"
+import { cardDividerClass } from "../ui/panelPrimitives"
 import BatchResultSummary from "../ui/BatchResultSummary"
 import CanvasPreviewSurface, { type CanvasPreviewSurfaceReadyPayload } from "../ui/CanvasPreviewSurface"
 import LayerMaskViewerDialog from "../ui/LayerMaskViewerDialog"
@@ -55,6 +56,26 @@ function shouldUseApiErrorLanguage(error: unknown): boolean {
   }
   const message = error instanceof Error ? error.message.trim() : ""
   return GENERIC_HTTP_STATUS_ERROR_RE.test(message)
+}
+
+/** Compact stroke icons for the ghost action row. 幽灵操作行的线性图标。 */
+function LayersIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 3l9 5-9 5-9-5 9-5z" />
+      <path d="M3 13l9 5 9-5" />
+    </svg>
+  )
+}
+
+function DownloadIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  )
 }
 
 function resolveRecipeExportError(error: unknown, t: (key: string) => string): string {
@@ -712,53 +733,57 @@ export default function ActionBar() {
               </WikiTooltip>
             </div>
             {hasPreview && (
-              <Button
-                label={layerImagesLoading ? t("action_layers_loading") : t("action_view_layers")}
-                variant="secondary"
-                onClick={() => void fetchLayerImages(layerImagesCurrentKey)}
-                disabled={layerImagesLoading}
-                loading={layerImagesLoading}
-                className="w-full"
-              />
-            )}
-            {hasPreview && (
-              <div className="flex gap-2">
+              <>
+                <div className={cardDividerClass} aria-hidden="true" />
                 <Button
-                  label={isExporting ? t("recipe_export_loading") : t("recipe_export_btn")}
-                  variant="secondary"
-                  onClick={() => {
-                    setIsExporting(true)
-                    setExportError(null)
-                    exportShareCard()
-                      .then((outcome) => setExportNotice(outcome === 'canceled' ? null : t(outcome === 'saved' ? 'file_save_saved' : 'file_save_download_started')))
-                      .catch((err: unknown) => {
-                        setExportError(resolveRecipeExportError(err, t))
-                      })
-                      .finally(() => setIsExporting(false))
-                  }}
-                  disabled={isExporting || modelSurfaceEnabled}
-                  loading={isExporting}
-                  title={modelSurfaceEnabled ? t("recipe_export_model_surface_unavailable") : undefined}
-                  className="flex-1"
+                  label={layerImagesLoading ? t("action_layers_loading") : t("action_view_layers")}
+                  variant="ghost"
+                  onClick={() => void fetchLayerImages(layerImagesCurrentKey)}
+                  disabled={layerImagesLoading}
+                  loading={layerImagesLoading}
+                  leadingIcon={<LayersIcon />}
+                  className="w-full"
                 />
-                <Button
-                  label={t("recipe_export_sidecar_btn")}
-                  variant="secondary"
-                  onClick={() => {
-                    setIsExporting(true)
-                    setExportError(null)
-                    exportSidecar()
-                      .then((outcome) => setExportNotice(outcome === 'canceled' ? null : t(outcome === 'saved' ? 'file_save_saved' : 'file_save_download_started')))
-                      .catch((err: unknown) => {
-                        setExportError(resolveRecipeExportError(err, t))
-                      })
-                      .finally(() => setIsExporting(false))
-                  }}
-                  disabled={isExporting || modelSurfaceEnabled}
-                  title={modelSurfaceEnabled ? t("recipe_export_model_surface_unavailable") : undefined}
-                  className="flex-1"
-                />
-              </div>
+                <div className="flex gap-2">
+                  <Button
+                    label={isExporting ? t("recipe_export_loading") : t("recipe_export_btn")}
+                    variant="ghost"
+                    onClick={() => {
+                      setIsExporting(true)
+                      setExportError(null)
+                      exportShareCard()
+                        .then((outcome) => setExportNotice(outcome === 'canceled' ? null : t(outcome === 'saved' ? 'file_save_saved' : 'file_save_download_started')))
+                        .catch((err: unknown) => {
+                          setExportError(resolveRecipeExportError(err, t))
+                        })
+                        .finally(() => setIsExporting(false))
+                    }}
+                    disabled={isExporting || modelSurfaceEnabled}
+                    loading={isExporting}
+                    leadingIcon={<DownloadIcon />}
+                    title={modelSurfaceEnabled ? t("recipe_export_model_surface_unavailable") : undefined}
+                    className="flex-1"
+                  />
+                  <Button
+                    label={t("recipe_export_sidecar_btn")}
+                    variant="ghost"
+                    onClick={() => {
+                      setIsExporting(true)
+                      setExportError(null)
+                      exportSidecar()
+                        .then((outcome) => setExportNotice(outcome === 'canceled' ? null : t(outcome === 'saved' ? 'file_save_saved' : 'file_save_download_started')))
+                        .catch((err: unknown) => {
+                          setExportError(resolveRecipeExportError(err, t))
+                        })
+                        .finally(() => setIsExporting(false))
+                    }}
+                    disabled={isExporting || modelSurfaceEnabled}
+                    leadingIcon={<DownloadIcon />}
+                    title={modelSurfaceEnabled ? t("recipe_export_model_surface_unavailable") : undefined}
+                    className="flex-1"
+                  />
+                </div>
+              </>
             )}
             {hasPreview && modelSurfaceEnabled && (
               <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -783,7 +808,7 @@ export default function ActionBar() {
 
       {previewDisplayUrl && (
         <div
-          className={`w-full overflow-hidden rounded-[22px] border border-slate-300 dark:border-slate-700 ${previewSurfaceClassName}`}
+          className={`w-full overflow-hidden rounded-[10px] bg-[var(--surface-well)] p-1 ${previewSurfaceClassName}`}
           style={previewAspectRatio ? { aspectRatio: previewAspectRatio } : undefined}
         >
           <CanvasPreviewSurface
@@ -819,8 +844,9 @@ export default function ActionBar() {
       />
 
       {activeLayerImages.length > 0 && (
-        <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-          <h4 className="mb-2 text-xs font-medium text-slate-600 dark:text-slate-400">
+        <div className="flex flex-col gap-3">
+          <div className={cardDividerClass} aria-hidden="true" />
+          <h4 className="text-xs font-medium text-slate-600 dark:text-slate-400">
             {t("action_layers_title")}
           </h4>
           <div
@@ -832,7 +858,7 @@ export default function ActionBar() {
                 className="group flex cursor-pointer flex-col items-center gap-1"
                 onClick={() => setZoomedLayerIdx(idx)}
               >
-                <div className="relative w-full overflow-hidden rounded border border-slate-200 dark:border-slate-600">
+                <div className="relative w-full overflow-hidden rounded-lg border border-slate-200/70 dark:border-slate-700/70">
                   <img
                     src={layer.url}
                     alt={`${t("action_layer_nth")}${idx + 1}${t("action_layer_unit")}`}

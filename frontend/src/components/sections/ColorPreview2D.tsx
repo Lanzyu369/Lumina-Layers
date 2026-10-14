@@ -1790,15 +1790,13 @@ export default function ColorPreview2D({
       )}
 
       <div
-        className="pointer-events-none absolute inset-0 z-20 border-2"
-        style={{ borderColor: 'var(--info-border)' }}
+        className="pointer-events-none absolute inset-0 z-20"
         aria-hidden="true"
       >
         <div
-          className="absolute right-2 top-2 rounded-full border px-2 py-1 text-[10px] font-semibold"
+          className="absolute right-2 top-2 rounded-full px-2 py-1 text-[10px] font-semibold"
           style={{
-            borderColor: 'var(--info-border)',
-            background: 'var(--info-soft)',
+            background: 'var(--surface-well)',
             color: 'var(--surface-text-muted)',
           }}
         >
@@ -1807,18 +1805,18 @@ export default function ColorPreview2D({
       </div>
 
       {selectionTool === 'brush' && (brushStrokesRef.current.length > 0 || brushPointsRef.current.length > 0) && (
-        <div className="pointer-events-auto absolute bottom-2 left-1/2 z-30 flex -translate-x-1/2 gap-2 rounded-lg border border-pink-300/80 bg-white/95 p-2 shadow-lg dark:border-pink-700/80 dark:bg-slate-900/95">
+        <div className="pointer-events-auto absolute bottom-2 left-1/2 z-30 flex -translate-x-1/2 gap-2 rounded-[10px] border border-slate-300/80 bg-white/95 p-2 dark:border-slate-700/80 dark:bg-slate-900/95">
           <button
             type="button"
             onClick={executeBrushDraft}
-            className="rounded-md bg-pink-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-pink-600"
+            className="rounded-lg bg-pink-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-pink-600"
           >
             {t('selection_brush_apply')}
           </button>
           <button
             type="button"
             onClick={clearBrushDraft}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+            className="ghost-control rounded-lg px-3 py-1.5 text-xs text-slate-700 dark:text-slate-200"
           >
             {t('selection_brush_clear')}
           </button>
@@ -1842,11 +1840,10 @@ export default function ColorPreview2D({
           data-testid="color-preview-2d-hold-original"
           data-active={showOriginal || undefined}
           className={cx(
-            "pointer-events-auto absolute right-2 top-10 z-30 flex h-7 w-7 items-center justify-center rounded-md border",
-            "border-slate-300/80 bg-slate-100/90 text-slate-700 shadow-sm transition-colors",
-            "hover:bg-slate-200/90 active:bg-slate-300/90",
-            "dark:border-slate-700/80 dark:bg-slate-900/80 dark:text-slate-200 dark:hover:bg-slate-800/90",
-            showOriginal && "bg-slate-300/90 dark:bg-slate-700/90",
+            "pointer-events-auto absolute right-2 top-10 z-30 flex h-7 w-7 items-center justify-center rounded-lg",
+            "bg-slate-900/60 text-slate-100 backdrop-blur-sm transition-colors",
+            "hover:bg-slate-900/75 active:bg-slate-900/85",
+            showOriginal && "bg-slate-900/85",
           )}
           style={{ touchAction: 'none' }}
         >

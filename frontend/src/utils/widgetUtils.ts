@@ -24,8 +24,12 @@ export function resolveResponsiveWidgetWidth(
   return Math.min(modeMaxWidth, safeWidth, Math.max(modeMinWidth, proportionalWidth));
 }
 
-/** Shared widget corner radius in pixels. (Widget 统一圆角，单位像素) */
-export const WIDGET_PANEL_RADIUS = 8;
+/** Shared widget corner radius in pixels. Matches the Hierarchy v2 "card"
+ *  step (16px) so the floating panel is the single card level and every
+ *  control inside it (10px / 8px) stays one step below.
+ *  Widget 统一圆角：与层级 v2 的“卡片”档（16px）一致，内部控件（10px / 8px）
+ *  始终低一档。 */
+export const WIDGET_PANEL_RADIUS = 16;
 
 /** Collapsed widget height — header only. (折叠状态高度，仅标题栏) */
 export const COLLAPSED_HEIGHT = 40;

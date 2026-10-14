@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, memo } from "react";
 import { useConverterStore } from "../../stores/converter";
 import { useI18n } from "../../i18n/context";
-import { cx, cardClass, wellPadClass } from "../ui/panelPrimitives";
+import { cx, StatusBanner, cardClass, compactFieldClass, wellPadClass } from "../ui/panelPrimitives";
 import type { MaterialColorSuggestionItem } from "../../api/types";
 import GradientGroupsPanel from "./GradientGroupsPanel";
 
@@ -154,7 +154,7 @@ export default function MaterialColorPicker() {
       <div className={cx(cardClass, "flex h-full flex-col gap-3 px-4 py-4")}>
         {/* Pending replacement bar — mirrors LutColorGrid for consistent UX */}
         {pendingReplacement && (
-          <div className={cx(wellPadClass, "flex flex-col gap-2 px-3 py-2")}>
+          <div className={cx(wellPadClass, "flex flex-col gap-2")}>
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               <div className="flex min-w-0 flex-wrap items-center gap-0.5">
                 {pendingReplacement.mode === "select-all" &&
@@ -207,7 +207,7 @@ export default function MaterialColorPicker() {
               <button
                 type="button"
                 onClick={() => setPendingReplacement(null)}
-                className="rounded-full border border-slate-300/80 bg-slate-100/85 px-2.5 py-1 text-[10px] font-medium text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-900"
+                className="ghost-control rounded-full px-2.5 py-1 text-[10px] font-medium text-slate-700 dark:text-slate-200"
               >
                 {t("replace_cancel_btn")}
               </button>
@@ -272,12 +272,9 @@ export default function MaterialColorPicker() {
 
             {/* Error line */}
             {error && (
-              <p
-                role="alert"
-                className="rounded-xl border border-rose-400/50 bg-rose-500/10 px-3 py-2 text-xs text-rose-600 dark:border-rose-600/50 dark:text-rose-300"
-              >
+              <StatusBanner role="alert" tone="error">
                 {t("material_picker_error").replace("{message}", error)}
-              </p>
+              </StatusBanner>
             )}
 
             {/* Loading / empty / grid */}
@@ -372,7 +369,7 @@ const TargetColorInputRow = memo(function TargetColorInputRow({
           value={draftTarget}
           onChange={(e) => setDraftTarget(e.target.value)}
           onKeyDown={handleSubmitOnEnter}
-          className="flex-1 rounded-xl border border-slate-200/80 bg-slate-100/78 px-3 py-1.5 font-mono text-[clamp(0.65rem,0.85vw,0.75rem)] text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100"
+          className={cx(compactFieldClass, "flex-1 py-1.5 font-mono text-[clamp(0.65rem,0.85vw,0.75rem)]")}
         />
         <button
           type="button"
@@ -444,8 +441,8 @@ const SuggestionGrid = memo(function SuggestionGrid({
             onClick={() => onClick(item)}
             className={`relative flex w-full min-w-0 flex-col items-center rounded-[10px] border px-1 py-1.5 transition-colors ${
               isCurrent
-                ? "border-amber-400 bg-amber-400/10 ring-2 ring-amber-400/30"
-                : "border-transparent hover:border-slate-300 hover:bg-slate-100/70 dark:hover:border-slate-600 dark:hover:bg-slate-900/75"
+                ? "border-amber-400 bg-amber-400/10"
+                : "border-transparent hover:border-[color:var(--surface-card-outline)] hover:bg-[var(--nav-chip-hover)]"
             }`}
           >
             <span

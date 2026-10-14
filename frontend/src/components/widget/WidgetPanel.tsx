@@ -211,7 +211,7 @@ export const WidgetPanel = React.memo(function WidgetPanel({
         animate={animateTarget}
         transition={transition}
         onAnimationComplete={handleAnimationComplete}
-        className={`border border-slate-200/80 shadow-[var(--shadow-control)] will-change-transform bg-slate-50/80 dark:bg-slate-950/80`}
+        className="panel-card will-change-transform"
       >
         <WidgetHeader
           widgetId={widgetId}

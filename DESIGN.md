@@ -358,9 +358,97 @@ JS layer — `frontend/src/components/ui/panelPrimitives.tsx`:
 - Don't thicken borders to make a block stand out — promote it to a well instead.
 - Don't give status hints a full border; they get a left accent bar.
 
-#### Demo scope (首版落地范围)
+#### Migration status (迁移状态)
 
-First pass applied to the **Settings** page (`SettingsPanel.tsx`) and the **Color Adjustment** workstation (`PalettePanel.tsx`, `LutColorGrid.tsx`, `MaterialColorPicker.tsx`, via `Color2DOverlay.tsx`). Shared controls (`Button`, `Dropdown`) had their radii brought onto the ladder. Remaining tabs (LUT / Material / Vector) still use the legacy `mutedSectionCardClass` and are pending migration.
+> Verified against the working tree on 2026-10-14. An earlier revision of this document claimed Settings had already migrated; that was wrong, and is corrected below.
+> 2026-10-14 按工作区实际代码核对。此前本文档写“设置页已迁移”与代码不符，已在下方更正。
+
+| Area | Status |
+|---|---|
+| Colour Adjustment workstation — `PalettePanel`, `LutColorGrid`, `MaterialColorPicker`, `GradientGroupsPanel`, `ColorQuickReplacePanel`, `TargetColorPanel`, `SimilarRecipeList`, `MaterialLayerBenefitCurve`, `SelectionToolPicker` | **Migrated** |
+| Colour Adjustment overlay — `Color2DOverlay`, `ColorPreview2D` | **Migrated** |
+| Image Conversion — widget shells, `BasicSettings`, `ActionBar`, `BedSizeSelector`, `BatchResultSummary`, `UnifiedUploader`, `LegacyLutSelector`, `ImageUpload`, `FridgeMagnetSettings`, `PuzzleSettings`, `CloisonneSettings`, `Scene3D` toolbar | **Migrated** |
+| LUT Management — `LutLibraryPanel`, `LutManagerPanel`, `LutCloudSyncPanel`, `LutDetailsPanel`, `LutComparePanel`, `MaterialCloudSyncPanel` | Migrated |
+| Material Management — Lumina Box panels (`LuminaBoxMaterialPanel`, `LuminaBoxLibraryCard`, `LuminaBoxBackingSetup`, `LuminaBoxMaterialCapture`, `LuminaBoxStackSamplesPanel`) | Migrated |
+| Material Management — `MaterialLibraryPanel`, `GradientCardGeneratePanel`, `GradientCardExtractPanel`, `MaterialRecipeQueryPanel` | **Pending** |
+| LUT Management — `CalibrationPanel`, `ExtractorPanel`, `FiveColorQueryPanel`, `ColorcheckerConfirmDialog` | **Pending** |
+| Image to Vector — `VectorizerPanel` | **Pending** |
+| Settings — `SettingsPanel`, `MachineSelectionDialog` | **Pending** |
+| Creative Workshop — `WorkshopPanel`, `ModuleDetails` | **Pending** |
+| Dialogs — `CustomRecipeDialog`, `CustomRecipeSidePanel`, `MaterialPickerDialog`, `BugReportModal` | **Pending** (dialog shells keep their single card; inner panels still nest) |
+
+Shared controls (`Button`, `Slider`, `Checkbox`, `RadioGroup`, `Dropdown`, field shells, `.status-banner`) are migrated platform-wide, so every page benefits even where its own containers are still pending.
+共享控件已全站迁移，因此即使某一页的容器还没改，这些控件也已经干净。
+
+Legacy helpers scheduled for removal once the last user migrates: `sectionCardClass`, `mutedSectionCardClass`, `workstationPanelCardClass`, `workstationInsetCardClass`, `workstationShellClass`, `resolveSectionCardClass` (all in `frontend/src/components/ui/panelPrimitives.tsx`).
+`panelPrimitives.tsx` 里的旧常量在最后一个使用者迁移完成后删除。
+
+### Ghost controls — 幽灵按钮与隐形边界 (Ghost Controls)
+
+> Lumina-specific. Introduced with the Image Conversion cleanup. 与图像转换页改造一同引入。
+
+`边界只在需要时出现。` A control that is already named by its own text or icon does not need a permanent box: the box adds a second rectangle to a column that already has a card, a well and a divider. Ghost controls keep the hit area and the label, and reveal their boundary on hover and keyboard focus.
+已经带有文字或图标的控件不需要常驻边框——那只是在已有卡片、凹槽和分割线的栏里再加一个矩形。幽灵控件保留点击区域和文字，只在悬停和键盘聚焦时露出边界。
+
+#### Three button levels (三级按钮)
+
+| Level | At rest | Used for |
+|---|---|---|
+| **Primary** | blue fill | the one decisive action of a section (`生成`) |
+| **Secondary** | hairline border + light fill | a standalone action that must read as a button (`预览`, `上传 LUT`, `应用旋转`, `取消`) |
+| **Ghost** | text / icon only | toolbar controls, per-row actions, dialog close, collapse headers, clear / reset (`查看分层`, `导出分享卡`, 撤销/重做, 编辑/历史/删除) |
+
+Reach for the weakest level that still communicates "this is clickable". Never make a block of centred text into ghost buttons without a leading icon — icon-less ghost buttons in a column read as a list of labels.
+优先用能读懂的最弱级别。一列没有图标的幽灵按钮会读成文字标签列表，所以成排出现时给每个按钮配前置图标。
+
+#### Ghost control states (状态)
+
+| State | Treatment |
+|---|---|
+| Rest | transparent 1px border + transparent fill; the border is present so hovering never reflows the layout |
+| Hover | `--surface-card-outline` border + `--nav-chip-hover` fill, text darkened |
+| Keyboard focus | same as hover plus a 2px `--focus-ring` outline (via `outline`, never `ring-*`) |
+| Pressed | fill steps up to `--surface-well` |
+| Toggled on (`aria-pressed="true"` / `data-active="true"`) | tinted fill + blue text, **no border** — the fill carries the state |
+| Destructive (`data-tone="danger"`) | hover turns text, border and fill red |
+| Disabled | 45% opacity, no hover reaction |
+| `@media (hover: none)` | a faint resting border, because a touch device cannot reveal it on hover |
+
+Implementation: `.ghost-control` in `frontend/src/index.css`. Reach it through `variant="ghost"` on `Button`, or the `ghostControlClass` export for raw `<button>` elements. Do not hand-write a ghost style — that is how six copies of the dialog close button happened.
+实现见 `index.css` 的 `.ghost-control`。通过 `Button variant="ghost"` 或 `ghostControlClass` 使用，不要手写。
+
+#### Field controls also hide their boundary (输入控件同样隐藏边界)
+
+Text inputs, number boxes, the slider value box and the `Dropdown` trigger use `workstationInputClass` / `compactFieldClass`: a tinted `--surface-well` fill with **no border** at rest, a hairline border on hover, a blue border plus focus ring on focus. The fill still reads as a field; the border only appears when the user is about to touch it.
+输入框、数字框、滑块数值框和下拉框触发按钮：静止时只有 `--surface-well` 浅底，无边框；悬停出现细边框；聚焦转蓝并加焦点环。
+
+#### Selectable rows are borderless (可选行不画边框)
+
+`Checkbox` and `RadioGroup` rows (`workstationChoiceRowClass`) are transparent at rest with a ghost boundary on hover. The checked state lives in the indicator alone — a 6px-radius square for checkboxes, a dot for radios. Rows carry `-mx-2 px-2` so the hover fill extends past the text while labels stay aligned with the sliders above them.
+复选框与单选项行静止透明，悬停显示幽灵边界；选中状态只由左侧标记表达（复选框是小圆角方形，单选框是圆点）。
+
+#### Dependent sub-settings use an indent, not a box (从属缩进)
+
+Settings revealed by the parent control above them (`模型覆面`, `耗材档案`, `反推LUT` 品牌, `大画幅`) use `dependentGroupClass`: a 2px left hairline plus 12px indent. That is already the third grouping device on the ladder — adding a border would make it a fourth card level.
+父级开关展开的子设置改用「左侧细线 + 缩进」，不再包一层带边框的盒子。
+
+#### Controls floating over an image or the 3D canvas (画面上的控件)
+
+A ghost boundary is invisible against arbitrary image content. When controls float over the picture:
+- **Several controls:** group them into one translucent pill toolbar and make the inner buttons ghost.
+- **A single control:** give it a translucent solid fill with no border.
+
+画面上的控件不能用幽灵边界：多个控件合并成一条半透明胶囊工具条（内部按钮用幽灵样式），单个控件用半透明实底。
+
+#### Content edges may keep a hairline (内容边缘例外)
+
+A swatch, a layer thumbnail or a preview tile is *content*, not a container. A barely visible hairline outline is allowed there so a white swatch stays visible on a white card. This exception does not extend to grouping boxes.
+色块、缩略图属于内容而非容器，允许保留极淡描边；这条例外不适用于分组盒子。
+
+#### `shadow-*` class names kill the focus ring (`shadow-` 类名会吞掉焦点环)
+
+`index.css` contains `:where([class*="shadow-"], [style*="box-shadow"]) { box-shadow: none !important; }`. Tailwind draws `ring-*` with `box-shadow`, so **any element whose class string contains `shadow-` loses its focus ring as well**. Never put a `shadow-*` utility on an interactive control; use `outline` (as `.ghost-control` does) or a real border for focus styling. Only `.panel-card` carries a real shadow, and it is applied through a CSS class, not a utility.
+`index.css` 的全局规则会清掉含 `shadow-` 类名的阴影；Tailwind 的 `ring-*` 靠 box-shadow 实现，因此类名里出现 `shadow-` 的交互控件会连焦点环一起丢失。交互控件不要写 `shadow-*`，聚焦样式用 outline 或边框；全站只有 `.panel-card` 通过 CSS 类保留真实阴影。
 
 ## 5. Layout Principles
 

@@ -18,7 +18,7 @@ import { normalizeReferenceHex, useSimilarRecipes } from "../../hooks/useSimilar
 import { useI18n } from "../../i18n/context";
 import { useConverterStore } from "../../stores/converter";
 import { useEyedropperStore } from "../../stores/eyedropperStore";
-import { StatusBanner, cardClass, cx, groupHeaderClass } from "../ui/panelPrimitives";
+import { StatusBanner, cardClass, cardDividerClass, cx, groupHeaderClass } from "../ui/panelPrimitives";
 import SimilarRecipeList from "./SimilarRecipeList";
 import TargetColorPanel from "./TargetColorPanel";
 import type { RecipeChannel } from "./recipeSuggestionUtils";
@@ -153,7 +153,7 @@ export default function ColorQuickReplacePanel() {
             onApplyNearest={handleApply}
             onApplyExact={replaceSelectionWithExactColor}
           />
-          <div className="panel-divider border-t" />
+          <div className={cardDividerClass} aria-hidden="true" />
           <section className="flex flex-col gap-2" aria-label={t("quick_replace_recipes_heading")}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h4 className={groupHeaderClass}>
@@ -267,11 +267,10 @@ function BasisToggle({
           disabled={option === "target" ? !targetAvailable : !selectionAvailable}
           onClick={() => onChange(option)}
           className={cx(
-            "rounded-full border px-2.5 py-1 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-45",
-            basis === option
-              ? "border-blue-300 bg-blue-500/12 text-blue-700 dark:border-blue-700 dark:bg-blue-500/16 dark:text-blue-300"
-              : "border-slate-200/80 bg-slate-100/70 text-slate-500 hover:border-slate-300 dark:border-slate-700/80 dark:bg-slate-900/60 dark:text-slate-400",
+            "ghost-control rounded-full px-2.5 py-1 text-[11px]",
+            basis === option ? "" : "text-slate-500 dark:text-slate-400",
           )}
+          data-active={basis === option ? "true" : undefined}
         >
           {t(option === "selection" ? "quick_replace_basis_selection" : "quick_replace_basis_target")}
         </button>
@@ -306,7 +305,7 @@ function ReferenceColorChooser({
             onClick={() => onPick(hex)}
             className={cx(
               "h-5 w-5 rounded-md border transition-transform hover:scale-110",
-              active === hex ? "border-amber-400 ring-2 ring-amber-400/40" : "border-slate-300/80 dark:border-slate-600/80",
+              active === hex ? "border-2 border-amber-500" : "border-slate-300/80 dark:border-slate-600/80",
             )}
             style={{ backgroundColor: hex }}
           />

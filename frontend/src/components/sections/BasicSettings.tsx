@@ -20,6 +20,7 @@ import type { SavedMaterialLibraryItem } from "../../api/types";
 import { listGradientCardMaterials } from "../../api/extractor";
 import { reconcileDirectoryNames } from "../../utils/materialDirectoryMigration";
 import UnifiedUploader from "../ui/UnifiedUploader";
+import Button from "../ui/Button";
 import Checkbox from "../ui/Checkbox";
 import Dropdown from "../ui/Dropdown";
 import Slider from "../ui/Slider";
@@ -40,7 +41,7 @@ import {
   RECIPE_IMPORT_NOT_SHARE_CARD_ERROR,
   type RecipeFileSource,
 } from "../../recipe/importRecipe";
-import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
+import { StatusBanner, cardDividerClass, workstationInputClass } from "../ui/panelPrimitives";
 import { type ImageRotationDegrees } from "../../utils/imageRotation";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
 import {
@@ -1589,6 +1590,8 @@ export default function BasicSettings() {
         </div>
       )}
 
+      <div className={cardDividerClass} aria-hidden="true" />
+
       <Slider
         label={t("basic_thickness")}
         tooltip={t("basic_thickness_hint")}
@@ -1685,14 +1688,15 @@ function QuantizeColorsControl() {
         step={step}
         onChange={setQuantizeColors}
       />
-      <button
-        type="button"
-        disabled={!imageFile || autoDetectLoading}
+      <Button
+        label={autoDetectLoading ? t("conv_auto_color_calculating") : t("conv_auto_color_btn")}
+        variant="ghost"
+        size="sm"
         onClick={autoDetectColors}
-        className="self-end px-3 py-1 text-xs rounded-md bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-      >
-        {autoDetectLoading ? t("conv_auto_color_calculating") : t("conv_auto_color_btn")}
-      </button>
+        disabled={!imageFile || autoDetectLoading}
+        loading={autoDetectLoading}
+        className="self-end"
+      />
     </div>
   );
 }

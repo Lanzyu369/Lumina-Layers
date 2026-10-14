@@ -6,7 +6,7 @@ import Dropdown from "../ui/Dropdown";
 import Slider from "../ui/Slider";
 import {
   cx,
-  mutedSectionCardClass,
+  groupHeaderClass,
   workstationFieldLabelClass,
   workstationInputClass,
 } from "../ui/panelPrimitives";
@@ -77,7 +77,7 @@ function NumberField({
 }
 
 const actionButtonClass =
-  "rounded-[18px] border border-slate-200/80 bg-white/80 px-3 py-2 text-sm font-medium text-slate-700 shadow-[var(--shadow-control)] transition-colors duration-150 hover:border-slate-300 hover:bg-white dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:bg-slate-900";
+  "ghost-control rounded-[10px] px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-200";
 
 function getCustomFridgeMagnetLabel(
   t: (key: string) => string,
@@ -201,24 +201,24 @@ export default function FridgeMagnetSettings() {
       />
 
       {enableFridgeMagnet ? (
-        <div className={mutedSectionCardClass}>
+        <div className="flex flex-col gap-2">
           <p className="text-xs text-slate-600 dark:text-slate-300">
             {t("fridge_magnet_mode_active_status")}
           </p>
-          <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-500 dark:text-slate-400">
-            <div className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-700/80">
-              <p className="font-medium text-slate-700 dark:text-slate-200">
+          <dl className="grid grid-cols-2 gap-3 text-xs text-slate-500 dark:text-slate-400">
+            <div>
+              <dt className="font-medium text-slate-700 dark:text-slate-200">
                 {t("fridge_magnet_summary_structure")}
-              </p>
-              <p>{t(`structure_mode.${structureMode}`)}</p>
+              </dt>
+              <dd>{t(`structure_mode.${structureMode}`)}</dd>
             </div>
-            <div className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-700/80">
-              <p className="font-medium text-slate-700 dark:text-slate-200">
+            <div>
+              <dt className="font-medium text-slate-700 dark:text-slate-200">
                 {t("fridge_magnet_summary_spacer")}
-              </p>
-              <p>{spacerThick.toFixed(1)} {t("common_unit_mm")}</p>
+              </dt>
+              <dd>{spacerThick.toFixed(1)} {t("common_unit_mm")}</dd>
             </div>
-          </div>
+          </dl>
         </div>
       ) : null}
 
@@ -242,6 +242,7 @@ export default function FridgeMagnetSettings() {
         <button
           type="button"
           className={actionButtonClass}
+          data-tone="danger"
           onClick={() => selectedMagnet && removeFridgeMagnet(selectedMagnet.id)}
           disabled={!enableFridgeMagnet || !selectedMagnet}
         >
@@ -251,10 +252,10 @@ export default function FridgeMagnetSettings() {
 
       {fridgeMagnets.length > 0 ? (
         <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+          <p className={groupHeaderClass}>
             {t("fridge_magnet_list_title")}
           </p>
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-1">
             {fridgeMagnets.map((magnet, index) => {
               const preset = getFridgeMagnetPreset(magnet.preset_key);
               const isSelected = magnet.id === selectedFridgeMagnetId;
@@ -263,11 +264,10 @@ export default function FridgeMagnetSettings() {
                   key={magnet.id}
                   type="button"
                   onClick={() => selectFridgeMagnet(magnet.id)}
+                  aria-pressed={isSelected}
                   className={cx(
-                    "rounded-[22px] border px-3.5 py-3 text-left shadow-[var(--shadow-control)] transition-colors duration-150",
-                    isSelected
-                      ? "border-blue-400 bg-blue-50/80 dark:border-blue-400/80 dark:bg-blue-500/10"
-                      : "border-slate-200/80 bg-white/65 hover:border-slate-300 hover:bg-white dark:border-slate-700/80 dark:bg-slate-900/60 dark:hover:border-slate-600",
+                    "ghost-control rounded-[10px] px-3.5 py-3 text-left",
+                    isSelected && "bg-[var(--nav-chip-active)]",
                   )}
                 >
                   <div className="flex items-center justify-between gap-3">
@@ -291,11 +291,9 @@ export default function FridgeMagnetSettings() {
           </div>
         </div>
       ) : enableFridgeMagnet ? (
-        <div className={mutedSectionCardClass}>
-          <p className="text-xs text-slate-600 dark:text-slate-300">
-            {t("fridge_magnet_empty_state")}
-          </p>
-        </div>
+        <p className="text-xs text-slate-600 dark:text-slate-300">
+          {t("fridge_magnet_empty_state")}
+        </p>
       ) : null}
 
       {selectedMagnet ? (
@@ -400,11 +398,9 @@ export default function FridgeMagnetSettings() {
           </button>
         </div>
       ) : fridgeMagnets.length > 0 ? (
-        <div className={mutedSectionCardClass}>
-          <p className="text-xs text-slate-600 dark:text-slate-300">
-            {t("fridge_magnet_select_hint")}
-          </p>
-        </div>
+        <p className="text-xs text-slate-600 dark:text-slate-300">
+          {t("fridge_magnet_select_hint")}
+        </p>
       ) : null}
     </div>
   );

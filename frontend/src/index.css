@@ -21,6 +21,11 @@
   --surface-card-outline: rgba(148, 163, 184, 0.38);
   --surface-well: rgba(100, 116, 139, 0.09);
   --surface-divider: rgba(148, 163, 184, 0.32);
+  --nav-chip-active: rgba(255, 255, 255, 0.96);
+  --nav-chip-hover: rgba(100, 116, 139, 0.08);
+  --shadow-nav-chip:
+    0 1px 2px rgba(15, 23, 42, 0.1),
+    0 0 0 0.5px rgba(15, 23, 42, 0.05);
   --shadow-card:
     0 1px 2px rgba(15, 23, 42, 0.05),
     0 20px 44px -32px rgba(15, 23, 42, 0.3);
@@ -93,6 +98,9 @@
   --surface-card-outline: rgba(100, 116, 139, 0.5);
   --surface-well: rgba(148, 163, 184, 0.1);
   --surface-divider: rgba(100, 116, 139, 0.45);
+  --nav-chip-active: rgba(148, 163, 184, 0.18);
+  --nav-chip-hover: rgba(148, 163, 184, 0.08);
+  --shadow-nav-chip: none;
   --shadow-card:
     0 1px 2px rgba(0, 0, 0, 0.3),
     0 20px 44px -32px rgba(0, 0, 0, 0.6);
@@ -122,8 +130,104 @@ body.lumina-canvas-orbiting [data-widget-id] {
   pointer-events: none !important;
 }
 
+/* Global shadow kill-switch. Tailwind draws `ring-*` with box-shadow, so any
+ * element that also carries a `shadow-*` utility loses its focus ring too.
+ * Keep `shadow-` out of class strings on interactive controls; use `outline`
+ * or `border` for focus styling inside `.ghost-control` below.
+ * 全局阴影开关：Tailwind 的 `ring-*` 靠 box-shadow 实现，因此凡是类名里同时
+ * 含 `shadow-` 的元素，焦点环也会被一起清掉。交互控件的类名里不要出现
+ * `shadow-`；幽灵控件的聚焦样式一律走 outline / border。 */
 :where([class*="shadow-"], [style*="box-shadow"]) {
   box-shadow: none !important;
+}
+
+/* Ghost control: no boundary at rest, boundary appears on hover / focus.
+ * Used by ghost Buttons, toolbar icon buttons, dialog close buttons and
+ * collapse headers. 幽灵控件：静止时无边界，悬停或聚焦时才出现细边框与浅底。
+ * The 1px border is always present (transparent at rest) so nothing reflows.
+ * 1px 边框始终存在（静止时透明），悬停不会引起尺寸跳动。 */
+.ghost-control {
+  border: 1px solid transparent;
+  background-color: transparent;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    outline-color 150ms ease;
+}
+
+.ghost-control:hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--surface-card-outline);
+  background-color: var(--nav-chip-hover);
+  color: rgb(15 23 42);
+}
+
+.dark .ghost-control:hover:not(:disabled):not([aria-disabled="true"]) {
+  color: rgb(241 245 249);
+}
+
+.ghost-control:focus-visible {
+  border-color: var(--surface-card-outline);
+  background-color: var(--nav-chip-hover);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.ghost-control:active:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--surface-card-outline);
+  background-color: var(--surface-well);
+}
+
+/* Toggled-on ghost control (e.g. the active selection tool). Boundary stays
+ * hidden; the fill carries the state. 开启态：不画边框，用淡蓝底表达选中。 */
+.ghost-control[aria-pressed="true"],
+.ghost-control[data-active="true"] {
+  border-color: transparent;
+  background-color: var(--nav-chip-active);
+  color: rgb(29 78 216);
+}
+
+.dark .ghost-control[aria-pressed="true"],
+.dark .ghost-control[data-active="true"] {
+  color: rgb(147 197 253);
+}
+
+.ghost-control[aria-pressed="true"]:hover:not(:disabled):not([aria-disabled="true"]),
+.ghost-control[data-active="true"]:hover:not(:disabled):not([aria-disabled="true"]) {
+  background-color: var(--surface-well);
+}
+
+.ghost-control:disabled,
+.ghost-control[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* Destructive ghost control: red text, border and fill on hover. */
+.ghost-control[data-tone="danger"] {
+  color: var(--surface-text-muted);
+}
+
+.ghost-control[data-tone="danger"]:hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--error-border);
+  background-color: var(--error-soft);
+  color: rgb(185 28 28);
+}
+
+.dark .ghost-control[data-tone="danger"]:hover:not(:disabled):not([aria-disabled="true"]) {
+  color: rgb(252 165 165);
+}
+
+.ghost-control[data-tone="danger"]:active:not(:disabled):not([aria-disabled="true"]) {
+  background-color: var(--error-soft);
+}
+
+/* Touch devices have no hover, so a boundary-less control reads as plain
+ * text. Show a faint resting border there. 触屏没有悬停，静止时给一圈极淡边框。 */
+@media (hover: none) {
+  .ghost-control:not([aria-pressed="true"]):not([data-active="true"]) {
+    border-color: var(--surface-outline);
+  }
 }
 
 @keyframes material-picker-card-select {
@@ -251,6 +355,14 @@ body.lumina-canvas-orbiting [data-widget-id] {
 .dock-scrollbar-hover:hover,
 .dock-scrollbar-hover:focus-within {
   overflow-y: auto;
+}
+
+.scrollbar-hidden {
+  scrollbar-width: none;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
 }
 
 .dark .dock-scrollbar {

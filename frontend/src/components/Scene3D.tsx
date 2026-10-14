@@ -1251,7 +1251,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
        * `--lumina-right-dock-width` CSS 变量自动避开右侧坞内的 widget。
        */}
       <div
-        className="absolute z-10 flex gap-1.5"
+        className="absolute z-10 flex gap-0.5 rounded-full border border-slate-200/80 bg-slate-100/85 p-1 backdrop-blur-sm dark:border-slate-700/80 dark:bg-slate-900/70"
         style={{
           top: "12px",
           right: "calc(var(--lumina-right-dock-width, 0px) + 12px)",
@@ -1263,12 +1263,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           aria-label={t("viewer_performance_toggle")}
           title={t("viewer_performance_toggle")}
           data-testid="scene3d-performance-toggle"
-          className={
-            "inline-flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] " +
-            (performanceVisible
-              ? "border-blue-500/60 bg-blue-500/15 text-blue-600 dark:text-blue-300"
-              : "border-slate-200/80 bg-slate-100/85 text-slate-600 hover:bg-slate-200/90 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80")
-          }
+          className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
         >
           <BarChartIcon className="h-4 w-4" />
         </button>
@@ -1278,12 +1273,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           aria-label={t("viewer_diagnostics_toggle")}
           title={t("viewer_diagnostics_toggle")}
           data-testid="scene3d-diagnostics-toggle"
-          className={
-            "inline-flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] " +
-            (diagnosticsVisible
-              ? "border-blue-500/60 bg-blue-500/15 text-blue-600 dark:text-blue-300"
-              : "border-slate-200/80 bg-slate-100/85 text-slate-600 hover:bg-slate-200/90 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80")
-          }
+          className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
         >
           <ActivityIcon className="h-4 w-4" />
         </button>
@@ -1292,7 +1282,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             onClick={toggleFullscreen}
             aria-label={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
             title={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/80 bg-slate-100/85 text-slate-600 backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors hover:bg-slate-200/90 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80"
+            className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
           >
             {isFullscreen ? <MinimizeIcon className="h-4 w-4" /> : <MaximizeIcon className="h-4 w-4" />}
           </button>
@@ -1301,7 +1291,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           onClick={takeScreenshot}
           aria-label={t("viewer_screenshot")}
           title={t("viewer_screenshot")}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/80 bg-slate-100/85 text-slate-600 backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors hover:bg-slate-200/90 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80"
+          className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
         >
           <CameraIcon className="h-4 w-4" />
         </button>

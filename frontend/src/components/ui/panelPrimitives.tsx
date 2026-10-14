@@ -54,17 +54,40 @@ export const groupHeaderClass =
 export const workstationFieldLabelClass =
   "text-sm font-medium text-slate-700 dark:text-slate-200";
 
+/** Field shell: filled at rest, boundary appears on hover, blue on focus.
+ * 输入框外壳：静止时只有浅灰底，悬停才出现细边框，聚焦转蓝并加焦点环。 */
 export const workstationInputClass =
-  "min-h-11 w-full rounded-[10px] border border-slate-200/80 bg-white/82 px-3.5 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 hover:bg-white/90 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100 dark:hover:border-slate-600";
+  "min-h-11 w-full rounded-[10px] border border-transparent bg-[var(--surface-well)] px-3.5 py-2 text-sm text-slate-800 outline-none transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus:border-blue-400 focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-100";
 
+/** Standalone text input (no min-height, no vertical padding): same field
+ *  treatment for compact search / hex rows. 紧凑输入框，沿用同一套字段样式。 */
+export const compactFieldClass =
+  "w-full rounded-[10px] border border-transparent bg-[var(--surface-well)] px-3 py-2 text-sm text-slate-800 outline-none transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus:border-blue-400 focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-100";
+
+/** Selectable row (checkbox / radio option): borderless at rest, ghost
+ *  boundary on hover. The negative inline margin lets the hover fill and
+ *  border extend slightly past the text while the label text stays aligned
+ *  with the rows above it. 可选行：静止无边框，悬停显示幽灵边界；负外边距让
+ *  悬停底色向外伸出，文字仍与其它控件左对齐。
+ *  `rounded-[10px]` is part of the public contract (tests locate rows by it). */
 export const workstationChoiceRowClass =
-  "rounded-[10px] border border-slate-200/80 bg-white/60 px-3.5 py-3 shadow-[var(--shadow-control)] transition-all duration-200 dark:border-slate-700/80 dark:bg-slate-900/55";
+  "-mx-2 flex rounded-[10px] border border-transparent px-2 py-1.5 transition-colors duration-150";
 
 export const workstationChoiceRowActiveClass =
-  "border-blue-400 bg-white/92 dark:border-blue-400/80 dark:bg-slate-900/82";
+  "hover:border-[color:var(--surface-card-outline)] hover:bg-[var(--nav-chip-hover)]";
 
-export const workstationChoiceRowDisabledClass =
-  "cursor-not-allowed opacity-45";
+export const workstationChoiceRowDisabledClass = "cursor-not-allowed opacity-45";
+
+/** Sub-settings revealed by a parent control (a switch inside a card that
+ *  unlocks more fields). Indented behind a hairline rule instead of being
+ *  wrapped in another bordered box. 从属缩进：父级开关展开的子设置，用一条
+ *  细竖线加缩进表达从属关系，不再套一层带边框的盒子。 */
+export const dependentGroupClass =
+  "flex flex-col gap-3 border-l-2 border-[color:var(--surface-divider)] py-1 pl-3";
+
+/** Ghost button/icon-button class for raw <button> elements that do not go
+ *  through the shared Button component. 原生按钮使用的幽灵按钮样式。 */
+export const ghostControlClass = "ghost-control";
 
 export const desktopSplitLayoutClass =
   "grid min-h-0 gap-5 xl:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)] xl:items-start 2xl:grid-cols-[minmax(22rem,27.5rem)_minmax(0,1fr)]";

@@ -137,50 +137,50 @@ export default function Slider(props: SliderProps) {
 
   return (
     <div className="flex flex-col gap-1.5">
-      {label && (
-        <label className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
-          <span>{label}</span>
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <label className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
+          <span className="truncate">{label}</span>
           {tooltip && <HelpDot title={label} description={tooltip} wikiPath={wikiPath} ariaLabel={tooltip} />}
         </label>
-      )}
-      <div className="flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-slate-100/70 px-2 py-1.5 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-900/48">
-        <input
-          type="range"
-          min={min}
-          max={max}
-          step={step}
-          value={rangeValue}
-          disabled={disabled}
-          aria-label={label}
-          data-testid={testId}
-          onChange={(e) => onChange(clampAndRound(Number(e.target.value)))}
-          className={cx(
-            "slider-track min-w-0 flex-1 appearance-none cursor-pointer rounded-full accent-blue-500 transition-all duration-200",
-            "h-1.5 bg-slate-200 dark:bg-slate-700",
-            "focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
-          )}
-        />
-        <div className="flex items-center shrink-0">
-          <input
-            type="text"
-            inputMode="decimal"
-            value={inputText}
-            disabled={disabled}
-            onChange={(e) => setInputText(e.target.value)}
-            onFocus={() => setIsFocused(true)}
-            onBlur={handleBlur}
-            onKeyDown={handleKeyDown}
-            style={{ width: inputWidth }}
-            className="rounded-lg border border-slate-200/80 bg-slate-100/90 px-1.5 py-1 text-center text-sm tabular-nums text-slate-700 shadow-[var(--shadow-control)] focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-100"
-            aria-label={`${label} value`}
-          />
-          {unit && (
-            <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500">
-              {unit}
-            </span>
-          )}
-        </div>
+        {label && (
+          <div className="flex shrink-0 items-center gap-1">
+            <input
+              type="text"
+              inputMode="decimal"
+              value={inputText}
+              disabled={disabled}
+              onChange={(e) => setInputText(e.target.value)}
+              onFocus={() => setIsFocused(true)}
+              onBlur={handleBlur}
+              onKeyDown={handleKeyDown}
+              style={{ width: inputWidth }}
+              className="rounded-[8px] border border-transparent bg-[var(--surface-well)] px-1.5 py-1 text-center text-sm tabular-nums text-slate-700 outline-none transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus:border-blue-400 focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-100"
+              aria-label={`${label} value`}
+            />
+            {unit && (
+              <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500">
+                {unit}
+              </span>
+            )}
+          </div>
+        )}
       </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={rangeValue}
+        disabled={disabled}
+        aria-label={label}
+        data-testid={testId}
+        onChange={(e) => onChange(clampAndRound(Number(e.target.value)))}
+        className={cx(
+          "slider-track w-full min-w-0 appearance-none cursor-pointer rounded-full accent-blue-500 transition-all duration-200",
+          "h-1.5 bg-slate-200 dark:bg-slate-700",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
+        )}
+      />
     </div>
   );
 }

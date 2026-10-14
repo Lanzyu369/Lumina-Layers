@@ -52,8 +52,9 @@ export default function SelectionToolPicker() {
         <Button
           key={tool}
           label={t(labelKey)}
-          variant={selectionTool === tool ? "primary" : "secondary"}
+          variant="ghost"
           size="sm"
+          active={selectionTool === tool}
           onClick={() => setSelectionTool(tool)}
           className="w-full"
           title={titleKey ? t(titleKey) : undefined}

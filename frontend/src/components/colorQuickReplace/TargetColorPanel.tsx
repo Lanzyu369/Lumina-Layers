@@ -7,7 +7,7 @@ import { useMemo } from "react";
 import type { PaletteEntry, SimilarRecipeItem } from "../../api/types";
 import { useI18n } from "../../i18n/context";
 import Button from "../ui/Button";
-import { cx, groupHeaderClass, wellPadClass } from "../ui/panelPrimitives";
+import { cx, compactFieldClass, groupHeaderClass, wellPadClass } from "../ui/panelPrimitives";
 import { InImageBadge, RecipeLayerChips } from "./SimilarRecipeList";
 import { deltaEQualityKey, type RecipeChannel } from "./recipeSuggestionUtils";
 
@@ -98,7 +98,7 @@ export default function TargetColorPanel({
           aria-invalid={showInvalid}
           value={targetInput}
           onChange={(event) => onTargetChange(event.target.value)}
-          className="min-w-0 flex-1 rounded-[10px] border border-slate-200/80 bg-slate-100/78 px-3 py-2 font-mono text-xs text-slate-700 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100"
+          className={cx(compactFieldClass, "min-w-0 flex-1 py-2 font-mono text-xs")}
           data-testid="quick-replace-target-hex"
         />
         <button
@@ -109,11 +109,9 @@ export default function TargetColorPanel({
           onClick={onToggleEyedropper}
           data-testid="quick-replace-eyedropper"
           className={cx(
-            "flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border transition-colors",
-            eyedropperActive
-              ? "border-transparent bg-blue-600 text-white"
-              : "border-slate-200/80 bg-slate-100/78 text-slate-600 hover:bg-slate-200/80 dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-300 dark:hover:bg-slate-800",
+            "ghost-control flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] text-slate-600 dark:text-slate-300",
           )}
+          data-active={eyedropperActive ? "true" : undefined}
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 4l5 5m-2.5-2.5L20 4M13.5 5.5l5 5L9 20H4v-5l9.5-9.5z" />
@@ -143,7 +141,7 @@ export default function TargetColorPanel({
                 className={cx(
                   "h-5 w-5 rounded-md border transition-transform hover:scale-110",
                   targetHex === hex
-                    ? "border-amber-400 ring-2 ring-amber-400/40"
+                    ? "border-2 border-amber-500"
                     : "border-slate-300/80 dark:border-slate-600/80",
                 )}
                 style={{ backgroundColor: hex }}
