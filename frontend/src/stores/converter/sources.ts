@@ -2,7 +2,7 @@ import type { ColorMode, LutSupportedMode, NativeBrandGroup } from "../../api/ty
 import { ColorMode as ColorModeEnum, ModelingMode as ModelingModeEnum } from "../../api/types";
 import { useSettingsStore } from "../settingsStore";
 import type { ConverterState, SourceVersion } from "./types";
-import { getMaterialArchiveProfileKind, isMaterialArchiveSourceVersion } from "./types";
+import { assertKnownSourceVersion, getMaterialArchiveProfileKind, isMaterialArchiveSourceVersion } from "./types";
 
 function looksLikeWhiteMaterialLabel(label: string | null | undefined): boolean {
   const text = String(label ?? "").trim().toLowerCase();
@@ -499,6 +499,8 @@ export function resolveConverterSourceSelection(
     predictive_model_available: false,
     isReady: false,
   };
+
+  assertKnownSourceVersion(state.source_version);
 
   if (isMaterialArchiveSourceVersion(state.source_version)) {
     return {

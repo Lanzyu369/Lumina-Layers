@@ -52,7 +52,14 @@ vi.mock("../stores/converter", () => {
     selector?: (state: typeof converterStoreState) => unknown,
   ) => (selector ? selector(converterStoreState) : converterStoreState);
   useConverterStore.getState = () => converterStoreState;
-  return { useConverterStore };
+  return {
+    useConverterStore,
+    // The dialog also imports this pure predicate from the barrel. Mirror it
+    // here instead of spreading the real module, which would load the network
+    // clients this suite deliberately mocks out.
+    isMaterialArchiveSourceVersion: (value: string | null | undefined) =>
+      value === "material" || value === "lumina_box",
+  };
 });
 
 const baseProps = {
