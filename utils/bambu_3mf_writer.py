@@ -1241,7 +1241,7 @@ class Slicer3MFWriter:
         ]
         if missing_production_methods:
             raise RuntimeError(
-                "Fat Cat requires patched neroued-3mf production UUID APIs: "
+                "Fat Cat requires neroued-3mf Production layout and UUID APIs: "
                 + ", ".join(missing_production_methods)
             )
 
@@ -1349,7 +1349,7 @@ class Slicer3MFWriter:
             )
             builder.add_build_item(
                 assembly_id, n3mf.Transform.translation(*build_translation),
-                **build_item_properties,
+                attributes=build_item_properties,
             )
         else:
             for obj_id in object_ids:
@@ -1363,7 +1363,7 @@ class Slicer3MFWriter:
             for index, object_id in enumerate(object_ids):
                 builder.add_build_item(
                     object_id, uuid=str(uuid.uuid4()) if index == 0 else "",
-                    **build_item_properties,
+                    attributes=build_item_properties,
                 )
             plan = builder.plan_production_layout()
             planned_object_ids = tuple(

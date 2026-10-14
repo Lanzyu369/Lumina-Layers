@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from importlib import metadata
-import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,8 +13,8 @@ from scripts.fatcat_packaging_contract import (
     FATCAT_DISTRIBUTION, FATCAT_MODULE, FATCAT_VERSION,
     FATCAT_WRITER_DISTRIBUTION, FATCAT_WRITER_VERSION,
     FATCAT_REQUIRED_ENTRY_POINTS, FATCAT_REQUIRED_DATA_FILES,
-    FATCAT_REPOSITORY, FATCAT_SOURCE_COMMIT, FATCAT_WRITER_PATCH,
-    FATCAT_WRITER_PATCH_SHA256, FATCAT_WRITER_SOURCE_COMMIT,
+    FATCAT_REPOSITORY, FATCAT_SOURCE_COMMIT, FATCAT_WRITER_REPOSITORY,
+    FATCAT_WRITER_SOURCE_COMMIT,
 )
 
 
@@ -46,22 +45,19 @@ def test_native_requirement_is_pinned_for_python_313_plus() -> None:
     assert FATCAT_SOURCE_COMMIT in requirements
 
 
-def test_fatcat_build_contract_uses_public_root_and_exact_b7_patch() -> None:
+def test_fatcat_build_contract_uses_public_root_and_writer_source() -> None:
     build_script = (ROOT / "scripts" / "build_3mf_native_wheels.py").read_text(
         encoding="utf-8",
     )
-    patch = ROOT / FATCAT_WRITER_PATCH
 
     assert FATCAT_REPOSITORY == "https://github.com/MOVIBALE/fatcat-metadata"
     assert FATCAT_VERSION == "0.1.0"
     assert len(FATCAT_SOURCE_COMMIT) == 40
     assert len(FATCAT_WRITER_SOURCE_COMMIT) == 40
-    assert FATCAT_WRITER_VERSION == "0.4.0+fatcat.b7"
-    assert FATCAT_WRITER_PATCH == "reference/neroued-patches/neroued-3mf-v0.4.0-b7.patch"
-    assert patch.is_file()
-    assert hashlib.sha256(patch.read_bytes()).hexdigest() == FATCAT_WRITER_PATCH_SHA256
+    assert FATCAT_WRITER_VERSION == "0.4.0+fatcat.production.1"
+    assert FATCAT_WRITER_REPOSITORY == "https://github.com/MOVIBALE/neroued_3mf.git"
     assert 'fatcat_root / "pyproject.toml"' in build_script
-    assert 'patch_path = ROOT / WRITER_PATCH_RELATIVE' in build_script
+    assert '"source_commit": writer_commit' in build_script
     assert '"project_root": "."' in build_script
     assert 'fatcat_root / "cpp"' not in build_script
 
@@ -115,7 +111,7 @@ def test_ci_native_wheel_bootstrap_uses_the_same_pinned_inputs() -> None:
     ).read_text(encoding="utf-8")
 
     assert "--get FATCAT_WRITER_SOURCE_COMMIT" in action
-    assert "--get FATCAT_WRITER_PATCH" in action
+    assert "--get FATCAT_WRITER_REPOSITORY" in action
     assert "--install" in action
     assert "scripts/build_3mf_native_wheels.py" in action
     assert "--output-dir \"$GITHUB_WORKSPACE/wheelhouse/3mf\"" in action
@@ -142,7 +138,7 @@ def test_public_fatcat_source_builds_without_a_token() -> None:
     )
 
     assert 'git clone --no-checkout "$FATCAT_REPOSITORY"' in action
-    assert '"$GITHUB_WORKSPACE/$writer_patch"' in action
+    assert 'git clone --no-checkout "$NEROUED_REPOSITORY"' in action
     assert "fatcat-token" not in action
     assert "FATCAT_TOKEN" not in action
     assert "http.extraheader" not in action

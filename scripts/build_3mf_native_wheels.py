@@ -29,14 +29,11 @@ from scripts.fatcat_packaging_contract import (
     FATCAT_SOURCE_COMMIT,
     FATCAT_VERSION,
     FATCAT_WRITER_DISTRIBUTION,
-    FATCAT_WRITER_PATCH,
-    FATCAT_WRITER_PATCH_SHA256,
     FATCAT_WRITER_SOURCE_COMMIT as WRITER_SOURCE_COMMIT,
     FATCAT_WRITER_VERSION as WRITER_VERSION,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-WRITER_PATCH_RELATIVE = Path(FATCAT_WRITER_PATCH)
 FATCAT_WHEEL_PREFIX = FATCAT_DISTRIBUTION.replace("-", "_") + "-"
 WRITER_WHEEL_PREFIX = FATCAT_WRITER_DISTRIBUTION.replace("-", "_") + "-"
 
@@ -59,33 +56,6 @@ def _git_value(root: Path, *args: str) -> str:
         text=True,
     )
     return result.stdout.strip()
-
-
-def _verify_patch_applied(source_root: Path, patch_path: Path) -> None:
-    """Require the pinned downstream patch to be applied exactly once.
-
-    要求指定的下游补丁已经完整应用；干净的上游 checkout 或半应用状态都拒绝构建。
-    """
-
-    result = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(source_root),
-            "apply",
-            "--reverse",
-            "--check",
-            str(patch_path),
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()
-        raise RuntimeError(
-            f"native source does not match the required patch {patch_path.name}"
-            + (f": {detail}" if detail else "")
-        )
 
 
 def _sha256(path: Path) -> str:
@@ -126,19 +96,17 @@ def build_native_wheels(
     output_dir: Path,
     python_executable: Path,
 ) -> dict[str, Any]:
-    """Build and record the C++ binding and patched writer wheels.
+    """Build and record the C++ binding and Production writer wheels.
 
-    构建并记录 C++ 绑定与补丁 writer wheel；输入源码必须由调用方明确提供。
+    构建并记录 C++ 绑定与 Production writer wheel；输入源码必须由调用方明确提供。
     """
 
     fatcat_root = fatcat_root.resolve()
     neroued_source = neroued_source.resolve()
     output_dir = output_dir.resolve()
-    patch_path = ROOT / WRITER_PATCH_RELATIVE
     for required in (
         fatcat_root / "pyproject.toml",
         neroued_source / "pyproject.toml",
-        patch_path,
     ):
         if not required.is_file():
             raise FileNotFoundError(f"native dependency input is missing: {required}")
@@ -146,10 +114,9 @@ def build_native_wheels(
     writer_commit = _git_value(neroued_source, "rev-parse", "HEAD")
     if writer_commit != WRITER_SOURCE_COMMIT:
         raise RuntimeError(
-            "patched neroued source must be the pinned v0.4.0 commit "
+            "neroued source must be the pinned Production commit "
             f"{WRITER_SOURCE_COMMIT}, got {writer_commit}"
         )
-    _verify_patch_applied(neroued_source, patch_path)
     fatcat_commit = _git_value(fatcat_root, "rev-parse", "HEAD")
     if fatcat_commit != FATCAT_SOURCE_COMMIT:
         raise RuntimeError(
@@ -163,12 +130,9 @@ def build_native_wheels(
             f"Fat Cat wheel must be {FATCAT_DISTRIBUTION}=={FATCAT_VERSION}, "
             f"got {package['name']}=={package['version']}"
         )
-    patch_sha256 = _sha256(patch_path)
-    if patch_sha256 != FATCAT_WRITER_PATCH_SHA256:
-        raise RuntimeError(
-            "Lumina B7 patch does not match the pinned patch bytes: "
-            f"expected {FATCAT_WRITER_PATCH_SHA256}, got {patch_sha256}"
-        )
+    for source_root in (fatcat_root, neroued_source):
+        if _git_value(source_root, "status", "--porcelain"):
+            raise RuntimeError(f"native dependency source must be clean: {source_root}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="lumina-3mf-native-build-") as temp:
@@ -208,7 +172,7 @@ def build_native_wheels(
         writer_wheel = _one_wheel(writer_wheels, WRITER_WHEEL_PREFIX)
         if WRITER_VERSION not in writer_wheel.name:
             raise RuntimeError(
-                f"patched writer wheel is not version {WRITER_VERSION}: {writer_wheel.name}"
+                f"Production writer wheel is not version {WRITER_VERSION}: {writer_wheel.name}"
             )
         manifest_path = output_dir / "manifest.json"
         previous = (
@@ -218,8 +182,8 @@ def build_native_wheels(
         if (
             previous.get("fatcat_cpp", {}).get("source_commit") != fatcat_commit
             or previous.get("fatcat_cpp", {}).get("version") != FATCAT_VERSION
-            or previous.get("neroued_writer", {}).get("upstream_commit") != writer_commit
-            or previous.get("neroued_writer", {}).get("patch_sha256") != patch_sha256
+            or previous.get("neroued_writer", {}).get("source_commit") != writer_commit
+            or previous.get("neroued_writer", {}).get("version") != WRITER_VERSION
         ):
             # Only native wheels owned by this builder belong to a generation.
             for prefix in (
@@ -248,9 +212,7 @@ def build_native_wheels(
         "neroued_writer": {
             "distribution": FATCAT_WRITER_DISTRIBUTION,
             "version": WRITER_VERSION,
-            "upstream_commit": writer_commit,
-            "patch": str(WRITER_PATCH_RELATIVE),
-            "patch_sha256": patch_sha256,
+            "source_commit": writer_commit,
             "wheel": writer_destination.name,
             "sha256": _sha256(writer_destination),
             "wheels": _wheel_records(output_dir, WRITER_WHEEL_PREFIX),
@@ -276,7 +238,7 @@ def install_native_wheels(*, output_dir: Path, python_executable: Path) -> None:
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
     expected = (
         ("fatcat_cpp", FATCAT_DISTRIBUTION, FATCAT_VERSION, "source_commit", FATCAT_SOURCE_COMMIT),
-        ("neroued_writer", FATCAT_WRITER_DISTRIBUTION, WRITER_VERSION, "upstream_commit", WRITER_SOURCE_COMMIT),
+        ("neroued_writer", FATCAT_WRITER_DISTRIBUTION, WRITER_VERSION, "source_commit", WRITER_SOURCE_COMMIT),
     )
     wheels: list[str] = []
     for key, distribution, version, commit_key, commit in expected:

@@ -19,20 +19,22 @@ Python 3.12 及以上的 3MF 导出链路使用两个独立依赖：
   Python 导入名为 `fatcat_metadata`。Windows x64、macOS arm64 和 Linux x64
   提供 CPython 3.12～3.14 的预编译 wheel；macOS 要求 14+，Linux 要求 glibc 2.28+。
   Lumina 使用公共 SDK，不再应用 FatCat 补丁或添加 `+lumina.1` 版本后缀。
-- 写包库：`neroued-3mf==0.4.0+fatcat.b7`，仍需匹配当前平台的 B7 wheel。
-  这个定制版本不在 PyPI，普通 `neroued-3mf==0.4.0` 不能替代它。
+- 写包库：`neroued-3mf==0.4.0+fatcat.production.1`，由
+  [公开 fork 的 GitHub Release](https://github.com/MOVIBALE/neroued_3mf/releases/tag/fatcat-production-1)
+  提供相同 Python/系统/架构的预编译包。这是等待
+  [上游 PR #17](https://github.com/Neroued/neroued_3mf/pull/17) 的临时兼容版本，
+  属于写包库的版本，与 FatCat SDK 的 `0.1.0` 独立。
 
 ### 使用预编译包
 
-将维护者提供的 B7 wheel 放入 `wheelhouse/3mf`，再执行以下命令。wheel 必须
-匹配 Python 版本、操作系统和 CPU 架构；例如 Windows x64 / CPython 3.14
-需要 `neroued_3mf-0.4.0+fatcat.b7-cp314-cp314-win_amd64.whl`。
-没有匹配的 B7 wheel 时需要联系维护者提供，不能通过安装普通 PyPI writer 绕过。
+依赖文件会从 PyPI 和公开 GitHub Release 自动选择对应的安装包，
+无需 GitHub 登录或 C++ 编译器。支持 CPython 3.12～3.14 的 Windows x64、
+macOS 14+ arm64 和 Linux x64；系统、架构或 Python 版本不匹配时应更换到受支持环境。
 
 ```powershell
 python -m pip uninstall -y lumina-3mf-metadata-cpp fatcat-metadata
 python -m pip install --only-binary=:all: fatcat-metadata==0.1.0
-python -m pip install --no-index --no-deps --find-links ./wheelhouse/3mf "neroued-3mf==0.4.0+fatcat.b7"
+python -m pip install --only-binary=:all: -r requirements-3mf-native.txt "neroued-3mf==0.4.0+fatcat.production.1"
 python -m pip install -r requirements.txt
 ```
 
@@ -42,25 +44,23 @@ python -m pip install -r requirements.txt
 
 ### 维护者从源码构建
 
-来源提交、仓库、版本和 writer 补丁由 `scripts/fatcat_packaging_contract.py`
+来源提交、仓库和版本由 `scripts/fatcat_packaging_contract.py`
 统一维护。FatCat 来自公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata)，固定
 完整提交 `a6f1dc78035c98668a4a54f2257d010d7a9abf94`。构建脚本从其根目录
 的 `pyproject.toml` 构建公共 `0.1.0` wheel，无需进入 `cpp/`，不会修改 SDK 源码。
-以下方式需要 Git、CMake 和 C++17 编译器；它用于准备发行包或原生开发环境。
+以下方式需要 Git、CMake 和 C++20 编译器（FatCat 本身使用 C++17）；它用于准备发行包或原生开发环境。
 
-Lumina 在 `reference/neroued-patches/neroued-3mf-v0.4.0-b7.patch` 保存精确的 B7
-补丁。生产 writer 仍固定在上游提交
-`331ac6fa62a719f0dddacf9f005861b187d54f0c`，应用补丁后版本为
-`neroued-3mf==0.4.0+fatcat.b7`。从 Lumina 仓库根目录准备本地源码并构建：
+writer 固定在公开提交 `a6043434d6cd9a2a76553ffdcdf0dda081d9b19c`，
+版本为 `neroued-3mf==0.4.0+fatcat.production.1`。两个源码目录都应保持干净；
+Lumina 不再保存或应用 writer 补丁。上游合并并正式发布后，再切换到官方版本。
+从 Lumina 仓库根目录准备本地源码并构建：
 
 ```powershell
 git clone https://github.com/MOVIBALE/fatcat-metadata ..\fatcat-metadata
 git -C ..\fatcat-metadata checkout a6f1dc78035c98668a4a54f2257d010d7a9abf94
-git clone https://github.com/neroued/neroued_3mf.git ..\neroued-3mf
-git -C ..\neroued-3mf checkout 331ac6fa62a719f0dddacf9f005861b187d54f0c
-$writerPatch = (Resolve-Path .\reference\neroued-patches\neroued-3mf-v0.4.0-b7.patch).Path
-git -C ..\neroued-3mf apply $writerPatch
+git clone https://github.com/MOVIBALE/neroued_3mf.git ..\neroued-3mf
+git -C ..\neroued-3mf checkout a6043434d6cd9a2a76553ffdcdf0dda081d9b19c
 
 python scripts/build_3mf_native_wheels.py `
   --fatcat-root ..\fatcat-metadata `

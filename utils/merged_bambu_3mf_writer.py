@@ -1561,7 +1561,7 @@ class MergedSlicer3MFWriter:
                         or str(uuid.uuid4())
                     )
                 ),
-                auto_drop=properties.get("auto_drop", ""),
+                attributes=properties,
             )
 
     @staticmethod

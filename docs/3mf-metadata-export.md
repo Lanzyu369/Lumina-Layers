@@ -4,11 +4,11 @@
 
 This guide describes the current 3MF export boundary and where its configuration lives.
 Lumina supplies selected device/material facts, geometry, layout, and explicit product
-process values. FatCat composes slicer project metadata; the patched `neroued-3mf`
+process values. FatCat composes slicer project metadata; the pinned `neroued-3mf`
 writer writes the final package once.
 
 本文说明当前 3MF 导出边界及配置归属。Lumina 提供用户选择的设备和材料事实、几何、
-布局及明确的产品工艺值；FatCat 合成切片器项目元数据，补丁版 `neroued-3mf` 单次写出最终包。
+布局及明确的产品工艺值；FatCat 合成切片器项目元数据，固定版本的 `neroued-3mf` 单次写出最终包。
 
 ## Code entry points / 代码入口
 
@@ -82,12 +82,16 @@ Lumina 直接使用公共 SDK，不再维护 FatCat 补丁或额外版本后缀�
 `scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
 [桌面环境指南](desktop-electron.md)。
 
-The writer remains `neroued-3mf==0.4.0+fatcat.b7`, built from the pinned upstream
-source and the separate B7 patch. Publishing FatCat does not publish that writer;
-source installations still need a matching B7 wheel or a maintainer build.
+The writer uses `neroued-3mf==0.4.0+fatcat.production.1`, built from a fixed
+public source commit without a Lumina patch. Its generic Production APIs are
+submitted in [upstream PR #17](https://github.com/Neroued/neroued_3mf/pull/17).
+The [temporary GitHub Release](https://github.com/MOVIBALE/neroued_3mf/releases/tag/fatcat-production-1)
+provides matching CPython 3.12–3.14 wheels through `requirements-3mf-native.txt`.
+The writer will switch to an official upstream version after acceptance and release.
 
-写包库仍为 `neroued-3mf==0.4.0+fatcat.b7`，由固定上游源码和独立 B7 补丁构建。
-FatCat 上架不会同时发布这个 writer；源码安装仍需匹配的 B7 wheel 或维护者构建。
+写包库使用固定公开源码构建的 `neroued-3mf==0.4.0+fatcat.production.1`，
+Lumina 不再维护 writer 补丁。通用 Production 接口已提交上游 PR #17，临时公开
+Release 提供 CPython 3.12～3.14 的预编译包；上游接受并发布后切换官方版本。
 
 The current source pin includes Bambu Studio 02.08.02.61, OrcaSlicer 2.4.2,
 QIDI Studio 02.07.02.60, ElegooSlicer 1.5.3.5, Anycubic Slicer Next macOS

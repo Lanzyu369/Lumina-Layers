@@ -250,14 +250,8 @@ cd Lumina-studio
 
 **基础依赖**（必需，请使用 Python 3.12）：
 ```bash
-# Python 3.12+ 需要先为当前平台构建原生 3MF wheel。先克隆
-# https://github.com/MOVIBALE/fatcat-metadata 并检出
-# 63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b，再按桌面指南准备固定版本的
-# neroued 源码并应用 Lumina 的 B7 补丁：
-# python scripts/build_3mf_native_wheels.py \
-#   --fatcat-root ../fatcat-metadata \
-#   --neroued-source ../neroued-3mf \
-#   --install
+# Python 3.12+ 从 PyPI/GitHub Releases 选择公开的原生 3MF wheel。
+# 已安装旧原生包时，先按 docs/desktop-electron.md 替换。
 python -m pip install -r requirements.txt
 # 开发/测试另装：python -m pip install -r requirements-dev.txt
 # 可选 PostgreSQL 后端另装：python -m pip install -r requirements-postgres.txt
@@ -277,10 +271,11 @@ SVG 分析固定使用独立项目发布的 `lumina-svg-core==0.3.1`（AGPLv3）
 包要求 macOS 12+，3.14 要求 macOS 14+。没有兼容 wheel 时会从发行源码包构建，
 需要 Git 和 C++17 编译器。详见[发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.1/docs/DISTRIBUTIONS.md)。
 
-本地或桌面安装必须先用固定提交的公开 Fat Cat 根项目和已打补丁的
-`neroued-3mf` 源码生成 `wheelhouse/3mf`，不要复制其他操作系统或 CPU 架构的
-wheel。Fat Cat 源码固定为提交 `63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b`，
-与 `scripts/fatcat_packaging_contract.py` 中的 `FATCAT_SOURCE_COMMIT` 保持一致。
+本地或桌面安装使用 PyPI 的 `fatcat-metadata==0.1.0` 和公开 GitHub Release
+提供的临时 Production writer。`requirements-3mf-native.txt` 会选择匹配 Python、
+系统和架构的预编译包，Lumina 不再应用源码补丁。从源码构建时由
+`scripts/fatcat_packaging_contract.py` 固定公开提交；详见
+[原生依赖安装指南](docs/desktop-electron.md#2-原生-3mf-依赖)。
 
 Prusa 导出使用 **PrusaSlicer 3.0.0-alpha12** 预览版格式。在设置中选择 PrusaSlicer
 及对应设备；内置配置使用原生默认 0.4 mm 喷嘴和板型。多色模型需要 MMU 或足够的
