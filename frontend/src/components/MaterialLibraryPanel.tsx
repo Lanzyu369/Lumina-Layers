@@ -22,6 +22,7 @@ import { useLuminaBoxMaterialNavigation } from "../stores/luminaBoxMaterialNavig
 import { normalizeResourceUrl } from "../utils/resourceUrl";
 import Button from "./ui/Button";
 import LuminaBoxLibraryCard from "./LuminaBoxLibraryCard";
+import LuminaBoxLibraryActions from "./LuminaBoxLibraryActions";
 import {
   StatusBanner,
   mutedSectionCardClass,
@@ -544,6 +545,7 @@ export default function MaterialLibraryPanel() {
         </div>
       </section>
 
+      {profileKind === "lumina_box" ? <LuminaBoxLibraryActions /> : null}
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div className={`${mutedSectionCardClass} flex flex-col gap-1 px-4 py-3`}>
           <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">

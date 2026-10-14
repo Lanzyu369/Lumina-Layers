@@ -16,7 +16,10 @@ from core.backed_gradient_smooth import BackedGradientSmoothTransport, SPECTRAL_
 from core.backed_gradient_transport import _validate_coefficients
 from core.errors import CoreValidationError
 from core.lumina_box_spectral import load_box_spectral_basis
-from core.lumina_box_transport import OpticalPort, combine_optical_layers, material_bulk_port, outer_surface_port
+from core.lumina_box_transport import (
+    OpticalPort, combine_optical_layers, material_bulk_port,
+    outer_surface_port, reverse_optical_port,
+)
 
 BACKED_GRADIENT_PROTOCOL_ID = "lumina_box_backed_gradient/v1"
 _KIND_SYMBOL = {"color": "R", "white": "W", "black": "K"}
@@ -270,10 +273,24 @@ class BackedGradientMaterialModel:
         rows = rows.astype(np.intp, copy=False)
         if not np.isfinite([layer_mm, backing_mm]).all() or layer_mm <= 0 or backing_mm <= 0:
             raise CoreValidationError("Printed layer and backing thickness must be positive")
-        output = np.empty((len(rows), 3))
         layers = [_bulk(material, float(layer_mm)) for material in materials]
-        layer_ports = tuple(np.stack([port[index] for port in layers]) for index in range(4))
         base = _bulk(backing, float(backing_mm))
+        from core.backed_gradient_recipe_kernel import pack_ports, predict_compiled
+
+        if predict_compiled is not None and len(rows) >= 256:
+            reporter = self._reporter
+            black = reporter.anchors["K"]
+            gain = (reporter.anchors["W"] - black) / (
+                reporter._white_latent - reporter._black_latent
+            )
+            return predict_compiled(
+                rows, np.stack([pack_ports(layer) for layer in layers]), pack_ports(base),
+                pack_ports(outer_surface_port(45.)[0]),
+                pack_ports(reverse_optical_port(outer_surface_port(0.)[0])),
+                reporter._basis.weights, black, gain, reporter._black_latent,
+            )
+        output = np.empty((len(rows), 3))
+        layer_ports = tuple(np.stack([port[index] for port in layers]) for index in range(4))
         for start in range(0, len(rows), 2048):
             block = rows[start:start + 2048]
             prefix = np.zeros(len(block), dtype=np.int64)

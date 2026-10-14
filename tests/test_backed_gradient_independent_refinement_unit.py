@@ -12,7 +12,7 @@ import pytest
 from api import backed_gradient_product_jobs as jobs
 from core.backed_gradient_archive import load_backed_gradient_archive, save_backed_gradient_material_archive
 from core.backed_gradient_backing_store import (
-    backing_material_snapshot, create_backing_material_dataset, get_backing_material,
+    create_black_white_pair, backing_material_snapshot, create_backing_material_dataset, get_backing_material,
     save_backing_material_result, save_backing_material_results,
 )
 from core.backed_gradient_fitting_v2 import _initial
@@ -62,7 +62,7 @@ def initial_group(tmp_path):
     operator = BackedGradientSmoothTransport({"W": vector[:5], "K": vector[5:]},
                                             {"W": [97., 98., 99.], "K": [0., 0., 0.]}, fitted_materials=("W", "K"))
     model = BackedGradientMaterialModel(reference_from_parameters(operator.to_parameters()))
-    white_capture = create_backing_material_dataset(store, {"name": "White A", "role": "W", "opposite_name": "Black B"})
+    white_capture = create_black_white_pair(store, {"white": {"name": "White A"}, "black": {"name": "Black B"}})
     _backing_samples(store, white_capture, model)
     white_snapshot = backing_material_snapshot(store, white_capture["dataset_id"])
     white = save_backing_material_result(store, white_snapshot, None)
@@ -199,12 +199,28 @@ def test_archive_swap_failure_rolls_back_both_backing_versions(initial_group, mo
         assert connection.execute("SELECT COUNT(*) FROM gradient_backing_material_versions").fetchone()[0] == 3
 
 
-def test_placeholder_does_not_invent_opposite_brand_or_material_type(tmp_path):
+def test_first_pair_keeps_separate_brands_and_material_types(tmp_path):
     store = BackedGradientStore(tmp_path)
-    dataset = create_backing_material_dataset(store, {"name": "White A", "role": "W", "brand": "Brand A",
-                                                       "material_type": "PETG", "opposite_name": "Black B"})
+    dataset = create_black_white_pair(store, {"white": {"name": "White A", "brand": "Brand A", "material_type": "PETG"},
+                                                  "black": {"name": "Black B", "brand": "Brand B", "material_type": "PLA"}})
     opposite = get_backing_material(store, dataset["workflow"]["opposite_material_id"])
-    assert opposite["name"] == "Black B" and opposite["brand"] == opposite["material_type"] == ""
+    assert opposite["name"] == "Black B" and opposite["brand"] == "Brand B" and opposite["material_type"] == "PLA"
+
+
+def test_joint_refinement_updates_black_white_library_profiles_without_treating_them_as_fourteen_reading_colors(initial_group):
+    from core.black_white_material_profiles import publish_black_white_profiles
+
+    store, pair, members, _, run, directory, result = initial_group
+    publish_black_white_profiles(store, [(item["snapshot"], item["fit"]) for item in pair.values()])
+    group, snapshots = material_group_snapshot(store, members[-1])
+    assert len(group["materials"]) == len(snapshots) == 2
+    jobs.publish_group_materials(store, run, directory, result)
+    for role, item in pair.items():
+        main, measurements, fit = load_backed_gradient_archive(store.root / item["name"])
+        assert main["backing_material_id"] == item["material_id"]
+        assert len(measurements["samples"]) == 8
+        assert fit["reference"] == result["reference"]
+        assert fit["component"] == result["reference"]["white" if role == "W" else "black"]
 
 
 def test_recollected_same_id_keeps_its_own_model_and_archives_outside_initial_refinement(initial_group):

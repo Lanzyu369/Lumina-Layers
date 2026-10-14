@@ -7,7 +7,7 @@ from copy import deepcopy
 import json
 import sqlite3
 from typing import Any
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import uuid4
 
 from core.backed_gradient_material import BackedGradientComponent, BackedGradientReference
 from core.backed_gradient_store import (
@@ -23,87 +23,49 @@ def _opposite(role: str) -> str:
     return "K" if role == "W" else "W"
 
 
-def _legacy_id(group_id: str, role: str) -> str:
-    return str(uuid5(NAMESPACE_URL, f"lumina-box/backing/{group_id}/{role}"))
+def create_black_white_pair(store: BackedGradientStore, payload: dict) -> dict:
+    """Create two mutually linked captures in one transaction.
+    在同一事务中创建互相关联的黑白耗材采集。
 
-
-def _archive_identities(store: BackedGradientStore) -> dict[tuple[str, str], dict]:
-    identities = {}
-    for path in store.root.rglob("material.json"):
-        if any(part.startswith(".") for part in path.relative_to(store.root).parts):
-            continue
-        try:
-            main = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if main.get("acquisition_source") == "lumina_box_backed_gradient":
-            identities[(main.get("capture_dataset_id"), main.get("material_symbol"))] = main
-    return identities
-
-
-def _project_reference(document: dict, role: str, identities: dict) -> dict:
-    from core.backed_gradient_product_store import backing_group_id
-
-    reference = document["reference"]
-    source = reference.get("source", {})
-    dataset_id = source.get("dataset_id")
-    group_id = backing_group_id(reference)
-    main = identities.get((dataset_id, role), {})
-    history = [deepcopy(row) for row in source.get("capture_history", [])
-               if row.get("material_symbol") == role]
-    samples = [deepcopy(row) for row in source.get("backing_samples", [])
-               if row.get("material_symbol") == role and row.get("backing") == _opposite(role)]
-    samples.extend(deepcopy(row) for row in history if row.get("sample_role") == "bare_backing" and row.get("selected", True))
-    context = history[0].get("capture_context", {}) if history else {}
-    name = (main.get("material_name") or source.get("materials", {}).get(role)
-            or context.get("materials", {}).get(role) or role)
-    profile = {
-        "material_id": _legacy_id(group_id, role), "role": role,
-        "name": name, "brand": main.get("brand") or source.get("brand") or context.get("brand", ""),
-        "material_type": main.get("material_type") or source.get("material_type") or context.get("material_type", ""),
-        "dataset_id": dataset_id, "status": "ready", "source": "legacy_reference",
-        "version_id": _digest({"reference_id": reference["reference_id"], "role": role}),
-        "component": deepcopy(reference["white" if role == "W" else "black"]),
-        "reference": deepcopy(reference), "reference_id": reference["reference_id"],
-        "bare_xyz": deepcopy(reference["anchors"][role]),
-        "opposite_material_id": _legacy_id(group_id, _opposite(role)),
-        "created_at": document.get("created_at"), "updated_at": document.get("created_at"),
-    }
-    profile["snapshot"] = {
-        **{key: deepcopy(profile[key]) for key in ("material_id", "role", "name", "brand", "material_type", "dataset_id", "bare_xyz", "opposite_material_id")},
-        "samples": samples, "capture_history": history,
-        "reference_anchors": {role: deepcopy(profile["bare_xyz"])},
-        "selected_record_ids": sorted({row["record_id"] for row in samples} | {
-            row["record_id"] for row in history if row.get("sample_role") == "bare_backing" and row.get("selected", True)}),
-        "reference": deepcopy(reference),
-    }
-    profile["snapshot"]["input_hash"] = _digest(profile["snapshot"])
-    return profile
-
-
-def _legacy_profiles(store: BackedGradientStore, *, all_versions: bool = False) -> list[dict]:
-    from core.backed_gradient_product_store import list_backing_references
-
-    if all_versions:
-        with store._connection() as connection:
-            references = [json.loads(row[0]) for row in connection.execute("SELECT document FROM gradient_references ORDER BY rowid DESC")]
-    else:
-        references = list_backing_references(store)
-    identities = _archive_identities(store)
-    return [_project_reference(document, role, identities) for document in references
-            if not document["reference"].get("source", {}).get("independent_backings") for role in ("W", "K")]
+    Args:
+        store: Capture storage.（采集存储。）
+        payload: White and black material identities.（黑白耗材身份。）
+    Returns:
+        White capture, with its partner already registered.（已关联黑色耗材的白色采集。）
+    """
+    identities = {role: payload[key] for role, key in (("W", "white"), ("K", "black"))}
+    if (identities["W"]["name"].strip(), identities["W"].get("brand", "").strip()) == (
+            identities["K"]["name"].strip(), identities["K"].get("brand", "").strip()):
+        raise CoreValidationError("Give the white and black materials distinct names.")
+    ids = {role: str(uuid4()) for role in identities}
+    datasets, documents = {}, {}
+    for role, identity in identities.items():
+        opposite = _opposite(role)
+        workflow = {"kind": "backing_material", "material_symbol": role, "role": role,
+                    "backing_material_id": ids[role], "opposite_material_id": ids[opposite]}
+        dataset = store._new_dataset({**identity, "materials": {key: item["name"] for key, item in identities.items()}},
+                                     workflow=workflow)
+        datasets[role] = dataset
+        documents[role] = {"material_id": ids[role], "role": role,
+                           **{key: dataset[key] for key in ("name", "brand", "material_type", "dataset_id", "created_at", "updated_at")},
+                           "active_dataset_id": dataset["dataset_id"], "opposite_material_id": ids[opposite], "status": "draft"}
+    with store._connection(write=True) as connection:
+        for role in identities:
+            connection.execute("INSERT INTO gradient_datasets VALUES (?,?)", (datasets[role]["dataset_id"], _json(datasets[role])))
+            connection.execute("INSERT INTO gradient_backing_materials VALUES (?,?)", (ids[role], _json(documents[role])))
+        return store._read_dataset(connection, datasets["W"]["dataset_id"])
 
 
 def list_backing_materials(store: BackedGradientStore) -> list[dict]:
-    """List separately saved backings, including lossless legacy projections.
-    列出独立保存的背板，包括无损投影的旧资料。
+    """List independently registered black/white materials.
+    列出独立登记的黑白耗材。
 
     Args:
         store: Capture storage.（采集存储。）
     Returns:
         Current material entities.（当前背板实体。）
     """
-    projected = {row["material_id"]: row for row in _legacy_profiles(store)}
+    projected = {}
     with store._connection() as connection:
         for (raw,) in connection.execute("SELECT document FROM gradient_backing_materials ORDER BY rowid"):
             document = json.loads(raw)
@@ -130,19 +92,16 @@ def get_backing_material(store: BackedGradientStore, material_id: str, *, versio
             row = connection.execute("SELECT document FROM gradient_backing_materials WHERE material_id=?", (identity,)).fetchone()
     if row:
         return json.loads(row[0])
-    for document in _legacy_profiles(store, all_versions=bool(version_id)):
-        if document["material_id"] == identity and (not version_id or document["version_id"] == version_id):
-            return document
     raise BackedGradientNotFoundError("The backing material was not found.")
 
 
 def create_backing_material_dataset(store: BackedGradientStore, payload: dict) -> dict:
-    """Start one backing capture without requiring its partner to be measured.
-    开始一种背板的采集，不要求另一背板已测完。
+    """Start a black/white material against its registered opposite material.
+    基于已登记的另一侧耗材开始黑白耗材采集。
 
     Args:
         store: Capture storage.（采集存储。）
-        payload: Own identity and selected or newly named opposite backing.（自身身份及选用或新命名的对侧背板。）
+        payload: Own identity and selected opposite material.（自身身份及选定的另一侧耗材。）
     Returns:
         Empty independent capture dataset.（空的独立采集表。）
     """
@@ -155,20 +114,13 @@ def create_backing_material_dataset(store: BackedGradientStore, payload: dict) -
         raise BackedGradientConflictError("A backing material cannot change its white/black role.")
     material_id = existing["material_id"] if existing else str(uuid4())
     opposite_id = payload.get("opposite_material_id") or (existing or {}).get("opposite_material_id")
-    placeholder = None
-    if opposite_id:
-        opposite = get_backing_material(store, opposite_id)
-        if opposite["role"] != opposite_role:
-            raise CoreValidationError("Choose a backing of the opposite role.")
-    else:
-        name = _text(payload.get("opposite_name"), "opposite_name", 200, required=True)
-        opposite = placeholder = {
-            "material_id": str(uuid4()), "role": opposite_role, "name": name,
-            "brand": payload.get("opposite_brand", ""),
-            "material_type": payload.get("opposite_material_type", ""),
-            "status": "draft", "dataset_id": None, "opposite_material_id": material_id,
-            "created_at": _now(), "updated_at": _now(),
-        }
+    if not opposite_id:
+        raise CoreValidationError("Create the first black and white materials together.")
+    opposite = get_backing_material(store, opposite_id)
+    if opposite["role"] != opposite_role:
+        raise CoreValidationError("Choose a backing of the opposite role.")
+    if existing is None and opposite["status"] != "ready":
+        raise CoreValidationError("Complete the opposite material profile before adding another material.")
     identity["materials"] = {role: identity["name"], opposite_role: opposite["name"]}
     workflow = {"kind": "backing_material", "material_symbol": role, "role": role,
                 "backing_material_id": material_id, "opposite_material_id": opposite["material_id"]}
@@ -185,10 +137,8 @@ def create_backing_material_dataset(store: BackedGradientStore, payload: dict) -
         document.update(opposite_material_id=opposite["material_id"], name=identity["name"],
                         brand=dataset["brand"], material_type=dataset["material_type"])
     with store._connection(write=True) as connection:
-        for item in (placeholder, document):
-            if item:
-                connection.execute("INSERT OR REPLACE INTO gradient_backing_materials VALUES (?,?)",
-                                   (item["material_id"], _json(item)))
+        connection.execute("INSERT OR REPLACE INTO gradient_backing_materials VALUES (?,?)",
+                           (document["material_id"], _json(document)))
     return dataset
 
 

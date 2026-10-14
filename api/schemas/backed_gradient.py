@@ -118,8 +118,24 @@ class BackingMaterialDatasetCreate(BaseModel):
     material_type: str = "PETG"
     role: Literal["W", "K"]
     opposite_material_id: str | None = Field(default=None, min_length=1)
-    opposite_name: str | None = Field(default=None, min_length=1, max_length=200)
     material_id: str | None = Field(default=None, min_length=1)
+
+
+class BlackWhiteMaterialIdentity(BaseModel):
+    """Identity of a black/white filament. / 黑白耗材的身份信息。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    name: str = Field(min_length=1, max_length=200)
+    brand: str = ""
+    material_type: str = "PETG"
+
+
+class BlackWhitePairCreate(BaseModel):
+    """Register both first-use materials together. / 同时登记首次使用的黑白耗材。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    white: BlackWhiteMaterialIdentity
+    black: BlackWhiteMaterialIdentity
 
 
 class BackingDatasetCreate(BaseModel):

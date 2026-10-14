@@ -122,7 +122,7 @@ def save_backed_gradient_material_archive(
     root = Path(materials_dir or archive.MATERIALS_DIR).resolve()
     with archive._ARCHIVE_WRITE_LOCK:
         root.mkdir(parents=True, exist_ok=True)
-        existing = archive._find_same_identity_archive(root, material_name=name, brand=brand)
+        existing = archive._find_same_identity_archive(root, material_name=name, brand=brand, material_type=material_type)
         if existing is not None and not overwrite:
             raise MaterialArchiveConflictError("A material with this brand and name is already saved")
         parent = root / archive._sanitize_directory_name(brand) if brand else root
@@ -179,6 +179,7 @@ def save_backed_gradient_material_archive(
                 "measurements_file": BACKED_GRADIENT_MEASUREMENTS_FILENAME, "optical_parameters_file": BACKED_GRADIENT_PARAMETERS_FILENAME,
                 "reference_id": reference.reference_id, "capture_dataset_id": fit.get("dataset_id"),
                 "material_symbol": fit.get("material_symbol"), "material_kind": component.kind,
+                "backing_material_id": measurements.get("backing_material_id"),
                 "estimated_rgb": fit["estimated_rgb"], "estimated_effective_d65_10_xyz_relative": estimate.tolist(),
                 "rmse_pp": fit.get("rmse_pp"), "status": fit.get("status", "complete"),
                 "sidecar_integrity": integrity,

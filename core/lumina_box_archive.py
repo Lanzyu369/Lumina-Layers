@@ -426,15 +426,18 @@ def _same_identity(
     *,
     material_name: str,
     brand: str | None,
+    material_type: str | None = None,
 ) -> bool:
     if not _is_lumina_box_archive(payload):
         return False
     saved_name = _clean_optional_text(payload.get("material_name"))
     saved_brand = _clean_optional_text(payload.get("brand"))
+    saved_type = _clean_optional_text(payload.get("material_type"))
     return (
         saved_name is not None
         and saved_name.casefold() == material_name.casefold()
         and (saved_brand or "").casefold() == (brand or "").casefold()
+        and (saved_type or "").casefold() == (material_type or "").casefold()
     )
 
 
@@ -456,11 +459,12 @@ def _find_same_identity_archive(
     *,
     material_name: str,
     brand: str | None,
+    material_type: str | None = None,
 ) -> tuple[Path, dict[str, Any]] | None:
     matches = [
         (path, payload)
         for path, payload in _iter_material_archives(materials_root)
-        if _same_identity(payload, material_name=material_name, brand=brand)
+        if _same_identity(payload, material_name=material_name, brand=brand, material_type=material_type)
     ]
     if not matches:
         return None

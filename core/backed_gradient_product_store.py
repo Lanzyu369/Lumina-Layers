@@ -176,6 +176,8 @@ def create_material_dataset(store: BackedGradientStore, payload: dict) -> dict:
         Empty durable material capture.（空的持久耗材采集。）
     """
     symbol = payload.get("material_symbol", SINGLE_MATERIAL_SYMBOL)
+    if symbol in ("W", "K"):
+        raise CoreValidationError("Create black and white materials through the black/white profile workflow.")
     if symbol not in CAPTURE_MATERIAL_SYMBOLS:
         raise CoreValidationError("Invalid material capture identity.")
     selected_backings = {}
@@ -317,6 +319,8 @@ def material_group_snapshot(store: BackedGradientStore, selected: dict) -> tuple
                 requests.setdefault((dataset["dataset_id"], workflow["material_symbol"]), workflow["reference_id"])
         elif dataset["dataset_id"] == source.get("dataset_id"):
             for symbol in dataset["materials"]:
+                if source.get("independent_backings") and symbol in ("W", "K"):
+                    continue
                 requests.setdefault((dataset["dataset_id"], symbol), selected["capture_reference_id"])
     snapshots_by_key = {}
     from core.backed_gradient_archive import load_backed_gradient_archive
@@ -326,7 +330,7 @@ def material_group_snapshot(store: BackedGradientStore, selected: dict) -> tuple
         if any(part.startswith(".") for part in path.relative_to(store.root).parts):
             continue
         main = json.loads(path.read_text(encoding="utf-8"))
-        if main.get("optical_model") != SPECTRAL_SMOOTH_MODEL_ID:
+        if main.get("optical_model") != SPECTRAL_SMOOTH_MODEL_ID or main.get("backing_material_id"):
             continue
         _, measurements, fit = load_backed_gradient_archive(path.parent, main)
         if backing_group_id(fit["reference"]) != group_id or not uses_reference_backings(measurements):

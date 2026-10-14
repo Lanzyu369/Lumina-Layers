@@ -32,6 +32,10 @@ except ImportError:  # pragma: no cover - exercised through import isolation
         return range(*args)
 
 from core.colorchecker.color_metrics import delta_e_2000
+from core.colorchecker.exact_match import (
+    _delta_e00_scalar_components,
+    _delta_e00_numba_components,
+)
 from core.material_cache import MaterialSolverCache, canonical_palette_order
 from core.material_candidate_cache import (
     PREVIEW_SAFE_CANDIDATE_BUDGET,
@@ -420,97 +424,6 @@ class ExactDynamicSearchResult:
         返回生成结果的引擎名称。
         """
         return self.engine
-
-
-def _delta_e00_scalar_components(
-    lightness1: float,
-    a1: float,
-    b1: float,
-    lightness2: float,
-    a2: float,
-    b2: float,
-) -> float:
-    chroma1 = math.sqrt(a1 * a1 + b1 * b1)
-    chroma2 = math.sqrt(a2 * a2 + b2 * b2)
-    mean_chroma = (chroma1 + chroma2) / 2.0
-    mean_chroma_seventh = mean_chroma**7
-    compensation = 0.5 * (
-        1.0
-        - math.sqrt(
-            mean_chroma_seventh / (mean_chroma_seventh + 25.0**7)
-        )
-    )
-
-    adjusted_a1 = a1 * (1.0 + compensation)
-    adjusted_a2 = a2 * (1.0 + compensation)
-    adjusted_chroma1 = math.sqrt(adjusted_a1**2 + b1**2)
-    adjusted_chroma2 = math.sqrt(adjusted_a2**2 + b2**2)
-    hue1 = math.degrees(math.atan2(b1, adjusted_a1)) % 360.0
-    hue2 = math.degrees(math.atan2(b2, adjusted_a2)) % 360.0
-
-    delta_lightness = lightness2 - lightness1
-    delta_chroma = adjusted_chroma2 - adjusted_chroma1
-    if adjusted_chroma1 * adjusted_chroma2 == 0.0:
-        delta_hue_degrees = 0.0
-    elif abs(hue2 - hue1) <= 180.0:
-        delta_hue_degrees = hue2 - hue1
-    elif hue2 - hue1 > 180.0:
-        delta_hue_degrees = hue2 - hue1 - 360.0
-    else:
-        delta_hue_degrees = hue2 - hue1 + 360.0
-    delta_hue = (
-        2.0
-        * math.sqrt(adjusted_chroma1 * adjusted_chroma2)
-        * math.sin(math.radians(delta_hue_degrees / 2.0))
-    )
-
-    mean_lightness = (lightness1 + lightness2) / 2.0
-    mean_adjusted_chroma = (adjusted_chroma1 + adjusted_chroma2) / 2.0
-    if adjusted_chroma1 * adjusted_chroma2 == 0.0:
-        mean_hue = hue1 + hue2
-    elif abs(hue1 - hue2) <= 180.0:
-        mean_hue = (hue1 + hue2) / 2.0
-    elif hue1 + hue2 < 360.0:
-        mean_hue = (hue1 + hue2 + 360.0) / 2.0
-    else:
-        mean_hue = (hue1 + hue2 - 360.0) / 2.0
-
-    hue_rotation = (
-        1.0
-        - 0.17 * math.cos(math.radians(mean_hue - 30.0))
-        + 0.24 * math.cos(math.radians(2.0 * mean_hue))
-        + 0.32 * math.cos(math.radians(3.0 * mean_hue + 6.0))
-        - 0.20 * math.cos(math.radians(4.0 * mean_hue - 63.0))
-    )
-    lightness_scale = 1.0 + (
-        0.015 * (mean_lightness - 50.0) ** 2
-        / math.sqrt(20.0 + (mean_lightness - 50.0) ** 2)
-    )
-    chroma_scale = 1.0 + 0.045 * mean_adjusted_chroma
-    hue_scale = 1.0 + 0.015 * mean_adjusted_chroma * hue_rotation
-
-    mean_adjusted_chroma_seventh = mean_adjusted_chroma**7
-    rotation_chroma = 2.0 * math.sqrt(
-        mean_adjusted_chroma_seventh
-        / (mean_adjusted_chroma_seventh + 25.0**7)
-    )
-    rotation_angle = 30.0 * math.exp(-((mean_hue - 275.0) / 25.0) ** 2)
-    rotation_term = -math.sin(math.radians(2.0 * rotation_angle)) * rotation_chroma
-
-    lightness_term = delta_lightness / lightness_scale
-    chroma_term = delta_chroma / chroma_scale
-    hue_term = delta_hue / hue_scale
-    return math.sqrt(
-        lightness_term**2
-        + chroma_term**2
-        + hue_term**2
-        + rotation_term * chroma_term * hue_term
-    )
-
-
-_delta_e00_numba_components = njit(cache=True, fastmath=False)(
-    _delta_e00_scalar_components
-)
 
 
 def _delta_e00_scalar(lab1: np.ndarray, lab2: np.ndarray) -> float:

@@ -14,6 +14,14 @@ Zero and finite above-100 readings are retained. Only reflection enters fitting.
 
 A shared backing setup contains W/K material parameters and bare 3 mm anchors.
 Initial capture is seven W-on-K, seven K-on-W, plus two bare references.
+First use registers both filament identities with `POST /black-white-pairs` in
+one transaction. With existing profiles, users can choose paired creation again
+or create one filament against an existing opposite filament. Black/white fitting publishes ordinary standalone profiles together
+with the backing models. `backing_material_id` binds each profile to its stable
+identity; the same profile supports printing and backing selection. The library
+owns record navigation and unfinished black/white captures. Creation forms never
+contain a list of existing profiles. Initial paired records are materialized by
+the one-time local data upgrade; runtime reads do not project legacy references.
 Backing-only data are underdetermined: initial parameters seed a group, and later
 individually captured filaments can jointly refine its calibration. Earlier
 complete v3 results split into profiles without changing their predictions.
@@ -28,7 +36,8 @@ Established references retain the fast fixed-reference single-filament path.
 - `backed_gradient_archive.py`: standalone profile persistence.
 - API prefix: `/api/extractor/lumina-box/backed-gradient`.
 
-The product uses references, material-datasets, backing-datasets and their fit-runs;
+The product uses references, material-datasets, black-white-pairs,
+backing-material-datasets and their fit-runs;
 existing capture/history/import/export endpoints are reused. CPU fitting runs in
 file-based workers. USB ACK follows durable save; replay is deduplicated.
 Switching material/backing settles pending writes and changes capture identity

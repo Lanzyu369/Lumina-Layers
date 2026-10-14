@@ -55,14 +55,26 @@ export default function LuminaBoxMaterialCapture({ capture, symbol, reference }:
     const label = next.sample_role === "bare_backing"
       ? t(next.backing === "W" ? "lumina_box_material_bare_white" : "lumina_box_material_bare_black")
       : `${t(next.backing === "W" ? "lumina_box_material_white_backing" : "lumina_box_material_black_backing")} ${thickness.toFixed(2)} mm`;
-    return <button type="button" disabled={locked} aria-label={label} aria-pressed={capture.inspectedSlot === slot}
-      className={`min-h-14 w-full rounded-lg px-3 py-2 text-left outline-none transition focus:ring-4 focus:ring-[var(--focus-ring)] ${capture.inspectedSlot === slot
+    const isSelected = capture.inspectedSlot === slot;
+
+    return <button type="button" disabled={locked} aria-label={label} aria-pressed={isSelected}
+      className={`group relative min-h-14 w-full rounded-lg px-3 py-2 text-left outline-none transition focus:ring-4 focus:ring-[var(--focus-ring)] ${isSelected
         ? "bg-blue-500/15 ring-1 ring-blue-500" : "bg-[var(--surface-well)] hover:bg-blue-500/10"}`}
       onClick={() => capture.selectSlot(next, thickness)} data-testid={`box-material-cell-${slot}`}>
       {next.sample_role === "bare_backing" ? <span className="mb-1 block text-sm font-medium">{label}</span> : null}
-      {reading ? <span className="flex flex-wrap gap-x-3 font-mono text-xs tabular-nums">{reading.reflectance_percent_xyz.map((value, axis) =>
-        <span key={axis}>{["X", "Y", "Z"][axis]} {value.toFixed(2)}</span>)}</span>
-        : <span className="text-sm text-slate-500 dark:text-slate-400">{t("lumina_box_material_unmeasured")}</span>}
+      {reading ? <>
+        <span className="flex flex-wrap gap-x-3 font-mono text-xs tabular-nums">{reading.reflectance_percent_xyz.map((value, axis) =>
+          <span key={axis}>{["X", "Y", "Z"][axis]} {value.toFixed(2)}</span>)}
+        </span>
+        <div className="absolute right-2 top-2 h-2 w-2 rounded-full bg-green-500" aria-label={t("lumina_box_cell_measured_badge")} title={t("lumina_box_cell_measured_badge")} />
+      </> : <>
+        <span className="text-sm text-slate-500 dark:text-slate-400">{t("lumina_box_material_unmeasured")}</span>
+        {!locked && !isSelected && (
+          <span className="absolute right-2 top-2 text-xs text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 dark:text-slate-500">
+            {t("lumina_box_cell_click_hint")}
+          </span>
+        )}
+      </>}
     </button>;
   };
 
@@ -77,7 +89,7 @@ export default function LuminaBoxMaterialCapture({ capture, symbol, reference }:
             ? t(backing === "W" ? "lumina_box_material_black_on_white" : "lumina_box_material_white_on_black")
             : t(backing === "W" ? "lumina_box_material_white_backing" : "lumina_box_material_black_backing")}</th>)}
         </tr></thead>
-        <tbody>{BACKED_GRADIENT_THICKNESSES.map((thickness) => <tr key={thickness}><th className="px-1 text-left font-normal tabular-nums">{thickness.toFixed(2)} mm</th>
+        <tbody>{BACKED_GRADIENT_THICKNESSES.map((thickness) => <tr key={thickness}><th className="px-1 text-left font-normal tabular-nums">{thickness.toFixed(2)}&nbsp;mm</th>
           {columns.map((backing) => <td key={backing}>{cell(columnTarget(symbol, backing, reference), thickness)}</td>)}
         </tr>)}</tbody>
       </table>

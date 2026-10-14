@@ -6,7 +6,7 @@ import pytest
 
 from core import backed_gradient_fitting_v2 as legacy
 from core.backed_gradient_backing_store import (
-    backing_material_snapshot, backing_selection, create_backing_material_dataset,
+    create_black_white_pair, backing_material_snapshot, backing_selection, create_backing_material_dataset,
     get_backing_material, list_backing_materials, save_backing_material_result, save_backing_material_results,
 )
 from core.backed_gradient_material import reference_from_parameters
@@ -47,11 +47,11 @@ def _capture(store, dataset, *, bare=(100.5, 99., 98.)):
 
 
 def _projected(store, reference):
-    save_backing_reference(store, reference, "Old paired data")
-    return {row["role"]: row for row in list_backing_materials(store)}
+    from tests.support.black_white_materials import register_black_white
+    return register_black_white(store, reference)
 
 
-def test_old_backings_project_separately_without_touching_their_parameters(store, reference):
+def test_registered_materials_keep_their_parameters_without_virtual_projections(store, reference):
     before = deepcopy(reference)
     pair = _projected(store, reference)
     assert pair["W"]["name"] == "Original White"
@@ -59,18 +59,17 @@ def test_old_backings_project_separately_without_touching_their_parameters(store
     for role, name in (("W", "white"), ("K", "black")):
         item = pair[role]
         assert item["component"] == reference[name]
-        assert item["bare_xyz"] == reference["anchors"][role]
         assert item["reference"] == before
         assert get_backing_material(store, item["material_id"], version_id=item["version_id"]) == item
     with store._connection() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM gradient_backing_materials").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM gradient_backing_materials").fetchone()[0] == 2
 
 
 def test_first_backing_can_be_saved_before_opposite_is_measured(store):
-    dataset = create_backing_material_dataset(store, {"name": "White A", "role": "W", "brand": "A", "opposite_name": "Black B"})
+    dataset = create_black_white_pair(store, {"white": {"name": "White A", "brand": "A"}, "black": {"name": "Black B"}})
     profiles = {row["role"]: row for row in list_backing_materials(store)}
     assert len(profiles) == 2 and profiles["K"]["status"] == "draft"
-    assert profiles["K"]["dataset_id"] is None
+    assert store.get(profiles["K"]["dataset_id"])["captures"] == []
     _capture(store, dataset)
     snapshot = backing_material_snapshot(store, dataset["dataset_id"])
     assert len(snapshot["samples"]) == 8 and len(snapshot["capture_history"]) == 8
@@ -83,8 +82,8 @@ def test_first_backing_can_be_saved_before_opposite_is_measured(store):
     assert save_backing_material_result(store, snapshot, None) == saved
 
 
-def test_second_backing_resumes_placeholder_and_can_read_first_full_measurements(store):
-    first = create_backing_material_dataset(store, {"name": "White A", "role": "W", "opposite_name": "Black B"})
+def test_second_backing_resumes_registered_identity_and_can_read_first_full_measurements(store):
+    first = create_black_white_pair(store, {"white": {"name": "White A"}, "black": {"name": "Black B"}})
     _capture(store, first)
     white = save_backing_material_result(store, backing_material_snapshot(store, first["dataset_id"]), None)
     second = create_backing_material_dataset(store, {"name": "Black B", "role": "K", "material_id": white["opposite_material_id"]})
@@ -144,7 +143,7 @@ def test_opposite_and_selection_require_correct_roles_and_complete_models(store,
     pair = _projected(store, reference)
     with pytest.raises(CoreValidationError, match="opposite role"):
         create_backing_material_dataset(store, {"name": "White", "role": "W", "opposite_material_id": pair["W"]["material_id"]})
-    dataset = create_backing_material_dataset(store, {"name": "White", "role": "W", "opposite_name": "Unmeasured black"})
+    dataset = create_black_white_pair(store, {"white": {"name": "White"}, "black": {"name": "Unmeasured black"}})
     draft = get_backing_material(store, dataset["workflow"]["backing_material_id"])
     with pytest.raises(CoreValidationError, match="completed"):
         backing_selection(store, draft["material_id"], pair["K"]["material_id"])
@@ -158,8 +157,8 @@ def test_different_observation_scales_cannot_be_silently_mixed(store, reference)
     other["reference_id"] = "independent-observation-calibration"
     other["source"]["dataset_id"] = str(uuid4())
     other["anchors"]["W"][0] += 1.
-    save_backing_reference(store, other, "Other calibration")
-    white = next(row for row in list_backing_materials(store) if row["reference_id"] == other["reference_id"] and row["role"] == "W")
+    other["source"]["materials"] = {"W": "Other White", "K": "Other Black"}
+    white = _projected(store, other)["W"]
     with pytest.raises(CoreValidationError, match="different measurement calibrations"):
         backing_selection(store, white["material_id"], original["K"]["material_id"])
 
@@ -171,7 +170,7 @@ def test_new_observation_reference_does_not_create_duplicate_backing_entities(st
 
 
 def test_measured_opposite_can_become_ready_without_recreating_waiting_capture(store, reference):
-    first = create_backing_material_dataset(store, {"name": "White A", "role": "W", "opposite_name": "Black B"})
+    first = create_black_white_pair(store, {"white": {"name": "White A"}, "black": {"name": "Black B"}})
     _capture(store, first)
     white_snapshot = backing_material_snapshot(store, first["dataset_id"])
     white = save_backing_material_result(store, white_snapshot, None)
@@ -187,7 +186,7 @@ def test_measured_opposite_can_become_ready_without_recreating_waiting_capture(s
 def test_bootstrap_publication_rolls_back_both_materials_if_second_write_fails(store, reference, monkeypatch):
     from core import backed_gradient_product_store as product_store
 
-    white_capture = create_backing_material_dataset(store, {"name": "White A", "role": "W", "opposite_name": "Black B"})
+    white_capture = create_black_white_pair(store, {"white": {"name": "White A"}, "black": {"name": "Black B"}})
     _capture(store, white_capture)
     white_snapshot = backing_material_snapshot(store, white_capture["dataset_id"])
     white = save_backing_material_result(store, white_snapshot, None)

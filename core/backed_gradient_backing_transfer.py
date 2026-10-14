@@ -68,8 +68,7 @@ def collect_backing_documents(store: BackedGradientStore, payloads: Sequence[Map
                 if require_complete:
                     raise CoreValidationError("The selected calibration is missing a matching backing model version. Re-export the material from the source computer with its backing records, then import it again.") from exc
                 return
-            if document.get("source") != "legacy_reference":
-                documents[key] = document
+            documents[key] = document
 
     for identity, version in requests:
         include(identity, version)
@@ -160,7 +159,7 @@ def restore_material_captures(store: BackedGradientStore, entries: Sequence[tupl
                 raise BackedGradientConflictError("An imported backing version belongs to different saved data.")
             documents[version] = document
         if isinstance(measurements.get("capture_export"), dict):
-            captures.append(_prepare(measurements["capture_export"]))
+            captures.append(_prepare(measurements["capture_export"], allow_independent_backing=True))
         fits.append((fit["reference"], str(measurements.get("name") or "Imported Box backing")))
         identities = measurements.get("backing_material_ids", {})
         components = fit.get("backing_components") or measurements.get("backing_components", {})

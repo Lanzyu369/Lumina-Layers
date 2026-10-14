@@ -283,6 +283,13 @@ class BackedGradientStore:
         return self._create(payload)
 
     def _create(self, payload: dict[str, Any], *, workflow: dict | None = None) -> dict[str, Any]:
+        dataset = self._new_dataset(payload, workflow=workflow)
+        with self._connection(write=True) as connection:
+            connection.execute("INSERT INTO gradient_datasets VALUES (?,?)", (dataset["dataset_id"], _json(dataset)))
+            return self._read_dataset(connection, dataset["dataset_id"])
+
+    @staticmethod
+    def _new_dataset(payload: dict[str, Any], *, workflow: dict | None = None) -> dict[str, Any]:
         normalized = _dataset_payload(payload)
         stamp = _now()
         dataset = {"schema_version": "1.0", "kind": DATASET_KIND, "dataset_id": str(uuid4()),
@@ -293,9 +300,7 @@ class BackedGradientStore:
                                            "diffuser_removed": True, "black_reference_material": "K"}}
         if workflow is not None:
             dataset["workflow"] = deepcopy(workflow)
-        with self._connection(write=True) as connection:
-            connection.execute("INSERT INTO gradient_datasets VALUES (?,?)", (dataset["dataset_id"], _json(dataset)))
-            return self._read_dataset(connection, dataset["dataset_id"])
+        return dataset
 
     def get(self, dataset_id: str) -> dict[str, Any]:
         """Read an experiment with history and selection. / 读取实验历史及选中读数。

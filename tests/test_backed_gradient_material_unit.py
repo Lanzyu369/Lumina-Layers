@@ -131,3 +131,29 @@ def test_actual_backings_require_both_materials(original):
     reference = reference_from_parameters(original.to_parameters())
     with pytest.raises(CoreValidationError, match="actual white and black"):
         BackedGradientMaterialModel(reference, {"W": reference.white})
+
+
+@pytest.mark.parametrize("layer_count", [0, 5, 8, 10])
+@pytest.mark.parametrize("backing_symbol", ["W", "K", "R"])
+def test_compiled_recipes_match_numpy_fallback(original, monkeypatch, layer_count, backing_symbol):
+    from core import backed_gradient_recipe_kernel as kernel
+
+    parameters = original.to_parameters()
+    reference = reference_from_parameters(parameters)
+    model = BackedGradientMaterialModel(reference)
+    components = [component_from_parameters(parameters, symbol) for symbol in original.fitted_materials]
+    backing = components[original.fitted_materials.index(backing_symbol)]
+    recipes = np.random.default_rng(725).integers(0, len(components), (257, layer_count))
+    actual = model.predict_recipes(components, recipes, .08, backing=backing, backing_mm=1.2)
+    monkeypatch.setattr(kernel, "predict_compiled", None)
+    expected = model.predict_recipes(components, recipes, .08, backing=backing, backing_mm=1.2)
+    np.testing.assert_allclose(actual, expected, rtol=1e-13, atol=1e-12)
+
+
+def test_compiled_ports_reject_upper_triangular_channel():
+    from core.backed_gradient_recipe_kernel import pack_ports
+
+    port = np.eye(2)
+    port[0, 1] = .1
+    with pytest.raises(ValueError, match="lower triangular"):
+        pack_ports((port,) * 4)

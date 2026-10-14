@@ -10,7 +10,7 @@ from pathlib import Path
 
 from api.worker_pool import WorkerPoolManager
 from api.workers.backed_gradient_material_workers import fit_backed_gradient_product_worker
-from core.backed_gradient_backing_store import save_backing_material_results
+from core.black_white_material_profiles import publish_black_white_profiles
 from core.backed_gradient_store import BackedGradientStore
 from core.errors import CoreProcessingError
 
@@ -67,7 +67,7 @@ def publish_backing_material_fit(store: BackedGradientStore, run: dict, director
             raise CoreProcessingError("A backing fit does not match its own frozen measurements.")
     if peer and peer.get("reference") != result.get("reference"):
         raise CoreProcessingError("Initial backing fits must share the same observation calibration.")
-    saved = save_backing_material_results(store, entries)[-1]
+    saved = publish_black_white_profiles(store, entries)[-1]
     result.update(backing_material_id=saved["material_id"], backing_version_id=saved["version_id"])
     run["backing_material_id"] = saved["material_id"]
     if saved.get("reference_id"):

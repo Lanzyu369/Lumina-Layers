@@ -67,6 +67,48 @@ SMALL_PALETTE = [RED, BLUE, WHITE]
 MEDIUM_PALETTE = [RED, BLUE, WHITE, GREEN, BLACK]
 
 
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_exact_candidate_search_matches_full_ciede2000_and_first_ties(dtype):
+    from core.colorchecker.color_metrics import delta_e_2000
+    from core.material_candidate_cache import _exact_delta_e00_best_indices
+
+    rng = np.random.default_rng(917)
+    targets = np.array([[50., 0., 0.], [75., -20., 40.], [20., 1., -60.]])
+    candidates = rng.uniform([0, -100, -100], [100, 100, 100], (4097, 3)).astype(dtype)
+    candidates[13] = targets[0]
+    candidates[4011] = targets[0]
+    distances = delta_e_2000(targets[:, None, :], candidates.astype(np.float64)[None, :, :])
+    expected_indices = np.argmin(distances, axis=1)
+    actual_indices, values = _exact_delta_e00_best_indices(targets, candidates)
+    np.testing.assert_array_equal(actual_indices, expected_indices)
+    np.testing.assert_allclose(values, distances[np.arange(len(targets)), expected_indices], atol=1e-12, rtol=1e-12)
+    assert actual_indices[0] == 13
+
+
+def test_exact_candidate_search_falls_back_if_compilation_fails(monkeypatch):
+    from core.colorchecker import exact_match
+    from core.material_candidate_cache import _exact_delta_e00_best_indices
+
+    def failed_kernel(*args):
+        raise RuntimeError("accelerator unavailable")
+
+    monkeypatch.setattr(exact_match, "_search_fixed_kernel", failed_kernel)
+    target = np.array([[50., 0., 0.]])
+    candidates = np.array([[20., 10., 30.], [50., 0., 0.]])
+    indices, distances = _exact_delta_e00_best_indices(target, candidates)
+    np.testing.assert_array_equal(indices, [1])
+    np.testing.assert_array_equal(distances, [0.])
+
+
+def test_exact_candidate_search_restores_numba_thread_budget():
+    numba = pytest.importorskip("numba")
+    from core.material_candidate_cache import _exact_delta_e00_best_indices
+
+    original_threads = numba.get_num_threads()
+    _exact_delta_e00_best_indices(np.array([[50., 0., 0.]]), np.array([[50., 0., 0.]]))
+    assert numba.get_num_threads() == original_threads
+
+
 def test_persisted_candidate_identity_change_is_a_miss(tmp_path):
     from core.material_candidate_cache import (
         load_material_candidate_runtime, save_material_candidate_runtime,

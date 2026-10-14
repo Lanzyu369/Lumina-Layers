@@ -124,7 +124,7 @@ describe("MaterialLibraryPanel", () => {
     expandAllMaterialLibraryGroups();
     await screen.findByText("Box Red");
     expect(screen.queryByText("Old experiment")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "重新采集" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看采集记录" }));
     expect(useWidgetStore.getState().activeTab).toBe("lumina-box");
     expect(useLuminaBoxMaterialNavigation.getState().captureRequest).toEqual({ datasetId: "collection-1", materialSymbol: "R",
       archive: { name: "Box Red", brand: "PETG", material_type: "", directoryName: "box-red" } });

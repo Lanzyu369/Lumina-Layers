@@ -938,6 +938,11 @@ def _exact_delta_e00_best_indices(
 
     targets = np.asarray(target_lab, dtype=np.float64)
     candidates = np.asarray(candidate_lab, dtype=np.float64)
+    from core.colorchecker.exact_match import try_exact_ciede2000_minima
+
+    compiled_result = try_exact_ciede2000_minima(targets, candidates)
+    if compiled_result is not None:
+        return compiled_result
     target_count = targets.shape[0]
     best_indices = np.full(target_count, -1, dtype=np.int64)
     best_values = np.full(target_count, np.inf, dtype=np.float64)

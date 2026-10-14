@@ -23,7 +23,7 @@ from api.local_origin_guard import require_local_app_origin
 from api.schemas.backed_gradient import (
     GradientCaptureRequest, GradientDatasetCreate, GradientSelectionRequest,
     MaterialDatasetCreate, BackingDatasetCreate, MaterialFitRequest, MaterialArchiveSaveRequest,
-    BackingMaterialDatasetCreate,
+    BackingMaterialDatasetCreate, BlackWhitePairCreate,
 )
 from api.structured_logging import get_logger
 from api.worker_pool import WorkerPoolManager
@@ -73,11 +73,24 @@ def list_independent_backings(store: BackedGradientStore = Depends(get_gradient_
         Names, readiness, and stable identities.（名称、完成状态和稳定身份。）
     """
     from core.backed_gradient_backing_store import list_backing_materials
+    from core.black_white_material_profiles import black_white_archive_index
 
     fields = ("material_id", "version_id", "role", "name", "brand", "material_type", "dataset_id",
-              "active_dataset_id", "opposite_material_id", "status", "reference_id", "source", "created_at", "updated_at")
-    return {"backings": _perform("backing_materials", lambda: [
-        {key: item[key] for key in fields if key in item} for item in list_backing_materials(store)])}
+              "active_dataset_id", "opposite_material_id", "status", "reference_id", "created_at", "updated_at", "dataset_revision")
+    def listing() -> list[dict]:
+        archives = black_white_archive_index(store.root)
+        items = []
+        for item in list_backing_materials(store):
+            item = {**item, "dataset_revision": item.get("snapshot", {}).get("dataset_revision")}
+            profile = archives.get(item["material_id"])
+            if item["status"] == "ready" and profile is None:
+                continue
+            if profile:
+                item = {**item, "name": profile[1]["material_name"], "brand": profile[1].get("brand", ""),
+                        "material_type": profile[1].get("material_type", "")}
+            items.append({key: item[key] for key in fields if key in item})
+        return items
+    return {"backings": _perform("backing_materials", listing)}
 
 
 @router.post("/backing-material-datasets")
@@ -96,6 +109,26 @@ def create_independent_backing(payload: BackingMaterialDatasetCreate,
 
     dataset = _perform("backing_material_create", lambda: create_backing_material_dataset(store, payload.model_dump(exclude_none=True)))
     log.info("Independent backing capture created", extra={"event": "backed_gradient_backing_material_create_done", "dataset_id": dataset["dataset_id"]})
+    return {"dataset": dataset}
+
+
+@router.post("/black-white-pairs")
+def create_black_white_materials(payload: BlackWhitePairCreate,
+                                 store: BackedGradientStore = Depends(get_gradient_store)) -> dict:
+    """Start the first black/white pair without requiring an existing archive.
+    创建首组黑白耗材，无需已有档案。
+
+    Args:
+        payload: Both material identities.（两种耗材身份。）
+        store: Capture storage.（采集存储。）
+    Returns:
+        First capture with its partner registered.（已关联另一耗材的首份采集。）
+    """
+    from core.backed_gradient_backing_store import create_black_white_pair
+
+    dataset = _perform("backing_material_create", lambda: create_black_white_pair(store, payload.model_dump()))
+    log.info("Black and white captures created", extra={"event": "backed_gradient_backing_material_create_done",
+                                                      "dataset_id": dataset["dataset_id"]})
     return {"dataset": dataset}
 
 

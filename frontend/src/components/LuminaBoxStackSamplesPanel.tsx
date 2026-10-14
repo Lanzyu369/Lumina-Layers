@@ -1,3 +1,4 @@
+import { motion } from "framer-motion";
 import type { LuminaBoxStackSampleRecord } from "../api/luminaBoxStackSamples";
 import { getLuminaBoxSerialApi } from "../api/luminaBoxSerial";
 import { useLuminaBoxStackSamples } from "../hooks/useLuminaBoxStackSamples";
@@ -106,7 +107,13 @@ export default function LuminaBoxStackSamplesPanel() {
       : capture.serial.issue ? t(`lumina_box_serial_${capture.serial.issue}`) : null;
 
   return (
-    <section className={resolvePanelSurfaceClass(workspace.mode)} data-testid="lumina-box-stack-samples-panel">
+    <motion.section
+      className={resolvePanelSurfaceClass(workspace.mode)}
+      data-testid="lumina-box-stack-samples-panel"
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: "easeOut" }}
+    >
       <div className="mx-auto flex w-full max-w-[96rem] flex-col gap-5 pb-6 text-slate-900 dark:text-slate-100">
         <PanelIntro title={t("lumina_box_stack_title")} description={t("lumina_box_stack_description")} />
 
@@ -256,6 +263,6 @@ export default function LuminaBoxStackSamplesPanel() {
           </div> : null}
         </section>
       </div>
-    </section>
+    </motion.section>
   );
 }

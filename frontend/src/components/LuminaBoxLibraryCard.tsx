@@ -22,7 +22,7 @@ export default function LuminaBoxLibraryCard({ item, selected, busy, onSelect, o
     </div>
     <div className="flex flex-wrap gap-2">
       <Button label={t("lumina_box_material_use_conversion")} onClick={() => navigation.useForConversion(item.directory_name, item.material_symbol ?? undefined)} />
-      <Button variant="secondary" label={t("lumina_box_material_remeasure")} disabled={busy || !item.capture_dataset_id || !item.material_symbol}
+      <Button variant="secondary" label={t("lumina_box_view_capture")} disabled={busy || !item.capture_dataset_id || !item.material_symbol}
         onClick={() => navigation.resumeCapture(item.capture_dataset_id!, item.material_symbol!, {
           name: item.material_name, brand: item.brand ?? "", material_type: item.material_type ?? "", directoryName: item.directory_name,
         })} />

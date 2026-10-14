@@ -71,7 +71,8 @@ def _finish(client, dataset):
 def test_new_backing_fits_without_recollecting_or_changing_the_other_material(context):
     client, store = context
     calibration = reference_fixture()
-    save_backing_reference(store, calibration.to_dict(), "Original calibration")
+    from tests.support.black_white_materials import register_black_white
+    register_black_white(store, calibration.to_dict())
     choices = client.get(URL + "/backing-materials").json()["backings"]
     black = next(item for item in choices if item["role"] == "K")
     initial = deepcopy(choices)
@@ -98,15 +99,17 @@ def test_new_backing_fits_without_recollecting_or_changing_the_other_material(co
 def test_first_backings_save_separately_then_obtain_a_common_calibration(context):
     client, store = context
     calibration = reference_fixture()
-    black = _create(client, name="First black", role="K", opposite_name="First white")
+    response = client.post(URL + "/black-white-pairs", json={"white": {"name": "First white"}, "black": {"name": "First black"}})
+    assert response.status_code == 200, response.text
+    white = response.json()["dataset"]
+    from core.backed_gradient_backing_store import get_backing_material
+    black_id = get_backing_material(store, white["workflow"]["opposite_material_id"])["active_dataset_id"]
+    black = store.get(black_id)
     _fill(client, black, calibration, calibration.black)
     first = _finish(client, black)
     assert first["status"] == "awaiting_opposite"
     entities = client.get(URL + "/backing-materials").json()["backings"]
     assert {item["status"] for item in entities} == {"draft", "measured"}
-    white_id = next(item["material_id"] for item in entities if item["role"] == "W")
-    white = _create(client, name="First white", role="W", material_id=white_id,
-                    opposite_material_id=black["workflow"]["backing_material_id"])
     _fill(client, white, calibration, calibration.white)
     second = _finish(client, white)
     assert second["status"] == "complete"
@@ -127,7 +130,7 @@ def test_initial_peer_result_cannot_publish_under_another_input(context, tmp_pat
     peer = {"dataset_id": "peer", "dataset_revision": 8, "input_hash": "peer-input"}
     (tmp_path / "input.json").write_text(json.dumps({**own, "opposite": {"snapshot": peer}}), encoding="utf-8")
     calls = []
-    monkeypatch.setattr(jobs, "save_backing_material_results", lambda *args: calls.append(args))
+    monkeypatch.setattr(jobs, "publish_black_white_profiles", lambda *args: calls.append(args))
     result = {**own, "status": "complete", "converged": True, "reference": {"reference_id": "common"},
               "bootstrap_peer": {**peer, "converged": True, "reference": {"reference_id": "common"}, field: "wrong-input"}}
     with pytest.raises(CoreProcessingError, match="frozen measurements"):

@@ -6,6 +6,8 @@ import { useWidgetStore } from "./widgetStore";
 
 interface LuminaBoxMaterialNavigation {
   libraryProfileKind: "stage_a" | "lumina_box";
+  creationKind: "material" | "backing";
+  createProfile: (kind: "material" | "backing") => void;
   captureRequest: { datasetId: string; materialSymbol: BackedGradientSymbol; archive?: LuminaBoxArchiveIdentity } | null;
   lastCaptureArchive: { datasetId: string; materialSymbol: BackedGradientSymbol; archive: LuminaBoxArchiveIdentity } | null;
   showLibrary: () => void;
@@ -24,6 +26,11 @@ export interface LuminaBoxArchiveIdentity {
  * 将已保存耗材的操作连接到对应工作页面。 */
 export const useLuminaBoxMaterialNavigation = create<LuminaBoxMaterialNavigation>()(persist((set) => ({
   libraryProfileKind: "stage_a",
+  creationKind: "material",
+  createProfile: (kind) => {
+    set({ creationKind: kind, captureRequest: null });
+    useWidgetStore.getState().setActiveTab("lumina-box");
+  },
   captureRequest: null,
   lastCaptureArchive: null,
   showLibrary: () => {

@@ -131,7 +131,7 @@ def publish_group_materials(store: BackedGradientStore, run: dict, directory: Pa
             if key in fits[own_key]})
     with _ARCHIVE_WRITE_LOCK, TemporaryDirectory(prefix=".publication-", dir=directory) as temporary:
         staging = Path(temporary)
-        candidates = _stage_group_archives(store, staging, group_id, members, fits)
+        candidates = _stage_group_archives(store, staging, group_id, members, fits, backing_documents)
         sibling_runs = _stage_group_runs(store, staging, run, members, fits, result["reference"]["reference_id"])
         updated_archives = [relative.as_posix() for relative in candidates]
         result.update(updated_materials=updated_archives)
@@ -162,7 +162,7 @@ def _refined_backing_documents(store: BackedGradientStore, snapshot: dict, refer
 
 
 def _stage_group_archives(store: BackedGradientStore, staging: Path, group_id: str,
-                          members: dict, fits: dict) -> list[Path]:
+                          members: dict, fits: dict, backing_documents: list[dict] | None = None) -> list[Path]:
     from core.backed_gradient_archive import load_backed_gradient_archive, save_backed_gradient_material_archive
     from core.backed_gradient_smooth import SPECTRAL_SMOOTH_MODEL_ID
 
@@ -177,15 +177,26 @@ def _stage_group_archives(store: BackedGradientStore, staging: Path, group_id: s
         if backing_group_id(previous["reference"]) != group_id:
             continue
         key = f"{previous['dataset_id']}:{previous['material_symbol']}"
-        if key not in fits:
+        backing = next((item for item in backing_documents or [] if item["material_id"] == main.get("backing_material_id")), None)
+        if backing:
+            member = {**deepcopy(backing["snapshot"]), "backing_material_id": backing["material_id"],
+                      "material_symbol": backing["role"], "backing_documents": deepcopy(backing_documents)}
+            fitted = {**deepcopy(backing["fit"]), "optical_model_id": SPECTRAL_SMOOTH_MODEL_ID,
+                      "material_symbol": backing["role"], "status": "complete",
+                      **{field: member[field] for field in ("dataset_id", "dataset_revision", "input_hash")}}
+        elif key not in fits:
+            if main.get("backing_material_id"):
+                continue
             if not uses_reference_backings(measurements):
                 continue
             raise CoreProcessingError("A saved material is missing from its backing group's fitted inputs.")
+        else:
+            member, fitted = members[key], fits[key]
         relative = path.parent.relative_to(store.root)
         shutil.copytree(path.parent, staging / "materials" / relative)
         saved = save_backed_gradient_material_archive(
             material_name=main["material_name"], brand=main.get("brand"), material_type=main.get("material_type"),
-            notes=main.get("notes"), measurement_payload=members[key], fit_payload=fits[key],
+            notes=main.get("notes"), measurement_payload=member, fit_payload=fitted,
             overwrite=True, materials_dir=str(staging / "materials"),
         )
         updated = json.loads(Path(saved.archive_path).read_text(encoding="utf-8"))

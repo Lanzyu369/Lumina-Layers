@@ -28,6 +28,7 @@ export interface LuminaBoxBackingMaterial {
   brand?: string;
   material_type?: string;
   dataset_id?: string;
+  dataset_revision?: number;
   active_dataset_id?: string;
   source?: string;
   opposite_material_id?: string;
@@ -64,13 +65,17 @@ export interface LuminaBoxMaterialRequest extends Omit<BackedGradientDatasetRequ
 export interface LuminaBoxBackingMaterialRequest extends Pick<BackedGradientDatasetRequest, "name" | "brand" | "material_type"> {
   role: "W" | "K";
   opposite_material_id?: string;
-  opposite_name?: string;
   material_id?: string;
 }
 
 export interface LuminaBoxBackingRequest extends Pick<BackedGradientDatasetRequest, "name" | "brand" | "material_type"> {
   white_name: string;
   black_name: string;
+}
+
+export interface LuminaBoxBlackWhitePairRequest {
+  white: Pick<BackedGradientDatasetRequest, "name" | "brand" | "material_type">;
+  black: Pick<BackedGradientDatasetRequest, "name" | "brand" | "material_type">;
 }
 
 export interface LuminaBoxMaterialFitRun extends Omit<BackedGradientFitRun, "fit_mode"> {
@@ -104,6 +109,11 @@ export interface LuminaBoxSavedMaterial {
 const endpoint = "/extractor/lumina-box/backed-gradient";
 const options = { timeout: 15_000 };
 const idPath = (id: string) => encodeURIComponent(id);
+
+/** Register the first black/white materials together. / 同时登记首组黑白耗材。 */
+export async function createLuminaBoxBlackWhitePair(payload: LuminaBoxBlackWhitePairRequest): Promise<LuminaBoxMaterialDataset> {
+  return (await apiClient.post<{ dataset: LuminaBoxMaterialDataset }>(`${endpoint}/black-white-pairs`, payload, options)).data.dataset;
+}
 
 /** List independently saved backing materials. / 列出分别保存的背板耗材资料。 */
 export async function listLuminaBoxBackingMaterials(): Promise<LuminaBoxBackingMaterial[]> {
