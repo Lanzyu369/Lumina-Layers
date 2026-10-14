@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import App from "../App";
 import { useWidgetStore } from "../stores/widgetStore";
 
@@ -96,7 +96,12 @@ describe("App Widget Toggles", () => {
 
   it("opens Creative Workshop without exposing converter widget controls", async () => {
     render(<App />);
-    await screen.findByTestId("health-badge-ok");
+    await waitFor(() => {
+      expect(screen.getByTestId("header-menu-button")).toHaveAttribute(
+        "data-backend-status",
+        "ok",
+      );
+    });
 
     fireEvent.click(screen.getByTestId("tab-workshop"));
 

@@ -51,6 +51,7 @@ import MachineSelectionDialog from "./settings/MachineSelectionDialog";
 import BuildPlateSelector from "./settings/BuildPlateSelector";
 import Custom3mfTemplateSettings from "./settings/Custom3mfTemplateSettings";
 import GeneratedFileDirectorySetting from "./settings/GeneratedFileDirectorySetting";
+import HeaderNavAlignmentSetting from "./settings/HeaderNavAlignmentSetting";
 import SvgHoleCompensationSettings from "./sections/SvgHoleCompensationSettings";
 import SettingsCategoryNav, {
   type SettingsCategory,
@@ -978,6 +979,8 @@ export default function SettingsPanel() {
                     ariaLabel={t("settings.witty_loading")}
                   />
               </div>
+
+              <HeaderNavAlignmentSetting />
             </section>
           )}
 

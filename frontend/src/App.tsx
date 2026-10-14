@@ -12,26 +12,35 @@ import { useColorcheckerArtifactLease } from "./hooks/useColorcheckerArtifactLea
 import { useActionHistoryBootstrap } from "./hooks/useActionHistoryBootstrap";
 import { useReproMode } from "./hooks/useReproMode";
 import { useWorkspaceMode } from "./hooks/useWorkspaceMode";
+import { useHeaderNavFit } from "./hooks/useHeaderNavFit";
+import { useDocumentThemeClass } from "./hooks/useDocumentThemeClass";
+import { useOutsideInteraction } from "./hooks/useOutsideInteraction";
 import { useSharedSettingsPersistence } from "./hooks/useSharedSettingsPersistence";
 import Scene3D from "./components/Scene3D";
 import ExtractorCanvas from "./components/ExtractorCanvas";
 import LoadingSpinner from "./components/LoadingSpinner";
 import AnnouncementDialog from "./components/ui/AnnouncementDialog";
 import { I18nProvider, useI18n } from "./i18n/context";
-import { BugReportButton } from "./components/BugReportButton";
 import { BugReportModal } from "./components/BugReportModal";
 import { ErrorTicketPrompt } from "./components/ErrorTicketPrompt";
 import { buildErrorTicketDescription } from "./utils/errorTicketDescription";
 import { useErrorTicketPromptCapture } from "./hooks/useErrorTicketPromptCapture";
 import { useErrorTicketPromptStore } from "./stores/errorTicketPromptStore";
+import { HeaderMenu } from "./components/HeaderMenu";
 import { TutorialHost } from "./components/tutorial/TutorialHost";
-import { TutorialLauncherButton } from "./components/tutorial/TutorialLauncherButton";
-import { LanguageToggle } from "./components/LanguageToggle";
-import { ThemeToggle } from "./components/ThemeToggle";
 import { WidgetWorkspace } from "./components/widget/WidgetWorkspace";
 import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP, CONVERTER_SUB_TAB_WIDGET_MAP } from "./stores/widgetStore";
 import TabNavBar, { hasSubTabs } from "./components/widget/TabNavBar";
 import SubTabBar from "./components/widget/SubTabBar";
+import AlignedNavStrip from "./components/widget/AlignedNavStrip";
+import {
+  HEADER_NAV_GRID_CLASS,
+  primaryTabsCellClass,
+  primaryTabsCellShift,
+  subTabRowJustifyClass,
+  subTabsCenterShift,
+} from "./components/widget/headerNavLayout";
+import { useSettingsStore } from "./stores/settingsStore";
 import CalibrationPanel from "./components/CalibrationPanel";
 import ExtractorPanel from "./components/ExtractorPanel";
 import ColorcheckerConfirmDialogExtractor from "./components/ColorcheckerConfirmDialog";
@@ -56,7 +65,10 @@ import {
   useElectronGeneratedFileDirectorySync,
   useElectronLanguageSync,
 } from "./integrations/electron";
-import { HEADER_STATUS_PILL_SHAPE_CLASS } from "./components/ui/headerControls";
+import {
+  HEADER_MENU_DIVIDER_CLASS,
+  HEADER_MENU_PANEL_CLASS,
+} from "./components/ui/headerControls";
 
 import LutDetailsPanel from "./components/LutDetailsPanel";
 
@@ -95,23 +107,6 @@ class SceneErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryStat
 
 import { useRef } from "react";
 
-function useOutsideClick(ref: React.RefObject<HTMLElement | null>, handler: () => void) {
-  useEffect(() => {
-    const listener = (event: MouseEvent | TouchEvent) => {
-      if (!ref.current || ref.current.contains(event.target as Node)) {
-        return;
-      }
-      handler();
-    };
-    document.addEventListener('mousedown', listener);
-    document.addEventListener('touchstart', listener);
-    return () => {
-      document.removeEventListener('mousedown', listener);
-      document.removeEventListener('touchstart', listener);
-    };
-  }, [ref, handler]);
-}
-
 import { AnimatePresence, motion } from "framer-motion";
 
 function WidgetToggles() {
@@ -122,8 +117,9 @@ function WidgetToggles() {
   const activeConverterSubTab = useWidgetStore((s) => s.activeConverterSubTab);
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const closeDropdown = useCallback(() => setIsOpen(false), []);
 
-  useOutsideClick(dropdownRef, () => setIsOpen(false));
+  useOutsideInteraction(dropdownRef, closeDropdown, isOpen);
 
   // Filter to only show widgets belonging to the current TAB page.
   // For the converter, narrow further by the active sub-tab so users cannot
@@ -147,7 +143,7 @@ function WidgetToggles() {
       <button
         data-testid="panel-controls-toggle"
         className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-full border px-3.5 text-sm font-semibold transition-colors duration-300 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]
-          ${isOpen ? 'border-transparent bg-blue-600 shadow-[var(--shadow-control-hover)] text-white' : 'border-slate-200/80 bg-slate-100/85 text-slate-600 shadow-[var(--shadow-control)] hover:bg-slate-200/90 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80'}
+          ${isOpen ? 'border-transparent bg-blue-600 text-white' : 'border-slate-200/80 bg-slate-100/85 text-slate-600 hover:bg-slate-200/90 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80'}
         `}
         style={{ WebkitTapHighlightColor: 'transparent' }}
         onClick={() => setIsOpen(!isOpen)}
@@ -173,7 +169,7 @@ function WidgetToggles() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -10, scale: 0.95 }}
               transition={{ duration: 0.2, ease: "easeOut" }}
-              className="absolute right-0 top-full mt-2 z-50 flex w-56 flex-col gap-1 overflow-hidden rounded-2xl border border-slate-200/80 bg-slate-100/98 p-2 shadow-[var(--shadow-control-hover)] dark:border-slate-800/80 dark:bg-slate-900/98 origin-top-right"
+              className={`${HEADER_MENU_PANEL_CLASS} w-56`}
             >
               {filteredRegistry.map((config) => {
                 const isActive = visibleWidgetIds.includes(config.id);
@@ -182,11 +178,11 @@ function WidgetToggles() {
                     key={config.id}
                     data-testid={`widget-toggle-${config.id}`}
                     className={`
-                      flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold tracking-wide transition-all duration-200 outline-none
+                      flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold tracking-wide transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]
                       ${
                         isActive
                           ? "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400"
-                          : "bg-transparent text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100/80 dark:hover:bg-slate-700/50"
+                          : "bg-transparent text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-[var(--nav-chip-hover)]"
                       }
                     `}
                     onClick={() => toggleVisible(config.id)}
@@ -199,12 +195,12 @@ function WidgetToggles() {
                 );
               })}
 
-              <div className="h-px bg-slate-200 dark:bg-slate-700/80 my-1 mx-2" />
+              <div className={HEADER_MENU_DIVIDER_CLASS} />
 
               <button
                 data-testid="widget-reset-layout"
-                className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold tracking-wide transition-all duration-200 outline-none
-                  bg-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100/80 dark:hover:bg-slate-700/50"
+                className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold tracking-wide transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]
+                  bg-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-[var(--nav-chip-hover)]"
                 onClick={() => {
                   resetLayout();
                   setIsOpen(false);
@@ -242,8 +238,27 @@ function AppContent() {
   useElectronLanguageSync();
   useElectronGeneratedFileDirectorySync();
   useSharedSettingsPersistence();
+  useDocumentThemeClass();
   const workspace = useWorkspaceMode();
   const reproMode = useReproMode();
+  const headerNavAlignment = useSettingsStore((s) => s.headerNavAlignment);
+  const headerRef = useRef<HTMLElement>(null);
+  const headerContentProbeRef = useRef<HTMLSpanElement>(null);
+  const headerBrandLogoRef = useRef<HTMLImageElement>(null);
+  const headerBrandTitleRef = useRef<HTMLHeadingElement>(null);
+  const headerToolsRef = useRef<HTMLDivElement>(null);
+  const primaryTabsRef = useRef<HTMLElement>(null);
+  const headerNavFit = useHeaderNavFit(headerNavAlignment, {
+    header: headerRef,
+    contentWidthProbe: headerContentProbeRef,
+    brandLogo: headerBrandLogoRef,
+    brandTitle: headerBrandTitleRef,
+    primaryTabs: primaryTabsRef,
+    tools: headerToolsRef,
+  });
+  const headerPaddingXClass = workspace.isCompact
+    ? "px-3 sm:px-4"
+    : "px-3 sm:px-4 lg:px-6";
 
   const [connected, setConnected] = useState<boolean | null>(null);
   const [announcementReady, setAnnouncementReady] = useState(false);
@@ -377,83 +392,88 @@ function AppContent() {
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-white">
       <header
-        className={`relative z-50 border-b border-slate-200 dark:border-slate-800 ${
-          workspace.isCompact
-            ? "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2.5 sm:px-4"
-            : "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-3 sm:px-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:px-6 lg:py-4"
-        }`}
+        ref={headerRef}
+        className={`relative z-50 grid items-center gap-x-6 gap-y-2 border-b panel-divider ${headerPaddingXClass} ${
+          workspace.isCompact ? "py-1.5" : "py-2.5"
+        } ${HEADER_NAV_GRID_CLASS}`}
       >
-        <div className="flex min-w-0 items-center gap-3">
-          <img src="/favicon.ico" alt={t("app_logo_alt")} className="h-8 w-8 shrink-0 rounded" />
-          <h1 className={`min-w-0 truncate font-semibold tracking-tight ${workspace.isCompact ? "hidden text-lg md:block" : "hidden text-xl sm:block"}`}>
-            {t("app_header_title")}
-          </h1>
+        <span
+          ref={headerContentProbeRef}
+          aria-hidden="true"
+          className="pointer-events-none col-span-full row-start-1 h-0 self-start"
+        />
+        <div className="col-start-1 row-start-1 flex w-max items-center justify-self-start">
+          <img
+            ref={headerBrandLogoRef}
+            src="/favicon.ico"
+            alt={t("app_logo_alt")}
+            className="h-8 w-8 shrink-0 rounded"
+          />
+          {/* Collapses to zero width when the tabs need the room; the title
+              keeps its natural width inside so it can still be measured. */}
+          <div
+            data-testid="header-brand-title"
+            className={`overflow-hidden ${headerNavFit.showBrandTitle ? "" : "max-w-0"}`}
+          >
+            <h1
+              ref={headerBrandTitleRef}
+              className={`w-max whitespace-nowrap pl-3 font-semibold tracking-tight ${workspace.isCompact ? "hidden text-lg md:block" : "hidden text-xl sm:block"}`}
+            >
+              {t("app_header_title")}
+            </h1>
+          </div>
         </div>
 
         {/* Right Side: Controls */}
-        <div className={`flex min-w-0 items-center justify-end gap-2 ${workspace.isCompact ? "" : "lg:col-start-3 lg:row-start-1"}`}>
+        <div
+          ref={headerToolsRef}
+          className="col-start-3 row-start-1 flex w-max items-center gap-2 justify-self-end"
+        >
           <WidgetToggles />
-          <LanguageToggle />
-          <ThemeToggle />
-          <TutorialLauncherButton />
-          <BugReportButton onClick={() => openBugReport("")} />
-          {reproMode.enabled && (
-            <span
-              data-testid="repro-mode-badge"
-              className={`${HEADER_STATUS_PILL_SHAPE_CLASS} bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 ${workspace.isCompact ? "px-3 text-xs" : "px-3.5 text-sm"}`}
-              title={`复现模式 / Reproduction mode: ${reproMode.ticketId}`}
-            >
-              <span className="h-2 w-2 rounded-full bg-amber-400" />
-              <span className={workspace.isCompact ? "hidden" : "hidden sm:inline"}>
-                {reproMode.ticketId}
-              </span>
-            </span>
-          )}
-          {connected === null ? (
-            <span
-              data-testid="health-badge-checking"
-              className={`${HEADER_STATUS_PILL_SHAPE_CLASS} border border-slate-200/80 bg-slate-100/85 text-slate-500 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-400 ${workspace.isCompact ? "px-3 text-xs" : "px-3.5 text-sm"}`}
-            >
-              <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400" />
-              <span className={workspace.isCompact ? "hidden" : "hidden sm:inline"}>{t("app_checking_backend")}</span>
-            </span>
-          ) : connected ? (
-            <span
-              data-testid="health-badge-ok"
-              className={`${HEADER_STATUS_PILL_SHAPE_CLASS} bg-green-100 text-green-700 dark:bg-green-900/60 dark:text-green-300 ${workspace.isCompact ? "px-3 text-xs" : "px-3.5 text-sm"}`}
-            >
-              <span className="h-2 w-2 rounded-full bg-green-400" />
-              <span className={workspace.isCompact ? "hidden" : "hidden sm:inline"}>{t("app_backend_connected")}</span>
-            </span>
-          ) : (
-            <span
-              data-testid="health-badge-fail"
-              className={`${HEADER_STATUS_PILL_SHAPE_CLASS} bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-300 ${workspace.isCompact ? "px-3 text-xs" : "px-3.5 text-sm"}`}
-            >
-              <span className="h-2 w-2 rounded-full bg-red-400" />
-              <span className={workspace.isCompact ? "hidden" : "hidden sm:inline"}>{t("app_backend_unreachable")}</span>
-            </span>
-          )}
+          <HeaderMenu
+            backendStatus={connected === null ? "checking" : connected ? "ok" : "fail"}
+            reproTicketId={reproMode.enabled ? reproMode.ticketId : null}
+            onReportBug={() => openBugReport("")}
+          />
         </div>
 
-        {/* Center: Tabs */}
-        <div className={`min-w-0 ${workspace.isCompact ? "col-span-3 row-start-2" : "col-span-2 lg:col-span-1 lg:col-start-2 lg:row-start-1"}`}>
-          <TabNavBar
-            activeTab={activeTab}
-            onTabChange={handleTabChange}
-            compact={workspace.isCompact}
-          />
+        {/* Primary tabs: same row as brand and tools when they fit */}
+        <div className={primaryTabsCellClass(headerNavAlignment, headerNavFit.singleRow)}>
+          <AlignedNavStrip
+            alignment={headerNavAlignment}
+            centerShift={primaryTabsCellShift(headerNavFit)}
+          >
+            <TabNavBar
+              navRef={primaryTabsRef}
+              activeTab={activeTab}
+              onTabChange={handleTabChange}
+              compact={workspace.isCompact}
+            />
+          </AlignedNavStrip>
         </div>
       </header>
 
       <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
         {hasSubTabs(activeTab) && (
-          <div className="shrink-0 border-b border-slate-200/80 bg-slate-100/50 px-3 py-2 dark:border-slate-800/80 dark:bg-slate-900/50 sm:px-4 lg:px-6">
-            <SubTabBar
-              activeTab={activeTab}
-              onTabChange={handleTabChange}
-              compact={workspace.isCompact}
-            />
+          <div
+            data-testid="sub-tab-row"
+            className={`flex shrink-0 border-b panel-divider bg-slate-100 py-0.5 dark:bg-slate-950 ${headerPaddingXClass} ${subTabRowJustifyClass(headerNavAlignment)}`}
+            style={
+              headerNavAlignment === "left"
+                ? { paddingLeft: headerNavFit.primaryTabsInsetPx }
+                : undefined
+            }
+          >
+            <AlignedNavStrip
+              alignment={headerNavAlignment}
+              centerShift={subTabsCenterShift(headerNavFit)}
+            >
+              <SubTabBar
+                activeTab={activeTab}
+                onTabChange={handleTabChange}
+                compact={workspace.isCompact}
+              />
+            </AlignedNavStrip>
           </div>
         )}
 

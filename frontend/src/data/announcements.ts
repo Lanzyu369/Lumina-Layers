@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-15",
+    title: { zh: "Lumina Layers — 10 月更新速览", en: "Lumina Layers — October updates" },
+    sections: [{
+      category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+      items: [{
+        zh: "顶部导航更清爽：主导航和子导航去掉了外框，两行之间用一条细线分开，内容区域也更大了。可以在“设置 → 常规”里选择导航居中或居左；窗口变窄时会先收起左上角的标题文字、只保留标志，实在放不下时主导航才移到下一行。",
+        en: "The top navigation is cleaner: the main and sub tabs no longer sit inside boxes, a thin line separates the two rows, and the content area gets more room. Choose centered or left-aligned navigation in Settings → General. When the window gets narrow, the title at the top left is hidden first so only the logo remains, and the main tabs move to the next row only when they truly no longer fit.",
+      }, {
+        zh: "顶栏右侧更简洁：切换语言、深色模式、新手引导、反馈问题和连接状态都收进了右上角的三横线菜单，点开即可使用；软件连接出问题时，菜单按钮上会出现红点提醒。",
+        en: "The top-right corner is tidier: language, dark mode, the beginner tour, bug reports and the connection status now live in the three-line menu at the top right. If the app loses its connection, a red dot appears on the menu button.",
+      }],
+    }],
+  },
+  {
     version: "2026-10-12",
     title: {
       zh: "Lumina Layers — 10 月更新速览",

@@ -90,7 +90,7 @@ To rebuild a session locally:
 python scripts/load_bug_repro.py <ticket_id>
 ```
 
-The script accepts both new random-monthly and historical daily-serial ids, copies every available attachment to `repro_sessions/<ticket_id>/`, extracts `materials.zip`, and writes a `repro_manifest.md` with the action history. The frontend shows a yellow badge when opened at `http://localhost:5174/?repro_session=<ticket_id>`.
+The script accepts both new random-monthly and historical daily-serial ids, copies every available attachment to `repro_sessions/<ticket_id>/`, extracts `materials.zip`, and writes a `repro_manifest.md` with the action history. When opened at `http://localhost:5174/?repro_session=<ticket_id>`, the header's three-line "More options" button shows an amber dot, and the menu lists the ticket being reproduced.
 
 ## Structured Logging
 

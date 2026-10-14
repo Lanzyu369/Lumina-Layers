@@ -66,6 +66,7 @@ class TestGetSettings:
         assert settings["build_plate_selections"] == {}
         assert settings["nozzle_size"] == "0.4"
         assert settings["enable_wipe_tower_auto_placement"] is True
+        assert settings["header_nav_alignment"] == "center"
 
     @pytest.mark.parametrize("legacy_env_value", ["", "1"])
     def test_get_settings_rejects_untrusted_origin(
@@ -263,6 +264,40 @@ class TestPostSettings:
         written = json.loads(mock_file.write_text.call_args.args[0])
         assert written["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
         assert written["enable_wipe_tower_auto_placement"] is False
+
+    @pytest.mark.parametrize("alignment", ["center", "left"])
+    def test_post_then_get_round_trips_header_nav_alignment(
+        self,
+        tmp_path: Path,
+        alignment: str,
+    ) -> None:
+        """Top navigation alignment survives a save and reload."""
+        settings_file = tmp_path / "user_settings.json"
+
+        with patch("api.routers.system.SETTINGS_FILE", settings_file):
+            saved = client.post(
+                "/api/system/settings",
+                json={"header_nav_alignment": alignment},
+            )
+            loaded = client.get("/api/system/settings")
+
+        assert saved.status_code == 200, saved.text
+        assert loaded.json()["settings"]["header_nav_alignment"] == alignment
+        assert json.loads(settings_file.read_text(encoding="utf-8"))[
+            "header_nav_alignment"
+        ] == alignment
+
+    @pytest.mark.parametrize("alignment", ["right", "", 1, None])
+    def test_post_settings_rejects_unknown_header_nav_alignment(
+        self,
+        alignment: object,
+    ) -> None:
+        response = client.post(
+            "/api/system/settings",
+            json={"header_nav_alignment": alignment},
+        )
+
+        assert response.status_code == 422
 
     def test_post_settings_preserves_fields_owned_by_newer_runtime_versions(
         self,

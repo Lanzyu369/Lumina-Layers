@@ -62,6 +62,23 @@ function isNozzleSize(value: unknown): value is NozzleSize {
   return typeof value === "string" && NOZZLE_SIZES.includes(value as NozzleSize);
 }
 
+/** Horizontal alignment of the primary and secondary navigation rows. */
+export type HeaderNavAlignment = "center" | "left";
+
+export const HEADER_NAV_ALIGNMENTS: readonly HeaderNavAlignment[] = [
+  "center",
+  "left",
+];
+
+export function isHeaderNavAlignment(
+  value: unknown,
+): value is HeaderNavAlignment {
+  return (
+    typeof value === "string" &&
+    HEADER_NAV_ALIGNMENTS.includes(value as HeaderNavAlignment)
+  );
+}
+
 export interface SettingsState {
   language: "zh" | "en";
   theme: "light" | "dark";
@@ -132,6 +149,12 @@ export interface SettingsState {
    * 仅桌面版：生成文件保存对话框默认打开的文件夹；空字符串表示系统默认位置。
    */
   generatedFileDirectory: string;
+  /**
+   * Centered keeps both navigation rows on the window axis; left places the
+   * primary tabs after the brand and aligns the sub tabs with them.
+   * 居中时两行导航都以窗口中线对齐；居左时主导航紧跟标题，子导航与主导航左对齐。
+   */
+  headerNavAlignment: HeaderNavAlignment;
 }
 
 // ========== Actions Interface ==========
@@ -171,6 +194,7 @@ export interface SettingsActions {
   setMaterialDeltaE00Tolerance: (value: number) => void;
   setAutoReplaceGradientBanding: (enabled: boolean) => void;
   setGeneratedFileDirectory: (directory: string) => void;
+  setHeaderNavAlignment: (alignment: HeaderNavAlignment) => void;
   hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => void;
   syncToBackend: () => Promise<void>;
 }
@@ -213,6 +237,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   materialDeltaE00Tolerance: MATERIAL_DELTA_E00_TOLERANCE_DEFAULT,
   autoReplaceGradientBanding: false,
   generatedFileDirectory: "",
+  headerNavAlignment: "center",
 };
 
 type PersistedSettingsSnapshot = Partial<SettingsState>;
@@ -550,6 +575,12 @@ export function deriveBackendDeviceSettingsPatch(
       ? settings.generated_file_directory.trim()
       : undefined,
   );
+  setScalarIfFresh(
+    "headerNavAlignment",
+    isHeaderNavAlignment(settings.header_nav_alignment)
+      ? settings.header_nav_alignment
+      : undefined,
+  );
 
   return patch;
 }
@@ -791,6 +822,13 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       setGeneratedFileDirectory: (directory: string) =>
         set({ generatedFileDirectory: directory.trim() }),
 
+      setHeaderNavAlignment: (alignment: HeaderNavAlignment) => {
+        if (!isHeaderNavAlignment(alignment)) {
+          return;
+        }
+        set({ headerNavAlignment: alignment });
+      },
+
       hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => {
         const current = get();
         const patch = deriveBackendDeviceSettingsPatch(
@@ -884,6 +922,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             auto_replace_gradient_banding:
               state.autoReplaceGradientBanding,
             generated_file_directory: state.generatedFileDirectory,
+            header_nav_alignment: state.headerNavAlignment,
           });
         } catch {
           // best-effort sync — settings are already persisted in localStorage
@@ -913,6 +952,11 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             typeof persistedSettings.enableWipeTowerAutoPlacement === "boolean"
               ? persistedSettings.enableWipeTowerAutoPlacement
               : currentState.enableWipeTowerAutoPlacement,
+          headerNavAlignment: isHeaderNavAlignment(
+            persistedSettings.headerNavAlignment,
+          )
+            ? persistedSettings.headerNavAlignment
+            : currentState.headerNavAlignment,
         };
       },
     },

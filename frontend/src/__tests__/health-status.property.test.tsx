@@ -1,5 +1,5 @@
 ﻿import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
 import fc from "fast-check";
 import type { ReactNode } from "react";
 
@@ -131,6 +131,8 @@ describe("Feature: frontend-scaffold, Property 2: 非 'ok' 状态显示失败徽
           });
 
           render(<App />);
+          // Backend status lives inside the header's more-options menu.
+          fireEvent.click(screen.getByTestId("header-menu-button"));
 
           await waitFor(() => {
             expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
@@ -139,6 +141,7 @@ describe("Feature: frontend-scaffold, Property 2: 非 'ok' 状态显示失败徽
           expect(
             screen.queryByTestId("health-badge-ok")
           ).not.toBeInTheDocument();
+          expect(screen.getByTestId("header-menu-alert")).toBeInTheDocument();
         }
       ),
       { numRuns: 20 }

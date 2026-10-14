@@ -17,6 +17,27 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "面板控件",
     en: "Panel Controls",
   },
+  header_menu_label: {
+    zh: "更多选项",
+    en: "More options",
+  },
+  // Name of the language the toggle switches to, written in that language.
+  header_menu_language_target: {
+    zh: "English",
+    en: "中文",
+  },
+  header_menu_dark_mode: {
+    zh: "深色模式",
+    en: "Dark mode",
+  },
+  header_menu_repro_mode: {
+    zh: "复现模式",
+    en: "Reproduction mode",
+  },
+  header_menu_repro_mode_ticket: {
+    zh: "复现模式 · {{ticket}}",
+    en: "Reproduction mode · {{ticket}}",
+  },
   bug_report_button_label: {
     zh: "反馈问题",
     en: "Report a bug",
@@ -2933,6 +2954,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.witty_loading_desc": {
     zh: "加载过程中显示轻松的提示语。",
     en: "Show lighthearted messages while a task is loading.",
+  },
+  "settings.header_nav_alignment_heading": {
+    zh: "顶部导航对齐",
+    en: "Top navigation alignment",
+  },
+  "settings.header_nav_alignment_description": {
+    zh: "选择主导航和子导航的位置。居中：两行导航共用一条中线，空间足够时就是窗口中线；居左：主导航紧跟标题，子导航与主导航第一项左对齐。窗口变窄时会先收起顶部标题文字、只保留标志，给导航腾出空间；标志和右侧按钮之间仍放不下时，主导航才移到下一行。",
+    en: "Choose where the main and sub navigation sit. Centered keeps both rows on one shared centre line, which is the middle of the window whenever there is room. Left places the main tabs right after the title and lines the sub tabs up with the first main tab. As the window narrows, the title text is hidden first so only the logo remains; the main tabs move to the next row only when they no longer fit between the logo and the buttons on the right.",
+  },
+  "settings.header_nav_alignment_label": {
+    zh: "对齐方式",
+    en: "Alignment",
+  },
+  "settings.header_nav_alignment_center": {
+    zh: "居中",
+    en: "Centered",
+  },
+  "settings.header_nav_alignment_left": {
+    zh: "居左",
+    en: "Left",
   },
   "settings.preserve_upload_filename_heading": {
     zh: "导出 3MF 时沿用上传文件名",
@@ -10272,8 +10313,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Lumina Studio turns an ordinary picture into a multi-color 3D print file (3MF): a few filaments are stacked in thin layers to reproduce rich colors.\n\nThis quick tour takes about a minute and walks you through the basic path from a picture to a print file.",
   },
   tutorial_welcome_note: {
-    zh: "引导只做讲解，不需要真的上传图片或生成模型。之后可以随时点击右上角的书本图标重新查看。",
-    en: "The tour only explains things. You don't need to upload or generate anything, and you can replay it any time from the book icon at the top right.",
+    zh: "引导只做讲解，不需要真的上传图片或生成模型。之后可以随时打开右上角的菜单（三条横线图标），选择“新手引导”重新查看。",
+    en: "The tour only explains things. You don't need to upload or generate anything, and you can replay it any time from the menu (the three-line icon) at the top right by choosing Beginner tour.",
   },
   tutorial_welcome_start: {
     zh: "开始引导",
@@ -10508,7 +10549,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "When you need help",
   },
   tutorial_step_help_body: {
-    zh: "设置项旁边的问号图标可以查看说明和在线文档；右上角的反馈按钮可以把问题发给开发者。\n想再看一遍这份引导，随时点击这个书本图标。祝打印顺利！",
-    en: "The question-mark icons next to settings show explanations and link to the online docs, and the feedback button at the top right sends problems to the developers.\nTo see this tour again, click this book icon any time. Happy printing!",
+    zh: "设置项旁边的问号图标可以查看说明和在线文档；右上角这个菜单里的“反馈问题”可以把问题发给开发者。\n想再看一遍这份引导，随时打开这个菜单选择“新手引导”。祝打印顺利！",
+    en: "The question-mark icons next to settings show explanations and link to the online docs, and Report a bug in this menu at the top right sends problems to the developers.\nTo see this tour again, open this menu and choose Beginner tour any time. Happy printing!",
   },
 };

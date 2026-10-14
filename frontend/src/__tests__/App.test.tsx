@@ -95,6 +95,11 @@ import apiClient from "../api/client";
 import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
 import { useErrorTicketPromptStore } from "../stores/errorTicketPromptStore";
 
+// Backend status lives inside the header's more-options menu.
+function openHeaderMenu() {
+  fireEvent.click(screen.getByTestId("header-menu-button"));
+}
+
 describe("App component", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -134,10 +139,12 @@ describe("App component", () => {
     });
 
     render(<App />);
+    openHeaderMenu();
 
     await waitFor(() => {
       expect(screen.getByTestId("health-badge-ok")).toBeInTheDocument();
     });
+    expect(screen.queryByTestId("header-menu-alert")).not.toBeInTheDocument();
     expect(apiClient.get).toHaveBeenCalledWith("/health", {
       suppressClientLog: true,
     });
@@ -149,8 +156,10 @@ describe("App component", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
+      expect(screen.getByTestId("header-menu-alert")).toBeInTheDocument();
     });
+    openHeaderMenu();
+    expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
     expect(apiClient.get).toHaveBeenCalledWith("/health", {
       suppressClientLog: true,
     });
@@ -166,11 +175,13 @@ describe("App component", () => {
 
     try {
       render(<App />);
+      openHeaderMenu();
 
       await act(async () => {
         await Promise.resolve();
       });
       expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
+      expect(screen.getByTestId("header-menu-alert")).toBeInTheDocument();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5_000);
@@ -186,6 +197,7 @@ describe("App component", () => {
       });
       expect(screen.getByTestId("health-badge-ok")).toBeInTheDocument();
       expect(screen.queryByTestId("health-badge-fail")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("header-menu-alert")).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

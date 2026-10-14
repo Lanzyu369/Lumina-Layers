@@ -331,6 +331,44 @@ describe("SettingsPanel information architecture", () => {
     );
   });
 
+  it("offers the centered or left top navigation choice under General", () => {
+    renderPanel();
+
+    const navigation = screen.getByRole("navigation", { name: "设置分类" });
+    fireEvent.click(
+      within(navigation).getByRole("button", { name: /常规/ }),
+    );
+
+    const alignmentSection = screen.getByTestId(
+      "settings-header-nav-alignment-section",
+    );
+    expect(
+      within(alignmentSection).getByRole("heading", {
+        name: "顶部导航对齐",
+        level: 3,
+      }),
+    ).toBeInTheDocument();
+    const centered = within(alignmentSection).getByRole("radio", { name: "居中" });
+    const left = within(alignmentSection).getByRole("radio", { name: "居左" });
+    expect(centered).toBeChecked();
+    expect(left).not.toBeChecked();
+
+    fireEvent.click(left);
+
+    expect(left).toBeChecked();
+    expect(useSettingsStore.getState().headerNavAlignment).toBe("left");
+  });
+
+  it("provides matching English copy for the top navigation choice", () => {
+    expect(translations["settings.header_nav_alignment_heading"].en).toBe(
+      "Top navigation alignment",
+    );
+    expect(translations["settings.header_nav_alignment_center"].en).toBe(
+      "Centered",
+    );
+    expect(translations["settings.header_nav_alignment_left"].en).toBe("Left");
+  });
+
   it("keeps the machine registry out of the page until the chooser opens", async () => {
     renderPanel();
 

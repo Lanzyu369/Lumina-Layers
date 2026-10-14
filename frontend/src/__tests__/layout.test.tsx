@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import App from "../App";
+import { useSettingsStore } from "../stores/settingsStore";
 import { useWidgetStore } from "../stores/widgetStore";
 
 vi.mock("../api/client", () => ({
@@ -34,6 +35,7 @@ describe("Widget Workspace Layout", () => {
       data: { status: "ok", version: "2.0", uptime_seconds: 100 },
     });
     useWidgetStore.getState().resetLayout();
+    useSettingsStore.setState({ headerNavAlignment: "center" });
   });
 
   it('preserves "Lumina Studio 2" header', () => {
@@ -80,7 +82,7 @@ describe("Widget Workspace Layout", () => {
     ]);
   });
 
-  it("keeps the top-level navigation in the legacy centered header column", () => {
+  it("keeps the top-level navigation in the centered header column by default", () => {
     render(<App />);
 
     const converterTab = screen.getByTestId("tab-converter");
@@ -88,9 +90,68 @@ describe("Widget Workspace Layout", () => {
     const header = nav?.closest("header");
     const tabWrapper = nav?.parentElement;
 
-    expect(header).toHaveClass("lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]");
-    expect(header).not.toHaveClass("lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]");
+    expect(header).toHaveClass("grid-cols-[auto_minmax(0,1fr)_auto]");
+    expect(tabWrapper).toHaveClass("col-start-2", "row-start-1", "justify-center");
     expect(tabWrapper).not.toHaveClass("w-full");
+    // Centering spacers flank both strips so the rows share one centre line.
+    expect(nav?.previousElementSibling).toHaveAttribute("aria-hidden", "true");
+    expect(nav?.nextElementSibling).toHaveAttribute("aria-hidden", "true");
+    const subTabs = screen.getByTestId("subtab-converter-core").closest("nav");
+    expect(subTabs?.previousElementSibling).toHaveAttribute("aria-hidden", "true");
+    expect(subTabs?.nextElementSibling).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByTestId("sub-tab-row")).toHaveClass("justify-center");
+  });
+
+  it("left-aligns both navigation rows when the setting asks for it", () => {
+    useSettingsStore.setState({ headerNavAlignment: "left" });
+    render(<App />);
+
+    const nav = screen.getByTestId("tab-converter").closest("nav");
+    const header = nav?.closest("header");
+    const tabWrapper = nav?.parentElement;
+
+    expect(header).toHaveClass("grid-cols-[auto_minmax(0,1fr)_auto]");
+    expect(tabWrapper).toHaveClass("col-start-2", "row-start-1", "justify-start");
+    expect(nav?.previousElementSibling).toHaveStyle({ display: "none" });
+    expect(nav?.nextElementSibling).toHaveStyle({ display: "none" });
+    expect(screen.getByTestId("sub-tab-row")).toHaveClass("justify-start");
+  });
+
+  it("keeps the sub tabs while the alignment setting changes", () => {
+    render(<App />);
+    const primaryTabs = screen.getByTestId("tab-converter").closest("nav");
+    const subTabs = screen.getByTestId("subtab-converter-core").closest("nav");
+
+    act(() => useSettingsStore.getState().setHeaderNavAlignment("left"));
+    expect(screen.getByTestId("sub-tab-row")).toHaveClass("justify-start");
+    expect(screen.getByTestId("subtab-converter-core")).toBeVisible();
+
+    act(() => useSettingsStore.getState().setHeaderNavAlignment("center"));
+    expect(screen.getByTestId("sub-tab-row")).toHaveClass("justify-center");
+    expect(screen.getByTestId("subtab-converter-core")).toBeVisible();
+
+    // The same strips stay mounted, keeping their scroll position and focus.
+    expect(screen.getByTestId("tab-converter").closest("nav")).toBe(primaryTabs);
+    expect(screen.getByTestId("subtab-converter-core").closest("nav")).toBe(subTabs);
+  });
+
+  it("applies the stored dark theme to the page", () => {
+    useSettingsStore.setState({ theme: "dark" });
+    try {
+      render(<App />);
+      expect(document.documentElement).toHaveClass("dark");
+    } finally {
+      useSettingsStore.setState({ theme: "light" });
+      document.documentElement.classList.remove("dark");
+    }
+  });
+
+  it("shows the brand title next to the logo while the header has room", () => {
+    render(<App />);
+
+    const title = screen.getByTestId("header-brand-title");
+    expect(title).toHaveTextContent("Lumina Studio 2");
+    expect(title).not.toHaveClass("max-w-0");
   });
 
   it("renders local LUT and material secondary tabs in the main app", () => {

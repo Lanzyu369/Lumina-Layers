@@ -450,6 +450,25 @@ A swatch, a layer thumbnail or a preview tile is *content*, not a container. A b
 `index.css` contains `:where([class*="shadow-"], [style*="box-shadow"]) { box-shadow: none !important; }`. Tailwind draws `ring-*` with `box-shadow`, so **any element whose class string contains `shadow-` loses its focus ring as well**. Never put a `shadow-*` utility on an interactive control; use `outline` (as `.ghost-control` does) or a real border for focus styling. Only `.panel-card` carries a real shadow, and it is applied through a CSS class, not a utility.
 `index.css` 的全局规则会清掉含 `shadow-` 类名的阴影；Tailwind 的 `ring-*` 靠 box-shadow 实现，因此类名里出现 `shadow-` 的交互控件会连焦点环一起丢失。交互控件不要写 `shadow-*`，聚焦样式用 outline 或边框；全站只有 `.panel-card` 通过 CSS 类保留真实阴影。
 
+### Top Navigation — 两级导航 (Two-Level Tabs)
+
+> Lumina-specific rules for `TabNavBar` (primary tabs) and `SubTabBar` (sub tabs). 主导航与子导航的专用规则。
+
+- **One tab style for both levels:** borderless tabs with no track behind the group; the selected tab is a raised chip (`--nav-chip-active` fill, `--shadow-nav-chip`, 8px radius) and hover uses `--nav-chip-hover`. Shared classes live in `frontend/src/components/widget/navTabStyles.ts`.
+  两级导航使用同一种标签：无描边、无底槽，选中项是浅色浮起块（8px 圆角），悬停用浅灰底。
+- **Rows and dividers carry the hierarchy, not boxes:** the header row (brand, primary tabs, tools) and the sub-tab row share the chrome surface, one `panel-divider` hairline separates them and a second one closes the sub-tab row. Never add tracks, outlines or tinted bands to tell the levels apart.
+  层级靠行和分隔线表达：顶栏行与子导航行同底色，中间一条细线，子导航行下方再一条；不要用底槽、描边或色带区分层级。
+- **Primary vs sub:** primary tabs are semibold with 16px icons and blue selected text; sub tabs are medium weight with 14px icons and ink selected text. Blue stays on the primary level only.
+  主导航半粗体、16px 图标、选中文字为蓝色；子导航中等字重、14px 图标、选中文字为深色。蓝色只用于主导航。
+- **Alignment is a user setting (`headerNavAlignment`):** `center` keeps both rows on one shared centre line, which is the window axis whenever there is room; `left` places the primary tabs after the brand and starts the sub tabs at the first primary tab. Never truncate, overlap, or stretch the tab group to the full width.
+  对齐方式由用户设置决定：居中时两行共用一条中线，空间足够时就是窗口中线；居左时主导航紧跟标题，子导航从第一个主导航项开始。不截断、不重叠，也不把标签组拉满整行。
+- **A tight header gives way in a fixed order (`headerNavLayout.ts`, `useHeaderNavFit`):** the "Lumina Studio 2" title collapses to the logo whenever that gives the tabs the room they need, before the tabs move; centered tabs leave the window axis only as far as the brand and the tools require, with the sub tabs following the same centre line; only when the tabs no longer fit between the logo and the tools do they move to a row of their own, and the title returns.
+  顶栏变紧时按固定顺序让步：只要收起“Lumina Studio 2”标题文字能给主导航腾出所需空间，就先收起、只留标志，再考虑移动主导航；居中时主导航在不碰到两侧的前提下尽量靠近窗口中线，子导航跟随同一条中线；只有标志和工具按钮之间也放不下时，主导航才移到下一行，标题文字随之恢复。
+- **Tab strips never show a scrollbar (`NavTabStrip`):** in a window narrower than a strip, it scrolls sideways with trackpads, keyboard focus, or a vertical mouse wheel. The selected chip slides only when the selected tab changes (`layoutDependency`); header layout changes such as alignment, title collapse or wrapping move it instantly.
+  导航标签条从不显示滚动条：窗口比标签条还窄时，可用触控板、键盘或鼠标竖向滚轮横向滚动。选中块只在切换标签时滑动；对齐方式、标题收起或换行等顶栏布局变化时直接到位，不重播滑动。
+- **Header tools stay minimal:** only Panel Controls sits on the right of the header row. Language, dark mode, beginner tour, bug report and the backend / reproduction status live in the three-line "More options" menu (`HeaderMenu`), whose rows carry visible labels. The menu button shows a dot only when the backend is unreachable (red) or a bug report is being reproduced (amber).
+  顶栏右侧只保留“面板控件”；语言、深色模式、新手引导、问题反馈和后端/复现状态收进三横线“更多选项”菜单，菜单项带文字。只有后端不可达（红点）或正在复现问题（橙点）时，菜单按钮才显示提示点。
+
 ## 5. Layout Principles
 
 ### Spacing System
