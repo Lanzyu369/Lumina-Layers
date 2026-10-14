@@ -50,6 +50,22 @@ export type SelectionDocument = SelectionDocumentResponse;
 
 export type SourceVersion = "legacy" | "native" | "material" | "lumina_box";
 
+const SOURCE_VERSION_VALUES: readonly SourceVersion[] = [
+  "legacy",
+  "native",
+  "material",
+  "lumina_box",
+];
+
+/** Reject persisted or externally supplied source values we do not understand. */
+export function assertKnownSourceVersion(
+  value: unknown,
+): asserts value is SourceVersion {
+  if (!SOURCE_VERSION_VALUES.includes(value as SourceVersion)) {
+    throw new Error(`Unsupported converter source version: ${String(value)}`);
+  }
+}
+
 /** Optical-profile families that share the material-archive converter path. */
 export type MaterialArchiveProfileKind = "stage_a" | "lumina_box";
 

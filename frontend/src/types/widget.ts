@@ -12,6 +12,7 @@ export type TabId =
   | "extractor"
   | "gradient-card-generate"
   | "gradient-card-extract"
+  | "lumina-box"
   | "lumina-box-material"
   | "lumina-box-stack-samples"
   | "material-library"

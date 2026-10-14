@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 import uuid
@@ -11,6 +12,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
+
+from core.backed_gradient_smooth import SPECTRAL_SMOOTH_MODEL_ID
+from core.lumina_box_archive import (
+    LUMINA_BOX_PROFILE_KIND,
+    validate_lumina_box_material_archive,
+)
+from core.lumina_box_spectral import LUMINA_BOX_SPECTRAL_MODEL_ID
 
 from . import (
     material_files,
@@ -97,6 +105,75 @@ class MaterialArchiveImportResult:
     imported_materials: list[dict[str, Any]]
 
 
+def _filter_integrity_checked_lumina_box_items(
+    target_root: Path,
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep cached Lumina Box rows only while their sidecars still validate."""
+    validated: list[dict[str, Any]] = []
+    for item in items:
+        if item.get("profile_kind") != "lumina_box":
+            validated.append(item)
+            continue
+        directory_name = item.get("directory_name")
+        if not isinstance(directory_name, str) or not directory_name:
+            continue
+        try:
+            material_dir = material_files.resolve_saved_material_dir(target_root, directory_name)
+            archive_payload = material_files._load_json_object(
+                material_dir / "material.json",
+                "Saved Lumina Box material archive is not valid UTF-8 JSON",
+            )
+        except (OSError, ValueError, FileNotFoundError):
+            continue
+        if validate_lumina_box_material_archive(material_dir, archive_payload):
+            validated.append(item)
+    return validated
+
+
+def _install_lumina_box_bundle_package_atomically(
+    *,
+    manifest_root: Path,
+    staged_material_dir: Path,
+    destination_dir: Path,
+    package: dict[str, Any],
+) -> None:
+    """Install a verified Lumina Box package by one directory replacement.
+    通过一次目录替换安装已经校验的 Lumina Box 包。
+    """
+    if destination_dir.exists():
+        raise FileExistsError(
+            f"Lumina Box import destination already exists: {destination_dir.name}"
+        )
+    staging_dir = destination_dir.parent / (
+        f".{destination_dir.name}.lumina-box-import-staging-{uuid.uuid4().hex}"
+    )
+    try:
+        material_package._copy_material_bundle_package_files(
+            manifest_root=manifest_root,
+            staged_material_dir=staged_material_dir,
+            destination_dir=staging_dir,
+            package=package,
+        )
+        copied_archive_payload = material_files._load_json_object(
+            staging_dir / "material.json",
+            "Imported Lumina Box material archive is not valid UTF-8 JSON",
+        )
+        material_package._validate_lumina_box_archive_for_bundle(
+            material_dir=staging_dir,
+            archive_payload=copied_archive_payload,
+            material_label=destination_dir.name,
+        )
+        if destination_dir.exists():
+            raise FileExistsError(
+                f"Lumina Box import destination already exists: {destination_dir.name}"
+            )
+        os.replace(staging_dir, destination_dir)
+    except Exception:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+
+
 def _material_summary_from_saved_archive(
     target_root: Path,
     material_dir: Path,
@@ -107,6 +184,12 @@ def _material_summary_from_saved_archive(
         archive_path,
         "Saved material archive is not valid UTF-8 JSON",
     )
+    if material_package._is_lumina_box_archive_payload(payload):
+        return _lumina_box_material_library_item_from_archive(
+            target_root,
+            material_dir,
+            payload,
+        )
     relative_directory_name = material_files._relative_directory_name(target_root, material_dir)
     stage_a_params_path = material_files._resolve_stage_a_params_path(material_dir, payload)
     if not stage_a_params_path.exists():
@@ -146,6 +229,8 @@ def _material_summary_from_saved_archive(
     return {
         "material_name": material_name,
         "directory_name": relative_directory_name,
+        "notes": archive_payload.get("notes"),
+        "notes": archive_payload.get("notes"),
         "brand": brand_value,
         **picker_metadata,
         "archive_path": str(archive_path),
@@ -602,9 +687,11 @@ def update_saved_stage_a_material_archive_metadata(
     brand: str | None = None,
     estimated_rgb: Sequence[int] | Any = _ESTIMATED_RGB_UNSET,
     materials_dir: str | None = None,
+    notes: Any = _ESTIMATED_RGB_UNSET,
+    material_type: Any = _ESTIMATED_RGB_UNSET,
 ) -> MaterialArchiveUpdateResult:
-    """Update editable metadata on a saved Stage A material archive.
-    更新已保存 Stage A 耗材档案的可编辑元数据。
+    """Update saved material metadata while retaining its optical parameters.
+    更新已保存耗材的元数据，保留光学参数。
 
     Args:
         directory_name: Saved material directory name. (已保存的耗材目录名)
@@ -615,6 +702,9 @@ def update_saved_stage_a_material_archive_metadata(
             previously stored value unchanged. (可选的用户覆盖显示 sRGB 三元组;
             默认 ``_ESTIMATED_RGB_UNSET`` 时保留原值不变)
         materials_dir: Optional materials root override. (可选的 materials 根目录覆盖)
+        notes: Optional notes; omission retains the saved value.（可选备注；省略时保留原值。）
+        material_type: Optional filament type; omission retains the saved value.
+            （可选耗材类型；省略时保留原值。）
 
     Returns:
         MaterialArchiveUpdateResult: Updated archive information. (更新结果)
@@ -642,6 +732,22 @@ def update_saved_stage_a_material_archive_metadata(
         archive_path,
         "Existing material archive is not valid UTF-8 JSON",
     )
+    if archive_payload.get("optical_model") == SPECTRAL_SMOOTH_MODEL_ID:
+        if not validate_lumina_box_material_archive(material_dir, archive_payload):
+            raise ValueError("The saved Box material cannot be read")
+        if normalized_estimated_rgb is not None:
+            raise ValueError("This material's display color is calculated from its measurements")
+        archive_payload.update(material_name=cleaned_material_name, brand=cleaned_brand, updated_at=material_files._now_iso())
+        for field, value in (("notes", notes), ("material_type", material_type)):
+            if value is not _ESTIMATED_RGB_UNSET:
+                archive_payload[field] = str(value).strip() or None if value is not None else None
+        archive_path.write_text(json.dumps(archive_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        material_files._invalidate_material_library_cache(target_root)
+        return MaterialArchiveUpdateResult(
+            archive_path=str(archive_path),
+            stage_a_params_path=str(material_dir / archive_payload["optical_parameters_file"]),
+            material_summary=_lumina_box_material_library_item_from_archive(target_root, material_dir, archive_payload),
+        )
     stage_a_params_path = material_files._resolve_stage_a_params_path(material_dir, archive_payload)
     if not stage_a_params_path.exists():
         raise FileNotFoundError(
@@ -656,6 +762,9 @@ def update_saved_stage_a_material_archive_metadata(
     archive_payload["material_name"] = cleaned_material_name
     archive_payload["brand"] = cleaned_brand
     archive_payload["updated_at"] = updated_at
+    for field, value in (("notes", notes), ("material_type", material_type)):
+        if value is not _ESTIMATED_RGB_UNSET:
+            archive_payload[field] = str(value).strip() or None if value is not None else None
     if normalized_estimated_rgb is not None:
         material_summary = archive_payload.get("material_summary")
         if not isinstance(material_summary, dict):
@@ -735,8 +844,8 @@ def export_saved_stage_a_material_archives(
     materials_dir: str | None = None,
     output_path: str | None = None,
 ) -> MaterialArchiveExportResult:
-    """Export one or more saved Stage A material archives into a ZIP file.
-    导出一个或多个已保存的 Stage A 耗材档案为 ZIP 文件。
+    """Export compatible saved material archives into a ZIP file.
+    将兼容的已保存耗材档案导出为 ZIP 文件。
 
     Args:
         directory_names: Saved material directory names to export. (要导出的耗材目录名)
@@ -748,6 +857,43 @@ def export_saved_stage_a_material_archives(
     """
     normalized_names = material_files._normalize_material_directory_names(directory_names)
     target_root = Path(materials_dir or material_files.MATERIALS_DIR)
+    selected_profile_kinds: set[str] = set()
+    selected_box_models: set[str] = set()
+    for directory_name in normalized_names:
+        material_dir = material_files._resolve_material_dir(target_root, directory_name)
+        material_archive_path = material_dir / "material.json"
+        if not material_archive_path.is_file():
+            raise FileNotFoundError(
+                f"Saved material archive not found: {directory_name}"
+            )
+        archive_payload = material_files._load_json_object(
+            material_archive_path,
+            "Saved material archive is not valid UTF-8 JSON",
+        )
+        if material_package._is_lumina_box_archive_payload(archive_payload):
+            selected_box_models.add(str(archive_payload.get("optical_model")))
+        selected_profile_kinds.add(
+            (
+                _LUMINA_BOX_PROFILE_KIND
+                if material_package._is_lumina_box_archive_payload(archive_payload)
+                else _STAGE_A_PROFILE_KIND
+            )
+        )
+    if len(selected_profile_kinds) != 1:
+        raise ValueError(
+            "Stage A and Lumina Box material archives must be exported separately"
+        )
+    if len(selected_box_models) > 1:
+        raise ValueError("Upgrade older Lumina Box profiles before exporting them with the new model")
+    bundle_schema_version = (
+        material_package._LUMINA_BOX_MATERIAL_PACKAGE_SCHEMA_VERSION
+        if _LUMINA_BOX_PROFILE_KIND in selected_profile_kinds
+        else material_package._MATERIAL_PACKAGE_SCHEMA_VERSION
+    )
+    if selected_box_models == {LUMINA_BOX_SPECTRAL_MODEL_ID}:
+        bundle_schema_version = material_package._SPECTRAL_BOX_MATERIAL_PACKAGE_SCHEMA_VERSION
+    elif selected_box_models == {SPECTRAL_SMOOTH_MODEL_ID}:
+        bundle_schema_version = material_package._BACKED_GRADIENT_BOX_PACKAGE_SCHEMA_VERSION
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     download_filename = f"lumina_materials_{len(normalized_names)}_{timestamp}.zip"
     zip_output_path = (
@@ -764,7 +910,7 @@ def export_saved_stage_a_material_archives(
         "material_count": len(normalized_names),
     }
     bundle_manifest = {
-        "schema_version": material_package._MATERIAL_PACKAGE_SCHEMA_VERSION,
+        "schema_version": bundle_schema_version,
         "kind": "lumina_material_bundle",
         "exported_at": manifest["exported_at"],
         "material_count": len(normalized_names),
@@ -825,8 +971,8 @@ def import_saved_stage_a_material_archives(
     selected_material_id: str | None = None,
     selected_revision_id: str | None = None,
 ) -> MaterialArchiveImportResult:
-    """Import one ZIP file containing one or more saved Stage A material archives.
-    导入一个包含一个或多个已保存 Stage A 耗材档案的 ZIP 文件。
+    """Import one ZIP file containing one or more supported material archives.
+    导入一个包含一个或多个受支持耗材档案的 ZIP 文件。
 
     Args:
         archive_path: ZIP archive path to import. (要导入的 ZIP 归档路径)
@@ -866,6 +1012,11 @@ def import_saved_stage_a_material_archives(
                 manifest_root = extract_root
         bundle_manifest = material_package._load_material_bundle_manifest(manifest_root)
         manifest = material_package._load_material_export_manifest(manifest_root)
+        bundle_schema_version = (
+            str(bundle_manifest["schema_version"])
+            if bundle_manifest is not None
+            else None
+        )
         material_root = (
             extracted_root / "materials"
             if (extracted_root / "materials").is_dir()
@@ -891,6 +1042,7 @@ def import_saved_stage_a_material_archives(
                 material_package._verify_material_bundle_package(
                     extracted_root=manifest_root,
                     package=raw_package,
+                    schema_version=str(bundle_schema_version),
                 )
                 normalized_directory_name = material_files._normalize_relative_directory_name(
                     str(raw_package.get("local_directory") or "")
@@ -957,28 +1109,44 @@ def import_saved_stage_a_material_archives(
                     material_archive_path,
                     "Saved material archive is not valid UTF-8 JSON",
                 )
-                stage_a_params_path = material_files._resolve_stage_a_params_path(
-                    staged_material_dir,
-                    archive_payload,
-                )
-                if not stage_a_params_path.is_file():
-                    raise FileNotFoundError(
-                        f"Saved Stage A parameters not found in ZIP: {relative_directory_name}"
+                is_lumina_box = material_package._is_lumina_box_archive_payload(archive_payload)
+                if is_lumina_box:
+                    material_package._validate_lumina_box_archive_for_bundle(
+                        material_dir=staged_material_dir,
+                        archive_payload=archive_payload,
+                        material_label=relative_directory_name,
                     )
-                stage_a_payload = material_files._load_json_object(
-                    stage_a_params_path,
-                    "Saved Stage A parameters are not valid UTF-8 JSON",
-                )
-                validate_stage_a_solver_parameters(
-                    stage_a_payload,
-                    material_label=relative_directory_name,
-                )
+                else:
+                    stage_a_params_path = material_files._resolve_stage_a_params_path(
+                        staged_material_dir,
+                        archive_payload,
+                    )
+                    if not stage_a_params_path.is_file():
+                        raise FileNotFoundError(
+                            "Saved Stage A parameters not found in ZIP: "
+                            f"{relative_directory_name}"
+                        )
+                    stage_a_payload = material_files._load_json_object(
+                        stage_a_params_path,
+                        "Saved Stage A parameters are not valid UTF-8 JSON",
+                    )
+                    validate_stage_a_solver_parameters(
+                        stage_a_payload,
+                        material_label=relative_directory_name,
+                    )
                 destination_dir = material_files._import_target_material_dir(
                     target_root,
                     relative_directory_name,
                 )
                 try:
-                    if package is not None:
+                    if is_lumina_box and package is not None:
+                        _install_lumina_box_bundle_package_atomically(
+                            manifest_root=manifest_root,
+                            staged_material_dir=staged_material_dir,
+                            destination_dir=destination_dir,
+                            package=package,
+                        )
+                    elif package is not None:
                         material_package._copy_material_bundle_package_files(
                             manifest_root=manifest_root,
                             staged_material_dir=staged_material_dir,
@@ -1001,6 +1169,20 @@ def import_saved_stage_a_material_archives(
                         archive_payload,
                     )
                 )
+            capture_imports = []
+            packages_by_path = {path: package for package, path in installed_packages}
+            for item in imported_materials:
+                if item.get("optical_model_id") == SPECTRAL_SMOOTH_MODEL_ID:
+                    from core.backed_gradient_archive import load_backed_gradient_archive
+                    from core.backed_gradient_backing_transfer import restore_material_captures
+                    from core.backed_gradient_store import BackedGradientStore
+
+                    path = target_root / item["directory_name"]
+                    _, measurements, fit = load_backed_gradient_archive(path)
+                    supplement = packages_by_path.get(path, {}).get("backed_gradient_backing_documents", [])
+                    capture_imports.append((measurements, fit, supplement))
+            if capture_imports:
+                restore_material_captures(BackedGradientStore(target_root), capture_imports)
             material_sync._record_material_sync_entries(
                 target_root=target_root,
                 installed_packages=installed_packages,
@@ -1021,6 +1203,7 @@ def import_saved_stage_a_material_archives(
 def list_saved_stage_a_material_archives(
     *,
     materials_dir: str | None = None,
+    profile_kind: str | None = _STAGE_A_PROFILE_KIND,
 ) -> list[dict[str, Any]]:
     """List saved Stage A material archives from the project materials directory.
     列出项目 materials 目录中已保存的 Stage A 耗材档案。
@@ -1031,12 +1214,34 @@ def list_saved_stage_a_material_archives(
     Returns:
         list[dict[str, Any]]: Material archive summaries sorted by recency. (按时间倒序的耗材档案摘要)
     """
+    normalized_profile_kind: str | None
+    if profile_kind is None:
+        normalized_profile_kind = None
+    else:
+        normalized_profile_kind = str(profile_kind).strip().lower()
+        if normalized_profile_kind == "all":
+            normalized_profile_kind = None
+        elif normalized_profile_kind not in _SUPPORTED_MATERIAL_PROFILE_KINDS:
+            accepted = ", ".join(
+                sorted(_SUPPORTED_MATERIAL_PROFILE_KINDS | {"all"})
+            )
+            raise ValueError(
+                f"Unsupported material profile_kind: {profile_kind!r}; expected {accepted}"
+            )
     target_root = Path(materials_dir or material_files.MATERIALS_DIR)
     if not target_root.exists():
         return []
     cached_items = material_files._cached_material_library_items(target_root)
     if cached_items is not None:
-        return material_registry_client._apply_official_registry_metadata(cached_items)
+        items = material_registry_client._apply_official_registry_metadata(
+            _filter_integrity_checked_lumina_box_items(target_root, cached_items)
+        )
+        return [
+            item
+            for item in items
+            if normalized_profile_kind is None
+            or item.get("profile_kind") == normalized_profile_kind
+        ]
 
     items: list[dict[str, Any]] = []
     archive_paths = [
@@ -1055,11 +1260,16 @@ def list_saved_stage_a_material_archives(
             archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             continue
-        item = _saved_material_library_item_from_archive(
-            target_root,
-            material_dir,
-            archive_payload,
-        )
+        try:
+            item = _saved_material_library_item_from_archive(
+                target_root,
+                material_dir,
+                archive_payload,
+            )
+        except (OSError, ValueError, FileNotFoundError):
+            if _material_profile_kind_from_archive(archive_payload) == _LUMINA_BOX_PROFILE_KIND:
+                continue
+            raise
         content_hash = material_package._local_material_content_hash(material_dir, archive_payload)
         if content_hash:
             item["content_hash"] = content_hash
@@ -1067,4 +1277,9 @@ def list_saved_stage_a_material_archives(
         items.append(item)
     material_registry_client._apply_official_registry_metadata(items)
     material_files._store_material_library_cache(target_root, items)
-    return items
+    return [
+        item
+        for item in items
+        if normalized_profile_kind is None
+        or item.get("profile_kind") == normalized_profile_kind
+    ]
