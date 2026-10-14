@@ -79,6 +79,15 @@ class GradientSelectionRequest(BaseModel):
     record_id: str
 
 
+class GradientFitRequest(BaseModel):
+    """Declare validation handling without accepting client parameters.
+    声明验证处理方式，不接收客户端模型参数。
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    include_validation_thickness: bool = True
+
+
 class MaterialDatasetCreate(BaseModel):
     """One filament and its saved backing setup. / 一种耗材及已存背板设置。"""
 

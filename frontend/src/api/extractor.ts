@@ -13,6 +13,11 @@ import type {
   GradientCardMaterialSaveResponse,
   GradientCardMaterialUpdateResponse,
   GradientCardStageAExtractResponse,
+  LuminaBoxFitRequest,
+  LuminaBoxFitResponse,
+  LuminaBoxMaterialLibraryResponse,
+  LuminaBoxSaveRequest,
+  LuminaBoxSaveResponse,
   LutPreviewResolvedCell,
   ManualFixResponse,
   ManualOrientationLabel,
@@ -799,6 +804,36 @@ export async function fitStageA(params: {
     fd,
     { timeout: 3_600_000 },
   );
+  return response.data;
+}
+
+/** Fit the adopted Lumina Box spectral profile. 拟合新版 Lumina Box 波段档案。 */
+export async function fitLuminaBoxMaterial(
+  payload: LuminaBoxFitRequest,
+): Promise<LuminaBoxFitResponse> {
+  const response = await apiClient.post<LuminaBoxFitResponse>(
+    "/extractor/lumina-box/fit",
+    payload,
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/** Save a fitted Lumina Box profile, optionally replacing a same-name profile. */
+export async function saveLuminaBoxMaterial(
+  payload: LuminaBoxSaveRequest,
+): Promise<LuminaBoxSaveResponse> {
+  const response = await apiClient.post<LuminaBoxSaveResponse>(
+    "/extractor/lumina-box/save",
+    payload,
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/** Load saved Box calibration choices. 加载已保存的 Box 校准白参考。 */
+export async function listLuminaBoxMaterials(): Promise<LuminaBoxMaterialLibraryResponse> {
+  const response = await apiClient.get<LuminaBoxMaterialLibraryResponse>("/extractor/lumina-box/materials");
   return response.data;
 }
 

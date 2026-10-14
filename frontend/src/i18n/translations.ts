@@ -10855,4 +10855,149 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "设置项旁边的问号图标可以查看说明和在线文档；右上角的反馈按钮可以把问题发给开发者。\n想再看一遍这份引导，随时点击这个书本图标。祝打印顺利！",
     en: "The question-mark icons next to settings show explanations and link to the online docs, and the feedback button at the top right sends problems to the developers.\nTo see this tour again, click this book icon any time. Happy printing!",
   },
+  lumina_box_stack_backing_context: {
+    zh: "当前匀光板 XYZ（%）",
+    en: "Current diffuser XYZ (%)",
+  },
+  lumina_box_stack_batch: {
+    zh: "材料批次",
+    en: "Material batch",
+  },
+  lumina_box_stack_current_sample: {
+    zh: "当前待采样片",
+    en: "Sample ready to measure",
+  },
+  lumina_box_stack_delete_selected: { zh: "删除这条记录", en: "Delete this record" },
+  lumina_box_stack_not_provided: { zh: "未填写", en: "Not provided" },
+  lumina_box_stack_description: {
+    zh: "按外观面到白底输入配方。连接 BOX 后选择 AUTO 或反射模式，按一次测量即可保存一条实测记录。",
+    en: "Enter the recipe from the visible face toward the white backing. Connect the BOX, select AUTO or reflection mode, and press Measure to save each reading.",
+  },
+  lumina_box_stack_export: { zh: "导出 JSON", en: "Export JSON" },
+  lumina_box_stack_loading: { zh: "正在读取…", en: "Loading…" },
+  lumina_box_stack_fixed_thickness: {
+    zh: "样片总厚 3.00 mm",
+    en: "Sample thickness 3.00 mm",
+  },
+  lumina_box_stack_geometry_hint: {
+    zh: "最底部白色首层为 0.20 mm，其余每层 0.08 mm，共 36 层。只需输入 1–35 层上部配方，剩余位置自动补白。BOX 上选择的厚度只作为设备原始信息保留，不改变样片结构。",
+    en: "The first white layer at the bottom is 0.20 mm; the other layers are 0.08 mm, for 36 layers in total. Enter 1–35 upper layers and the remaining positions are filled with white. The BOX thickness selection is retained only as device metadata.",
+  },
+  lumina_box_stack_geometry_summary: {
+    zh: "上部 {layers} 层 / {upper} mm + 白底 {base} mm = 3.00 mm",
+    en: "{layers} upper layers / {upper} mm + {base} mm white backing = 3.00 mm",
+  },
+  lumina_box_stack_invalid_recipe: {
+    zh: "请输入 1–35 个有效字母 W、R、Y、B、C、M、G、K，再进行测量。",
+    en: "Enter 1–35 valid letters (W, R, Y, B, C, M, G, K), then take a new measurement.",
+  },
+  lumina_box_stack_latest: {
+    zh: "最近保存的样片",
+    en: "Latest saved sample",
+  },
+  lumina_box_stack_records_empty: {
+    zh: "还没有叠色样片记录。首次测量保存后会出现在这里。",
+    en: "No stack samples yet. Your first saved measurement will appear here.",
+  },
+  lumina_box_stack_measured_color: {
+    zh: "反射实测颜色",
+    en: "Measured reflection color",
+  },
+  lumina_box_stack_metadata: {
+    zh: "样片名称与采集信息（可选）",
+    en: "Sample name and capture details (optional)",
+  },
+  lumina_box_stack_name: {
+    zh: "样片名称",
+    en: "Sample name",
+  },
+  lumina_box_stack_no_reading: {
+    zh: "输入配方并连接 BOX，测量成功保存后会在这里显示实测颜色。",
+    en: "Enter a recipe and connect the BOX. The measured color appears here after the reading is saved.",
+  },
+  lumina_box_stack_raw_details: { zh: "原始采集与完整层序", en: "Raw capture and complete layer order" },
+  lumina_box_stack_notes: {
+    zh: "备注",
+    en: "Notes",
+  },
+  lumina_box_stack_pending_description: {
+    zh: "每条读数仍对应它收到时的配方。重试不会改归当前新配方。",
+    en: "Each reading keeps the recipe entered when it arrived. Retrying does not assign it to a newer recipe.",
+  },
+  lumina_box_stack_save_failed: {
+    zh: "样片保存失败，原读数已保留，请重试保存。",
+    en: "The sample could not be saved. The original reading is retained; retry saving it.",
+  },
+  lumina_box_stack_received_at: {
+    zh: "采集时间",
+    en: "Captured at",
+  },
+  lumina_box_stack_recipe_hint: {
+    zh: "从左到右填写外观面至白底方向的上部配方，每个字母为 0.08 mm。白色底板由软件补足，总厚固定为 3.00 mm。",
+    en: "Read left to right from the visible face toward the white backing. Each letter adds a 0.08 mm upper layer. The software fills the remaining white backing to a total of 3.00 mm.",
+  },
+  lumina_box_stack_recipe_label: {
+    zh: "配方（外观面 → 内部 → 白底）",
+    en: "Recipe (visible face → inside → white backing)",
+  },
+  lumina_box_stack_recipe_placeholder: {
+    zh: "例如 RYBWYY",
+    en: "For example, RYBWYY",
+  },
+  lumina_box_stack_record_count: {
+    zh: "共 {count} 条实测记录；同一配方可多次测量",
+    en: "{count} measured records; repeated measurements of one recipe are kept separately",
+  },
+  lumina_box_stack_records: {
+    zh: "已保存样片",
+    en: "Saved samples",
+  },
+  lumina_box_stack_reference: {
+    zh: "白参考记录（可选）",
+    en: "White reference (optional)",
+  },
+  lumina_box_stack_reference_auto: {
+    zh: "沿用唯一可用白参考；无记录时留空",
+    en: "Use the only available white reference, or leave unset",
+  },
+  lumina_box_stack_reflection_xyz: {
+    zh: "原始反射 XYZ（%）",
+    en: "Raw reflection XYZ (%)",
+  },
+  lumina_box_stack_refresh: { zh: "刷新记录", en: "Refresh records" },
+  lumina_box_stack_retry: {
+    zh: "重试保存",
+    en: "Retry save",
+  },
+  lumina_box_stack_saved_at: {
+    zh: "保存时间",
+    en: "Saved at",
+  },
+  lumina_box_stack_selected_record: { zh: "选中记录", en: "Selected record" },
+  lumina_box_stack_serial_hint: {
+    zh: "连接一次后可连续换配方、测量和保存。BOX 使用 AUTO 或反射模式，厚度可任意选择。正在保存时输入会暂时锁定；保存失败可重试原读数，无需重新测量。",
+    en: "Keep one connection while changing recipes and measuring successive samples. Use AUTO or reflection mode with any BOX thickness selection. Inputs briefly lock while saving. Retry a failed save without measuring again.",
+  },
+  lumina_box_stack_storage_failed: {
+    zh: "浏览器无法保存采集缓存。待读数仍保留在当前页面，请恢复本地存储后重试。",
+    en: "The browser could not save the capture cache. Pending readings remain on this page; restore local storage and retry.",
+  },
+  lumina_box_stack_title: {
+    zh: "叠色样片实测",
+    en: "Measure printed stack samples",
+  },
+  lumina_box_stack_transmission_not_measured: {
+    zh: "未采集透射数据（本条为仅反射测量）",
+    en: "Transmission was not measured (reflection-only capture).",
+  },
+  lumina_box_stack_transmission_xyz: {
+    zh: "原始透射 XYZ（%）",
+    en: "Raw transmission XYZ (%)",
+  },
+  lumina_box_stack_unnamed: { zh: "未命名样片", en: "Unnamed sample" },
+  lumina_box_stack_view: { zh: "查看", en: "View" },
+  lumina_box_workspace_tabs: {
+    zh: "Lumina Box 工作区",
+    en: "Lumina Box workspace",
+  },
 };

@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends
 from starlette.responses import FileResponse, JSONResponse
 
 from api.backed_gradient_jobs import (
-    read_result, read_run, start_material_fit, start_backing_fit,
+    read_result, read_run, read_validation, score_validation, start_fit, start_material_fit, start_backing_fit,
     start_backing_material_fit,
 )
 from api.dependencies import get_file_registry, get_worker_pool
@@ -21,7 +21,7 @@ from api.errors import ConflictDomainError, NotFoundDomainError, to_http_excepti
 from api.file_registry import FileRegistry
 from api.local_origin_guard import require_local_app_origin
 from api.schemas.backed_gradient import (
-    GradientCaptureRequest, GradientDatasetCreate, GradientSelectionRequest,
+    GradientCaptureRequest, GradientDatasetCreate, GradientFitRequest, GradientSelectionRequest,
     MaterialDatasetCreate, BackingDatasetCreate, MaterialFitRequest, MaterialArchiveSaveRequest,
     BackingMaterialDatasetCreate, BlackWhitePairCreate,
 )
@@ -407,6 +407,25 @@ def import_dataset(payload: dict[str, Any], store: BackedGradientStore = Depends
     return {"dataset": dataset}
 
 
+@router.post("/datasets/{dataset_id}/fit-runs")
+async def create_fit_run(dataset_id: UUID, payload: GradientFitRequest,
+                         store: BackedGradientStore = Depends(get_gradient_store),
+                         pool: WorkerPoolManager = Depends(get_worker_pool)) -> dict[str, Any]:
+    """Start a bounded fit from a frozen server snapshot.
+    从冻结服务器快照启动有时限的拟合。
+
+    Args:
+        dataset_id: Experiment UUID.（实验UUID。）
+        payload: Validation/refit mode.（验证或重拟合模式。）
+        store: Experiment storage.（实验存储。）
+        pool: Managed workers.（受管理工作进程。）
+
+    Returns:
+        Initial task state.（初始任务状态。）
+    """
+    run = _perform("fit", lambda: start_fit(store, pool, str(dataset_id), include_validation=payload.include_validation_thickness))
+    log.info("Backed-gradient fit queued", extra={"event": "backed_gradient_fit_queue_done", "fit_id": run["fit_id"], "dataset_id": str(dataset_id)})
+    return {"run": run}
 
 
 @router.get("/datasets/{dataset_id}/fit-runs")
@@ -486,8 +505,36 @@ def export_fit_result(fit_id: UUID, format: Literal["json", "csv", "png"],
     return FileResponse(resolved[0], filename=resolved[1], media_type=media, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/fit-runs/{fit_id}/validate-024")
+def validate_fit_024(fit_id: UUID, store: BackedGradientStore = Depends(get_gradient_store)) -> dict[str, Any]:
+    """Validate new .24 readings without refitting existing parameters.
+    验证新零点二四毫米读数，不重拟合既有参数。
+
+    Args:
+        fit_id: Frozen fit UUID.（冻结拟合UUID。）
+        store: Experiment storage.（实验存储。）
+
+    Returns:
+        Independently persisted validation.（独立持久化验证。）
+    """
+    validation = _perform("validate_024", lambda: score_validation(store, str(fit_id)))
+    log.info("Backed-gradient independent validation saved", extra={"event": "backed_gradient_validation_save_done", "fit_id": str(fit_id)})
+    return {"validation": validation}
 
 
+@router.get("/fit-runs/{fit_id}/validation-024")
+def get_fit_validation(fit_id: UUID, store: BackedGradientStore = Depends(get_gradient_store)) -> dict[str, Any]:
+    """Read separate frozen validation after navigation or restart.
+    切页或重启后读取独立冻结验证。
+
+    Args:
+        fit_id: Fit UUID.（拟合UUID。）
+        store: Experiment storage.（实验存储。）
+
+    Returns:
+        Latest validation or null.（最新验证或空值。）
+    """
+    return {"validation": _perform("validation_read", lambda: read_validation(store, str(fit_id)))}
 
 
 def _missing_comparison() -> Any:

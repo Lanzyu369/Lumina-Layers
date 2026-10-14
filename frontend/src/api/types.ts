@@ -877,9 +877,241 @@ export interface StageAFitResponse {
   fit_summary: StageAFitSummary;
 }
 
+/**
+ * CIE XYZ triplet used by the Lumina Box manual optical-measurement flow.
+ * Lumina Box 手工光学测量流程使用的 CIE XYZ 三元组。
+ *
+ * Measurement and prediction triplets in the paired protocol use the
+ * explicit 0–100 percentage scale; the estimated effective XYZ triplet is a
+ * separate relative 0–1 value in the fit response.
+ * paired 协议中的测量值和预测值明确使用 0–100 百分数；拟合响应中的有效
+ * XYZ 估计值另有明确的 relative 0–1 类型。
+ */
 export type LuminaBoxXYZ = [number, number, number];
+
 export type LuminaBoxPercentXYZ = LuminaBoxXYZ;
+
+export type LuminaBoxNumericPercentXYZ = LuminaBoxXYZ;
+
+export type LuminaBoxValueScale = "percent_0_100";
+
+export type LuminaBoxMeasurementProtocolId = "lumina_box_xyz_paired_diffuser_km/v2";
+
+export type LuminaBoxFitObjectiveId = "box_spectral_paired_equal_xyz/v1" | "box_spectral_paired_physical_white/v2" | "box_spectral_paired_spectral_white/v3";
+export const LUMINA_BOX_DEFAULT_REFERENCE_MIN_REFLECTANCE_PERCENT = 95;
+
+export type LuminaBoxMeasurementReflectionBoundaryId = "instrument_diffuser_recycled_white_reference/v1";
+export const LUMINA_BOX_OPTICAL_MODEL_ID = "box_reference_consistent_feedback/equal_xyz_v1" as const;
+export type LuminaBoxOpticalModelId = typeof LUMINA_BOX_OPTICAL_MODEL_ID;
+
+export type LuminaBoxResidualUnit = "percentage_point";
+
+export interface LuminaBoxPairedSample {
+  thickness_mm: number;
+  transmittance_percent_xyz: LuminaBoxPercentXYZ;
+  reflectance_percent_xyz: LuminaBoxPercentXYZ;
+}
+
+export interface LuminaBoxRawMeasurementRow {
+  thickness_mm: string;
+  reflectance_percent_xyz: [string, string, string];
+  transmittance_percent_xyz: [string, string, string];
+}
+
+export interface LuminaBoxRawMeasurements {
+  material_name: string;
+  brand: string;
+  material_type: string;
+  notes: string;
+  is_reference_white?: boolean;
+  reference_directory_name?: string | null;
+  reference_min_reflectance_percent?: string;
+  measurement_backing_percent_xyz: [string, string, string];
+  samples: LuminaBoxRawMeasurementRow[];
+}
+
+export interface LuminaBoxMeasurementRecord extends LuminaBoxRawMeasurements {
+  schema_version: string;
+  kind: "lumina_box_measurements";
+  record_id: string;
+  created_at: string;
+}
+
+export interface LuminaBoxMeasurementSummary {
+  record_id: string;
+  created_at: string;
+  material_name: string;
+  brand: string;
+  sample_count: number;
+}
+
+/** Fixed color-space bridge used by Lumina Box KM-XYZ responses. */
 export type LuminaBoxColorBridgeId = "d65_10_to_d65_2_diagonal/v1";
+
+/** Request body for one fixed paired T/R Lumina Box fit. */
+export interface LuminaBoxFitRequest {
+  protocol_id: LuminaBoxMeasurementProtocolId;
+  value_scale: LuminaBoxValueScale;
+  measurement_backing_percent_xyz: LuminaBoxNumericPercentXYZ;
+  samples: LuminaBoxPairedSample[];
+  is_reference_white: boolean;
+  reference_directory_name?: string | null;
+  reference_min_reflectance_percent?: number;
+}
+
+export interface LuminaBoxSamplePredictionValues {
+  measured_percent_xyz: LuminaBoxPercentXYZ;
+  predicted_percent_xyz: LuminaBoxPercentXYZ;
+  residual_percentage_points_xyz: LuminaBoxXYZ;
+}
+
+export interface LuminaBoxSamplePrediction {
+  thickness_mm: number;
+  transmittance: LuminaBoxSamplePredictionValues;
+  reflectance: LuminaBoxSamplePredictionValues;
+}
+
+export type LuminaBoxResidualModality = "transmittance" | "reflectance";
+
+export interface LuminaBoxMaxResidualLocation {
+  thickness_mm: number;
+  modality: LuminaBoxResidualModality;
+  channel: "X" | "Y" | "Z";
+  signed_residual_percentage_points: number;
+}
+
+export interface LuminaBoxResidualSummary {
+  transmittance_channel_rmse_percentage_points_xyz: LuminaBoxXYZ;
+  reflectance_channel_rmse_percentage_points_xyz: LuminaBoxXYZ;
+  channel_rmse_percentage_points_xyz: LuminaBoxXYZ;
+  transmittance_rmse_percentage_points: number;
+  reflectance_rmse_percentage_points: number;
+  overall_rmse_percentage_points: number;
+  max_abs_residual_percentage_points: number;
+  max_abs_location: LuminaBoxMaxResidualLocation;
+}
+
+export interface LuminaBoxChannelDiagnostics {
+  channel: "X" | "Y" | "Z";
+  transmittance_rmse: number;
+  reflectance_rmse: number;
+  warnings: string[];
+}
+
+export interface LuminaBoxFitDiagnostics {
+  success: boolean;
+  message: string;
+  nfev: number;
+  start_count: number;
+  robust_objective: number;
+  jacobian_condition: number | null;
+  objective_id: LuminaBoxFitObjectiveId;
+  objective_config: Record<string, unknown>;
+  channels: LuminaBoxChannelDiagnostics[];
+  warnings: string[];
+}
+
+export interface LuminaBoxFitParameters {
+  parameterization: "log_absorption4_log_scattering_power_forward_coupling/v1";
+  log_absorption_anchors: [number, number, number, number];
+  log_scattering_strength: number;
+  scattering_power: number;
+  forward_scattering_fraction: number;
+  measurement_backing_scale: number;
+  unit: "mm^-1";
+}
+
+/** Result of fitting the six effective XYZ K/S coefficients. */
+export interface LuminaBoxFitResponse {
+  status: "ok";
+  message: string;
+  fit_session_id: string;
+  model_id: LuminaBoxOpticalModelId;
+  optical_model_id: LuminaBoxOpticalModelId;
+  reference_id: string;
+  is_reference_white: boolean;
+  measurement_protocol_id: LuminaBoxMeasurementProtocolId;
+  color_bridge_id: LuminaBoxColorBridgeId;
+  value_scale: LuminaBoxValueScale;
+  residual_unit: LuminaBoxResidualUnit;
+  parameters: LuminaBoxFitParameters;
+  sample_predictions: LuminaBoxSamplePrediction[];
+  residual_summary: LuminaBoxResidualSummary;
+  diagnostics: LuminaBoxFitDiagnostics;
+  estimated_effective_d65_10_xyz_relative: LuminaBoxXYZ;
+  estimated_reflectance_thickness_mm: number;
+  estimated_srgb: LuminaBoxXYZ;
+  measurement_backing_base_percent_xyz: LuminaBoxXYZ;
+  measurement_backing_scale: number;
+  measurement_backing_effective_percent_xyz: LuminaBoxXYZ;
+  measurement_reflection_boundary_id: LuminaBoxMeasurementReflectionBoundaryId;
+  fit_quality: LuminaBoxFitQuality;
+  reference_physics?: LuminaBoxReferencePhysics | null;
+  warnings: string[];
+}
+
+export interface LuminaBoxReferencePhysics {
+  minimum_total_reflectance_percent_y: number;
+  total_reflectance_percent_xyz: LuminaBoxXYZ;
+  total_transmittance_percent_xyz: LuminaBoxXYZ;
+  absorption_percent_xyz: LuminaBoxXYZ;
+  lower_bound_active: boolean;
+  assigned_calibration_percent: number;
+  exact_white_reflectance_measured: false;
+}
+
+export interface LuminaBoxFitQuality {
+  savable: boolean;
+  reasons: string[];
+  thresholds: Record<string, number>;
+}
+
+export interface LuminaBoxSaveRequest {
+  fit_session_id: string;
+  material_name: string;
+  brand?: string | null;
+  material_type?: string | null;
+  notes?: string | null;
+  overwrite?: boolean;
+}
+
+export interface LuminaBoxSavedMaterial {
+  material_name: string;
+  directory_name: string;
+  brand: string | null;
+  material_type: string | null;
+  notes: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  profile_kind: "lumina_box";
+  acquisition_source: "lumina_box";
+  optical_model: LuminaBoxOpticalModelId;
+  optical_model_id: LuminaBoxOpticalModelId;
+  reference_id: string | null;
+  is_reference_white: boolean;
+  measurement_protocol_id: LuminaBoxMeasurementProtocolId;
+  color_bridge_id: LuminaBoxColorBridgeId;
+  measurement_backing_base_percent_xyz: number[];
+  measurement_backing_scale: number | null;
+  measurement_backing_effective_percent_xyz: number[];
+  measurement_reflection_boundary_id: LuminaBoxMeasurementReflectionBoundaryId;
+  estimated_effective_d65_10_xyz_relative: number[];
+  estimated_reflectance_thickness_mm: number | null;
+  estimated_rgb: number[];
+}
+
+export interface LuminaBoxSaveResponse {
+  status: "ok";
+  message: string;
+  material: LuminaBoxSavedMaterial;
+}
+
+export interface LuminaBoxMaterialLibraryResponse {
+  status: "ok";
+  message: string;
+  materials: LuminaBoxSavedMaterial[];
+  outdated_count: number;
+}
 
 export interface GradientCardMaterialSummary {
   sample_count: number;
@@ -2330,6 +2562,7 @@ export interface UserSettings {
   custom_slicer_id: string;
   nozzle_size: string;
   enable_base_layer_height_modifier: boolean;
+  measurement_backing_percent_xyz?: [number, number, number];
   enable_wipe_tower_auto_placement: boolean;
   enable_solver_cache_grid_selection: boolean;
   solver_cache_grid_resolution: 64 | 128 | 256 | 512 | 1024 | 2048;

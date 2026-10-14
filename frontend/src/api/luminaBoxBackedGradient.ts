@@ -5,6 +5,7 @@ export type BackedGradientSymbol = "R" | "Y" | "B" | "W" | "K" | "C" | "M" | "G"
 export type BackedGradientBacking = "W" | "K";
 export type BackedGradientRole = "coated" | "bare_backing";
 export type BackedGradientXYZ = [number, number, number];
+export type BackedGradientModelKey = "affine" | "two_flux";
 export const BACKED_GRADIENT_THICKNESSES = [0.08, 0.16, 0.24, 0.32, 0.64, 1.28, 2] as const;
 export const BACKED_GRADIENT_SYMBOLS: BackedGradientSymbol[] = ["R", "Y", "B", "W", "K", "C", "M", "G"];
 export const BACKED_GRADIENT_CAPTURE_SYMBOLS: BackedGradientSymbol[] = [...BACKED_GRADIENT_SYMBOLS, "material"];
@@ -95,6 +96,11 @@ export interface BackedGradientFitRun {
   updated_at: string;
 }
 
+export interface BackedGradientMetrics {
+  overall_rmse_pp: number;
+  per_material_rmse_pp: Partial<Record<BackedGradientSymbol, number>>;
+}
+
 export interface BackedGradientPrediction {
   record_id: string;
   material_symbol: BackedGradientSymbol;
@@ -107,14 +113,107 @@ export interface BackedGradientPrediction {
   residual_percent_xyz: BackedGradientXYZ;
 }
 
+export interface BackedGradientStability {
+  status: "stable" | "unstable" | "not_available" | "incomplete";
+  per_backing?: Partial<Record<BackedGradientBacking, {
+    xyz_width_p95_pp: number;
+    xyz_width_max_pp: number;
+    delta_e00_p95: number;
+    delta_e00_max: number;
+  }>>;
+  accepted_parameter_sets?: number;
+  profile_evaluations?: number;
+}
+
+export interface BackedGradientModelResult {
+  status: "converged" | "failed" | "exploratory";
+  model_id: string;
+  parameters: Record<string, unknown> | null;
+  cv: BackedGradientMetrics | null;
+  sample_predictions: BackedGradientPrediction[];
+  stability: BackedGradientStability;
+  error?: string | null;
+}
+
+export interface BackedGradientValidation {
+  status: "frozen_and_scored" | "not_available" | "included_in_training";
+  used_for_training: boolean;
+  selected_model_before_validation?: BackedGradientModelKey | null;
+  prediction_hash?: string;
+  predictions?: Partial<Record<BackedGradientModelKey, BackedGradientPrediction[]>>;
+  metrics?: Partial<Record<BackedGradientModelKey, BackedGradientMetrics>>;
+  passed: boolean | null;
+  source_fit_input_hash?: string;
+  current_validation_input_hash?: string;
+}
+
+export interface BackedGradientRecipeColor {
+  xyz: BackedGradientXYZ;
+  rgb: [number, number, number];
+  hex: string;
+}
+
+export interface BackedGradientComparisonRow {
+  id: number;
+  row: number;
+  column: number;
+  recipe_visible_to_back: string;
+  backings: Record<BackedGradientBacking, {
+    affine: BackedGradientRecipeColor | null;
+    two_flux: BackedGradientRecipeColor | null;
+    delta_e00: number | null;
+    stability: Partial<Record<BackedGradientModelKey, { xyz_width_pp: BackedGradientXYZ; delta_e00_width: number }>>;
+  }>;
+}
+
+export interface BackedGradientBlindRecipe {
+  recipe_visible_to_back: string;
+  backing: BackedGradientBacking;
+  layer_mm: number;
+  backing_mm: number;
+  total_mm: number;
+  predictions: Partial<Record<BackedGradientModelKey, BackedGradientXYZ>>;
+}
+
+export interface BackedGradientFitResult {
+  models: Record<BackedGradientModelKey, BackedGradientModelResult>;
+  recommendation: {
+    model: BackedGradientModelKey | null;
+    status: "recommended" | "exploratory";
+    reason: string;
+    failure_stage?: "frozen_six" | "frozen_validation_024" | "full_refit";
+    failure_reason?: string;
+  };
+  validation_024: BackedGradientValidation;
+  controls: {
+    rows: Array<Record<string, unknown>>;
+    count: number;
+    max_abs_deviation_pp: number;
+    rms_deviation_pp: number;
+  };
+  comparison: {
+    model_ids?: Partial<Record<BackedGradientModelKey, string>>;
+    geometry: { total_mm: 3; upper_layers: 5; layer_mm: 0.08; backing_mm: 2.6 };
+    rows: BackedGradientComparisonRow[];
+    blind_recipes: BackedGradientBlindRecipe[];
+  } | null;
+}
+
 const endpoint = "/extractor/lumina-box/backed-gradient";
 const options = { timeout: 15_000 };
 const datasetUrl = (id: string) => `${endpoint}/datasets/${encodeURIComponent(id)}`;
+const runUrl = (id: string) => `${endpoint}/fit-runs/${encodeURIComponent(id)}`;
 
 /** Resolve a trusted backend export only at the download boundary.
  * 仅在下载出口解析可信的后端导出地址。 */
 export function getBackedGradientExportUrl(id: string): string {
   return buildApiResourceUrl(`${datasetUrl(id)}/export`);
+}
+
+/** Resolve a generated fit attachment for the desktop download handler.
+ * 为桌面下载处理器解析已生成的拟合附件地址。 */
+export function getBackedGradientFitExportUrl(id: string, format: "json" | "csv" | "png"): string {
+  return buildApiResourceUrl(`${runUrl(id)}/exports/${format}`);
 }
 
 /** List independent reflection-gradient datasets. / 列出独立反射梯度数据集。 */
@@ -157,4 +256,41 @@ export async function exportBackedGradientDataset(id: string): Promise<BackedGra
 /** Merge an exported dataset without removing existing records. / 合并导入数据集，保留已有记录。 */
 export async function importBackedGradientDataset(data: BackedGradientExport): Promise<BackedGradientDataset> {
   return (await apiClient.post<{ dataset: BackedGradientDataset }>(`${endpoint}/import`, data, options)).data.dataset;
+}
+
+/** Start a separate frozen-input fit. / 启动独立的冻结输入拟合。 */
+export async function startBackedGradientFit(id: string, includeValidationThickness: boolean): Promise<BackedGradientFitRun> {
+  return (await apiClient.post<{ run: BackedGradientFitRun }>(`${datasetUrl(id)}/fit-runs`, {
+    include_validation_thickness: includeValidationThickness,
+  }, options)).data.run;
+}
+
+/** Read asynchronous fit progress. / 读取异步拟合进度。 */
+export async function loadBackedGradientFit(id: string): Promise<BackedGradientFitRun> {
+  return (await apiClient.get<{ run: BackedGradientFitRun }>(runUrl(id), options)).data.run;
+}
+
+/** List every independent fit for this dataset. / 列出数据集的各次独立拟合。 */
+export async function listBackedGradientFits(id: string): Promise<BackedGradientFitRun[]> {
+  return (await apiClient.get<{ runs: BackedGradientFitRun[] }>(`${datasetUrl(id)}/fit-runs`, options)).data.runs;
+}
+
+/** Read a finished result and its unclipped color predictions. / 读取完成的结果及未裁切颜色预测。 */
+export async function loadBackedGradientFitResult(id: string): Promise<BackedGradientFitResult> {
+  return (await apiClient.get<{ result: BackedGradientFitResult }>(`${runUrl(id)}/result`, options)).data.result;
+}
+
+/** Score later 0.24 mm samples against frozen parameters. / 用冻结参数检验后补的0.24毫米样本。 */
+export async function validateBackedGradient024(id: string): Promise<BackedGradientValidation> {
+  return (await apiClient.post<{ validation: BackedGradientValidation }>(`${runUrl(id)}/validate-024`, {}, options)).data.validation;
+}
+
+/** Reload the latest independent 0.24 mm validation. / 重新读取独立的0.24毫米验证结果。 */
+export async function loadBackedGradientValidation(id: string): Promise<BackedGradientValidation | null> {
+  return (await apiClient.get<{ validation: BackedGradientValidation | null }>(`${runUrl(id)}/validation-024`, options)).data.validation;
+}
+
+/** Download a generated fit artifact. / 下载已生成的拟合产物。 */
+export async function downloadBackedGradientFit(id: string, format: "json" | "csv" | "png"): Promise<Blob> {
+  return (await apiClient.get<Blob>(`${runUrl(id)}/exports/${format}`, { ...options, responseType: "blob" })).data;
 }

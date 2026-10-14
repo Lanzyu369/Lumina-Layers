@@ -1,9 +1,18 @@
 """Lumina Studio API system schemas."""
 
 from dataclasses import dataclass
-from typing import Literal
+import math
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, StrictBool
+from pydantic import BaseModel, Field, StrictBool, field_validator
+
+
+_DEFAULT_MEASUREMENT_BACKING_PERCENT_XYZ = (19.8, 19.7, 24.7)
+
+
+def _default_measurement_backing_percent_xyz() -> list[float]:
+    """Return an independent default XYZ triplet for each settings instance."""
+    return list(_DEFAULT_MEASUREMENT_BACKING_PERCENT_XYZ)
 
 
 class DeviceProfileInfo(BaseModel):
@@ -114,6 +123,41 @@ class UserSettings(BaseModel):
     material_delta_e00_tolerance: float = Field(default=0.5, ge=0.0, le=5.0)
     auto_replace_gradient_banding: StrictBool = False
     generated_file_directory: str = Field(default="", max_length=1024)
+    measurement_backing_percent_xyz: list[float] = Field(
+        default_factory=_default_measurement_backing_percent_xyz,
+        description="Instrument diffuser XYZ percentages; all zeros select diffuser-free capture.",
+    )
+
+    @field_validator("measurement_backing_percent_xyz", mode="before")
+    @classmethod
+    def validate_measurement_backing_percent_xyz(cls, value: Any) -> list[float]:
+        """Accept positive diffuser XYZ or an all-zero capture marker.
+        接受正数匀光板 XYZ，或表示无匀光板采集的全零标记。
+        """
+        if not isinstance(value, (list, tuple)) or len(value) != 3:
+            raise ValueError(
+                "measurement_backing_percent_xyz must contain exactly 3 channels"
+            )
+
+        normalized: list[float] = []
+        for channel in value:
+            if isinstance(channel, bool) or not isinstance(channel, (int, float)):
+                raise ValueError(
+                    "measurement_backing_percent_xyz channels must be finite numbers in [0, 100]"
+                )
+            numeric = float(channel)
+            if not math.isfinite(numeric) or not 0.0 <= numeric <= 100.0:
+                raise ValueError(
+                    "measurement_backing_percent_xyz channels must be finite numbers in [0, 100]"
+                )
+            normalized.append(numeric)
+        if any(channel == 0.0 for channel in normalized) and any(
+            channel > 0.0 for channel in normalized
+        ):
+            raise ValueError(
+                "measurement_backing_percent_xyz must be all positive, or all zero for diffuser-free capture"
+            )
+        return normalized
 
 
 class UserSettingsResponse(BaseModel):

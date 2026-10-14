@@ -54,6 +54,14 @@ export const MATERIAL_DELTA_E00_TOLERANCE_MIN = 0.0;
 export const MATERIAL_DELTA_E00_TOLERANCE_MAX = 5.0;
 export const MATERIAL_DELTA_E00_TOLERANCE_STEP = 0.1;
 
+export type LuminaBoxMeasurementBackingPercentXYZ = [string, string, string];
+
+export const DEFAULT_LUMINA_BOX_MEASUREMENT_BACKING_PERCENT_XYZ: LuminaBoxMeasurementBackingPercentXYZ = [
+  "19.8",
+  "19.7",
+  "24.7",
+];
+
 export type NozzleSize = "0.2" | "0.25" | "0.4";
 
 const NOZZLE_SIZES: readonly NozzleSize[] = ["0.2", "0.25", "0.4"];
@@ -126,6 +134,7 @@ export interface SettingsState {
    * 内代表色（像素最多的那一个），一键去掉海带纹；默认关闭。
    */
   autoReplaceGradientBanding: boolean;
+  luminaBoxMeasurementBackingPercentXYZ: LuminaBoxMeasurementBackingPercentXYZ;
   /**
    * Desktop only: folder the save dialog for generated files opens in.
    * Empty means the operating-system default location.
@@ -170,6 +179,9 @@ export interface SettingsActions {
   resetSvgPixelsPerMm: () => void;
   setMaterialDeltaE00Tolerance: (value: number) => void;
   setAutoReplaceGradientBanding: (enabled: boolean) => void;
+  setLuminaBoxMeasurementBackingPercentXYZ: (
+    values: LuminaBoxMeasurementBackingPercentXYZ,
+  ) => void;
   setGeneratedFileDirectory: (directory: string) => void;
   hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => void;
   syncToBackend: () => Promise<void>;
@@ -212,6 +224,9 @@ export const DEFAULT_SETTINGS: SettingsState = {
   svgPixelsPerMm: SVG_PIXELS_PER_MM_DEFAULT,
   materialDeltaE00Tolerance: MATERIAL_DELTA_E00_TOLERANCE_DEFAULT,
   autoReplaceGradientBanding: false,
+  luminaBoxMeasurementBackingPercentXYZ: [
+    ...DEFAULT_LUMINA_BOX_MEASUREMENT_BACKING_PERCENT_XYZ,
+  ],
   generatedFileDirectory: "",
 };
 
@@ -309,6 +324,30 @@ function normalizeMaterialDeltaE00Tolerance(value: unknown): number {
     Math.max(MATERIAL_DELTA_E00_TOLERANCE_MIN, value),
   );
   return Number(clamped.toFixed(1));
+}
+
+function normalizeLuminaBoxMeasurementBackingPercentXYZ(
+  value: unknown,
+): LuminaBoxMeasurementBackingPercentXYZ {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 3 ||
+    !value.every((channel) => typeof channel === "string")
+  ) {
+    return [...DEFAULT_LUMINA_BOX_MEASUREMENT_BACKING_PERCENT_XYZ];
+  }
+  return [value[0], value[1], value[2]];
+}
+
+export function parseLuminaBoxMeasurementBackingPercentXYZ(
+  values: LuminaBoxMeasurementBackingPercentXYZ,
+): [number, number, number] | null {
+  const parsed = values.map((value) => value.trim() ? Number(value) : Number.NaN);
+  return parsed.length === 3 &&
+    parsed.every((channel) => Number.isFinite(channel) && channel >= 0 && channel <= 100) &&
+    (parsed.every((channel) => channel === 0) || parsed.every((channel) => channel > 0))
+    ? [parsed[0], parsed[1], parsed[2]]
+    : null;
 }
 
 export function deriveBackendDeviceSettingsPatch(
@@ -504,6 +543,28 @@ export function deriveBackendDeviceSettingsPatch(
       settings.enable_base_layer_height_modifier;
   }
 
+  if (
+    Array.isArray(settings.measurement_backing_percent_xyz) &&
+    settings.measurement_backing_percent_xyz.length === 3 &&
+    settings.measurement_backing_percent_xyz.every(
+      (channel) =>
+        typeof channel === "number" &&
+        Number.isFinite(channel) &&
+        channel >= 0 &&
+        channel <= 100,
+    ) &&
+    (settings.measurement_backing_percent_xyz.every((channel) => channel === 0) ||
+      settings.measurement_backing_percent_xyz.every((channel) => channel > 0)) &&
+    current.luminaBoxMeasurementBackingPercentXYZ.every(
+      (channel, index) =>
+        channel === DEFAULT_LUMINA_BOX_MEASUREMENT_BACKING_PERCENT_XYZ[index],
+    ) &&
+    !hasOwnSetting(persistedSnapshot, "luminaBoxMeasurementBackingPercentXYZ")
+  ) {
+    patch.luminaBoxMeasurementBackingPercentXYZ = settings.measurement_backing_percent_xyz.map(
+      (channel) => String(channel),
+    ) as LuminaBoxMeasurementBackingPercentXYZ;
+  }
   setScalarIfFresh(
     "enableWipeTowerAutoPlacement",
     typeof settings.enable_wipe_tower_auto_placement === "boolean"
@@ -788,6 +849,9 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       setAutoReplaceGradientBanding: (enabled: boolean) =>
         set({ autoReplaceGradientBanding: enabled }),
 
+      setLuminaBoxMeasurementBackingPercentXYZ: (
+        values: LuminaBoxMeasurementBackingPercentXYZ,
+      ) => set({ luminaBoxMeasurementBackingPercentXYZ: [...values] as LuminaBoxMeasurementBackingPercentXYZ }),
       setGeneratedFileDirectory: (directory: string) =>
         set({ generatedFileDirectory: directory.trim() }),
 
@@ -832,6 +896,11 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
           );
           delete directPatch.enableWipeTowerAutoPlacement;
         }
+        if (patch.luminaBoxMeasurementBackingPercentXYZ) {
+          actions.setLuminaBoxMeasurementBackingPercentXYZ(
+            patch.luminaBoxMeasurementBackingPercentXYZ,
+          );
+        }
         if (typeof patch.deviceProfileId === "string") {
           actions.setDeviceProfileId(patch.deviceProfileId);
           delete directPatch.deviceProfileId;
@@ -843,6 +912,10 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       syncToBackend: async () => {
         const state = get();
+        const measurementBackingPercentXYZ =
+          parseLuminaBoxMeasurementBackingPercentXYZ(
+            state.luminaBoxMeasurementBackingPercentXYZ,
+          );
         try {
           await saveSettings({
             language: state.language,
@@ -873,6 +946,12 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             nozzle_size: state.nozzleSize,
             enable_base_layer_height_modifier:
               state.enableBaseLayerHeightModifier,
+            ...(measurementBackingPercentXYZ
+              ? {
+                  measurement_backing_percent_xyz:
+                    measurementBackingPercentXYZ,
+                }
+              : {}),
             enable_wipe_tower_auto_placement:
               state.enableWipeTowerAutoPlacement,
             enable_solver_cache_grid_selection:
@@ -909,6 +988,11 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             persistedSettings.materialDeltaE00Tolerance ??
               currentState.materialDeltaE00Tolerance,
           ),
+          luminaBoxMeasurementBackingPercentXYZ:
+            normalizeLuminaBoxMeasurementBackingPercentXYZ(
+              persistedSettings.luminaBoxMeasurementBackingPercentXYZ ??
+                currentState.luminaBoxMeasurementBackingPercentXYZ,
+            ),
           enableWipeTowerAutoPlacement:
             typeof persistedSettings.enableWipeTowerAutoPlacement === "boolean"
               ? persistedSettings.enableWipeTowerAutoPlacement

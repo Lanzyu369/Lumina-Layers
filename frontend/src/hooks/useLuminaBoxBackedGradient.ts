@@ -21,6 +21,7 @@ import {
   type BackedGradientDraft, type BackedGradientJournal, type BackedGradientJournalEntry,
   type BackedGradientTarget,
 } from "../utils/luminaBoxBackedGradientCapture";
+import { useBackedGradientFits } from "./useBackedGradientFits";
 
 const captureKey = (datasetId: string, captureId: string, measurementId: string) =>
   JSON.stringify([datasetId, captureId, measurementId]);
@@ -91,6 +92,7 @@ export function useLuminaBoxBackedGradient(options: {
   const deletedIdsRef = useRef(new Set<string>());
   const tRef = useRef(t);
   tRef.current = t;
+  const fits = useBackedGradientFits(options.researchFits === false ? null : dataset);
   const current = (epoch: number) => mountedRef.current && epochRef.current === epoch;
 
   const compareCaptureOrder = (left: BackedGradientCapture, right: BackedGradientCapture) => {
@@ -542,5 +544,6 @@ export function useLuminaBoxBackedGradient(options: {
     manualValid: backedGradientManualXYZ(draft.manualXYZ) !== null,
     inspectedSlot, inspectSlot: (slot: string) => { setInspectedSlot(slot); setInspectedRecordId(""); },
     slotRecords, inspectedRecord, inspectRecord: setInspectedRecordId, chooseCapture, removeCapture, recordBusy,
+    fits,
   };
 }

@@ -225,7 +225,6 @@ def test_library_api_metadata_recipe_preview_and_export_download(saved_backed_ma
     from api.app import create_app
     from fastapi.testclient import TestClient
     from api.dependencies import get_file_registry, get_session_store
-    from api.routers.single_stage import get_material_cache_evictor
     from api.file_registry import FileRegistry
     from api.session_store import SessionStore
 
@@ -239,7 +238,6 @@ def test_library_api_metadata_recipe_preview_and_export_download(saved_backed_ma
     app = create_app()
     app.dependency_overrides[get_file_registry] = lambda: registry
     app.dependency_overrides[get_session_store] = lambda: store
-    app.dependency_overrides[get_material_cache_evictor] = lambda: lambda _directory: None
     client = TestClient(app, base_url="http://127.0.0.1")
     directory = saved.material_summary["directory_name"]
     listing = client.get("/api/extractor/gradient-card-materials", params={"profile_kind": "lumina_box"})

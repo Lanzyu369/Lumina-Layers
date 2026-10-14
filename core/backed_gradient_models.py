@@ -44,4 +44,8 @@ def restore_backed_gradient_model(parameters: Mapping) -> BackedGradientModel:
 
     if identity == SPECTRAL_SMOOTH_MODEL_ID:
         return BackedGradientSmoothTransport.from_parameters(parameters)
+    from core.backed_gradient_rgb import BackedGradientRGB, RGB_AFFINE_MODEL_ID
+
+    if identity == RGB_AFFINE_MODEL_ID:
+        return BackedGradientRGB.from_parameters(parameters)
     raise CoreValidationError("Unknown backed-gradient model version")

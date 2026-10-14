@@ -11,13 +11,16 @@ from uuid import uuid4
 
 from api.structured_logging import get_logger
 from api.worker_pool import WorkerPoolManager
+from api.workers.backed_gradient_workers import fit_backed_gradient_worker
 from core.backed_gradient_store import (
-    BackedGradientConflictError, BackedGradientStore, _uuid,
+    THICKNESSES_MM, BackedGradientConflictError, BackedGradientStore, _digest, _uuid,
 )
 from core.errors import CoreError, CoreProcessingError, CoreValidationError
 
 
 log = get_logger(__name__)
+FIT_TIMEOUT_SECONDS = 600.0
+NARROW_BAND_FIT_TIMEOUT_SECONDS = 900.0
 _tasks: dict[str, asyncio.Task[None]] = {}
 _backing_tasks: dict[str, str] = {}
 
@@ -26,8 +29,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _training_key(snapshot: dict[str, Any]) -> str:
+    return _digest({"reference_anchors": snapshot["reference_anchors"], "conditions": snapshot["conditions"],
+                    "samples": [sample for sample in snapshot["samples"] if sample["overlay_mm"] != .24]})
 
 
+def _validate_complete(snapshot: dict[str, Any], include_validation: bool) -> None:
+    symbols = {sample["material_symbol"] for sample in snapshot["samples"]} | {"W", "K"}
+    thicknesses = THICKNESSES_MM if include_validation else tuple(d for d in THICKNESSES_MM if d != .24)
+    targets = {(sample["material_symbol"], sample["backing"], sample["overlay_mm"]) for sample in snapshot["samples"]}
+    missing = [f"{symbol}:{backing}:{thickness:.2f}" for symbol in sorted(symbols) for backing in ("W", "K")
+               for thickness in thicknesses if (symbol, backing, thickness) not in targets]
+    if missing:
+        raise CoreValidationError("Missing backed-gradient readings: " + ", ".join(missing))
 
 
 async def _execute(store: BackedGradientStore, pool: WorkerPoolManager, run: dict[str, Any], directory: Path) -> None:
@@ -43,7 +57,10 @@ async def _execute(store: BackedGradientStore, pool: WorkerPoolManager, run: dic
 
             await execute_product_fit(store, pool, run, directory)
         else:
-            raise CoreValidationError("Unsupported backed-gradient production fit mode.")
+            submission = pool.submit(fit_backed_gradient_worker, str(directory / "input.json"), str(directory),
+                                     run["fit_mode"] == "full_seven")
+            timeout = NARROW_BAND_FIT_TIMEOUT_SECONDS if run.get("fitting_algorithm_id") else FIT_TIMEOUT_SECONDS
+            await asyncio.wait_for(submission, timeout=timeout)
         if not (directory / "result.json").is_file():
             raise CoreProcessingError("The fit worker did not produce a complete result.")
         result = json.loads((directory / "result.json").read_text(encoding="utf-8"))
@@ -90,6 +107,35 @@ async def _execute(store: BackedGradientStore, pool: WorkerPoolManager, run: dic
                                                         "error_type": type(exc).__name__, "error_message": message})
 
 
+def start_fit(store: BackedGradientStore, pool: WorkerPoolManager, dataset_id: str, *, include_validation: bool = False) -> dict[str, Any]:
+    """Start one bounded job using immutable, server-owned input.
+    使用不可变服务器输入启动一个有时限的任务。
+
+    Args:
+        store: Independent experiment store.（独立实验库。）
+        pool: Managed process pool.（受管理进程池。）
+        dataset_id: Experiment UUID.（实验UUID。）
+        include_validation: Request a separate seven-point refit.（请求独立七档重拟合。）
+
+    Returns:
+        Durable initial task state.（持久初始任务状态。）
+    """
+    snapshot = store.snapshot(dataset_id)
+    _validate_complete(snapshot, include_validation)
+    if include_validation:
+        from core.backed_gradient_fitting_v2 import BACKED_GRADIENT_SMOOTH_ALGORITHM_ID
+
+        snapshot["fitting_algorithm_id"] = BACKED_GRADIENT_SMOOTH_ALGORITHM_ID
+    if include_validation:
+        from core.backed_gradient_fitting import _prepare, _training_digest
+
+        training_key = _training_digest(_prepare(snapshot, True))
+    else:
+        training_key = _training_key(snapshot)
+    metadata = {"training_input_hash": training_key}
+    if include_validation:
+        metadata["fitting_algorithm_id"] = snapshot["fitting_algorithm_id"]
+    return _queue_fit(store, pool, snapshot, "full_seven" if include_validation else "frozen_six", metadata)
 
 
 def start_material_fit(store: BackedGradientStore, pool: WorkerPoolManager, dataset_id: str,
@@ -240,8 +286,59 @@ def read_result(store: BackedGradientStore, fit_id: str) -> dict[str, Any]:
     return result
 
 
+def score_validation(store: BackedGradientStore, fit_id: str, *, snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Score newly collected .24 data using unchanged six-point parameters.
+    使用未变更的六档参数评分新采集的零点二四毫米数据。
+
+    Args:
+        store: Independent experiment storage.（独立实验库。）
+        fit_id: Completed frozen-six fit UUID.（已完成六档拟合UUID。）
+        snapshot: Optional current server snapshot.（可选当前服务器快照。）
+
+    Returns:
+        Independently persisted frozen validation.（独立持久化冻结验证。）
+    """
+    from core.backed_gradient_fitting import score_backed_gradient_validation
+
+    run = read_run(store, fit_id)
+    if run["status"] != "complete" or run["fit_mode"] != "frozen_six":
+        raise CoreValidationError("Select a completed frozen-six fit for independent .24 validation.")
+    current = snapshot if snapshot is not None else store.snapshot(run["dataset_id"])
+    _validate_complete(current, True)
+    if _training_key(current) != run.get("training_input_hash"):
+        raise CoreValidationError("Non-validation readings or bare anchors changed. Run a new six-thickness fit first.")
+    directory = store.results_root / _uuid(fit_id)
+    filename = directory / f"validation-{current['input_hash']}.json"
+    try:
+        if filename.is_file():
+            return json.loads(filename.read_text(encoding="utf-8"))
+        validation = score_backed_gradient_validation(read_result(store, fit_id), current)
+        validation.update(fit_id=fit_id, created_at=_now())
+        temporary = directory / f"validation-{uuid4().hex}.tmp"
+        temporary.write_text(json.dumps(validation, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+        temporary.replace(filename)
+        return validation
+    except (OSError, ValueError) as exc:
+        raise CoreProcessingError("Could not save the independent validation. Original readings and parameters remain saved.") from exc
 
 
+def read_validation(store: BackedGradientStore, fit_id: str) -> dict[str, Any] | None:
+    """Restore the newest separately saved validation without changing a fit.
+    恢复最新独立验证，不修改原拟合。
+
+    Args:
+        store: Experiment storage.（实验库。）
+        fit_id: Fit UUID.（拟合UUID。）
+
+    Returns:
+        Latest frozen validation, if present.（存在时返回最新冻结验证。）
+    """
+    store.get_run(fit_id)
+    try:
+        paths = sorted((store.results_root / _uuid(fit_id)).glob("validation-*.json"), key=lambda path: path.stat().st_mtime_ns)
+        return json.loads(paths[-1].read_text(encoding="utf-8")) if paths else None
+    except (OSError, ValueError) as exc:
+        raise CoreProcessingError("Could not read the saved independent validation.") from exc
 
 
 async def cancel_backed_gradient_jobs() -> None:
