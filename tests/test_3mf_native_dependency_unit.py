@@ -53,6 +53,7 @@ def test_fatcat_build_contract_uses_public_root_and_exact_b7_patch() -> None:
     patch = ROOT / FATCAT_WRITER_PATCH
 
     assert FATCAT_REPOSITORY == "https://github.com/MOVIBALE/fatcat-metadata"
+    assert FATCAT_VERSION == "0.1.0"
     assert len(FATCAT_SOURCE_COMMIT) == 40
     assert len(FATCAT_WRITER_SOURCE_COMMIT) == 40
     assert FATCAT_WRITER_VERSION == "0.4.0+fatcat.b7"

@@ -64,20 +64,30 @@ validation stays at the existing SDK, source parser and writer boundaries.
 - **neroued-3mf** owns the one final 3MF package write.
 
 FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`, version
-`0.1.0+lumina.1` (upstream `0.1.0` with the tracked native export patch). Lumina builds from the public
+`0.1.0`, available as precompiled [PyPI wheels](https://pypi.org/project/fatcat-metadata/0.1.0/).
+Lumina consumes the same public SDK without a downstream patch or version suffix.
+Maintainer builds use the public
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) root
-project at source revision `63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b` and pins
+project at source revision `a6f1dc78035c98668a4a54f2257d010d7a9abf94` and pins
 the writer contract in
 `scripts/fatcat_packaging_contract.py`; build and installation steps are in
 [the desktop setup guide](desktop-electron.md).
 
-FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`，构建版本为
-`0.1.0+lumina.1`（上游 `0.1.0` 加仓库保存的原生导出修正补丁）。
-Lumina 从公开仓库
+FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`，版本为
+`0.1.0`，可从 [PyPI](https://pypi.org/project/fatcat-metadata/0.1.0/) 安装预编译包。
+Lumina 直接使用公共 SDK，不再维护 FatCat 补丁或额外版本后缀。
+维护者从公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) 的根项目构建，
-源码提交固定为 `63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b`，并在
+源码提交固定为 `a6f1dc78035c98668a4a54f2257d010d7a9abf94`，并在
 `scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
 [桌面环境指南](desktop-electron.md)。
+
+The writer remains `neroued-3mf==0.4.0+fatcat.b7`, built from the pinned upstream
+source and the separate B7 patch. Publishing FatCat does not publish that writer;
+source installations still need a matching B7 wheel or a maintainer build.
+
+写包库仍为 `neroued-3mf==0.4.0+fatcat.b7`，由固定上游源码和独立 B7 补丁构建。
+FatCat 上架不会同时发布这个 writer；源码安装仍需匹配的 B7 wheel 或维护者构建。
 
 The current source pin includes Bambu Studio 02.08.02.61, OrcaSlicer 2.4.2,
 QIDI Studio 02.07.02.60, ElegooSlicer 1.5.3.5, Anycubic Slicer Next macOS
