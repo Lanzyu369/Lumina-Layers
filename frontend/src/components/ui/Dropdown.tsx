@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cx, workstationFieldLabelClass, workstationInputClass } from "./panelPrimitives";
 import HelpDot from "./HelpDot";
@@ -43,16 +43,21 @@ export default function Dropdown({
   wikiPath,
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const listboxId = useId();
   const isGroupedMode = groupedOptions !== undefined;
-  const optionGroups = useMemo<DropdownOptionGroup[]>(() => {
-    if (groupedOptions !== undefined) {
-      return groupedOptions.filter((group) => group.options.length > 0);
-    }
-    return [{ label: "", options: options ?? [] }];
+  const optionGroups = useMemo(() => {
+    const groups = groupedOptions !== undefined
+      ? groupedOptions.filter((group) => group.options.length > 0)
+      : [{ label: "", options: options ?? [] }];
+    let index = 0;
+    return groups.map((group) => ({
+      label: group.label,
+      options: group.options.map((option) => ({ ...option, index: index++ })),
+    }));
   }, [groupedOptions, options]);
   const flatOptions = useMemo(
     () => optionGroups.flatMap((group) => group.options),
@@ -70,6 +75,7 @@ export default function Dropdown({
     () => flatOptions.find((opt) => opt.value === value) ?? null,
     [flatOptions, value],
   );
+  const activeOption = open ? flatOptions[activeIndex] : undefined;
 
   const updateMenuPos = useCallback(() => {
     if (!triggerRef.current) return;
@@ -131,15 +137,71 @@ export default function Dropdown({
     };
   }, [open, updateMenuPos]);
 
+  useEffect(() => {
+    if (!activeOption) return;
+    document.getElementById(`${listboxId}-option-${activeOption.index}`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeOption, listboxId]);
+
   const handleToggle = () => {
     if (disabled) return;
-    if (!open) updateMenuPos();
+    if (!open) {
+      updateMenuPos();
+      setActiveIndex(selectedOption?.index ?? (flatOptions.length > 0 ? 0 : -1));
+    }
+    triggerRef.current?.focus();
     setOpen((prev) => !prev);
   };
 
   const handleSelect = (nextValue: string) => {
     onChange(nextValue);
     setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
+    if (disabled) return;
+    if (event.key === "Tab") {
+      setOpen(false);
+      return;
+    }
+    if (event.key === "Escape") {
+      if (open) {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+      }
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (open && activeOption) {
+        handleSelect(activeOption.value);
+      } else {
+        handleToggle();
+      }
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (flatOptions.length === 0) return;
+    let nextIndex: number;
+    if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = flatOptions.length - 1;
+    } else if (!open) {
+      nextIndex = selectedOption?.index ?? (event.key === "ArrowUp" ? flatOptions.length - 1 : 0);
+    } else {
+      nextIndex = Math.max(0, Math.min(flatOptions.length - 1,
+        activeIndex + (event.key === "ArrowDown" ? 1 : -1),
+      ));
+    }
+    updateMenuPos();
+    setActiveIndex(nextIndex);
+    setOpen(true);
   };
 
   const triggerLabel = selectedOption?.label ?? placeholder ?? "";
@@ -161,9 +223,13 @@ export default function Dropdown({
         role="combobox"
         aria-expanded={open}
         aria-controls={listboxId}
+        aria-haspopup="listbox"
+        aria-activedescendant={activeOption ? `${listboxId}-option-${activeOption.index}` : undefined}
         aria-label={label}
         disabled={disabled}
         onClick={handleToggle}
+        onKeyDown={handleKeyDown}
+        onBlur={() => setOpen(false)}
         className={cx(
           workstationInputClass,
           "flex w-full min-w-0 items-center justify-between gap-3 overflow-hidden py-2 text-left",
@@ -203,6 +269,7 @@ export default function Dropdown({
           <div
             id={listboxId}
             role="listbox"
+            aria-label={label}
             className="dock-scrollbar max-h-72 overflow-y-auto p-2"
           >
             {optionGroups.map((group) => (
@@ -219,13 +286,17 @@ export default function Dropdown({
                       key={`${group.label}-${opt.value}`}
                       type="button"
                       role="option"
+                      id={`${listboxId}-option-${opt.index}`}
                       aria-selected={isSelected}
+                      tabIndex={-1}
+                      onMouseDown={(event) => event.preventDefault()}
                       onClick={() => handleSelect(opt.value)}
                       className={cx(
                         "flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm leading-6 transition-colors duration-150",
                         isSelected
                           ? "bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-200"
-                          : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900"
+                          : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900",
+                        opt.index === activeIndex && "bg-[var(--surface-well)] ring-2 ring-inset ring-[var(--focus-ring)]",
                       )}
                     >
                       {opt.leading && (

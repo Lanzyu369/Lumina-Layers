@@ -31,6 +31,14 @@ function validateConverterShape(recipe: Record<string, unknown>, version: number
   }
   const base = converter.base as Record<string, unknown>;
   const device = converter.device as Record<string, unknown>;
+  if (device.native_filament_profiles !== undefined && (
+    !isRecord(device.native_filament_profiles) ||
+    Object.values(device.native_filament_profiles).some(
+      (value) => typeof value !== "string" || !value.trim(),
+    )
+  )) {
+    throw new Error("Invalid recipe: native filament profiles");
+  }
   if (
     device.custom_3mf_template_id !== undefined &&
     device.custom_3mf_template_id !== null &&

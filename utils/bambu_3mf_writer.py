@@ -769,6 +769,7 @@ class Slicer3MFWriter:
         preserve_template_filament_slots: Optional[bool] = None,
         custom_3mf_template_id: Optional[str] = None,
         material_types: Mapping[str, str | None] | None = None,
+        native_filament_profiles: Mapping[str, str] | None = None,
     ):
         """Initialize a writer for an exact native target or saved user project.
         初始化使用精确原生目标或已保存用户项目的 3MF 写入器。
@@ -841,6 +842,7 @@ class Slicer3MFWriter:
             defaults, settings, aliases=process_setting_aliases(self.slicer),
         )
         self._material_types = dict(material_types or {})
+        self._native_filament_profiles = dict(native_filament_profiles or {})
         self.device_profile_id = str(device_profile_id or "").strip() or None
         self.build_plate_id = str(build_plate_id or "").strip() or None
         (
@@ -1129,6 +1131,7 @@ class Slicer3MFWriter:
                 "name": name,
                 "colour": f"#{red:02X}{green:02X}{blue:02X}",
                 "material_type": self._material_types.get(name),
+                "native_filament_profile_name": self._native_filament_profiles.get(name),
             }
             for name, (red, green, blue) in material_palette
         ]
@@ -1913,6 +1916,7 @@ def export_scene_with_slicer_metadata(
     preserve_template_filament_slots: Optional[bool] = None,
     custom_3mf_template_id: Optional[str] = None,
     material_types: Mapping[str, str | None] | None = None,
+    native_filament_profiles: Mapping[str, str] | None = None,
 ):
     """Export a Trimesh scene as the selected slicer's native 3MF project.
     将 Trimesh 场景导出为所选切片软件的原生 3MF 工程。
@@ -2018,6 +2022,7 @@ def export_scene_with_slicer_metadata(
         preserve_template_filament_slots=preserve_template_filament_slots,
         custom_3mf_template_id=custom_3mf_template_id,
         material_types=material_types,
+        native_filament_profiles=native_filament_profiles,
         enable_relief=bool(enable_relief),
         enable_base_layer_height_modifier=bool(enable_base_layer_height_modifier),
         enable_wipe_tower_auto_placement=bool(enable_wipe_tower_auto_placement),

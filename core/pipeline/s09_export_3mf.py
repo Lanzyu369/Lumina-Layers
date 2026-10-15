@@ -213,6 +213,7 @@ def run(ctx: dict) -> dict:
             preview_colors=preview_colors,
             project_slot_names=slot_names,
             material_types=ctx.get("material_types"),
+            native_filament_profiles=ctx.get("native_filament_profiles"),
             settings=print_settings,
             color_mode=color_mode,
             printer_id=ctx.get("printer_id", "bambu-h2d"),

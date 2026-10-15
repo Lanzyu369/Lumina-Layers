@@ -432,18 +432,31 @@ export function restoreConverterRecipe(
     heightmapFile = base64ToFile(hm.payload_b64, hm.filename, hm.mime_type);
   }
 
-  // --- LUT matching ---
-  const lutMatch = matchLut(conv.base.lut, localLuts);
-  let lutName = "";
-  if (lutMatch.matched) {
-    lutName = lutMatch.lutName;
-    if (lutMatch.matchType === "name" && conv.base.lut.path_hint) {
-      warnings.push(RECIPE_IMPORT_WARNING_LUT_DEGRADED);
-    }
-  } else {
-    warnings.push(RECIPE_IMPORT_WARNING_LUT_MISSING);
-  }
+  // --- Restore source-specific LUT selection ---
   const source = conv.source;
+  const sourceVersion = source?.source_version ?? "legacy";
+  let lutName = "";
+  let legacyLutNames: string[] = [];
+  if (sourceVersion === "legacy") {
+    const lutMatch = matchLut(conv.base.lut, localLuts);
+    if (lutMatch.matched) {
+      lutName = lutMatch.lutName;
+      if (lutMatch.matchType === "name" && conv.base.lut.path_hint) {
+        warnings.push(RECIPE_IMPORT_WARNING_LUT_DEGRADED);
+      }
+    } else {
+      warnings.push(RECIPE_IMPORT_WARNING_LUT_MISSING);
+    }
+    const restored = restoreLegacyLutNames(
+      lutName,
+      source?.selected_legacy_lut_names,
+      localLuts,
+    );
+    legacyLutNames = restored.names;
+    if (restored.missingSecondary) {
+      warnings.push(RECIPE_IMPORT_WARNING_SECONDARY_LUT_MISSING);
+    }
+  }
   const dynamicBounds = resolveImportedDynamicLayerBounds(source);
   const dynamicMaterialEnabled =
     source?.source_version === "material" &&
@@ -452,14 +465,6 @@ export function restoreConverterRecipe(
     conv.material_dynamic,
     dynamicMaterialEnabled,
   );
-  const restoredLegacyLutNames = restoreLegacyLutNames(
-    lutName,
-    source?.selected_legacy_lut_names,
-    localLuts,
-  );
-  if (restoredLegacyLutNames.missingSecondary) {
-    warnings.push(RECIPE_IMPORT_WARNING_SECONDARY_LUT_MISSING);
-  }
 
   // --- Normalize hex values (strip '#' for store) ---
   const replacementRegions: ColorReplacementItem[] =
@@ -584,6 +589,14 @@ export function restoreConverterRecipe(
   // --- Build partial state ---
   const state: Partial<ConverterState> = {
     workshopSource,
+    native_filament_profiles: { ...(conv.device.native_filament_profiles ?? {}) },
+    nativeFilamentProfileScope: conv.device.native_filament_profiles ? {
+      slicer: conv.device.slicer,
+      printer_id: conv.device.printer_id,
+      device_profile_id: conv.device.device_profile_id ?? "",
+      nozzle_size: conv.device.nozzle_size,
+    } : null,
+    nativeMaterialSelection: null,
 
     // Model-surface uploads and face selections are session-bound and are not
     // represented by the current recipe schema. Clear every related field so
@@ -605,9 +618,9 @@ export function restoreConverterRecipe(
     modelSurfaceWarnings: [],
 
     // Base
-    source_version: (source?.source_version ?? "legacy") as ConverterState["source_version"],
+    source_version: sourceVersion as ConverterState["source_version"],
     lut_name: lutName,
-    lut_names: restoredLegacyLutNames.names,
+    lut_names: legacyLutNames,
     color_mode: conv.base.color_mode as ConverterState["color_mode"],
     modeling_mode: conv.base.modeling_mode as ConverterState["modeling_mode"],
     target_width_mm: conv.base.target_width_mm,

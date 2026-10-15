@@ -1454,6 +1454,10 @@ function buildPreviewSessionResetState(
     : null;
   return {
     sessionId: null,
+    nativeMaterialSelection: null,
+    nativeMaterialSelectionAction: null,
+    nativeMaterialSelectionLoading: false,
+    nativeMaterialSelectionError: null,
     isLoading: false,
     previewImageUrl: null,
     originalPreviewUrl: null,
@@ -1893,6 +1897,12 @@ export const DEFAULT_STATE: ConverterState = {
   autoDetectColorsLoading: false,
   isLoading: false,
   isGenerating: false,
+  native_filament_profiles: {},
+  nativeFilamentProfileScope: null,
+  nativeMaterialSelection: null,
+  nativeMaterialSelectionAction: null,
+  nativeMaterialSelectionLoading: false,
+  nativeMaterialSelectionError: null,
   error: null,
   previewImageUrl: null,
   modelUrl: null,

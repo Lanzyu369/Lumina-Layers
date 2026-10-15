@@ -15,9 +15,9 @@ from typing import Any
 FATCAT_DISTRIBUTION = "fatcat-metadata"
 FATCAT_MODULE = "fatcat_metadata"
 FATCAT_ADAPTER_MODULE = "fatcat_metadata_neroued"
-FATCAT_VERSION = "0.1.0"
+FATCAT_VERSION = "0.1.1"
 FATCAT_REPOSITORY = "https://github.com/MOVIBALE/fatcat-metadata"
-FATCAT_SOURCE_COMMIT = "a6f1dc78035c98668a4a54f2257d010d7a9abf94"
+FATCAT_SOURCE_COMMIT = "86a199c20e0277b519e1acbca6ea0d9a5ec5fbb1"
 FATCAT_LEGACY_DISTRIBUTION = "lumina-3mf-metadata-cpp"
 FATCAT_WRITER_DISTRIBUTION = "neroued-3mf"
 FATCAT_WRITER_VERSION = "0.4.0+fatcat.production.1"
@@ -29,6 +29,7 @@ FATCAT_REQUIRED_ENTRY_POINTS = (
     "native_project_source_catalog",
     "list_native_fields",
     "compose_project_settings",
+    "resolve_project_materials",
     "compose_model_metadata",
     "patch_wipe_tower",
     "read_source_metadata",

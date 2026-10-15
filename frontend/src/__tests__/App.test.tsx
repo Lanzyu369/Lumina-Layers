@@ -94,12 +94,15 @@ import App from "../App";
 import apiClient from "../api/client";
 import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
 import { useErrorTicketPromptStore } from "../stores/errorTicketPromptStore";
+import { translations } from "../i18n/translations";
 
 describe("App component", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Restore default rejection for unmocked calls
-    vi.mocked(apiClient.get).mockRejectedValue(new Error("unmocked"));
+    // Unrelated workspace checks start after the backend readiness gate opens.
+    vi.mocked(apiClient.get).mockResolvedValue({
+      data: { status: "ok", version: "2.0", uptime_seconds: 100 },
+    });
     useSettingsStore.setState({ ...DEFAULT_SETTINGS });
     useErrorTicketPromptStore.getState()._resetForTests();
     localStorage.clear();
@@ -107,6 +110,7 @@ describe("App component", () => {
 
   it("offers a ticket after a server error and pre-fills the bug report", async () => {
     render(<App />);
+    await screen.findByText("Lumina Studio 2");
 
     act(() => {
       useErrorTicketPromptStore.getState().reportApiError({
@@ -140,25 +144,35 @@ describe("App component", () => {
     });
     expect(apiClient.get).toHaveBeenCalledWith("/health", {
       suppressClientLog: true,
+      timeout: 4_000,
+      signal: expect.any(AbortSignal),
     });
   });
 
-  it("renders red badge when API request fails", async () => {
+  it("waits for the backend before mounting the workspace after an initial failure", async () => {
     vi.mocked(apiClient.get).mockRejectedValue(new Error("Network Error"));
 
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
+      expect(apiClient.get).toHaveBeenCalled();
     });
+    expect(screen.getByRole("status")).toHaveTextContent(translations.app_starting.zh);
+    expect(screen.queryByText("Lumina Studio 2")).not.toBeInTheDocument();
     expect(apiClient.get).toHaveBeenCalledWith("/health", {
       suppressClientLog: true,
+      timeout: 4_000,
+      signal: expect.any(AbortSignal),
     });
   });
 
-  it("rechecks health after a failed request and recovers the badge", async () => {
+  it("rechecks health and preserves the workspace through later disconnects", async () => {
     vi.useFakeTimers();
     vi.mocked(apiClient.get)
+      .mockRejectedValueOnce(new Error("Network Error"))
+      .mockResolvedValueOnce({
+        data: { status: "ok", version: "2.0", uptime_seconds: 120 },
+      })
       .mockRejectedValueOnce(new Error("Network Error"))
       .mockResolvedValue({
         data: { status: "ok", version: "2.0", uptime_seconds: 120 },
@@ -170,7 +184,8 @@ describe("App component", () => {
       await act(async () => {
         await Promise.resolve();
       });
-      expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent(translations.app_starting.zh);
+      expect(screen.queryByText("Lumina Studio 2")).not.toBeInTheDocument();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5_000);
@@ -180,12 +195,30 @@ describe("App component", () => {
       expect(apiClient.get).toHaveBeenCalledTimes(2);
       expect(apiClient.get).toHaveBeenNthCalledWith(1, "/health", {
         suppressClientLog: true,
+        timeout: 4_000,
+        signal: expect.any(AbortSignal),
       });
       expect(apiClient.get).toHaveBeenNthCalledWith(2, "/health", {
         suppressClientLog: true,
+        timeout: 4_000,
+        signal: expect.any(AbortSignal),
       });
       expect(screen.getByTestId("health-badge-ok")).toBeInTheDocument();
       expect(screen.queryByTestId("health-badge-fail")).not.toBeInTheDocument();
+      const workspaceHeader = screen.getByText("Lumina Studio 2");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
+      expect(screen.getByText("Lumina Studio 2")).toBe(workspaceHeader);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(screen.getByTestId("health-badge-ok")).toBeInTheDocument();
+      expect(screen.getByText("Lumina Studio 2")).toBe(workspaceHeader);
+      expect(apiClient.get).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
     }
@@ -198,6 +231,6 @@ describe("App component", () => {
 
     render(<App />);
 
-    expect(screen.getByText("Lumina Studio 2")).toBeInTheDocument();
+    expect(await screen.findByText("Lumina Studio 2")).toBeInTheDocument();
   });
 });

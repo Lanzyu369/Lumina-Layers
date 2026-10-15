@@ -7,6 +7,7 @@ import type {
   ColorMode,
   ColorReplacementItem,
   DynamicMaterialRecipe,
+  ExportMaterialSelection,
   FridgeMagnetItem,
   GradientGroupItem,
   GradientSelectionSource,
@@ -122,9 +123,24 @@ export interface WorkshopConverterImageInput {
   source: WorkshopRecipeSource;
 }
 
+export interface NativeFilamentProfileScope {
+  slicer: string;
+  printer_id: string;
+  device_profile_id: string;
+  nozzle_size: string;
+}
+
+export type NativeMaterialSelectionAction = "edit" | "generate" | "batch";
+
 // ========== State Interface ==========
 
 export interface ConverterState {
+  native_filament_profiles: Record<string, string>;
+  nativeFilamentProfileScope: NativeFilamentProfileScope | null;
+  nativeMaterialSelection: ExportMaterialSelection | null;
+  nativeMaterialSelectionAction: NativeMaterialSelectionAction | null;
+  nativeMaterialSelectionLoading: boolean;
+  nativeMaterialSelectionError: string | null;
   // 图片
   imageFile: File | null;
   imagePreviewUrl: string | null;
@@ -836,6 +852,16 @@ export interface ConverterActions {
   invalidatePreviewForAutoRefresh: () => void;
   submitPreview: () => Promise<void>;
   submitGenerate: () => Promise<string | null>;
+  openNativeMaterialSelection: () => Promise<void>;
+  refreshNativeMaterialSelection: (
+    profiles: Record<string, string>,
+    buildPlateId: string,
+  ) => Promise<void>;
+  applyNativeMaterialSelection: (
+    profiles: Record<string, string>,
+    buildPlateId: string,
+  ) => Promise<void>;
+  cancelNativeMaterialSelection: () => void;
   reconcileUnknownContentCommit: () => Promise<void>;
 
   // 裁剪
