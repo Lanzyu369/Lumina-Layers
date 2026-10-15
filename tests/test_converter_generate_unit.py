@@ -110,6 +110,18 @@ async def _timed_submit_via_generate_mock(
 
 
 @pytest.fixture(autouse=True)
+def _resolved_native_material_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub material preflight for route tests that use synthetic source files.
+
+    只隔离虚构文件的材料预检，保留设备、缓存、worker 路由及错误断言。
+    """
+    monkeypatch.setattr(
+        "api.routers.converter.generate.require_material_selection",
+        MagicMock(return_value={"ready": True}),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _keep_generate_pool_timing_opt_in() -> object:
     """Keep legacy submit assertions while the route uses submit_timed."""
     previous = _mock_pool.submit_timed

@@ -32,15 +32,22 @@ def test_neroued_requirement_selects_first_zero_copy_release() -> None:
     requirement = _neroued_requirement()
 
     assert str(requirement.specifier) == f"=={FATCAT_WRITER_VERSION}"
-    assert str(requirement.marker) == 'python_version >= "3.12"'
+    assert requirement.marker is None
     assert "0.3.99" not in requirement.specifier
     assert "0.6.0" not in requirement.specifier
 
 
-def test_native_requirement_is_pinned_for_python_313_plus() -> None:
+def test_native_requirement_pins_the_public_sdk_without_a_python_marker() -> None:
     requirements = (ROOT / "requirements-3mf-native.txt").read_text(encoding="utf-8")
+    requirement = next(
+        Requirement(line.strip())
+        for line in requirements.splitlines()
+        if line.strip().startswith(FATCAT_DISTRIBUTION)
+    )
 
-    assert f'{FATCAT_DISTRIBUTION}=={FATCAT_VERSION}; python_version >= "3.12"' in requirements
+    assert str(requirement.specifier) == f"=={FATCAT_VERSION}"
+    assert requirement.marker is None
+    assert requirement.url is None
     assert FATCAT_REPOSITORY in requirements
     assert FATCAT_SOURCE_COMMIT in requirements
 
@@ -51,7 +58,7 @@ def test_fatcat_build_contract_uses_public_root_and_writer_source() -> None:
     )
 
     assert FATCAT_REPOSITORY == "https://github.com/MOVIBALE/fatcat-metadata"
-    assert FATCAT_VERSION == "0.1.0"
+    assert FATCAT_VERSION == "0.1.1"
     assert len(FATCAT_SOURCE_COMMIT) == 40
     assert len(FATCAT_WRITER_SOURCE_COMMIT) == 40
     assert FATCAT_WRITER_VERSION == "0.4.0+fatcat.production.1"

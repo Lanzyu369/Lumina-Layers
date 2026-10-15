@@ -15,6 +15,15 @@ vi.mock("./i18n/context", () => ({
   I18nProvider: ({ children }: { children?: React.ReactNode }) => children,
 }));
 
+// jsdom has no layout scrolling; dropdown keyboard navigation uses this DOM API.
+if (typeof HTMLElement.prototype.scrollIntoView !== "function") {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    writable: true,
+    value: vi.fn(),
+  });
+}
+
 // Polyfill ResizeObserver for jsdom (used by WidgetWorkspace)
 if (typeof globalThis.ResizeObserver === "undefined") {
   globalThis.ResizeObserver = class ResizeObserver {
