@@ -259,18 +259,37 @@ cd Lumina-studio
 
 ### Option 1: Local Installation
 
-**Core dependencies** (required; use Python 3.12):
+Prepare ordinary 64-bit **CPython 3.12–3.14**, **Node.js 24.x** (or 22.x ≥22.13),
+and **pnpm 10.33.2** before installing. Use the pinned pnpm version; see the
+[Node](https://nodejs.org/en/download) and [pnpm](https://pnpm.io/installation)
+installation guides. Repository access is required while Lumina remains private.
+
+The application dependency intersection covers Windows x64, Linux x86-64 with
+glibc 2.28+, and Apple Silicon macOS 14+. Intel Mac, Linux ARM, musl/Alpine,
+Windows ARM, 32-bit and free-threaded Python are not covered by this wheel set.
+This is the whole application's range, not the wider range of SVG alone.
+
+Create a new Python environment:
 
 ```bash
-# Python 3.12+ selects public native 3MF wheels from PyPI/GitHub Releases.
-# Follow docs/desktop-electron.md to replace legacy native packages first.
+python -m venv .venv
+```
+
+Activate it using your shell's command:
+
+| Shell | Command |
+| --- | --- |
+| Windows PowerShell | `.venv\Scripts\Activate.ps1` |
+| macOS / Linux | `source .venv/bin/activate` |
+
+Then install and run from the repository root:
+
+```bash
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 # For development/tests: python -m pip install -r requirements-dev.txt
 # Optional PostgreSQL backend: python -m pip install -r requirements-postgres.txt
-corepack enable
-cd frontend
-pnpm install
-cd ..
+pnpm --dir frontend install --frozen-lockfile
 python start_all.py
 ```
 
@@ -281,15 +300,16 @@ SVG analysis uses the published `lumina-svg-core==0.3.1` release under
 AGPL-3.0-only. `requirements-native-svg.txt` selects the matching Python
 3.12–3.14 wheel from GitHub Releases. Linux x86-64 requires glibc 2.28+;
 Mac wheels require macOS 12+ for Python 3.12/3.13 and 14+ for Python 3.14.
-If no compatible wheel exists, pip builds the release source archive with
-Git and a C++17 toolchain. See the [upstream distribution guide](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.1/docs/DISTRIBUTIONS.md).
+Lumina requires matching precompiled native packages and fails installation on
+unsupported platforms instead of compiling them locally. See the
+[upstream distribution guide](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.1/docs/DISTRIBUTIONS.md).
 
-This branch requires `fatcat-metadata==0.1.1` for native filament selection and
-build-plate preflight. This SDK update is not released yet; install a matching
-maintainer-built wheel before the remaining requirements. Published `0.1.0`
-does not provide the new API. The temporary Production writer remains unchanged
-and comes from public GitHub Release wheels. Lumina applies no source patches;
-source revisions are pinned in `scripts/fatcat_packaging_contract.py`. See the
+This branch requires `fatcat-metadata==0.1.1`. Requirements select its public
+[review-candidate wheels](https://github.com/MOVIBALE/fatcat-metadata/releases/tag/v0.1.1-candidate.1)
+and the unchanged public Production writer automatically. PyPI still has 0.1.0;
+SDK 0.1.1 publication there waits for the SDK PR to merge. Ordinary source installs
+need no extra SDK checkout, local wheelhouse, C++ compiler or consumer patch.
+Maintainer source revisions are pinned in `scripts/fatcat_packaging_contract.py`. See the
 [native dependency installation guide](docs/desktop-electron.md#2-原生-3mf-依赖).
 
 Prusa export targets **PrusaSlicer 3.0.0-alpha12**, a preview format. In Settings,

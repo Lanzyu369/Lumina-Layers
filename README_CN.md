@@ -248,17 +248,36 @@ cd Lumina-studio
 
 ### 选项 1：本地安装
 
-**基础依赖**（必需，请使用 Python 3.12）：
+先准备普通 64 位 **CPython 3.12～3.14**、**Node.js 24.x**（或不低于 22.13 的
+22.x）和 **pnpm 10.33.2**。使用项目固定的 pnpm 版本，安装方式见
+[Node 官方下载](https://nodejs.org/en/download)和 [pnpm 指南](https://pnpm.io/installation)。
+Lumina 保持私有，克隆前需具备仓库访问权限。
+
+整套应用必需依赖的预编译交集为 Windows x64、glibc 2.28+ 的 Linux x86-64、
+macOS 14+ 的 Apple Silicon。Intel Mac、Linux ARM、Alpine/musl、Windows ARM、
+32 位及自由线程 Python 不在这套 wheel 覆盖范围；不能用 SVG 单库范围代替本体范围。
+
+先创建新环境：
+
 ```bash
-# Python 3.12+ 从 PyPI/GitHub Releases 选择公开的原生 3MF wheel。
-# 已安装旧原生包时，先按 docs/desktop-electron.md 替换。
+python -m venv .venv
+```
+
+按当前 shell 激活：
+
+| Shell | 命令 |
+| --- | --- |
+| Windows PowerShell | `.venv\Scripts\Activate.ps1` |
+| macOS / Linux | `source .venv/bin/activate` |
+
+然后在仓库根目录安装并启动：
+
+```bash
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 # 开发/测试另装：python -m pip install -r requirements-dev.txt
 # 可选 PostgreSQL 后端另装：python -m pip install -r requirements-postgres.txt
-corepack enable
-cd frontend
-pnpm install
-cd ..
+pnpm --dir frontend install --frozen-lockfile
 python start_all.py
 ```
 
@@ -268,13 +287,15 @@ python start_all.py
 SVG 分析固定使用独立项目发布的 `lumina-svg-core==0.3.1`（AGPLv3）。
 `requirements-native-svg.txt` 会从 GitHub Releases 选择匹配 Python 3.12～3.14、
 系统和架构的安装包。Linux x86-64 要求 glibc 2.28+；Mac 的 Python 3.12/3.13
-包要求 macOS 12+，3.14 要求 macOS 14+。没有兼容 wheel 时会从发行源码包构建，
-需要 Git 和 C++17 编译器。详见[发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.1/docs/DISTRIBUTIONS.md)。
+包要求 macOS 12+，3.14 要求 macOS 14+。Lumina 要求匹配的原生预编译包；
+不支持的平台会在安装时明确失败，不会要求本地编译。
+详见[发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.1/docs/DISTRIBUTIONS.md)。
 
-本分支的原生耗材选择与打印板预检需要 `fatcat-metadata==0.1.1`。
-该 SDK 更新尚未发布，先安装维护者构建的匹配 wheel，再安装其余依赖；
-已发布的 `0.1.0` 不包含新接口。公开 GitHub Release 提供的临时 Production
-writer 保持不变。Lumina 不应用源码补丁，由
+本分支需要 `fatcat-metadata==0.1.1`，requirements 会自动从公开的
+[候选发行](https://github.com/MOVIBALE/fatcat-metadata/releases/tag/v0.1.1-candidate.1)
+选择匹配 wheel，Production writer 保持不变。PyPI 当前仍为 0.1.0，SDK PR 合入后
+才能沿现有流程发布 0.1.1。普通源码运行无需额外克隆 SDK、准备本地 wheelhouse、
+应用源码补丁或编译 C++。维护者构建所用的来源提交由
 `scripts/fatcat_packaging_contract.py` 固定来源提交；详见
 [原生依赖安装指南](docs/desktop-electron.md#2-原生-3mf-依赖)。
 
