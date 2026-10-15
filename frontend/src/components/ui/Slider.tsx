@@ -157,11 +157,9 @@ export default function Slider(props: SliderProps) {
               className="rounded-[8px] border border-transparent bg-[var(--surface-well)] px-1.5 py-1 text-center text-sm tabular-nums text-slate-700 outline-none transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus:border-blue-400 focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-100"
               aria-label={`${label} value`}
             />
-            {unit && (
-              <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500">
-                {unit}
-              </span>
-            )}
+            <span className="min-w-6 shrink-0 text-[11px] font-medium text-slate-400 dark:text-slate-500">
+              {unit}
+            </span>
           </div>
         )}
       </div>
