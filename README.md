@@ -262,14 +262,8 @@ cd Lumina-studio
 **Core dependencies** (required; use Python 3.12):
 
 ```bash
-# Python 3.12+ requires current-platform native 3MF wheels first. Clone
-# https://github.com/MOVIBALE/fatcat-metadata and check out
-# 63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b, then follow the desktop guide to
-# prepare the pinned neroued source and apply Lumina's B7 patch.
-# python scripts/build_3mf_native_wheels.py \
-#   --fatcat-root ../fatcat-metadata \
-#   --neroued-source ../neroued-3mf \
-#   --install
+# Python 3.12+ selects public native 3MF wheels from PyPI/GitHub Releases.
+# Follow docs/desktop-electron.md to replace legacy native packages first.
 python -m pip install -r requirements.txt
 # For development/tests: python -m pip install -r requirements-dev.txt
 # Optional PostgreSQL backend: python -m pip install -r requirements-postgres.txt
@@ -290,11 +284,12 @@ Mac wheels require macOS 12+ for Python 3.12/3.13 and 14+ for Python 3.14.
 If no compatible wheel exists, pip builds the release source archive with
 Git and a C++17 toolchain. See the [upstream distribution guide](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.1/docs/DISTRIBUTIONS.md).
 
-For a local or desktop install, build `wheelhouse/3mf` from the pinned public
-Fat Cat root and patched `neroued-3mf` source before installing; do not reuse
-wheels from another OS or CPU. The required public source commit is
-`63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b`, recorded as `FATCAT_SOURCE_COMMIT`
-in `scripts/fatcat_packaging_contract.py`.
+For a local or desktop install, `fatcat-metadata==0.1.0` comes from PyPI and
+the temporary Production writer comes from public GitHub Release wheels.
+`requirements-3mf-native.txt` selects the matching Python/platform package;
+Lumina applies no source patches. Source builds pin public commits through
+`scripts/fatcat_packaging_contract.py`. See the
+[native dependency installation guide](docs/desktop-electron.md#2-原生-3mf-依赖).
 
 Prusa export targets **PrusaSlicer 3.0.0-alpha12**, a preview format. In Settings,
 select PrusaSlicer and the exact Prusa device; built-in profiles use the native

@@ -4,11 +4,11 @@
 
 This guide describes the current 3MF export boundary and where its configuration lives.
 Lumina supplies selected device/material facts, geometry, layout, and explicit product
-process values. FatCat composes slicer project metadata; the patched `neroued-3mf`
+process values. FatCat composes slicer project metadata; the pinned `neroued-3mf`
 writer writes the final package once.
 
 本文说明当前 3MF 导出边界及配置归属。Lumina 提供用户选择的设备和材料事实、几何、
-布局及明确的产品工艺值；FatCat 合成切片器项目元数据，补丁版 `neroued-3mf` 单次写出最终包。
+布局及明确的产品工艺值；FatCat 合成切片器项目元数据，固定版本的 `neroued-3mf` 单次写出最终包。
 
 ## Code entry points / 代码入口
 
@@ -64,20 +64,34 @@ validation stays at the existing SDK, source parser and writer boundaries.
 - **neroued-3mf** owns the one final 3MF package write.
 
 FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`, version
-`0.1.0+lumina.1` (upstream `0.1.0` with the tracked native export patch). Lumina builds from the public
+`0.1.0`, available as precompiled [PyPI wheels](https://pypi.org/project/fatcat-metadata/0.1.0/).
+Lumina consumes the same public SDK without a downstream patch or version suffix.
+Maintainer builds use the public
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) root
-project at source revision `63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b` and pins
+project at source revision `a6f1dc78035c98668a4a54f2257d010d7a9abf94` and pins
 the writer contract in
 `scripts/fatcat_packaging_contract.py`; build and installation steps are in
 [the desktop setup guide](desktop-electron.md).
 
-FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`，构建版本为
-`0.1.0+lumina.1`（上游 `0.1.0` 加仓库保存的原生导出修正补丁）。
-Lumina 从公开仓库
+FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`，版本为
+`0.1.0`，可从 [PyPI](https://pypi.org/project/fatcat-metadata/0.1.0/) 安装预编译包。
+Lumina 直接使用公共 SDK，不再维护 FatCat 补丁或额外版本后缀。
+维护者从公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) 的根项目构建，
-源码提交固定为 `63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b`，并在
+源码提交固定为 `a6f1dc78035c98668a4a54f2257d010d7a9abf94`，并在
 `scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
 [桌面环境指南](desktop-electron.md)。
+
+The writer uses `neroued-3mf==0.4.0+fatcat.production.1`, built from a fixed
+public source commit without a Lumina patch. Its generic Production APIs are
+submitted in [upstream PR #17](https://github.com/Neroued/neroued_3mf/pull/17).
+The [temporary GitHub Release](https://github.com/MOVIBALE/neroued_3mf/releases/tag/fatcat-production-1)
+provides matching CPython 3.12–3.14 wheels through `requirements-3mf-native.txt`.
+The writer will switch to an official upstream version after acceptance and release.
+
+写包库使用固定公开源码构建的 `neroued-3mf==0.4.0+fatcat.production.1`，
+Lumina 不再维护 writer 补丁。通用 Production 接口已提交上游 PR #17，临时公开
+Release 提供 CPython 3.12～3.14 的预编译包；上游接受并发布后切换官方版本。
 
 The current source pin includes Bambu Studio 02.08.02.61, OrcaSlicer 2.4.2,
 QIDI Studio 02.07.02.60, ElegooSlicer 1.5.3.5, Anycubic Slicer Next macOS
