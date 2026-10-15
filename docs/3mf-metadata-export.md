@@ -64,29 +64,25 @@ validation stays at the existing SDK, source parser and writer boundaries.
 - **neroued-3mf** owns the one final 3MF package write.
 
 FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`.
-This branch requires `0.1.1` for native material preflight. Requirements select
-matching [public candidate wheels](https://github.com/MOVIBALE/fatcat-metadata/releases/tag/v0.1.1-candidate.1)
+This branch requires [PyPI 0.1.1](https://pypi.org/project/fatcat-metadata/0.1.1/)
+for native material preflight. Requirements select matching published wheels
 automatically; no SDK checkout, local wheelhouse or C++ compiler is needed.
-PyPI still has [0.1.0](https://pypi.org/project/fatcat-metadata/0.1.0/), which does
-not include that API. Publishing 0.1.1 to PyPI waits for SDK PR review and merge.
 Lumina consumes the same public SDK without a downstream patch or version suffix.
 Maintainer builds use the public
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) root
-project at source revision `f7d26d3d015cb58bdecbaffae97c1ee254ce54ea` and pins
+project at source revision `86a199c20e0277b519e1acbca6ea0d9a5ec5fbb1` and pins
 the writer contract in
 `scripts/fatcat_packaging_contract.py`; build and installation steps are in
 [the desktop setup guide](desktop-electron.md).
 
 FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`。
-本分支需要 `0.1.1`，requirements 自动选择
-[公开候选 wheel](https://github.com/MOVIBALE/fatcat-metadata/releases/tag/v0.1.1-candidate.1)，
+本分支需要 [PyPI 正式版 0.1.1](https://pypi.org/project/fatcat-metadata/0.1.1/)，
+requirements 自动选择匹配的已发布 wheel，
 无需额外克隆 SDK、准备本地 wheelhouse 或安装 C++ 编译器。
-PyPI 已发布的 [0.1.0](https://pypi.org/project/fatcat-metadata/0.1.0/) 不包含新预检接口；
-0.1.1 正式发布到 PyPI 仍需先完成 SDK PR 审核与合入。
 Lumina 直接使用公共 SDK，不再维护 FatCat 补丁或额外版本后缀。
 维护者从公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) 的根项目构建，
-源码提交固定为 `f7d26d3d015cb58bdecbaffae97c1ee254ce54ea`，并在
+源码提交固定为 `86a199c20e0277b519e1acbca6ea0d9a5ec5fbb1`，并在
 `scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
 [桌面环境指南](desktop-electron.md)。
 

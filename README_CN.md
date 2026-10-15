@@ -284,19 +284,20 @@ python start_all.py
 启动器会同时启动后端和前端。在浏览器中打开启动器显示的前端地址
 （默认：`http://localhost:4174`）。
 
-SVG 分析固定使用独立项目发布的 `lumina-svg-core==0.3.1`（AGPLv3）。
-`requirements-native-svg.txt` 会从 GitHub Releases 选择匹配 Python 3.12～3.14、
+SVG 分析固定使用独立项目发布的 `lumina-svg-core==0.3.2`（AGPLv3）。
+`requirements-native-svg.txt` 会从 PyPI 选择匹配 Python 3.12～3.14、
 系统和架构的安装包。Linux x86-64 要求 glibc 2.28+；Mac 的 Python 3.12/3.13
 包要求 macOS 12+，3.14 要求 macOS 14+。Lumina 要求匹配的原生预编译包；
 不支持的平台会在安装时明确失败，不会要求本地编译。
-详见[发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.1/docs/DISTRIBUTIONS.md)。
+详见[发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.2/docs/DISTRIBUTIONS.md)。
 
-本分支需要 `fatcat-metadata==0.1.1`，requirements 会自动从公开的
-[候选发行](https://github.com/MOVIBALE/fatcat-metadata/releases/tag/v0.1.1-candidate.1)
-选择匹配 wheel，Production writer 保持不变。PyPI 当前仍为 0.1.0，SDK PR 合入后
-才能沿现有流程发布 0.1.1。普通源码运行无需额外克隆 SDK、准备本地 wheelhouse、
+本分支需要 `fatcat-metadata==0.1.1`，requirements 会自动从
+[PyPI 正式发行](https://pypi.org/project/fatcat-metadata/0.1.1/)
+选择匹配 wheel，公开的 Production writer 保持不变。普通源码运行无需额外克隆 SDK、准备本地 wheelhouse、
 应用源码补丁或编译 C++。维护者构建所用的来源提交由
-`scripts/fatcat_packaging_contract.py` 固定来源提交；详见
+`scripts/fatcat_packaging_contract.py` 统一维护。曾安装同为 0.1.1 的审核候选包时，
+请用 `python -m pip install --force-reinstall --no-cache-dir --only-binary=:all: fatcat-metadata==0.1.1`
+替换为正式 PyPI 构建。详见
 [原生依赖安装指南](docs/desktop-electron.md#2-原生-3mf-依赖)。
 
 Prusa 导出使用 **PrusaSlicer 3.0.0-alpha12** 预览版格式。在设置中选择 PrusaSlicer
