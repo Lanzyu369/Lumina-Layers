@@ -281,7 +281,7 @@ describe("recipe integration", () => {
 
     it("exports schema_version 4 and imports legacy defaults without warnings", async () => {
       const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
-      expect(recipe.schema_version).toBe(4);
+      expect(recipe.schema_version).toBe(5);
 
       const legacy = JSON.parse(JSON.stringify(recipe)) as LuminaRecipe;
       legacy.schema_version = 1;
@@ -507,10 +507,10 @@ describe("recipe integration", () => {
 
       expect(
         translations[RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED].zh,
-      ).toContain("当前会话");
+      ).toContain("旧项目");
       expect(
         translations[RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED].en,
-      ).toContain("current session");
+      ).toContain("older project");
     });
 
     it("does not mark a recipe when no spatial edits exist", async () => {
@@ -589,8 +589,8 @@ describe("recipe integration", () => {
   describe("editable recipes and asset validation", () => {
     it("exports schema v4 without retired recipe or asset digests", async () => {
       const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
-      expect(recipe.schema_version).toBe(4);
-      expect(recipe.compat.min_schema_version).toBe(4);
+      expect(recipe.schema_version).toBe(5);
+      expect(recipe.compat.min_schema_version).toBe(5);
       expect(recipe).not.toHaveProperty("integrity");
       expect(recipe.asset.primary).not.toHaveProperty("sha256");
       expect(recipe.recipe.converter!.base.lut).not.toHaveProperty("fingerprint");
@@ -610,7 +610,7 @@ describe("recipe integration", () => {
           delete legacy.asset.primary.sha256;
         }
         const parsed = await parseRecipeFile(new File([JSON.stringify(legacy)], "edited.lumina.json"));
-        expect(parsed.recipe.schema_version).toBe(4);
+        expect(parsed.recipe.schema_version).toBe(5);
         expect(parsed.recipe).not.toHaveProperty("integrity");
         expect(parsed.recipe.asset.primary).not.toHaveProperty("sha256");
         expect(parsed.recipe.recipe.converter!.base.lut).not.toHaveProperty("fingerprint");
@@ -732,7 +732,7 @@ describe("recipe integration", () => {
         : JSON.stringify(legacy);
       const parsed = await parseRecipeFile(new File([body], `first-v1.${container}`));
       const restored = restoreConverterRecipe(parsed.recipe, LOCAL_LUTS);
-      expect(parsed.recipe.schema_version).toBe(4);
+      expect(parsed.recipe.schema_version).toBe(5);
       expect(restored.state).toMatchObject({
         lut_name: "TestLUT", target_width_mm: 80, target_height_mm: 60,
         source_version: "legacy", puzzleEnabled: false, puzzleRows: 3,

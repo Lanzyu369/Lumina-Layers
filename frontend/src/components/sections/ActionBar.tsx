@@ -134,6 +134,8 @@ export default function ActionBar() {
   const submitFullPipeline = useConverterStore((s) => s.submitFullPipeline)
   const threemfDiskPath = useConverterStore((s) => s.threemfDiskPath)
   const downloadUrl = useConverterStore((s) => s.downloadUrl)
+  const backingOutput = useConverterStore((s) => s.backingOutput)
+  const separatedBacking = useConverterStore((s) => s.separate_backing)
   const generateWarnings = useConverterStore((s) => s.generateWarnings)
   const sessionId = useConverterStore((s) => s.sessionId)
   const largeFormatEnabled = useConverterStore((s) => s.largeFormatEnabled)
@@ -879,7 +881,7 @@ export default function ActionBar() {
         threemfDiskPath={threemfDiskPath}
         downloadUrl={downloadUrl}
         canSubmit={!nativeMaterialSelectionLoading && (batchMode ? canBatchSubmit && !batchLoading : canSubmit)}
-        largeFormat={batchMode ? false : largeFormatEnabled}
+        largeFormat={batchMode ? false : largeFormatEnabled || (separatedBacking && backingOutput === "separate_project")}
         onAutoGenerate={async () => {
           if (batchMode) {
             await submitBatch()

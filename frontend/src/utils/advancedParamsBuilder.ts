@@ -138,6 +138,7 @@ function buildGeneration(
     use_lut_constrained: state.use_lut_constrained,
     auto_dynamic_range: state.auto_dynamic_range,
     separate_backing: state.separate_backing,
+    backing_output: state.backingOutput,
     material_dynamic_layer_count_enabled:
       isMaterialSource && state.materialDynamicLayerCountEnabled,
     material_min_layer_count: isMaterialSource
@@ -217,11 +218,12 @@ function buildCloisonne(state: ConverterState): AdvancedParamsCloisonne {
 
 function buildCoating(state: ConverterState): AdvancedParamsCoating {
   if (!state.enable_coating) {
-    return { enable_coating: false, coating_height_mm: null };
+    return { enable_coating: false, coating_height_mm: null, coating_material: null };
   }
   return {
     enable_coating: true,
     coating_height_mm: state.coating_height_mm,
+    coating_material: state.coatingMaterial,
   };
 }
 

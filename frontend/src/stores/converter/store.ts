@@ -20,6 +20,8 @@ import {
   fetchLutList as apiFetchLutList,
   getEditorCommitStatus as apiGetEditorCommitStatus,
   getEditorSelection as apiGetEditorSelection,
+  exportEditorProject as apiExportEditorProject,
+  restoreEditorProject as apiRestoreEditorProject,
   mutateEditorSelection as apiMutateEditorSelection,
   mutateFreeColors as apiMutateFreeColors,
   regionReplace as apiRegionReplace,
@@ -42,6 +44,7 @@ import {
 } from "../../api/lut";
 import { fetchMaterialColorSuggestions } from "../../api/materialCache";
 import { uploadImagePreview } from "../../api/system";
+import { closeSession } from "../../api/session";
 import type {
   AutoHeightMode,
   ColorMode,
@@ -105,11 +108,13 @@ import { createPreviewSpace,type PreviewSpaceBounds } from "../../utils/previewS
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
 import { computeScaleFactor } from "../../utils/scaleUtils";
 import {
+  invalidateGeneratedArtifacts,
   registerPreviewArtifactInvalidator
 } from "../generatedArtifactInvalidation";
 import { lutErrorToVisibleMessage } from "../lutErrorMessages";
 import { registerPrinterBedLabelSynchronizer } from "../printerBedLabelSync";
 import { useSettingsStore } from "../settingsStore";
+import { loadCoatingMaterial, persistCoatingMaterial } from "./coatingMaterial";
 import {
   newestEditorContentRevision
 } from "./editorRevision";
@@ -711,6 +716,11 @@ function finishContentCommit(replacementEpoch: number, success: boolean): void {
   if (!handle || handle.settled) return;
   handle.settled = true;
   contentCommitHandles.delete(replacementEpoch);
+  if (success && useConverterStore.getState().sessionId === handle.sessionId) {
+    // A committed edit invalidates the current launch shortcut. Its existing
+    // TTL download remains on the server for anyone who already saved the URL.
+    useConverterStore.setState({ threemfDiskPath: null, downloadUrl: null });
+  }
   handle.resolve(success);
 }
 
@@ -1487,6 +1497,7 @@ function buildPreviewSessionResetState(
     contentCommitStatus: "idle",
     contentCommitOperationId: null,
     replacement_regions: [],
+    pendingEditorProject: preserveProjectComparisonState ? current.pendingEditorProject : null,
     recipe_overrides: [],
     customRecipeHistory: [],
     free_color_set: new Set<string>(),
@@ -1816,6 +1827,7 @@ export const DEFAULT_STATE: ConverterState = {
   auto_dynamic_range: false,
   chroma_gate: 15,
   separate_backing: false,
+  backingOutput: "same_project",
   add_loop: false,
   loop_width: 4.0,
   loop_length: 8.0,
@@ -1838,6 +1850,7 @@ export const DEFAULT_STATE: ConverterState = {
   wire_height_mm: 0.4,
   enable_coating: false,
   coating_height_mm: 0.08,
+  coatingMaterial: loadCoatingMaterial(),
   largeFormatEnabled: false,
   tileWidthMm: 250,
   tileHeightMm: 250,
@@ -1872,6 +1885,7 @@ export const DEFAULT_STATE: ConverterState = {
   historyBusy: false,
   contentCommitStatus: "idle",
   contentCommitOperationId: null,
+  pendingEditorProject: null,
   colorContours: {},
   autoHeightMode: "darker-higher" as AutoHeightMode,
   heightmapFile: null,
@@ -3284,6 +3298,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }),
     setSeparateBacking: (enabled: boolean) =>
       set({ separate_backing: enabled }),
+    setBackingOutput: (backingOutput) => {
+      invalidateGeneratedArtifacts({ preservePreviews: true });
+      set({ backingOutput, threemfDiskPath: null, downloadUrl: null });
+    },
 
     // --- 鎸備欢鐜?---
     setAddLoop: (enabled: boolean) =>
@@ -3587,14 +3605,27 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({ wire_height_mm: clampValue(height, 0.04, 1.0) }),
 
     // --- 涂层 ---
-    setEnableCoating: (enabled: boolean) =>
+    setEnableCoating: (enabled: boolean) => {
+      invalidateGeneratedArtifacts({ preservePreviews: true });
       set({
         enable_coating: enabled,
+        nativeMaterialSelection: null,
+        nativeMaterialSelectionError: null,
         threemfDiskPath: null,
         downloadUrl: null,
-      }),
-    setCoatingHeightMm: (height: number) =>
-      set({ coating_height_mm: clampValue(height, 0.04, 0.12) }),
+      });
+    },
+    setCoatingHeightMm: (height: number) => {
+      invalidateGeneratedArtifacts({ preservePreviews: true });
+      set({ coating_height_mm: clampValue(height, 0.04, 0.12),
+        threemfDiskPath: null, downloadUrl: null });
+    },
+    setCoatingMaterial: (coatingMaterial) => {
+      invalidateGeneratedArtifacts({ preservePreviews: true });
+      persistCoatingMaterial(coatingMaterial);
+      set({ coatingMaterial, nativeMaterialSelection: null, nativeMaterialSelectionError: null,
+        threemfDiskPath: null, downloadUrl: null });
+    },
 
     // --- 大画幅 ---
     setLargeFormatEnabled: (enabled: boolean) =>
@@ -5219,8 +5250,28 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       layerOrder: string = "Top2Bottom",
       virtualMaterials?: VirtualMaterial[],
     ) => {
+      const state = _get();
+      if (!state.sessionId) {
+        set({ error: "请先预览图片" });
+        return;
+      }
+      await _get().commitRecipeOverride({
+        session_id: state.sessionId, region_ids: regionIds, recipe,
+        layer_order: layerOrder,
+        color_layers: isDynamicMaterialActive(state) ? recipe.length
+          : Math.max(recipe.length, state.color_layers ?? recipe.length),
+        layer_height_mm: state.layer_height_mm ?? state.selectedLutInfo?.layer_height_mm ?? 0.08,
+        ...(virtualMaterials?.length ? { virtual_materials: virtualMaterials } : {}),
+      });
+    },
+
+    commitRecipeOverride: async (request) => {
+      const regionIds = request.region_ids ?? [];
+      const recipe = [...request.recipe];
+      const layerOrder = request.layer_order;
+      const virtualMaterials = request.virtual_materials;
       const initialState = _get();
-      if (!initialState.sessionId) {
+      if (!initialState.sessionId || initialState.sessionId !== request.session_id) {
         set({ error: "请先预览图片" });
         return;
       }
@@ -5250,11 +5301,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       // preview's physical print depth remains in the session and the backend
       // pads it with the configured backing material; sending the maximum
       // depth here turns a valid short recipe into a 422 mismatch.
-      const resolvedLayers = isDynamicMaterialActive(state)
-        ? recipe.length
-        : Math.max(recipe.length, state.color_layers ?? recipe.length);
-      const resolvedHeight =
-        state.layer_height_mm ?? state.selectedLutInfo?.layer_height_mm ?? 0.08;
+      const resolvedLayers = request.color_layers;
+      const resolvedHeight = request.layer_height_mm;
       // Deep-copy virtuals to isolate the payload / state from later
       // caller-side mutations; 422 on ``recipe[i] >= LUT.N`` requires this
       // list to be present, so forward it when non-empty.
@@ -5296,15 +5344,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           operation_id: previewCommit.operationId,
         });
         if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
-        // After a custom recipe, the preview content changed, so any previous
-        // selection mask is invalid. Clear the selection entirely rather than
-        // trying to sync a stale mask. The user can re-select after the recipe
-        // is applied. This fixes the "can't deselect / clear-all broken" bug.
-        const currentSelection = _get().selectionDocument;
-        if (currentSelection && currentSelection.selected_component_count > 0) {
-          await _get().applySelectionMutation({ operation: "clear" });
-        }
-        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
+        // The response owns the post-edit mask and revisions. A second
+        // selection mutation here would race dependent save/generate work.
         set((current) => ({
           replacePreviewLoading: false,
           previewImageUrl:
@@ -5317,7 +5358,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
           ...dynamicMaterialResultState(response),
           ...historyFlagsFromResponse(response),
-          recipe_overrides: [
+          recipe_overrides: response.recipe_overrides ?? [
             ...current.recipe_overrides.filter(
               (item) => !targetRegionIds.includes(item.region_id),
             ),
@@ -5348,7 +5389,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             response.selection,
           ),
         }));
+        if (!response.selection) void _get().hydrateSelectionDocument();
         _get()._pollAsyncGlb();
+        return response;
       } catch (err) {
         const settlement = await settleReplacementPreviewError(
           _get(),
@@ -6967,12 +7010,34 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (isStalePreviewRequest()) {
           return;
         }
+        let restoredEditor: Awaited<ReturnType<typeof apiRestoreEditorProject>> | null = null;
+        if (state.pendingEditorProject) {
+          try {
+            restoredEditor = await apiRestoreEditorProject(response.session_id, state.pendingEditorProject, createEditorOperationId());
+          } catch (error) {
+            void closeSession(response.session_id);
+            throw error;
+          }
+        }
+        if (isStalePreviewRequest()) {
+          if (state.pendingEditorProject) void closeSession(response.session_id);
+          return;
+        }
+        if (restoredEditor && (restoredEditor.status !== "committed" || !restoredEditor.result?.preview_url)) {
+          void closeSession(response.session_id);
+          throw new Error(tRuntime("recipe_editor_restore_unconfirmed"));
+        }
+        const editorResult = restoredEditor?.result;
+        if (restoredEditor?.editor_content_revision !== undefined) {
+          rememberConfirmedEditorContentRevision(response.session_id, restoredEditor.editor_content_revision);
+        }
         _logPreviewTimer("response received");
         // 后端返回 JSON，preview_url 是相对路径如 /api/files/xxx
         const previewUrl =
-          normalizeResourceUrl(response.preview_url) ?? response.preview_url;
-        const glbUrl = response.preview_glb_url
-          ? normalizeResourceUrl(response.preview_glb_url)
+          normalizeResourceUrl(editorResult?.preview_url ?? response.preview_url) ?? response.preview_url;
+        const responseGlb = editorResult ? editorResult.preview_glb_url : response.preview_glb_url;
+        const glbUrl = responseGlb
+          ? normalizeResourceUrl(responseGlb)
           : null;
         // Normalize palette hex values: strip leading '#' for frontend consistency
         const normalizedPalette = (response.palette ?? []).map((e) => ({
@@ -7023,6 +7088,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           },
           palette: normalizedPalette,
           ...dynamicMaterialResultState(response),
+          ...(editorResult ? dynamicMaterialResultState(editorResult) : {}),
           ...(shouldResetHeightmapMapping
             ? clearedHeightmapUploadState()
             : autoReliefHeightMap
@@ -7050,11 +7116,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           historyCanUndo: false,
           historyCanRedo: false,
           historyBusy: false,
-          replacement_regions: portableProjectColors.replacement_regions,
-          recipe_overrides: [],
+          replacement_regions: editorResult?.replacement_regions ?? portableProjectColors.replacement_regions,
+          recipe_overrides: editorResult?.recipe_overrides ?? [],
+          pendingEditorProject: null,
           customRecipeHistory: portableProjectColors.customRecipeHistory,
-          free_color_set: portableProjectColors.free_color_set,
-          regionReplacementCount: 0,
+          free_color_set: editorResult?.free_color_set ? new Set(editorResult.free_color_set) : portableProjectColors.free_color_set,
+          regionReplacementCount: editorResult?.region_replacement_count ?? 0,
           selectedColor: null,
           selectedColors: new Set<string>(),
           regionData: null,
@@ -7090,7 +7157,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           gradientSelection: null,
         });
         await _get().hydrateSelectionDocument();
-        if (portableProjectColors.free_color_set.size > 0) {
+        if (!editorResult && portableProjectColors.free_color_set.size > 0) {
           const freeColorRestoreSessionId = response.session_id;
           try {
             await queueFreeColorMutation(freeColorRestoreSessionId, async () => {
@@ -8022,6 +8089,37 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     setError: (error: string | null) => set({ error }),
     clearError: () => set({ error: null }),
 
+    prepareRecipeExport: async () => {
+      const initial = _get();
+      if (initial.sessionId) {
+        const selection = waitForSelectionMutation(initial.sessionId);
+        if (selection && !(await selection)) throw new Error(tRuntime("recipe_export_wait_edits"));
+        const content = waitForContentCommits(initial.sessionId);
+        if (content && !(await content)) throw new Error(tRuntime("recipe_export_wait_edits"));
+        await _get().hydrateSelectionDocument();
+      }
+      const state = _get();
+      if (state.sessionId !== initial.sessionId || state.contentCommitStatus === "pending" || state.contentCommitStatus === "unknown") {
+        throw new Error(tRuntime("recipe_export_wait_edits"));
+      }
+      const hasSpatialData = state.regionReplacementCount > 0 || state.recipe_overrides.length > 0
+        || (state.selectionDocument?.selected_pixel_count ?? 0) > 0;
+      if (!hasSpatialData || !state.sessionId) return { state, editorFile: state.pendingEditorProject };
+      const revision = confirmedSelectionRevisions.get(state.sessionId)?.editorContentRevision
+        ?? state.selectionDocument?.editor_content_revision ?? undefined;
+      const selectionRevision = state.selectionDocument?.selection_revision;
+      const editorFile = await apiExportEditorProject(state.sessionId, revision, selectionRevision);
+      const latest = _get();
+      const latestRevision = confirmedSelectionRevisions.get(state.sessionId)?.editorContentRevision
+        ?? latest.selectionDocument?.editor_content_revision ?? undefined;
+      if (latest.sessionId !== state.sessionId || latestRevision !== revision
+          || latest.selectionDocument?.selection_revision !== selectionRevision
+          || latest.contentCommitStatus === "pending" || latest.contentCommitStatus === "unknown") {
+        throw new Error(tRuntime("recipe_export_wait_edits"));
+      }
+      return { state, editorFile };
+    },
+
     importRecipeState: (
       partial: Partial<ConverterState>,
       imageFile: File,
@@ -8073,6 +8171,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         workshopSource: restoredWorkshopSource,
       });
       persistSvgHoleCompensationSettings(svgHoleCompensationOptions(_get()));
+      persistCoatingMaterial(_get().coatingMaterial);
 
       // Restore the optional heightmap after all project state is in place.
       if (heightmapFile) {

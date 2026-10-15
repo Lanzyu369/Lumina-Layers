@@ -263,6 +263,9 @@ def run(ctx: dict) -> dict:
         ctx["preview_colors"] = preview_colors
         ctx["material_types"] = build_lut_material_types(lut_metadata, slot_names)
 
+    from core.export_materials import configure_coating_material
+
+    configure_coating_material(ctx)
     slot_names = ctx["slot_names"]
     preview_colors = ctx["preview_colors"]
     _log.debug(

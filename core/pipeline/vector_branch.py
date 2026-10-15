@@ -1844,6 +1844,7 @@ def _run_vector_branch(ctx: dict) -> dict:
         vec_processor.fridge_magnets = list(fridge_magnets)
         vec_processor.enable_coating = bool(ctx.get("enable_coating", False))
         vec_processor.coating_height_mm = float(ctx.get("coating_height_mm", 0.08))
+        vec_processor.coating_material = ctx.get("resolved_coating_material")
         vec_processor.enable_outline = bool(ctx.get("enable_outline", False))
         try:
             vec_processor.outline_width_mm = float(ctx.get("outline_width", 2.0) or 2.0)
@@ -2277,6 +2278,8 @@ def _run_vector_branch(ctx: dict) -> dict:
         # 1.5a Use color config from analysis (already resolved)
         vec_color_mode = vec_processor.color_mode
         vec_preview_colors = dict(analysis.preview_colors)
+        if coating_material := ctx.get("resolved_coating_material"):
+            vec_preview_colors[coating_material.name] = [*coating_material.rgb, 255]
         vec_slot_list = analysis.slot_names
         vector_parse_warnings = list(
             getattr(vec_processor, "parse_warnings", None) or []
@@ -2357,6 +2360,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                     },
                 )
         elif board_geom is not None and separate_backing:
+            board_geom.metadata["lumina_print_role"] = "backing"
             vec_preview_colors["Board"] = vec_preview_colors.get(
                 separate_backing_color_id, [255, 255, 255, 255]
             )
@@ -2580,7 +2584,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             or ctx.get("cover_source_path")
             or ctx.get("image_path")
         )
-        export_scene_with_bambu_metadata(
+        exported_path = export_scene_with_bambu_metadata(
             scene=scene,
             output_path=out_path,
             slot_names=vec_slot_names,
@@ -2592,6 +2596,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             nozzle_size=ctx.get("nozzle_size", "0.4"),
             project_slot_names=vec_slot_list,
             material_types=ctx.get("material_types"),
+            backing_output=ctx.get("backing_output", "same_project"),
             native_filament_profiles=ctx.get("native_filament_profiles"),
             enable_base_layer_height_modifier=(
                 bool(ctx.get("enable_base_layer_height_modifier", True))
@@ -2617,6 +2622,8 @@ def _run_vector_branch(ctx: dict) -> dict:
                 else None
             ),
         )
+        if ctx.get("backing_output") == "separate_project":
+            out_path = exported_path
         vector_timing["export_3mf_s"] = time.perf_counter() - export_t0
         log.info(
             "Vector 3MF exported with Bambu metadata",

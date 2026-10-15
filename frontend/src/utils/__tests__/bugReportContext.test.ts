@@ -389,6 +389,19 @@ describe("collectBugReportContext", () => {
     expect(context.material_backing_material_dir_name).toBe("brand/white");
   });
 
+  it("includes an independent coating archive in reproducible source attachments", () => {
+    useConverterStore.setState({ source_version: "legacy", enable_coating: true,
+      coatingMaterial: { source: "material_archive", key: "brand/clear-petg" } });
+    useWidgetStore.setState({ activeTab: "converter" });
+
+    const context = collectBugReportContext();
+
+    expect(context.source_material_dir_names).toContain("brand/clear-petg");
+    expect((context.advanced_params as AdvancedParamsFull).coating?.coating_material).toEqual({
+      source: "material_archive", key: "brand/clear-petg",
+    });
+  });
+
   it("collects native LUT source details on converter tab", () => {
     useConverterStore.setState({
       sessionId: "converter-session",

@@ -63,11 +63,13 @@ def test_batch_worker_forwards_coating(enabled, mode, source):
             modeling_mode_value=mode, color_layers=5, layer_height_mm=0.08,
             quantize_colors=48, enable_cleanup=True, artifact_prefix="test-",
             material_source=source, enable_coating=enabled, coating_height_mm=0.12,
+            coating_material={"source": "palette", "key": "White"},
             svg_hole_compensation_enabled=mode == "vector",
             svg_hole_max_area_mm2=0.75, svg_hole_max_width_mm=0.21,
         )
     assert convert.call_args.kwargs["enable_coating"] is enabled
     assert convert.call_args.kwargs["coating_height_mm"] == 0.12
+    assert convert.call_args.kwargs["coating_material"] == {"source": "palette", "key": "White"}
     assert convert.call_args.kwargs["svg_hole_compensation_enabled"] is (mode == "vector")
     assert convert.call_args.kwargs["svg_hole_max_area_mm2"] == 0.75
     assert convert.call_args.kwargs["svg_hole_max_width_mm"] == 0.21
@@ -104,14 +106,16 @@ def test_two_svg_batch_exports_keep_coating(tmp_path, monkeypatch, mode, enabled
             str(svg_path), str(lut_path), 10, 1.2, "Single-sided",
             "4-Color (RYBW)", mode, 5, 0.08, 4, False, "coating-test-",
             enable_coating=enabled, coating_height_mm=0.12,
+            coating_material={"source": "palette", "key": "White"},
         )
         assert result["threemf_path"], result["status_msg"]
         sidecar = json.loads(Path(result["metadata_sidecar_path"]).read_text(encoding="utf-8"))
         slots = tuple(MaterialSlot(**slot) for slot in sidecar["slots"])
-        assert any(slot.slot_name == "Coating" for slot in slots) is enabled
+        assert not any(slot.slot_name == "Coating" for slot in slots)
+        assert any(slot.slot_name == "White" for slot in slots)
         items.append(MergedItem(
             source_filename=svg_path.name, source_3mf_path=Path(result["threemf_path"]),
-            slots=slots, tx_mm=index * 15, ty_mm=0,
+            slots=slots, tx_mm=40 + index * 15, ty_mm=40,
         ))
     merged = tmp_path / "merged.3mf"
     MergedBambu3MFWriter().write(items, merged, plate_width_mm=256, plate_depth_mm=256)

@@ -50,6 +50,7 @@ function deriveFinalArtifact(isConverterActive: boolean): FinalArtifactRef | nul
     return null;
   }
   const artifactType: FinalArtifactRef["artifact_type"] = converter.largeFormatEnabled
+    || (converter.separate_backing && converter.backingOutput === "separate_project")
     ? "zip"
     : downloadUrl.toLowerCase().includes(".zip")
       ? "zip"
@@ -299,6 +300,8 @@ export function collectBugReportContext(): BugReportContextPayload {
     ].filter((value) => value.length > 0))],
     source_material_dir_names: [...new Set([
       ...converter.selectedMaterialDirNames, converter.materialBackingMaterialDirName,
+      ...(converter.enable_coating && converter.coatingMaterial?.source === "material_archive"
+        ? [converter.coatingMaterial.key] : []),
     ].filter((value): value is string => typeof value === "string" && value.length > 0))],
     workflow_state: {
       converter: captureWorkflowState(converter), single_stage: captureWorkflowState(singleStage),

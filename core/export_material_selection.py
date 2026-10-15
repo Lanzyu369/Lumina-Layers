@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from config import ColorSystem
 from core.errors import NativeMaterialSelectionError
+from core.export_materials import resolve_coating_material
 from core.machine_registry import load_machine_registry, resolve_machine_registry_root
 from core.material_lut_provider import load_materials
 from core.material_lut_synthesis import build_material_preview_colors, build_material_slot_names
@@ -97,6 +98,14 @@ def _source_materials(
             colours = colour_config["preview"]
         types = build_lut_material_types(metadata, names)
     choices = params.get("native_filament_profiles") or {}
+    coating = resolve_coating_material(
+        params.get("coating_material"), slot_names=names,
+        preview_colors=colours, material_types=types,
+    ) if params.get("enable_coating") else None
+    if coating and coating.name not in names:
+        names = [*names, coating.name]
+        colours = {**colours, coating.name: [*coating.rgb, 255]}
+        types = {**types, coating.name: coating.material_type}
     records = []
     for index, name in enumerate(names):
         rgb = colours.get(name, colours.get(index, colours.get(str(index), (128, 128, 128))))
@@ -132,6 +141,8 @@ def resolve_export_material_selection(
     在生成前预检原生材料选择，保留工艺参数；导入调校模板继续采用自身设置。
     """
     if params.get("custom_3mf_template_id"):
+        if params.get("enable_coating"):
+            _source_materials(params, source_context)
         return {"ready": True, "materials": [], "issues": [], "build_plates": [],
                 "slicer_id": str(params.get("slicer") or ""), "machine_uid": "",
                 "nozzle_uid": "", "build_plate_uid": "",

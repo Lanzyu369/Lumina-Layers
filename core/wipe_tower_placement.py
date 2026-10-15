@@ -125,6 +125,7 @@ class WipeTowerPlacementRequest:
     tower_preview_x_guard_margin: float = 0.0
     cyclic_toolchanges: bool = False
     tower_wall_types: tuple[str, ...] = ()
+    reserve_model_brim_at_bed_edge: bool = True
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,16 @@ class WipeTowerPlacementResult:
     warning_code: str | None
     reason: str
     tower_wall_type: str | None = None
+    bed_bounds: Rect | None = None
+    model_brim_requires_review: bool = False
+
+    @property
+    def placement_available(self) -> bool:
+        """Whether body placement is usable, possibly pending native brim review.
+
+        实体布局是否可用；底边仍可保持待原生切片确认。
+        """
+        return not self.requires_manual_adjustment or self.model_brim_requires_review
 
 
 @dataclass(frozen=True)
@@ -772,6 +783,7 @@ def _build_result(
             else None
         ),
         reason=reason,
+        bed_bounds=_effective_bed_bounds(request),
     )
 
 
@@ -809,6 +821,10 @@ def _layout_is_safe(
         0.0,
         float(request.model_tower_clearance) - 2.0 * edge_clearance,
     )
+    model_bed_bounds = (
+        result.model_outer_bounds if request.reserve_model_brim_at_bed_edge
+        else result.model_bounds.expanded(edge_clearance)
+    )
     # Run the cheap overlap test before the polygon containment tests; all
     # three checks are pure, so the order does not change the answer.
     return (
@@ -825,7 +841,7 @@ def _layout_is_safe(
             )
         )
         <= _EPSILON
-        and rect_allowed(result.model_outer_bounds)
+        and rect_allowed(model_bed_bounds)
         and rect_allowed(result.tower_outer_bounds)
     )
 
@@ -873,7 +889,10 @@ def _solve_tower_body_placement(
     if (
         request.model_translation_locked
         and bed is not None
-        and not rect_allowed(original.model_outer_bounds)
+        and not rect_allowed(
+            original.model_outer_bounds if request.reserve_model_brim_at_bed_edge
+            else original.model_bounds.expanded(edge_clearance)
+        )
     ):
         return _build_result(
             request,
@@ -933,7 +952,8 @@ def _solve_tower_body_placement(
             clearance_candidates
         ):
             model_margin = (
-                max(0.0, request.model_brim) + candidate_edge_clearance
+                (max(0.0, request.model_brim) if request.reserve_model_brim_at_bed_edge else 0.0)
+                + candidate_edge_clearance
             )
             base_tower_margin = (
                 max(0.0, request.tower_brim) + candidate_edge_clearance
@@ -1173,15 +1193,9 @@ def _solve_tower_body_placement(
     )
 
 
-def solve_wipe_tower_placement(
+def _solve_supported_tower_shapes(
     request: WipeTowerPlacementRequest,
 ) -> WipeTowerPlacementResult:
-    """Place the current native tower, then try a supported rectangular body.
-
-    优先保留原生塔形状；无安全位置时，仅尝试目标明确支持的矩形塔。
-    两种形状复用同一求解器，保留模型尺寸、冲刷量与擦料塔启用状态。
-    """
-
     current = _solve_tower_body_placement(request)
     if (
         not current.requires_manual_adjustment
@@ -1199,6 +1213,42 @@ def solve_wipe_tower_placement(
         rectangular, tower_wall_type="rectangle",
         reason=f"{rectangular.reason}_rectangle",
     )
+
+
+def solve_wipe_tower_placement(
+    request: WipeTowerPlacementRequest,
+) -> WipeTowerPlacementResult:
+    """Search supported tower shapes without confusing brim estimates with geometry.
+
+    优先预留完整底边。仅底边估算挡住床边时，保留模型/塔的真实边界和
+    两者之间的完整底边间距，继续求解侧边布局并提示原生切片确认底边。
+    不缩放模型、不减少冲刷量，也不更改底边设置。
+    """
+    current = _solve_supported_tower_shapes(request)
+    if not current.requires_manual_adjustment:
+        return current
+    if request.model_brim > 0 and request.reserve_model_brim_at_bed_edge:
+        # Auto brim is determined by native slicing, not by a full rectangular
+        # offset of the model. Keep that offset for model/tower separation, but
+        # do not discard a body-safe layout solely for a possible brim at the
+        # bed edge. Explicit brims also retain a warning until native review.
+        body_layout = _solve_supported_tower_shapes(replace(
+            request, reserve_model_brim_at_bed_edge=False,
+        ))
+        if not body_layout.requires_manual_adjustment:
+            return replace(
+                body_layout, model_brim_requires_review=True,
+                requires_manual_adjustment=True,
+                warning_code=WIPE_TOWER_MANUAL_WARNING_CODE,
+                reason="model_brim_requires_native_slice",
+            )
+    bed = current.bed_bounds
+    if bed is not None and (
+        current.model_outer_bounds.width > bed.width + _EPSILON
+        or current.model_outer_bounds.height > bed.height + _EPSILON
+    ):
+        return replace(current, reason="model_envelope_exceeds_printable_bounds")
+    return current
 
 
 __all__ = [

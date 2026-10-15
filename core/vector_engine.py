@@ -3807,6 +3807,7 @@ class VectorProcessor:
         self.fridge_magnets: list = []
         self.enable_coating = False
         self.coating_height_mm = 0.08
+        self.coating_material = None
         self.enable_outline = False
         self.outline_width_mm = 0.0
         self.expand_stroke_to_fill = False
@@ -5598,7 +5599,9 @@ class VectorProcessor:
                     "meshes": coating_meshes,
                     "mat_id": max(num_channels, len(slot_names)),
                 }
-            preview_colors[coating_name] = [200, 200, 200, 80]
+            meshes_by_slot[coating_name]["export_material"] = self.coating_material
+            preview_colors[coating_name] = ([*self.coating_material.rgb, 255]
+                                            if self.coating_material else [200, 200, 200, 80])
         stage_timings["coating_s"] = time.perf_counter() - t0
         stage_timings["vector_mesh_rss_after_coating_bytes"] = int(
             get_process_rss_bytes() or 0
@@ -5672,9 +5675,13 @@ class VectorProcessor:
             if mirror_transform is not None:
                 transform_layered_mesh(combined, mirror_transform)
 
-            color_val = preview_colors.get(mat_id, preview_colors.get(name, [255, 255, 255, 255]))
+            export_material = data.get("export_material")
+            color_val = ([*export_material.rgb, 255] if export_material else
+                         preview_colors.get(mat_id, preview_colors.get(name, [255, 255, 255, 255])))
             combined.visual.face_colors = color_val
             combined.metadata["name"] = name
+            if export_material:
+                combined.metadata["bambu_material_name"] = export_material.name
             scene.add_geometry(combined, geom_name=name)
 
         stage_timings["assemble_s"] = time.perf_counter() - t0

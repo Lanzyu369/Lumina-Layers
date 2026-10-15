@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, NamedTuple
+from typing import Annotated, Literal, NamedTuple
 
 import asyncio
 from concurrent.futures.process import BrokenProcessPool
@@ -40,6 +40,7 @@ from api.preview_cache_artifacts import (
 )
 from api.replacement_history import replacement_history_lock
 from api.schemas.converter import (
+    CoatingMaterialReference,
     ColorMode,
     ConvertGenerateRequest,
     LargeFormatConvertGenerateRequest,
@@ -2584,6 +2585,8 @@ async def convert_generate(
     worker_fn = worker_generate_model
     worker_params = params
     if _should_use_model_surface_overlay(session_data):
+        if request.backing_output != "same_project":
+            raise HTTPException(status_code=422, detail="Independent backing projects are not supported for model surface generation.")
         if request.backing_infill_density_percent < 100:
             raise HTTPException(
                 status_code=422,
@@ -2707,6 +2710,7 @@ async def convert_generate(
                 download_filename = generate_preserved_upload_3mf_filename(
                     session_data.get("source_basename")
                 )
+                download_filename = str(Path(download_filename).with_suffix(Path(threemf_path).suffix))
             download_id = registry.register_path(
                 str(uuid.uuid4()),
                 threemf_path,
@@ -4645,6 +4649,8 @@ async def convert_batch(
     pool: WorkerPoolManager = Depends(get_worker_pool),
     enable_coating: bool = Form(False, description="启用透明镀层"),
     coating_height_mm: float = Form(0.08, ge=0.04, le=0.12, description="透明镀层厚度 (mm)"),
+    coating_material: str | None = Form(None),
+    backing_output: Literal["same_project", "separate_project"] = Form("same_project"),
 ) -> BatchResponse:
     """Batch-convert multiple images via process pool.
     通过进程池批量转换多张图像。
@@ -4662,6 +4668,8 @@ async def convert_batch(
         separate_backing: Emit the backing as a separate mesh object when true.
             (为 true 时将底板作为独立网格对象输出。)
     """
+    if backing_output != "same_project":
+        raise HTTPException(status_code=422, detail="Independent backing projects are available for single-model generation, not batch merging.")
     validate_export_device_selection(
         printer_id=printer_id,
         slicer=slicer,
@@ -4752,8 +4760,12 @@ async def convert_batch(
             selected_native_profiles = TypeAdapter(dict[str, str]).validate_json(
                 native_filament_profiles or "{}",
             )
+            selected_coating_material = (
+                CoatingMaterialReference.model_validate_json(coating_material).model_dump()
+                if coating_material else None
+            )
         except ValidationError as exc:
-            raise HTTPException(status_code=422, detail="Native filament selections must be a JSON name-to-preset mapping.") from exc
+            raise HTTPException(status_code=422, detail="Native filament or coating material selections are invalid.") from exc
         require_material_selection({
             "source_kind": resolved_source_kind,
             "lut_name": resolved_lut_name, "lut_names": _normalize_batch_string_list(lut_names),
@@ -4764,6 +4776,7 @@ async def convert_batch(
             "device_profile_id": device_profile_id, "build_plate_id": build_plate_id,
             "custom_3mf_template_id": custom_3mf_template_id, "color_mode": color_mode,
             "native_filament_profiles": selected_native_profiles,
+            "enable_coating": enable_coating, "coating_material": selected_coating_material,
             "lut_path": lut_path,
         })
         # Validate modeling_mode string (main thread)
@@ -4938,6 +4951,7 @@ async def convert_batch(
         enable_coating,
         coating_height_mm,
         selected_native_profiles,
+        selected_coating_material,
     )
     batch_size = max(1, int(pool.max_workers))
     workers_completed = False

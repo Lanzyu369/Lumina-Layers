@@ -4,6 +4,14 @@
  * Contains all zh/en translation key-value pairs
  */
 export const translations: Record<string, Record<"zh" | "en", string>> = {
+  recipe_export_wait_edits: {
+    zh: "编辑或选区仍在提交，请等待完成或同步编辑状态后再保存。",
+    en: "An edit or selection is still being committed. Wait for it to finish or synchronize the editor before saving.",
+  },
+  recipe_editor_restore_unconfirmed: {
+    zh: "尚未确认项目局部编辑的恢复结果，原项目数据已保留，请重新预览。",
+    en: "The restored project edits could not be confirmed. Your project data is preserved; run preview again.",
+  },
   native_material_edit_button: { zh: "打印耗材…", en: "Print filaments…" },
   native_material_edit_title: { zh: "打印耗材", en: "Print filaments" },
   native_material_edit_description: {
@@ -5683,12 +5691,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Native vector tiling failed, so raster tiling was used automatically.",
   },
   wipe_tower_manual_adjustment_title: {
-    zh: "打印前必须手动调整擦料塔",
-    en: "Manual wipe tower adjustment required",
+    zh: "打印前请手动检查摆放",
+    en: "Check the layout before printing",
   },
   wipe_tower_manual_adjustment_warning: {
-    zh: "文件已继续生成，但当前模型和擦料塔无法在所选热床上同时安全摆放。Lumina 没有缩小模型，也没有关闭擦料塔；请务必在切片软件中手动移动模型，或调整擦料塔的宽度和位置后再打印。",
-    en: "The file was generated, but the model and wipe tower cannot both fit safely on the selected bed. Lumina did not scale the model or disable the tower; before printing, move the model or adjust the tower width and position manually in the slicer.",
+    zh: "文件已生成，可以下载。自动摆放未能确认模型、底边（brim）和擦料塔的安全位置；当前估算会预留完整底边，实际切片可能占用更少空间。模型尺寸、原生工艺和擦料塔均已保留。请在切片软件中检查并手动调整，确认切片通过后再打印。ZIP 中的每个工程都需要分别检查。",
+    en: "The file is ready to download. Automatic placement could not verify safe positions for the model, brim and wipe tower. The estimate reserves the full brim allowance; actual slicing may use less space. Model dimensions, native process settings and the tower were preserved. Check and adjust the layout in your slicer, and confirm slicing succeeds before printing. Check each project in a ZIP separately.",
   },
   basic_tile_width: {
     zh: "切片宽度",
@@ -5946,6 +5954,19 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== Coating Settings ====================
+  adv_backing_output: { zh: "背板输出", en: "Backing output" },
+  adv_backing_output_same: { zh: "同一工程", en: "Same project" },
+  adv_backing_output_separate: { zh: "独立分盘工程（ZIP）", en: "Independent plate projects (ZIP)" },
+  adv_backing_output_hint: { zh: "保留原尺寸，模型和背板各输出一个 3MF。解压后分别打开切片，检查模型、底边（brim）和擦料塔的位置。", en: "Keeps the original size and writes one 3MF each for the model and backing. Unzip and slice each project separately, checking the model, brim and wipe tower positions." },
+  adv_backing_output_unavailable: { zh: "独立背板工程用于单面、无浮雕的单模型导出。当前模式请使用同一工程或现有分块输出。", en: "Independent backing projects support a single-sided model without relief. Use the same project or the existing tile workflow for this mode." },
+  coating_material: { zh: "涂层耗材", en: "Coating material" },
+  coating_material_choose: { zh: "请选择实际使用的耗材", en: "Choose the actual filament" },
+  coating_material_palette: { zh: "当前模型耗材", en: "Current model materials" },
+  coating_material_archive: { zh: "独立耗材档案", en: "Independent material archive" },
+  coating_material_retry: { zh: "重试", en: "Retry" },
+  coating_material_load_failed: { zh: "耗材档案加载失败，已有选择保留。", en: "Could not load material archives. Your existing selection is retained." },
+  coating_material_hint: { zh: "涂层使用你选择的实际耗材。生成前会检查原生耗材预设和板型兼容性。", en: "The coating uses your selected filament. Native presets and build-plate compatibility are checked before generation." },
+  coating_material_mixed: { zh: "涂层与模型包含不同材料类型。请确认它们适合共同打印；将保留各自原生温度和流量，不自动替换材料。", en: "The coating and model use different material types. Confirm they can print together; each retains its native temperature and flow settings." },
   coating_enable: {
     zh: "启用透明镀层",
     en: "Enable Transparent Coating",
@@ -8048,12 +8069,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "The imported recipe enabled puzzle back labels. Back labels are not available in this version and have been disabled.",
   },
   recipe_import_warning_spatial_edits_not_serialized: {
-    zh: "连通区域的局部改色仅属于当前会话，未写入分享配方；导入后需要重新应用。",
-    en: "Connected-region color edits belong to the current session and were not saved in the shared recipe; reapply them after import.",
+    zh: "这个旧项目未保存局部改色的空间数据，无法还原缺失的选区；原图和其他参数仍会恢复。",
+    en: "This older project did not save the spatial data for local color edits. Missing selections cannot be recovered; the original source and other settings will still be restored.",
   },
   recipe_import_warning_region_recipes_not_restored: {
-    zh: "区域自定义配方依赖原预览会话中的选区，导入后不会直接激活；配方历史已保留，可重新选区后应用。",
-    en: "Region-specific recipes depend on selections from the original preview session, so they are not activated on import. Their recipe history is kept for reuse after selecting a new region.",
+    zh: "这个旧项目缺少区域配方的实际掩码，不能确定原来的应用范围；已保留配方历史，可重新选区后应用。",
+    en: "This older project is missing the actual masks for region recipes, so their original scope cannot be recovered. Recipe history is kept for reuse after selecting a new region.",
   },
   recipe_import_workshop_degraded: {
     zh: "分享卡中的创意工坊编辑数据已损坏或当前不可用；主图和转换参数仍可正常导入。",

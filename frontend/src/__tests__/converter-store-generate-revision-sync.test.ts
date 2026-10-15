@@ -145,6 +145,24 @@ beforeEach(() => {
 });
 
 describe("generate editor content revision", () => {
+  it.each([
+    ["coating enabled", () => useConverterStore.getState().setEnableCoating(true)],
+    ["coating height", () => useConverterStore.getState().setCoatingHeightMm(0.12)],
+    ["coating material", () => useConverterStore.getState().setCoatingMaterial({ source: "palette", key: "White" })],
+    ["backing plates", () => useConverterStore.getState().setBackingOutput("separate_project")],
+  ] as const)("discards a late download after changing %s", async (_name, change) => {
+    seedEditorState();
+    useConverterStore.setState({ downloadUrl: null, enable_coating: false });
+    let complete!: (value: Awaited<ReturnType<typeof convertGenerate>>) => void;
+    mockedConvertGenerate.mockReturnValueOnce(new Promise((resolve) => { complete = resolve; }));
+    const generating = useConverterStore.getState().submitGenerate();
+    await vi.waitFor(() => expect(mockedConvertGenerate).toHaveBeenCalledOnce());
+    change();
+    complete(generated as never);
+    await generating;
+    expect(useConverterStore.getState().downloadUrl).toBeNull();
+  });
+
   it("sends the revision confirmed by an undo response without a selection", async () => {
     seedEditorState();
     mockedReplacementHistory.mockResolvedValueOnce(historyResponse(7));

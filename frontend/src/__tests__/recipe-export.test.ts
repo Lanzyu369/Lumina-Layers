@@ -362,7 +362,7 @@ describe("recipe/exportRecipe", () => {
       source,
     );
 
-    expect(recipe.schema_version).toBe(4);
+    expect(recipe.schema_version).toBe(5);
     expect(recipe.recipe.workshop).toEqual(source);
     expect(recipe.recipe.workshop).not.toBe(source);
     expect(recipe.recipe.workshop?.payload).not.toBe(source.payload);

@@ -130,11 +130,19 @@ export interface VectorPreviewRendererResponse {
   renderer: "vector_analytic" | "segmented";
 }
 
+export interface CoatingMaterialReference {
+  source: "palette" | "material_archive";
+  key: string;
+}
+
+export type BackingOutput = "same_project" | "separate_project";
+
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
   spacer_thick: number;
   backing_infill_density_percent?: number;
   structure_mode: StructureMode;
   separate_backing: boolean;
+  backing_output?: BackingOutput;
   add_loop: boolean;
   loop_width: number;
   loop_length: number;
@@ -155,6 +163,7 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   wire_height_mm: number;
   enable_coating: boolean;
   coating_height_mm: number;
+  coating_material?: CoatingMaterialReference | null;
   replacement_regions?: ColorReplacementItem[];
   recipe_overrides?: RecipeOverrideItem[];
   free_color_set?: string[];
@@ -326,6 +335,7 @@ export interface RecipeOverrideApplyResponse
   preview_url: string;
   preview_glb_url?: string | null;
   override_count: number;
+  recipe_overrides?: RecipeOverrideItem[];
   can_undo?: boolean;
   can_redo?: boolean;
   /** Authoritative selection and content revision after the edit. */
@@ -1868,11 +1878,13 @@ export interface BatchPreviewItem {
 }
 
 export interface BatchConvertParams {
+  backing_output?: BackingOutput;
   svg_hole_compensation_enabled?: boolean;
   svg_hole_max_area_mm2?: number;
   svg_hole_max_width_mm?: number;
   enable_coating?: boolean;
   coating_height_mm?: number;
+  coating_material?: CoatingMaterialReference | null;
   source_kind?: "legacy_single" | "legacy_multi" | "native_bundle";
   lut_name?: string;
   lut_names?: string[];

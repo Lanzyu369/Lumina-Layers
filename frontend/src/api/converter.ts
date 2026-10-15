@@ -872,6 +872,32 @@ export async function replacementHistory(
   return response.data;
 }
 
+/** Capture editable pixels and spatial masks at the confirmed editor revisions. */
+export async function exportEditorProject(
+  sessionId: string,
+  editorContentRevision?: number,
+  selectionRevision?: number,
+): Promise<File> {
+  const response = await apiClient.get<Blob>(
+    `/convert/editor-project/${encodeURIComponent(sessionId)}`,
+    { responseType: "blob", params: { editor_content_revision: editorContentRevision, selection_revision: selectionRevision }, timeout: 60_000 },
+  );
+  return new File([response.data], "editor.json.gz", { type: "application/gzip" });
+}
+
+/** Initialize a fresh source preview with the embedded editable checkpoint. */
+export async function restoreEditorProject(
+  sessionId: string, file: File, operationId: string,
+): Promise<EditorCommitStatusResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("operation_id", operationId);
+  const response = await apiClient.post<EditorCommitStatusResponse>(
+    `/convert/editor-project/${encodeURIComponent(sessionId)}/restore`, form, { timeout: 60_000 },
+  );
+  return response.data;
+}
+
 /** Read the server-side confirmation for one editor operation. */
 export async function getEditorCommitStatus(
   sessionId: string,
