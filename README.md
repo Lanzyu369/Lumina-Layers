@@ -304,11 +304,12 @@ Lumina requires matching precompiled native packages and fails installation on
 unsupported platforms instead of compiling them locally. See the
 [upstream distribution guide](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.1/docs/DISTRIBUTIONS.md).
 
-This branch requires `fatcat-metadata==0.1.1`. Requirements select its public
-[review-candidate wheels](https://github.com/MOVIBALE/fatcat-metadata/releases/tag/v0.1.1-candidate.1)
-and the unchanged public Production writer automatically. PyPI still has 0.1.0;
-SDK 0.1.1 publication there waits for the SDK PR to merge. Ordinary source installs
+This branch requires `fatcat-metadata==0.1.1`. Requirements select its
+[PyPI wheels](https://pypi.org/project/fatcat-metadata/0.1.1/)
+and the unchanged public Production writer automatically. Ordinary source installs
 need no extra SDK checkout, local wheelhouse, C++ compiler or consumer patch.
+If you previously installed a 0.1.1 review candidate, replace it with the final
+PyPI build using `python -m pip install --force-reinstall --no-cache-dir --only-binary=:all: fatcat-metadata==0.1.1`.
 Maintainer source revisions are pinned in `scripts/fatcat_packaging_contract.py`. See the
 [native dependency installation guide](docs/desktop-electron.md#2-原生-3mf-依赖).
 

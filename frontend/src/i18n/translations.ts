@@ -54,11 +54,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "“{material}”之前选择的耗材预设不适用于当前设备或打印板，请重新选择。",
     en: "The previous preset for “{material}” does not support the current machine or build plate. Choose it again.",
   },
+  native_material_settings_incompatible: {
+    zh: "这组耗材预设的共同设置无法组合。请选择可共同使用的原生预设，或导入切片软件中已配置好的 3MF 模板。",
+    en: "These filament presets have incompatible shared settings. Choose compatible native presets or import a 3MF template configured in your slicer.",
+  },
   file_save_saved: { zh: "文件已保存", en: "File saved" },
   file_save_download_started: { zh: "已开始下载", en: "Download started" },
   file_save_failed: { zh: "保存失败，请检查文件名、目标目录权限和可用空间后重试。", en: "Save failed. Check the filename, folder permissions and available space, then retry." },
   file_save_too_large: { zh: "文件超过 128 MiB 保存上限，请减小图像后重试。", en: "The file exceeds the 128 MiB save limit. Reduce the image size and retry." },
   // ==================== Application Title and Header ====================
+  app_starting: { zh: "正在启动 Lumina", en: "Starting Lumina" },
+  app_starting_detail: {
+    zh: "正在等待本机服务就绪，首次启动可能需要更久。连接成功后会自动进入，无需刷新；如果一直停留在此处，请检查启动器或终端中的错误。",
+    en: "Waiting for the local service. The first start may take longer. Lumina will open automatically when connected; no refresh is needed. If this screen remains, check the launcher or terminal for errors.",
+  },
   app_subtitle: {
     zh: "多材料3D打印色彩系统 | v1.6.3",
     en: "Multi-Material 3D Print Color System | v1.6.3",

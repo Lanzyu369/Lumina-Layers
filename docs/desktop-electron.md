@@ -20,12 +20,8 @@ Windows ARM、32 位或 free-threaded Python 尚无完整应用所需的 wheel �
 3MF 导出链路使用两个独立依赖：
 
 - 元数据 SDK：`fatcat-metadata==0.1.1`，Python 导入名为 `fatcat_metadata`。
-  requirements 自动从公开的
-  [候选发行](https://github.com/MOVIBALE/fatcat-metadata/releases/tag/v0.1.1-candidate.1)
-  选择预编译包。已发布的
-  [PyPI 0.1.0](https://pypi.org/project/fatcat-metadata/0.1.0/) 不包含耗材选择预检接口，
-  不能替代本分支依赖。0.1.1 正式发布到 PyPI 仍需先审核并合入 SDK PR；
-  候选发行固定本次审核源码，不代表 SDK main 已更新。
+  requirements 自动从
+  [PyPI 0.1.1](https://pypi.org/project/fatcat-metadata/0.1.1/) 选择预编译包。
   Lumina 使用公共 SDK，不再应用 FatCat 补丁或添加 `+lumina.1` 版本后缀。
 - 写包库：`neroued-3mf==0.4.0+fatcat.production.1`，由
   [公开 fork 的 GitHub Release](https://github.com/MOVIBALE/neroued_3mf/releases/tag/fatcat-production-1)
@@ -48,14 +44,20 @@ python -m pip install -r requirements.txt
 已有实验环境含旧版 `lumina-3mf-metadata-cpp` 或本地同版本构建时，建议重新创建
 虚拟环境，避免共享包文件或旧依赖混入；这不是首次安装步骤。
 
+如果之前安装过版本同为 `0.1.1` 的审核候选包，需替换成正式 PyPI 构建：
+
+```bash
+python -m pip install --force-reinstall --no-cache-dir --only-binary=:all: fatcat-metadata==0.1.1
+```
+
 ### 维护者从源码构建
 
 来源提交、仓库和版本由 `scripts/fatcat_packaging_contract.py`
 统一维护。FatCat 来自公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata)，固定
-完整提交 `f7d26d3d015cb58bdecbaffae97c1ee254ce54ea`。构建脚本从其根目录
+完整提交 `86a199c20e0277b519e1acbca6ea0d9a5ec5fbb1`。构建脚本从其根目录
 的 `pyproject.toml` 构建 `0.1.1` wheel，无需进入 `cpp/`，不会修改 SDK 源码。
-该修正尚未合入 main；以下仅供维护者准备发行包或进行原生开发，普通源码运行
+以下仅供维护者准备发行包或进行原生开发，普通源码运行
 跳过本节。它需要 Git、CMake 和 C++20 编译器（FatCat 本身使用 C++17）。
 
 writer 固定在公开提交 `a6043434d6cd9a2a76553ffdcdf0dda081d9b19c`，
@@ -65,7 +67,7 @@ Lumina 不再保存或应用 writer 补丁。上游合并并正式发布后，�
 
 ```powershell
 git clone https://github.com/MOVIBALE/fatcat-metadata ..\fatcat-metadata
-git -C ..\fatcat-metadata checkout f7d26d3d015cb58bdecbaffae97c1ee254ce54ea
+git -C ..\fatcat-metadata checkout 86a199c20e0277b519e1acbca6ea0d9a5ec5fbb1
 git clone https://github.com/MOVIBALE/neroued_3mf.git ..\neroued-3mf
 git -C ..\neroued-3mf checkout a6043434d6cd9a2a76553ffdcdf0dda081d9b19c
 

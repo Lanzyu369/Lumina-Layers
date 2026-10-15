@@ -1,14 +1,12 @@
 # Native metadata dependencies for the selected slicer export routes.
 #
 # Public source: https://github.com/MOVIBALE/fatcat-metadata
-# Pin: f7d26d3d015cb58bdecbaffae97c1ee254ce54ea.
-# Public review-candidate wheels supply the 0.1.1 native material selection API.
-# PyPI publication still requires the reviewed SDK change to land on main.
+# Release source: 86a199c20e0277b519e1acbca6ea0d9a5ec5fbb1.
+# PyPI wheels supply the 0.1.1 native material selection API.
 # Lumina consumes the same public SDK without patching it or changing its version.
 # The temporary Production writer is distributed by the public Neroued fork.
 # Its generic APIs are submitted upstream; Lumina applies no source patch.
 # See docs/desktop-electron.md for precompiled installation and maintainer builds.
 --find-links https://github.com/MOVIBALE/neroued_3mf/releases/expanded_assets/fatcat-production-1
---find-links https://github.com/MOVIBALE/fatcat-metadata/releases/expanded_assets/v0.1.1-candidate.1
 
 fatcat-metadata==0.1.1

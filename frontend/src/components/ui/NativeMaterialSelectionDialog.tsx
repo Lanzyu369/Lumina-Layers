@@ -131,6 +131,13 @@ function MaterialSelectionContent({ selection, isEditing }: {
               />
             </div>
           )}
+          {!isChecking && !selectionError && selection.issues
+            .filter((issue) => issue.material_index === null)
+            .map((issue) => (
+              <p key={issue.code} className="status-banner text-sm" data-tone="warning" role="status">
+                {t(issue.code)}
+              </p>
+            ))}
           {templateManaged ? (
             <p className="status-banner text-sm" data-tone="info" role="status">
               {t("native_material_template_managed")}

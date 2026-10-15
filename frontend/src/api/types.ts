@@ -188,7 +188,8 @@ export type ExportMaterialIssueCode =
   | "native_material_ambiguous"
   | "native_material_plate_incompatible"
   | "native_material_unavailable"
-  | "native_material_selection_invalid";
+  | "native_material_selection_invalid"
+  | "native_material_settings_incompatible";
 
 export interface ExportMaterialSelection {
   ready: boolean;
@@ -212,7 +213,7 @@ export interface ExportMaterialSelection {
   }>;
   issues: Array<{
     code: ExportMaterialIssueCode;
-    material_index: number;
+    material_index: number | null;
     material_name: string;
     material_type: string;
     build_plate_uid: string;

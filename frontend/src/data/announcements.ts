@@ -26,6 +26,9 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
       items: [{
         zh: "生成打印文件前，会检查耗材预设和打印板是否兼容。遇到多个匹配预设或打印板不兼容时，可直接选择耗材、切换打印板并继续生成；分享卡也会保存耗材选择。",
         en: "Filament presets and build plates are checked before generating print files. If several presets match or the plate is incompatible, choose a filament or switch plates and continue. Share cards also retain your filament choices.",
+      }, {
+        zh: "首次启动时会等待本机服务准备好，再自动进入工作区，无需手动刷新。耗材预设之间的共同设置冲突也会在生成前明确提示。",
+        en: "The first start now waits for the local service before opening the workspace automatically, without a manual refresh. Conflicting shared filament settings are also explained before generation.",
       }],
     }],
   },
