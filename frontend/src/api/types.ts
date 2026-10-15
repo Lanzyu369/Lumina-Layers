@@ -166,6 +166,7 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   device_profile_id?: string;
   build_plate_id?: string;
   custom_3mf_template_id?: string | null;
+  native_filament_profiles?: Record<string, string>;
   enable_base_layer_height_modifier?: boolean;
   enable_wipe_tower_auto_placement?: boolean;
   use_cached_matched_rgb?: boolean;
@@ -174,6 +175,50 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   /** Exact shared-selection revision captured for generation. */
   selection_revision?: number;
 };
+
+export interface NativeFilamentProfile {
+  name: string;
+  vendor: string;
+  material_type: string;
+  available: boolean;
+  supported_build_plate_uids: string[];
+}
+
+export type ExportMaterialIssueCode =
+  | "native_material_ambiguous"
+  | "native_material_plate_incompatible"
+  | "native_material_unavailable"
+  | "native_material_selection_invalid";
+
+export interface ExportMaterialSelection {
+  ready: boolean;
+  slicer_id: string;
+  machine_uid: string;
+  nozzle_uid: string;
+  device_profile_id: string;
+  machine_profile_id: string;
+  build_plate_uid: string;
+  materials: Array<{
+    name: string;
+    material_type: string;
+    selected_profile_name: string | null;
+    profiles: NativeFilamentProfile[];
+  }>;
+  build_plates: Array<{
+    id: string;
+    build_plate_uid: string;
+    name: string;
+    compatible: boolean;
+  }>;
+  issues: Array<{
+    code: ExportMaterialIssueCode;
+    material_index: number;
+    material_name: string;
+    material_type: string;
+    build_plate_uid: string;
+    message: string;
+  }>;
+}
 
 export interface PuzzleLayoutPreviewRequest {
   target_height_mm: number;
@@ -1874,6 +1919,7 @@ export interface BatchConvertParams {
   device_profile_id?: string;
   build_plate_id?: string;
   custom_3mf_template_id?: string | null;
+  native_filament_profiles?: Record<string, string>;
   enable_base_layer_height_modifier?: boolean;
   enable_wipe_tower_auto_placement?: boolean;
 }

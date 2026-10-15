@@ -2592,6 +2592,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             nozzle_size=ctx.get("nozzle_size", "0.4"),
             project_slot_names=vec_slot_list,
             material_types=ctx.get("material_types"),
+            native_filament_profiles=ctx.get("native_filament_profiles"),
             enable_base_layer_height_modifier=(
                 bool(ctx.get("enable_base_layer_height_modifier", True))
                 and not bool(ctx.get("enable_relief", False))

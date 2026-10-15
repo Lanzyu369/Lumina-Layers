@@ -63,22 +63,25 @@ validation stays at the existing SDK, source parser and writer boundaries.
   private package files.
 - **neroued-3mf** owns the one final 3MF package write.
 
-FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`, version
-`0.1.0`, available as precompiled [PyPI wheels](https://pypi.org/project/fatcat-metadata/0.1.0/).
+FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`.
+This branch requires the unreleased `0.1.1` update for native material preflight;
+the published [0.1.0 wheels](https://pypi.org/project/fatcat-metadata/0.1.0/)
+do not include that API. Install a matching maintainer-built wheel first.
 Lumina consumes the same public SDK without a downstream patch or version suffix.
 Maintainer builds use the public
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) root
-project at source revision `a6f1dc78035c98668a4a54f2257d010d7a9abf94` and pins
+project at source revision `36bcb0600ed3140d45c1c6dc064ef19c8cd14433` and pins
 the writer contract in
 `scripts/fatcat_packaging_contract.py`; build and installation steps are in
 [the desktop setup guide](desktop-electron.md).
 
-FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`，版本为
-`0.1.0`，可从 [PyPI](https://pypi.org/project/fatcat-metadata/0.1.0/) 安装预编译包。
+FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`。
+本分支需要尚未发布的 `0.1.1`，应先安装维护者构建的匹配 wheel；
+已发布的 [0.1.0](https://pypi.org/project/fatcat-metadata/0.1.0/) 不包含新预检接口。
 Lumina 直接使用公共 SDK，不再维护 FatCat 补丁或额外版本后缀。
 维护者从公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) 的根项目构建，
-源码提交固定为 `a6f1dc78035c98668a4a54f2257d010d7a9abf94`，并在
+源码提交固定为 `36bcb0600ed3140d45c1c6dc064ef19c8cd14433`，并在
 `scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
 [桌面环境指南](desktop-electron.md)。
 
@@ -123,6 +126,26 @@ FatCat 统一写入独立项目预设名称，保留原生来源与已合成的�
 原生 0.20mm 名称时让用户误以为实际层高也是 0.20mm。单件用户模板保留自身预设名称。
 
 ## Current Selection and Composition
+
+Built-in exports use FatCat's `resolve_project_materials` for both preflight and
+final composition. It returns native filament candidates and the plates compatible
+with the complete selection. Ambiguous presets require an explicit user choice;
+an incompatible plate is a configuration error, not an internal server failure.
+Lumina's **Print materials…** action opens the same selection dialog after preview.
+Saving there changes only native preset and plate choices; generation resumes only
+when requested. Generate and batch actions show this dialog when preflight needs
+input, then continue after confirmation. Choices are scoped to the slicer, exact
+device and nozzle, and are included in saved recipes and bug-report context.
+Imported user templates retain their own material tuning and bypass built-in
+selection. Layer heights, speeds, flow and other explicit process overrides stay
+on the existing composition path; preflight does not rewrite them.
+
+内置导出的预检和最终组装共用 FatCat 的原生耗材解析规则，返回候选预设和整套材料
+共同兼容的打印板。多个候选时由用户明确选择，板型不兼容则返回可操作的配置错误。
+预览后可点击「打印耗材…」主动修改；这里保存选择不会立即生成。直接生成或批量
+生成遇到歧义时，也会打开同一窗口，确认后继续。选择按切片软件、具体设备和喷嘴
+隔离，并写入配方及工单复现上下文。导入的用户模板继续保留自身耗材调校；层高、
+速度、流量等明确工艺值仍走已有组装流程，预检不会改写这些值。
 
 Automatic tower placement first preserves the selected native body style. If
 it cannot fit safely, the shared single/batch/puzzle solver may select a

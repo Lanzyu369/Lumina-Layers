@@ -129,6 +129,8 @@ export default function ActionBar() {
   const bedSizes = useConverterStore((s) => s.bedSizes)
   const submitPreview = useConverterStore((s) => s.submitPreview)
   const submitGenerate = useConverterStore((s) => s.submitGenerate)
+  const openNativeMaterialSelection = useConverterStore((s) => s.openNativeMaterialSelection)
+  const nativeMaterialSelectionLoading = useConverterStore((s) => s.nativeMaterialSelectionLoading)
   const submitFullPipeline = useConverterStore((s) => s.submitFullPipeline)
   const threemfDiskPath = useConverterStore((s) => s.threemfDiskPath)
   const downloadUrl = useConverterStore((s) => s.downloadUrl)
@@ -705,12 +707,21 @@ export default function ActionBar() {
                   label={t("action_generate")}
                   variant="primary"
                   onClick={() => void submitGenerate()}
-                  disabled={!canGenerate || isLoading || isGenerating || replacePreviewLoading}
+                  disabled={!canGenerate || isLoading || isGenerating || replacePreviewLoading || nativeMaterialSelectionLoading}
                   loading={isGenerating}
                   className="w-full"
                 />
               </WikiTooltip>
             </div>
+            <Button
+              label={t("native_material_edit_button")}
+              variant="secondary"
+              size="sm"
+              onClick={() => void openNativeMaterialSelection()}
+              disabled={!hasPreview || !sourceSelection.isReady || isLoading || isGenerating || batchLoading || replacePreviewLoading || contentCommitStatus === "unknown"}
+              loading={nativeMaterialSelectionLoading}
+              className="justify-self-start"
+            />
             {hasPreview && (
               <Button
                 label={layerImagesLoading ? t("action_layers_loading") : t("action_view_layers")}
@@ -867,7 +878,7 @@ export default function ActionBar() {
       <SlicerSelector
         threemfDiskPath={threemfDiskPath}
         downloadUrl={downloadUrl}
-        canSubmit={batchMode ? canBatchSubmit && !batchLoading : canSubmit}
+        canSubmit={!nativeMaterialSelectionLoading && (batchMode ? canBatchSubmit && !batchLoading : canSubmit)}
         largeFormat={batchMode ? false : largeFormatEnabled}
         onAutoGenerate={async () => {
           if (batchMode) {

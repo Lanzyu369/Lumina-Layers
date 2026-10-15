@@ -271,10 +271,11 @@ SVG 分析固定使用独立项目发布的 `lumina-svg-core==0.3.1`（AGPLv3）
 包要求 macOS 12+，3.14 要求 macOS 14+。没有兼容 wheel 时会从发行源码包构建，
 需要 Git 和 C++17 编译器。详见[发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.1/docs/DISTRIBUTIONS.md)。
 
-本地或桌面安装使用 PyPI 的 `fatcat-metadata==0.1.0` 和公开 GitHub Release
-提供的临时 Production writer。`requirements-3mf-native.txt` 会选择匹配 Python、
-系统和架构的预编译包，Lumina 不再应用源码补丁。从源码构建时由
-`scripts/fatcat_packaging_contract.py` 固定公开提交；详见
+本分支的原生耗材选择与打印板预检需要 `fatcat-metadata==0.1.1`。
+该 SDK 更新尚未发布，先安装维护者构建的匹配 wheel，再安装其余依赖；
+已发布的 `0.1.0` 不包含新接口。公开 GitHub Release 提供的临时 Production
+writer 保持不变。Lumina 不应用源码补丁，由
+`scripts/fatcat_packaging_contract.py` 固定来源提交；详见
 [原生依赖安装指南](docs/desktop-electron.md#2-原生-3mf-依赖)。
 
 Prusa 导出使用 **PrusaSlicer 3.0.0-alpha12** 预览版格式。在设置中选择 PrusaSlicer

@@ -284,11 +284,12 @@ Mac wheels require macOS 12+ for Python 3.12/3.13 and 14+ for Python 3.14.
 If no compatible wheel exists, pip builds the release source archive with
 Git and a C++17 toolchain. See the [upstream distribution guide](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.1/docs/DISTRIBUTIONS.md).
 
-For a local or desktop install, `fatcat-metadata==0.1.0` comes from PyPI and
-the temporary Production writer comes from public GitHub Release wheels.
-`requirements-3mf-native.txt` selects the matching Python/platform package;
-Lumina applies no source patches. Source builds pin public commits through
-`scripts/fatcat_packaging_contract.py`. See the
+This branch requires `fatcat-metadata==0.1.1` for native filament selection and
+build-plate preflight. This SDK update is not released yet; install a matching
+maintainer-built wheel before the remaining requirements. Published `0.1.0`
+does not provide the new API. The temporary Production writer remains unchanged
+and comes from public GitHub Release wheels. Lumina applies no source patches;
+source revisions are pinned in `scripts/fatcat_packaging_contract.py`. See the
 [native dependency installation guide](docs/desktop-electron.md#2-原生-3mf-依赖).
 
 Prusa export targets **PrusaSlicer 3.0.0-alpha12**, a preview format. In Settings,

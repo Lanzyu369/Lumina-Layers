@@ -1576,33 +1576,11 @@ def run(ctx: dict) -> dict:
             # 各 region 的本地虚拟索引再统一重映射到该全局表，保证
             # material_matrix 里的通道 id 跨 region 一致。
             lut_palette_length = _resolve_recipe_native_palette_length(ctx, lut_metadata)
-            virtual_registry: list[dict[str, str]] = []
-            virtual_lookup: dict[tuple[str, str], int] = {}
-            per_region_virtual_maps: dict[str, dict[int, int]] = {}
-            for item in recipe_overrides:
-                if not isinstance(item, dict):
-                    continue
-                region_id_raw = str(item.get("region_id", "")).strip()
-                region_virtuals = item.get("virtual_materials") or []
-                local_to_global: dict[int, int] = {}
-                for local_idx, vm in enumerate(region_virtuals):
-                    if not isinstance(vm, dict):
-                        continue
-                    name = str(vm.get("name") or "").strip()
-                    hex_value = str(vm.get("hex") or "").strip()
-                    if not name or not hex_value:
-                        continue
-                    key = (name.lower(), hex_value.lower())
-                    global_idx = virtual_lookup.get(key)
-                    if global_idx is None:
-                        global_idx = lut_palette_length + len(virtual_registry)
-                        virtual_registry.append(
-                            {"name": name, "hex": hex_value}
-                        )
-                        virtual_lookup[key] = global_idx
-                    local_to_global[lut_palette_length + local_idx] = global_idx
-                if region_id_raw:
-                    per_region_virtual_maps[region_id_raw] = local_to_global
+            from core.recipe_virtual_materials import build_virtual_material_registry
+
+            virtual_registry, per_region_virtual_maps = build_virtual_material_registry(
+                recipe_overrides, lut_palette_length,
+            )
 
             if virtual_registry:
                 _extend_ctx_palette_with_virtuals(

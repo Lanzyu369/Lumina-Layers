@@ -620,6 +620,10 @@ class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
     printer_id: str = Field("bambu-h2d", description="Printer profile ID")
     slicer: str = Field("BambuStudio", description="Slicer software name")
     custom_3mf_template_id: str | None = None
+    native_filament_profiles: dict[str, str] = Field(
+        default_factory=dict,
+        description="Exact native filament preset selections keyed by exported material name",
+    )
     nozzle_size: str = Field("0.4", description="Printer nozzle size")
     device_profile_id: Optional[str] = Field(
         None,

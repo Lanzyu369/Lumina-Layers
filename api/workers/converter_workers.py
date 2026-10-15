@@ -1085,6 +1085,7 @@ def worker_batch_convert_item(
     svg_hole_max_width_mm: float = 0.1,
     enable_coating: bool = False,
     coating_height_mm: float = 0.08,
+    native_filament_profiles: dict[str, str] | None = None,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
@@ -1221,6 +1222,7 @@ def worker_batch_convert_item(
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
         enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
         material_source=material_source,
+        native_filament_profiles=native_filament_profiles,
         selected_materials=selected_materials,
         material_layer_count=material_layer_count,
         material_layer_height_mm=material_layer_height_mm,
@@ -1599,6 +1601,7 @@ def worker_generate_model_surface_overlay(
             preview_colors=overlay.preview_colors,
             project_slot_names=overlay.project_slot_names,
             material_types=overlay.scene.metadata.get("material_types"),
+            native_filament_profiles=normalized_params.get("native_filament_profiles"),
             preserve_template_filament_slots=(
                 False if converter_params.get("material_source") == "material_archive" else None
             ),
@@ -2301,6 +2304,7 @@ def worker_generate_large_format_svg_native(
                 nozzle_size=params.get("nozzle_size", "0.4"),
                 project_slot_names=slot_names,
                 material_types=worker_ctx.get("material_types"),
+                native_filament_profiles=params.get("native_filament_profiles"),
                 enable_base_layer_height_modifier=bool(
                     worker_ctx.get("enable_base_layer_height_modifier", True)
                 ),

@@ -4,6 +4,56 @@
  * Contains all zh/en translation key-value pairs
  */
 export const translations: Record<string, Record<"zh" | "en", string>> = {
+  native_material_edit_button: { zh: "打印耗材…", en: "Print filaments…" },
+  native_material_edit_title: { zh: "打印耗材", en: "Print filaments" },
+  native_material_edit_description: {
+    zh: "为每种材料选择切片软件中的耗材预设和兼容打印板。保存后用于下次生成，不会立即生成文件。",
+    en: "Choose a slicer filament preset for each material and a compatible build plate. These choices will be saved for the next generation without generating a file now.",
+  },
+  native_material_edit_cancel: { zh: "取消", en: "Cancel" },
+  native_material_edit_save: { zh: "保存选择", en: "Save choices" },
+  native_material_load_failed: { zh: "无法读取打印耗材预设，请重试。", en: "Could not load filament presets. Please retry." },
+  native_material_rechecking: { zh: "正在检查耗材预设和打印板兼容性…", en: "Checking filament presets and build plate compatibility…" },
+  native_material_recheck: { zh: "重新检查", en: "Check again" },
+  native_material_recheck_failed: { zh: "未能重新检查耗材与打印板兼容性，草稿已保留，请重试。", en: "Could not recheck filament and build plate compatibility. Your draft is preserved; please retry." },
+  native_material_template_managed: {
+    zh: "当前导出使用导入的 3MF 模板，耗材预设由该模板管理。",
+    en: "The imported 3MF template manages the filament presets for this export.",
+  },
+  native_material_dialog_title: { zh: "确认打印耗材", en: "Confirm print filaments" },
+  native_material_dialog_description: {
+    zh: "请为每种材料选择切片软件中的耗材预设和兼容打印板。确认后会继续生成。",
+    en: "Choose a slicer filament preset for each material and a compatible build plate. Generation will continue after confirmation.",
+  },
+  native_material_build_plate: { zh: "兼容打印板", en: "Compatible build plate" },
+  native_material_choose_plate: { zh: "选择打印板", en: "Choose a build plate" },
+  native_material_profile: { zh: "切片软件耗材预设", en: "Slicer filament preset" },
+  native_material_choose_profile: { zh: "请选择耗材预设", en: "Choose a filament preset" },
+  native_material_automatic: { zh: "自动匹配：{profile}", en: "Automatic: {profile}" },
+  native_material_automatic_option: { zh: "自动匹配", en: "Automatic" },
+  native_material_selected: { zh: "已选择：{profile}", en: "Selected: {profile}" },
+  native_material_cancel: { zh: "取消生成", en: "Cancel generation" },
+  native_material_apply: { zh: "确认并继续生成", en: "Confirm and continue" },
+  native_material_no_compatible_plate: {
+    zh: "当前耗材预设组合没有共同兼容的打印板。请调整耗材预设或设备后重试。",
+    en: "The current filament presets have no compatible build plate in common. Change the presets or machine and try again.",
+  },
+  native_material_ambiguous: {
+    zh: "“{material}”对应多个 {type} 耗材预设，请选择实际使用的耗材。",
+    en: "Several {type} presets match “{material}”. Choose the filament you will use.",
+  },
+  native_material_plate_incompatible: {
+    zh: "“{material}”当前选择的耗材预设不支持“{plate}”，请更换预设或打印板。",
+    en: "The selected filament preset for “{material}” does not support “{plate}”. Choose another preset or build plate.",
+  },
+  native_material_unavailable: {
+    zh: "当前设备和喷嘴没有可用的 {type} 原生耗材预设（材料：“{material}”）。请调整材料或设备后重试。",
+    en: "No native {type} filament preset is available for this machine and nozzle (material: “{material}”). Change the materials or machine and try again.",
+  },
+  native_material_selection_invalid: {
+    zh: "“{material}”之前选择的耗材预设不适用于当前设备或打印板，请重新选择。",
+    en: "The previous preset for “{material}” does not support the current machine or build plate. Choose it again.",
+  },
   file_save_saved: { zh: "文件已保存", en: "File saved" },
   file_save_download_started: { zh: "已开始下载", en: "Download started" },
   file_save_failed: { zh: "保存失败，请检查文件名、目标目录权限和可用空间后重试。", en: "Save failed. Check the filename, folder permissions and available space, then retry." },

@@ -201,6 +201,8 @@ export interface ConverterRecipeDevice {
   build_plate_id?: string;
   /** Device-local template ID; import the native project on each device. */
   custom_3mf_template_id?: string | null;
+  /** Exact native filament presets, scoped to this recipe's hardware target. */
+  native_filament_profiles?: Record<string, string>;
   /** Preserve the slicer's base-layer height modifier choice. */
   enable_base_layer_height_modifier?: boolean;
   /** Allow Lumina to adapt the model and wipe-tower layout during export. */

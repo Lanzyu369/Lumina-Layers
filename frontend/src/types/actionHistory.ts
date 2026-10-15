@@ -134,6 +134,13 @@ export interface AdvancedParamsGeneration {
   material_delta_e00_tolerance: number | null;
   enable_wipe_tower_auto_placement?: boolean;
   wipe_tower_warning_codes?: string[];
+  native_filament_profiles?: Record<string, string>;
+  native_filament_profile_scope?: {
+    slicer: string;
+    printer_id: string;
+    device_profile_id: string;
+    nozzle_size: string;
+  } | null;
 }
 
 /**

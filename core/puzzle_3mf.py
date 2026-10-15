@@ -57,6 +57,8 @@ def assemble_puzzle_3mf(
     overview_png_bytes: bytes | None,
     metadata_target: MetadataTarget,
     enable_wipe_tower_auto_placement: bool = True,
+    material_types: Mapping[str, str | None] | None = None,
+    native_filament_profiles: Mapping[str, str] | None = None,
 ) -> str:
     """Write puzzle metadata through Fat Cat while retaining Lumina placement.
 
@@ -82,6 +84,9 @@ def assemble_puzzle_3mf(
             API 路由明确选择的 Fat Cat 目标。
         enable_wipe_tower_auto_placement: Whether to solve one final layout.
             是否求解一次最终擦料塔布局。
+        material_types: Known types for the full palette. 全局调色板已知材料类型。
+        native_filament_profiles: Resolved native presets for sparse slots.
+            补齐稀疏槽位时沿用已明确选择的原生预设。
 
     Returns:
         str: Written 3MF path. (写出的 3MF 路径)
@@ -139,7 +144,10 @@ def assemble_puzzle_3mf(
         enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
         source_materials=[
             {"name": name, "colour": _rgb_to_hex(_resolve_preview_rgb_for_material_name(
-                name, index, preview_colors, "#C8C8C8"))}
+                name, index, preview_colors, "#C8C8C8")),
+             "material_type": (material_types or {}).get(name),
+             **({"native_filament_profile_name": native_filament_profiles[name]}
+                if native_filament_profiles and name in native_filament_profiles else {})}
             for index, name in enumerate(slot_names or [])
         ],
     )

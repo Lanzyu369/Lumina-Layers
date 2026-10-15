@@ -2,6 +2,7 @@ import apiClient, { type ApiRequestOptions } from "./client";
 import type {
   ConvertPreviewRequest,
   ConvertGenerateRequest,
+  ExportMaterialSelection,
   PreviewResponse,
   GenerateResponse,
   LargeFormatGenerateRequest,
@@ -88,6 +89,19 @@ export async function convertGenerate(
       params,
     },
     { timeout: 0 },
+  );
+  return response.data;
+}
+
+/** Check native filament choices before building printable geometry. */
+export async function fetchExportMaterialSelection(
+  sessionId: string | null,
+  params: ConvertGenerateRequest | BatchConvertParams,
+): Promise<ExportMaterialSelection> {
+  const response = await apiClient.post<ExportMaterialSelection>(
+    "/convert/export-materials",
+    { session_id: sessionId, params },
+    { timeout: 30_000 },
   );
   return response.data;
 }

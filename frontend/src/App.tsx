@@ -17,6 +17,7 @@ import Scene3D from "./components/Scene3D";
 import ExtractorCanvas from "./components/ExtractorCanvas";
 import LoadingSpinner from "./components/LoadingSpinner";
 import AnnouncementDialog from "./components/ui/AnnouncementDialog";
+import NativeMaterialSelectionDialog from "./components/ui/NativeMaterialSelectionDialog";
 import { I18nProvider, useI18n } from "./i18n/context";
 import { BugReportButton } from "./components/BugReportButton";
 import { BugReportModal } from "./components/BugReportModal";
@@ -545,6 +546,7 @@ function AppContent() {
           还是可停靠 widget 形式打开都能弹出；其显隐由提取器 store 的
           colorchecker 阶段自行控制。 */}
       <ColorcheckerConfirmDialogExtractor />
+      <NativeMaterialSelectionDialog />
     </div>
   );
 }

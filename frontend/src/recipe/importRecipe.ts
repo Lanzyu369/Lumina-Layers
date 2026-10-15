@@ -584,6 +584,14 @@ export function restoreConverterRecipe(
   // --- Build partial state ---
   const state: Partial<ConverterState> = {
     workshopSource,
+    native_filament_profiles: { ...(conv.device.native_filament_profiles ?? {}) },
+    nativeFilamentProfileScope: conv.device.native_filament_profiles ? {
+      slicer: conv.device.slicer,
+      printer_id: conv.device.printer_id,
+      device_profile_id: conv.device.device_profile_id ?? "",
+      nozzle_size: conv.device.nozzle_size,
+    } : null,
+    nativeMaterialSelection: null,
 
     // Model-surface uploads and face selections are session-bound and are not
     // represented by the current recipe schema. Clear every related field so

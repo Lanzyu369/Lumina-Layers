@@ -2471,30 +2471,11 @@ def apply_recipe_overrides_to_analysis(
 
     # --- Build a global virtual-material registry (dedupe by name+hex) ---
     lut_palette_length = int(analysis.num_channels)
-    virtual_registry: list[dict] = []
-    virtual_lookup: dict[tuple, int] = {}
-    per_region_virtual_maps: dict[str, dict[int, int]] = {}
-    for item in recipe_overrides:
-        if not isinstance(item, dict):
-            continue
-        rid = str(item.get("region_id", "")).strip()
-        local_map: dict[int, int] = {}
-        for local_idx, vm in enumerate(item.get("virtual_materials") or []):
-            if not isinstance(vm, dict):
-                continue
-            name = str(vm.get("name") or "").strip()
-            hex_value = str(vm.get("hex") or "").strip()
-            if not name or not hex_value:
-                continue
-            key = (name.lower(), hex_value.lower())
-            gidx = virtual_lookup.get(key)
-            if gidx is None:
-                gidx = lut_palette_length + len(virtual_registry)
-                virtual_registry.append({"name": name, "hex": hex_value})
-                virtual_lookup[key] = gidx
-            local_map[lut_palette_length + local_idx] = gidx
-        if rid:
-            per_region_virtual_maps[rid] = local_map
+    from core.recipe_virtual_materials import build_virtual_material_registry
+
+    virtual_registry, per_region_virtual_maps = build_virtual_material_registry(
+        recipe_overrides, lut_palette_length,
+    )
 
     # --- Compute effective target layer count ---
     recipe_max_len = max(

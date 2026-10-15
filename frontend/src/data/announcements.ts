@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-15",
+    title: {
+      zh: "Lumina Layers — 10 月更新速览",
+      en: "Lumina Layers — October updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "生成打印文件前，会检查耗材预设和打印板是否兼容。遇到多个匹配预设或打印板不兼容时，可直接选择耗材、切换打印板并继续生成；分享卡也会保存耗材选择。",
+        en: "Filament presets and build plates are checked before generating print files. If several presets match or the plate is incompatible, choose a filament or switch plates and continue. Share cards also retain your filament choices.",
+      }],
+    }],
+  },
+  {
     version: "2026-10-12",
     title: {
       zh: "Lumina Layers — 10 月更新速览",

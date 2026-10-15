@@ -6,6 +6,7 @@ Core modules should raise these exceptions instead of API-specific errors.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Mapping
 
 
 @dataclass
@@ -24,6 +25,20 @@ class CoreValidationError(CoreError):
 
     def __init__(self, detail: str):
         super().__init__(detail=detail, error_type="core_validation_error")
+
+
+class NativeMaterialSelectionError(CoreValidationError):
+    """Report a native preset or plate choice the user must resolve.
+
+    报告需要用户明确选择的原生耗材预设或打印板问题。
+    """
+
+    def __init__(self, material_selection: Mapping[str, Any]):
+        self.material_selection = dict(material_selection)
+        issues = self.material_selection.get("issues") or []
+        message = str(issues[0]["message"]) if issues else "Resolve native material selections."
+        super().__init__(message)
+        self.error_type = "native_material_selection_required"
 
 
 class WipeTowerLayoutError(CoreValidationError):
