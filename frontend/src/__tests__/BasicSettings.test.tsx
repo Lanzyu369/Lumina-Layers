@@ -565,7 +565,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
     // UnifiedUploader shows the translated upload hint in empty state
     expect(
-      screen.getByText("拖拽图片或 Lumina 项目文件（图片支持多选）"),
+      screen.getByText("拖拽图片或 Lumina 项目文件"),
     ).toBeInTheDocument();
   });
 

@@ -6808,8 +6808,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== Unified Uploader ====================
   upload_unified_hint: {
-    zh: "拖拽图片或 Lumina 项目文件（图片支持多选）",
-    en: "Drop images or a Lumina project file (images support multi-select)",
+    zh: "拖拽图片或 Lumina 项目文件",
+    en: "Drop images or a Lumina project file",
+  },
+  upload_unified_multiselect_hint: {
+    zh: "（图片支持多选）",
+    en: "(images support multi-select)",
   },
   upload_tap_to_change: {
     zh: "点击更换或追加",

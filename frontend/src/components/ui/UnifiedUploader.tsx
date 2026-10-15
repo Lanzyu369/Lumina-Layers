@@ -317,7 +317,7 @@ export default function UnifiedUploader({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`flex min-h-[120px] items-center justify-center rounded-[10px] border-2 cursor-pointer transition-colors ${borderClass}`}
+      className={`flex min-h-[120px] items-center justify-center rounded-[10px] border-2 px-4 py-5 text-center cursor-pointer transition-colors ${borderClass}`}
     >
       <input
         ref={inputRef}
@@ -328,8 +328,9 @@ export default function UnifiedUploader({
         className="hidden"
         aria-hidden="true"
       />
-      <span className="text-sm text-slate-500 dark:text-slate-400 select-none">
-        {t("upload_unified_hint")}
+      <span className="min-w-0 text-sm leading-relaxed text-slate-500 dark:text-slate-400 select-none">
+        <span className="block text-balance">{t("upload_unified_hint")}</span>
+        <span className="mt-1 block text-balance">{t("upload_unified_multiselect_hint")}</span>
       </span>
     </div>
   );
