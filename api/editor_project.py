@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import gzip
+import hashlib
 from io import BytesIO
 import json
 from typing import Any
@@ -39,6 +40,19 @@ def _cache(session: dict[str, Any]) -> dict[str, Any]:
     return hydrate_preview_cache_for_worker(cache, mmap=False)
 
 
+def _source_sha256(session: dict[str, Any]) -> str:
+    # image_path is the working upload: crops and rotations replace its content.
+    # Only the digest travels with the checkpoint, never a filename/session path.
+    source_path = session.get("image_path")
+    if source_path:
+        try:
+            with open(source_path, "rb") as source:
+                return hashlib.file_digest(source, "sha256").hexdigest()
+        except OSError as exc:
+            raise ValueError("Project edit source image is unavailable; run preview again") from exc
+    raise ValueError("Project edit source image is unavailable; run preview again")
+
+
 def _binding(session: dict[str, Any], cache: dict[str, Any]) -> dict[str, Any]:
     metadata = cache.get("lut_metadata")
     metadata = metadata.to_dict() if hasattr(metadata, "to_dict") else metadata or {}
@@ -61,9 +75,12 @@ def _binding(session: dict[str, Any], cache: dict[str, Any]) -> dict[str, Any]:
             "layer_order": "Top2Bottom",
         }
     return {
+        "source_sha256": _source_sha256(session),
         "width": cache.get("target_w"),
         "height": cache.get("target_h"),
+        "target_width_mm": cache.get("target_width_mm"),
         "pixel_scale": cache.get("pixel_scale"),
+        "modeling_mode": cache.get("modeling_mode", session.get("modeling_mode")),
         "material_source": session.get("material_source", "lut"),
         "selected_materials": selected_materials,
         "lut_source_kind": session.get("lut_source_kind", "legacy_single"),
