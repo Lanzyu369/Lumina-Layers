@@ -33,7 +33,7 @@ const selection: SelectionDocumentResponse = {
 const preview = {
   status: "ok", message: "preview", preview_glb_url: null, warnings: [],
   session_id: "restored-preview", preview_url: "/api/files/source.png",
-  palette: [], dimensions: { width: 6, height: 4 },
+  palette: [], dimensions: { width: 6, height: 4, preview_raw_url: "/api/files/source-raw.png" },
 } satisfies PreviewResponse;
 const restored: EditorCommitStatusResponse = {
   status: "committed", operation_id: "restored-operation", editor_content_revision: 3,
@@ -42,7 +42,8 @@ const restored: EditorCommitStatusResponse = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useConverterStore.setState({ ...DEFAULT_STATE, source_version: "legacy", lut_name: "test-lut", imageFile: new File(["source"], "source.png") });
+  useConverterStore.setState({ ...DEFAULT_STATE, source_version: "legacy", lut_name: "test-lut",
+    imageFile: new File(["source"], "source.png"), imagePreviewUrl: "/source-upload.png" });
   vi.mocked(getEditorSelection).mockResolvedValue(selection);
   vi.mocked(convertPreview).mockResolvedValue(preview);
 });
@@ -94,7 +95,12 @@ describe("portable editor project orchestration", () => {
     expect(useConverterStore.getState().color_layers).toBe(5);
   });
 
-  it("restores the checkpoint before exposing the new editable session", async () => {
+  it.each([false, true])("restores content before exposing the session, with raw preview=%s", async (withRaw) => {
+    if (!withRaw) {
+      vi.mocked(convertPreview).mockResolvedValue({
+        ...preview, dimensions: { width: 6, height: 4 },
+      });
+    }
     const file = new File(["checkpoint"], "editor.json.gz");
     useConverterStore.setState({ pendingEditorProject: file });
     const restore = deferred<EditorCommitStatusResponse>();
@@ -105,8 +111,27 @@ describe("portable editor project orchestration", () => {
     expect(useConverterStore.getState().pendingEditorProject).toBe(file);
     restore.resolve(restored);
     await previewing;
-    expect(useConverterStore.getState()).toMatchObject({ sessionId: "restored-preview", pendingEditorProject: null, regionReplacementCount: 1, previewImageUrl: "/api/files/edited.png" });
+    expect(useConverterStore.getState()).toMatchObject({
+      sessionId: "restored-preview", pendingEditorProject: null, regionReplacementCount: 1,
+      previewImageUrl: "/api/files/edited.png", previewBaseImageUrl: "/api/files/edited.png",
+      originalPreviewUrl: preview.preview_url, imagePreviewUrl: "/source-upload.png",
+    });
     expect(useConverterStore.getState().selectionDocument?.selected_pixel_count).toBe(2);
+  });
+
+  it.each([false, true])("keeps ordinary preview and original-image comparison, with raw preview=%s", async (withRaw) => {
+    if (!withRaw) {
+      vi.mocked(convertPreview).mockResolvedValue({
+        ...preview, dimensions: { width: 6, height: 4 },
+      });
+    }
+    await useConverterStore.getState().submitPreview();
+    expect(restoreEditorProject).not.toHaveBeenCalled();
+    expect(useConverterStore.getState()).toMatchObject({
+      previewImageUrl: preview.preview_url, originalPreviewUrl: preview.preview_url,
+      previewBaseImageUrl: withRaw ? preview.dimensions.preview_raw_url : preview.preview_url,
+      imagePreviewUrl: "/source-upload.png",
+    });
   });
 
   it("closes a failed fresh session and keeps the asset available for retry", async () => {

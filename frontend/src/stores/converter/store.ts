@@ -7028,13 +7028,21 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           throw new Error(tRuntime("recipe_editor_restore_unconfirmed"));
         }
         const editorResult = restoredEditor?.result;
+        // Apply the normal content-commit contract in the same publication as
+        // the fresh session, so its stable 2D base cannot retain unedited raw pixels.
+        const restoredEditorState = editorCommitResultStateFromResponse(
+          { ...state, sessionId: response.session_id },
+          response.session_id,
+          restoredEditor?.operation,
+          editorResult,
+        );
         if (restoredEditor?.editor_content_revision !== undefined) {
           rememberConfirmedEditorContentRevision(response.session_id, restoredEditor.editor_content_revision);
         }
         _logPreviewTimer("response received");
         // 后端返回 JSON，preview_url 是相对路径如 /api/files/xxx
-        const previewUrl =
-          normalizeResourceUrl(editorResult?.preview_url ?? response.preview_url) ?? response.preview_url;
+        const sourcePreviewUrl = normalizeResourceUrl(response.preview_url) ?? response.preview_url;
+        const previewUrl = restoredEditorState.previewImageUrl ?? sourcePreviewUrl;
         const responseGlb = editorResult ? editorResult.preview_glb_url : response.preview_glb_url;
         const glbUrl = responseGlb
           ? normalizeResourceUrl(responseGlb)
@@ -7078,17 +7086,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           isLoading: false,
           sessionId: response.session_id,
           previewImageUrl: previewUrl,
-          originalPreviewUrl: previewUrl,
+          originalPreviewUrl: sourcePreviewUrl,
           previewBaseImageUrl:
             normalizeResourceUrl(response.dimensions?.preview_raw_url) ??
-            previewUrl,
+            sourcePreviewUrl,
           lutMatchMode: response.lut_match_mode ?? "legacy",
           lutMatchInfo: response.lut_match_info ?? {
             match_mode: response.lut_match_mode ?? "legacy",
           },
           palette: normalizedPalette,
           ...dynamicMaterialResultState(response),
-          ...(editorResult ? dynamicMaterialResultState(editorResult) : {}),
           ...(shouldResetHeightmapMapping
             ? clearedHeightmapUploadState()
             : autoReliefHeightMap
@@ -7116,12 +7123,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           historyCanUndo: false,
           historyCanRedo: false,
           historyBusy: false,
-          replacement_regions: editorResult?.replacement_regions ?? portableProjectColors.replacement_regions,
-          recipe_overrides: editorResult?.recipe_overrides ?? [],
+          replacement_regions: portableProjectColors.replacement_regions,
+          recipe_overrides: [],
           pendingEditorProject: null,
           customRecipeHistory: portableProjectColors.customRecipeHistory,
-          free_color_set: editorResult?.free_color_set ? new Set(editorResult.free_color_set) : portableProjectColors.free_color_set,
-          regionReplacementCount: editorResult?.region_replacement_count ?? 0,
+          free_color_set: portableProjectColors.free_color_set,
+          regionReplacementCount: 0,
           selectedColor: null,
           selectedColors: new Set<string>(),
           regionData: null,
@@ -7155,6 +7162,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           gradientGroupsError: null,
           gradientGroupsSessionId: null,
           gradientSelection: null,
+          ...restoredEditorState,
         });
         await _get().hydrateSelectionDocument();
         if (!editorResult && portableProjectColors.free_color_set.size > 0) {
