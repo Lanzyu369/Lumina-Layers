@@ -9,6 +9,7 @@
 
 import type { LuminaRecipe } from "./types";
 import { DEFAULT_CONVERTER_RECIPE_PUZZLE, RECIPE_FORMAT, RECIPE_SCHEMA_VERSION } from "./types";
+import { readCoatingMaterialReference } from "../stores/converter/coatingMaterial";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -30,6 +31,14 @@ function validateConverterShape(recipe: Record<string, unknown>, version: number
     throw new Error("Invalid recipe: malformed puzzle section");
   }
   const base = converter.base as Record<string, unknown>;
+  const coating = converter.coating as Record<string, unknown>;
+  const geometry = converter.geometry as Record<string, unknown>;
+  if (geometry.backing_output !== undefined && geometry.backing_output !== "same_project" && geometry.backing_output !== "separate_project") {
+    throw new Error("Invalid recipe: backing output mode");
+  }
+  if (coating.coating_material != null && !readCoatingMaterialReference(coating.coating_material)) {
+    throw new Error("Invalid recipe: coating material selection");
+  }
   const device = converter.device as Record<string, unknown>;
   if (device.native_filament_profiles !== undefined && (
     !isRecord(device.native_filament_profiles) ||
@@ -135,8 +144,8 @@ export function migrateRecipe(raw: unknown): LuminaRecipe {
     ];
     return recipe;
   }
-  // V1–V3 optional fields keep their existing defaults. V4 retires digests.
-  // V1–V3 可选字段继续采用现有默认值；V4 移除已退役的摘要元数据。
+  // V5 editor assets are optional; missing historical masks are never invented.
+  // V5 编辑素材可选；旧项目没有保存的掩码不可凭空生成。
   const converter = recipe.recipe.converter;
   if (converter && converter.puzzle === undefined) {
     converter.puzzle = { ...DEFAULT_CONVERTER_RECIPE_PUZZLE };

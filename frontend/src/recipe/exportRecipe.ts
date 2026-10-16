@@ -114,8 +114,8 @@ export function exportConverterRecipe(
   lutPath?: string,
 ): ConverterRecipe {
   // Merge global-only colorRemapMap entries into global replacement_regions.
-  // Spatial region edits remain session-scoped and are never serialized here.
-  // 这里只合并全局替色映射；空间局部改色仅存在于当前会话。
+  // Local edits use the authoritative checkpoint embedded beside the source.
+  // 这里只合并全局映射；局部编辑通过原图旁的权威快照保存。
   let mergedReplacements: ColorReplacementItem[] = [
     ...state.replacement_regions,
   ];
@@ -225,6 +225,7 @@ export function exportConverterRecipe(
         state.backing_infill_density_percent,
       structure_mode: state.structure_mode,
       separate_backing: state.separate_backing,
+      backing_output: state.backingOutput,
       add_loop: state.add_loop,
       loop_width: state.loop_width,
       loop_length: state.loop_length,
@@ -252,6 +253,7 @@ export function exportConverterRecipe(
     coating: {
       enable_coating: state.enable_coating,
       coating_height_mm: state.coating_height_mm,
+      coating_material: state.coatingMaterial,
     },
     color_ops: {
       replacement_regions: normalizedReplacements,
@@ -370,11 +372,15 @@ export async function buildFullRecipe(
 export async function buildRecipeAssets(
   primaryFile: File,
   heightmapFile?: File | null,
+  editorFile?: File | null,
 ): Promise<RecipeAssets> {
   const primary = await buildAssetEntry(primaryFile);
   const assets: RecipeAssets = { primary };
   if (heightmapFile) {
     assets.heightmap = await buildAssetEntry(heightmapFile);
+  }
+  if (editorFile) {
+    assets.editor = await buildAssetEntry(editorFile);
   }
   return assets;
 }

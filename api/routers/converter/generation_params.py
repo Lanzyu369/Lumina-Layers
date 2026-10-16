@@ -31,6 +31,8 @@ def build_common_generation_params(request: ConvertGenerateRequest) -> dict:
         "wire_height_mm": request.wire_height_mm,
         "enable_coating": request.enable_coating,
         "coating_height_mm": request.coating_height_mm,
+        "coating_material": request.coating_material.model_dump() if request.coating_material else None,
+        "backing_output": request.backing_output,
         "hue_weight": request.hue_weight,
         "chroma_gate": request.chroma_gate,
         "printer_id": request.printer_id,

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useConverterStore } from "../stores/converter";
 import type {
   ColorReplacementItem,
+  ExportMaterialSelection,
   RecipeOverrideItem,
   SelectionDocumentResponse,
 } from "../api/types";
@@ -17,6 +18,7 @@ vi.mock("../api/converter", async () => {
     applyRecipeOverride: vi.fn(),
     replacementHistory: vi.fn(),
     convertGenerate: vi.fn(),
+    fetchExportMaterialSelection: vi.fn(),
     getEditorSelection: vi.fn(),
     getEditorCommitStatus: vi.fn(),
   };
@@ -25,6 +27,7 @@ vi.mock("../api/converter", async () => {
 import {
   applyRecipeOverride,
   convertGenerate,
+  fetchExportMaterialSelection,
   getEditorCommitStatus,
   getEditorSelection,
   replacementHistory,
@@ -35,6 +38,7 @@ const mockedResetReplacements = vi.mocked(resetReplacements);
 const mockedApplyRecipeOverride = vi.mocked(applyRecipeOverride);
 const mockedReplacementHistory = vi.mocked(replacementHistory);
 const mockedConvertGenerate = vi.mocked(convertGenerate);
+const mockedFetchExportMaterialSelection = vi.mocked(fetchExportMaterialSelection);
 const mockedGetEditorCommitStatus = vi.mocked(getEditorCommitStatus);
 const mockedGetEditorSelection = vi.mocked(getEditorSelection);
 
@@ -129,6 +133,18 @@ function expectPageStateUnchanged(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockedFetchExportMaterialSelection.mockResolvedValue({
+    ready: true,
+    slicer_id: "BambuStudio",
+    machine_uid: "bbl:bambu-lab-h2d",
+    nozzle_uid: "nozzle:0.4mm",
+    device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+    machine_profile_id: "bbl:bambu-lab-h2d",
+    build_plate_uid: "plate:textured-pei",
+    materials: [],
+    build_plates: [],
+    issues: [],
+  } satisfies ExportMaterialSelection);
 });
 
 describe("editor commit receipt business-state reconciliation", () => {

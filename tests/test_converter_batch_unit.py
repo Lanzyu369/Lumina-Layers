@@ -40,6 +40,15 @@ _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
 
 
+@pytest.fixture(autouse=True)
+def native_selection_for_worker_orchestration(monkeypatch):
+    """These worker tests use fake LUT/archive paths, not native profile fixtures."""
+    monkeypatch.setattr(
+        "api.routers.converter.generate.require_material_selection",
+        lambda *args, **kwargs: {"ready": True, "materials": []},
+    )
+
+
 class _PreviewRegistrationFailingRegistry(FileRegistry):
     """FileRegistry that accepts the merged 3MF and rejects preview GLBs."""
 
@@ -836,6 +845,7 @@ class TestBatchWorkerPoolSubmit:
                     "high_precision_3d_preview": "true",
                     "enable_coating": str(coating_enabled).lower(),
                     "coating_height_mm": "0.12",
+                    "coating_material": json.dumps({"source": "palette", "key": "White"}),
                     "svg_hole_compensation_enabled": str(compensation_enabled).lower(),
                     "svg_hole_max_area_mm2": "0.75",
                     "svg_hole_max_width_mm": "0.21",
@@ -896,6 +906,7 @@ class TestBatchWorkerPoolSubmit:
         expected_options = {
             "enable_coating": coating_enabled,
             "coating_height_mm": 0.12,
+            "coating_material": {"source": "palette", "key": "White"},
             "svg_hole_compensation_enabled": compensation_enabled,
             "svg_hole_max_area_mm2": 0.75,
             "svg_hole_max_width_mm": 0.21,

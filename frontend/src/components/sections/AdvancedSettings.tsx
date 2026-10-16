@@ -5,12 +5,20 @@ import {
 import { useI18n } from "../../i18n/context";
 import Slider from "../ui/Slider";
 import Checkbox from "../ui/Checkbox";
+import Dropdown from "../ui/Dropdown";
+import { StatusBanner } from "../ui/panelPrimitives";
+import { StructureMode, ColorMode, type BackingOutput } from "../../api/types";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
 
 export default function AdvancedSettings() {
   const { t } = useI18n();
   const enable_cleanup = useConverterStore((s) => s.enable_cleanup);
   const separate_backing = useConverterStore((s) => s.separate_backing);
+  const backingOutput = useConverterStore((s) => s.backingOutput);
+  const setBackingOutput = useConverterStore((s) => s.setBackingOutput);
+  const canSeparateProjects = useConverterStore((s) => s.structure_mode === StructureMode.SINGLE_SIDED
+    && !s.enable_relief && s.color_mode !== ColorMode.FIVE_COLOR_EXT
+    && !s.batchMode && !s.puzzleEnabled && !s.largeFormatEnabled && !s.modelSurfaceEnabled);
   const hue_enable = useConverterStore((s) => s.hue_enable);
   const use_lut_constrained = useConverterStore((s) => s.use_lut_constrained);
   const auto_dynamic_range = useConverterStore((s) => s.auto_dynamic_range);
@@ -45,6 +53,20 @@ export default function AdvancedSettings() {
         checked={separate_backing}
         onChange={setSeparateBacking}
       />
+      {separate_backing && (canSeparateProjects ? <>
+        <Dropdown
+          label={t("adv_backing_output")}
+          value={backingOutput}
+          options={[
+            { value: "same_project", label: t("adv_backing_output_same") },
+            { value: "separate_project", label: t("adv_backing_output_separate") },
+          ]}
+          onChange={(value) => setBackingOutput(value as BackingOutput)}
+        />
+        {backingOutput === "separate_project" && <StatusBanner>{t("adv_backing_output_hint")}</StatusBanner>}
+      </> : <StatusBanner action={backingOutput === "separate_project" ?
+        <button type="button" className="underline" onClick={() => setBackingOutput("same_project")}>{t("adv_backing_output_same")}</button>
+        : undefined}>{t("adv_backing_output_unavailable")}</StatusBanner>)}
       <Checkbox
         label={t("adv_precise_color_matching")}
         tooltip={t("adv_precise_color_matching_hint")}

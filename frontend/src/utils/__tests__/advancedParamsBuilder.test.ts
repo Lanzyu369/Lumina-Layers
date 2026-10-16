@@ -90,6 +90,7 @@ function makeHeavyState(): ConverterState {
     wire_height_mm: 0.6,
     enable_coating: true,
     coating_height_mm: 0.12,
+    coatingMaterial: { source: "palette", key: "White PETG" },
     add_loop: true,
     loop_width: 4.5,
     loop_length: 9,
@@ -322,6 +323,7 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
     expect(result.coating).toEqual({
       enable_coating: true,
       coating_height_mm: 0.1,
+      coating_material: state.coatingMaterial,
     });
     expect(result.loop.add_loop).toBe(true);
     expect(result.loop.loop_width).toBe(state.loop_width);
@@ -471,6 +473,7 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
     expect(result.coating).toEqual({
       enable_coating: false,
       coating_height_mm: null,
+      coating_material: null,
     });
     expect(result.loop).toEqual({
       add_loop: false,

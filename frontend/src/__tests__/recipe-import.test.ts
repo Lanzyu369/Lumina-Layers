@@ -843,14 +843,14 @@ describe("recipe/migration", () => {
   it("migrates V1 to the editable V4 format", () => {
     const recipe = createTestRecipe();
     const migrated = migrateRecipe(recipe);
-    expect(migrated.schema_version).toBe(4);
+    expect(migrated.schema_version).toBe(5);
     expect(migrated.recipe.converter).toEqual(recipe.recipe.converter);
   });
 
   it("migrates V2 without inventing workshop data", () => {
     const recipe = createTestRecipe({ schema_version: 2 });
     const migrated = migrateRecipe(recipe);
-    expect(migrated.schema_version).toBe(4);
+    expect(migrated.schema_version).toBe(5);
     expect(migrated.recipe.workshop).toBeUndefined();
   });
 

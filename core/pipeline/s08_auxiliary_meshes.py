@@ -438,6 +438,7 @@ def run(ctx: dict) -> dict:
                 backing_name = "Backing"
                 backing_mesh.visual.face_colors = base_aux_color
                 backing_mesh.metadata["name"] = backing_name
+                backing_mesh.metadata["lumina_print_role"] = "backing"
                 if base_aux_material_name:
                     backing_mesh.metadata["bambu_material_name"] = base_aux_material_name
                 preview_colors[backing_name] = base_aux_color
@@ -646,9 +647,11 @@ def run(ctx: dict) -> dict:
                         coating_mesh,
                         coating_sources,
                     )
-                coating_mesh.visual.face_colors = [200, 200, 200, 80]  # Semi-transparent grey
+                coating_material = ctx["resolved_coating_material"]
+                coating_mesh.visual.face_colors = [*coating_material.rgb, 255]
                 coating_name = "Coating"
                 coating_mesh.metadata["name"] = coating_name
+                coating_mesh.metadata["bambu_material_name"] = coating_material.name
                 scene.add_geometry(coating_mesh, node_name=coating_name, geom_name=coating_name)
                 valid_slot_names.append(coating_name)
                 _log.debug(f"Coating added as standalone '{coating_name}' ({coating_layers} layers)")

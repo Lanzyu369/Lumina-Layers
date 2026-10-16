@@ -3,9 +3,11 @@ import type {
   AutoHeightMode,
   BatchPreviewItem,
   BatchResponse,
+  BackingOutput,
   BedSizeItem,
   ColorMode,
   ColorReplacementItem,
+  CoatingMaterialReference,
   DynamicMaterialRecipe,
   ExportMaterialSelection,
   FridgeMagnetItem,
@@ -30,6 +32,8 @@ import type {
   PuzzleStyle,
   RecipeHistoryItem,
   RecipeOverrideItem,
+  RecipeOverrideApplyRequest,
+  RecipeOverrideApplyResponse,
   SelectionDocumentResponse,
   StructureMode,
   VirtualMaterial,
@@ -216,6 +220,7 @@ export interface ConverterState {
   auto_dynamic_range: boolean;
   chroma_gate: number;
   separate_backing: boolean;
+  backingOutput: BackingOutput;
 
   // 挂件环
   add_loop: boolean;
@@ -248,6 +253,7 @@ export interface ConverterState {
   // 涂层
   enable_coating: boolean;
   coating_height_mm: number;
+  coatingMaterial: CoatingMaterialReference | null;
 
   // 大画幅
   largeFormatEnabled: boolean;
@@ -297,6 +303,7 @@ export interface ConverterState {
   historyBusy: boolean;
   contentCommitStatus: ContentCommitStatus;
   contentCommitOperationId: string | null;
+  pendingEditorProject: File | null;
 
   // 颜色轮廓数据（后端 OpenCV 提取，用于 3D 高亮）
   colorContours: Record<string, number[][][]>;
@@ -516,6 +523,7 @@ export interface ConverterActions {
   setAutoDynamicRange: (enabled: boolean) => void;
   setChromaGate: (threshold: number) => void;
   setSeparateBacking: (enabled: boolean) => void;
+  setBackingOutput: (output: BackingOutput) => void;
   setAddLoop: (enabled: boolean) => void;
   setLoopWidth: (width: number) => void;
   setLoopLength: (length: number) => void;
@@ -549,6 +557,7 @@ export interface ConverterActions {
   setWireHeightMm: (height: number) => void;
   setEnableCoating: (enabled: boolean) => void;
   setCoatingHeightMm: (height: number) => void;
+  setCoatingMaterial: (material: CoatingMaterialReference | null) => void;
 
   // 大画幅
   setLargeFormatEnabled: (enabled: boolean) => void;
@@ -615,6 +624,7 @@ export interface ConverterActions {
     /** Virtual materials declared at apply time; required when ``recipe`` carries indices ``>= LUT.N``. */
     virtualMaterials?: VirtualMaterial[],
   ) => Promise<void>;
+  commitRecipeOverride: (request: RecipeOverrideApplyRequest) => Promise<RecipeOverrideApplyResponse | undefined>;
   upsertRecipeOverrides: (
     regionIds: string[],
     recipe: number[],
@@ -908,6 +918,8 @@ export interface ConverterActions {
   setLayerImagesOpen: (open: boolean) => void;
 
   // 配方导入
+  /** Capture source parameters and a confirmed portable editor checkpoint. */
+  prepareRecipeExport: () => Promise<{ state: ConverterState; editorFile: File | null }>;
   importRecipeState: (
     partial: Partial<ConverterState>,
     imageFile: File,

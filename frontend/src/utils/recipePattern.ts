@@ -56,13 +56,9 @@ export function validateRecipePattern(
   const letterMap = buildPaletteLetterMap(palette);
   for (const char of pattern) {
     if (char === "-" || char === "?" || char === "*") continue;
-    if (/[a-zA-Z]/.test(char)) {
-      if (!letterMap.has(char.toUpperCase())) {
-        return char;
-      }
-      continue;
+    if (!letterMap.has(char.toUpperCase())) {
+      return char;
     }
-    return char;
   }
   return null;
 }

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   applyRecipeOverride: vi.fn(),
   getGlbStatus: vi.fn(),
   showBrowserCompletionNotification: vi.fn(),
+  fetchExportMaterialSelection: vi.fn(),
 }));
 
 vi.mock("../../api/converter", async () => {
@@ -30,6 +31,7 @@ vi.mock("../../api/converter", async () => {
     convertGeneratePuzzle: mocks.convertGeneratePuzzle,
     applyRecipeOverride: mocks.applyRecipeOverride,
     getGlbStatus: mocks.getGlbStatus,
+    fetchExportMaterialSelection: mocks.fetchExportMaterialSelection,
   };
 });
 
@@ -196,6 +198,11 @@ describe("native bundle converter flow", () => {
     mocks.applyRecipeOverride.mockReset();
     mocks.getGlbStatus.mockReset();
     mocks.showBrowserCompletionNotification.mockReset();
+    mocks.fetchExportMaterialSelection.mockReset().mockResolvedValue({
+      ready: true, materials: [], issues: [], build_plates: [],
+      slicer_id: "BambuStudio", machine_uid: "bambu-lab-a1",
+      nozzle_uid: "nozzle:0.4mm", build_plate_uid: "textured-pei-plate",
+    });
     useSettingsStore.setState({
       enableCompletionNotifications: false,
       language: "zh",
@@ -404,6 +411,7 @@ describe("native bundle converter flow", () => {
 
     seedLegacyGenerateState("session-old");
     const oldRequest = useConverterStore.getState().submitGenerate();
+    await vi.waitFor(() => expect(mocks.convertGenerate).toHaveBeenCalledOnce());
 
     seedLegacyGenerateState("session-fresh");
     const freshRequest = useConverterStore.getState().submitGenerate();
@@ -457,6 +465,7 @@ describe("native bundle converter flow", () => {
     });
 
     const staleRequest = useConverterStore.getState().submitGenerate();
+    await vi.waitFor(() => expect(mocks.convertGenerate).toHaveBeenCalledOnce());
     useSettingsStore
       .getState()
       .setBuildPlateForMachine(
@@ -467,6 +476,7 @@ describe("native bundle converter flow", () => {
     const stateAfterPlateChange = useConverterStore.getState();
 
     const freshRequest = useConverterStore.getState().submitGenerate();
+    await vi.waitFor(() => expect(mocks.convertGenerate).toHaveBeenCalledTimes(2));
     expect(mocks.convertGenerate.mock.calls[0][1].build_plate_id).toBe(
       "engineering-plate",
     );
@@ -529,6 +539,7 @@ describe("native bundle converter flow", () => {
     });
 
     const request = useConverterStore.getState().submitGenerate();
+    await vi.waitFor(() => expect(mocks.convertGenerate).toHaveBeenCalledOnce());
     useSettingsStore
       .getState()
       .setBuildPlateForMachine(
@@ -564,11 +575,9 @@ describe("native bundle converter flow", () => {
     });
 
     const request = useConverterStore.getState().submitGenerate();
-    expect(mocks.convertGenerate).toHaveBeenCalledWith(
-      "session-filename-preference",
-      expect.any(Object),
-      false,
-    );
+    await vi.waitFor(() => expect(mocks.convertGenerate).toHaveBeenCalledWith(
+      "session-filename-preference", expect.any(Object), false,
+    ));
 
     useSettingsStore.getState().setPreserveUploadFilenameFor3mf(true);
 
@@ -611,7 +620,7 @@ describe("native bundle converter flow", () => {
     });
 
     const request = useConverterStore.getState().submitGenerate();
-    expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(mocks.convertGenerate).toHaveBeenCalledOnce());
 
     useConverterStore.setState({ puzzleEnabled: true });
     useSettingsStore.getState().setPreserveUploadFilenameFor3mf(true);
@@ -658,7 +667,7 @@ describe("native bundle converter flow", () => {
     });
 
     const request = useConverterStore.getState().submitGenerate();
-    expect(mocks.convertGenerateLargeFormat).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(mocks.convertGenerateLargeFormat).toHaveBeenCalledOnce());
 
     useConverterStore.setState({ largeFormatEnabled: false });
     useSettingsStore.getState().setPreserveUploadFilenameFor3mf(true);
@@ -704,6 +713,7 @@ describe("native bundle converter flow", () => {
 
     seedLegacyGenerateState("session-old");
     const oldRequest = useConverterStore.getState().submitGenerate();
+    await vi.waitFor(() => expect(mocks.convertGenerate).toHaveBeenCalledOnce());
 
     useConverterStore.setState({
       sessionId: "session-new",
@@ -766,6 +776,7 @@ describe("native bundle converter flow", () => {
 
     seedLegacyGenerateState("session-same");
     const firstRequest = useConverterStore.getState().submitGenerate();
+    await vi.waitFor(() => expect(mocks.convertGenerate).toHaveBeenCalledOnce());
     const secondRequest = useConverterStore.getState().submitGenerate();
     await secondRequest;
 
@@ -799,6 +810,7 @@ describe("native bundle converter flow", () => {
 
     seedLegacyGenerateState("session-error");
     const staleRequest = useConverterStore.getState().submitGenerate();
+    await vi.waitFor(() => expect(mocks.convertGenerate).toHaveBeenCalledOnce());
     const freshRequest = useConverterStore.getState().submitGenerate();
     await freshRequest;
 
@@ -837,6 +849,7 @@ describe("native bundle converter flow", () => {
 
     seedLegacyGenerateState("puzzle-old", { puzzleEnabled: true });
     const oldRequest = useConverterStore.getState().submitGenerate();
+    await vi.waitFor(() => expect(mocks.convertGeneratePuzzle).toHaveBeenCalledOnce());
 
     seedLegacyGenerateState("puzzle-fresh", { puzzleEnabled: true });
     const freshRequest = useConverterStore.getState().submitGenerate();
@@ -881,6 +894,7 @@ describe("native bundle converter flow", () => {
     seedLegacyGenerateState("puzzle-plate", { puzzleEnabled: true });
 
     const request = useConverterStore.getState().submitGenerate();
+    await vi.waitFor(() => expect(mocks.convertGeneratePuzzle).toHaveBeenCalledOnce());
     useSettingsStore
       .getState()
       .setBuildPlateForMachine(
@@ -931,6 +945,7 @@ describe("native bundle converter flow", () => {
 
     seedLegacyGenerateState("large-old", { largeFormatEnabled: true });
     const oldRequest = useConverterStore.getState().submitGenerate();
+    await vi.waitFor(() => expect(mocks.convertGenerateLargeFormat).toHaveBeenCalledOnce());
 
     seedLegacyGenerateState("large-fresh", { largeFormatEnabled: true });
     const freshRequest = useConverterStore.getState().submitGenerate();
@@ -973,6 +988,7 @@ describe("native bundle converter flow", () => {
     });
 
     const request = useConverterStore.getState().submitGenerate();
+    await vi.waitFor(() => expect(mocks.convertGenerateLargeFormat).toHaveBeenCalledOnce());
     useSettingsStore
       .getState()
       .setBuildPlateForMachine(
@@ -2272,7 +2288,7 @@ describe("native bundle converter flow", () => {
       } as never);
 
       const submitGenerate = useConverterStore.getState().submitGenerate();
-      expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(mocks.convertGenerate).toHaveBeenCalledOnce());
 
       useConverterStore.setState(changedOverrides as never);
       generation.resolve({
@@ -2341,7 +2357,7 @@ describe("native bundle converter flow", () => {
       } as never);
 
       const submitGenerate = useConverterStore.getState().submitGenerate();
-      expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(mocks.convertGenerate).toHaveBeenCalledOnce());
 
       useConverterStore.setState(enabledOverrides as never);
       generation.resolve({
@@ -2471,7 +2487,7 @@ describe("native bundle converter flow", () => {
       });
 
       const submitGenerate = useConverterStore.getState().submitGenerate();
-      expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(mocks.convertGenerate).toHaveBeenCalledOnce());
 
       useConverterStore.getState()._pollAsyncGlb();
       await flushGlbPoll();

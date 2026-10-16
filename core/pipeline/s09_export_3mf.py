@@ -206,13 +206,14 @@ def run(ctx: dict) -> dict:
             },
         )
 
-        export_scene_with_bambu_metadata(
+        exported_path = export_scene_with_bambu_metadata(
             scene=scene,
             output_path=out_path,
             slot_names=valid_slot_names,
             preview_colors=preview_colors,
             project_slot_names=slot_names,
             material_types=ctx.get("material_types"),
+            backing_output=ctx.get("backing_output", "same_project"),
             native_filament_profiles=ctx.get("native_filament_profiles"),
             settings=print_settings,
             color_mode=color_mode,
@@ -267,6 +268,8 @@ def run(ctx: dict) -> dict:
         ctx["error"] = f"[ERROR] 3MF export failed: {e}"
         return ctx
 
-    ctx["out_path"] = out_path
+    ctx["out_path"] = (
+        exported_path if ctx.get("backing_output") == "separate_project" else out_path
+    )
 
     return ctx

@@ -653,7 +653,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     expect(
-      screen.getByText(/文件已继续生成，但当前模型和擦料塔无法在所选热床上同时安全摆放/),
+      screen.getByText(/文件已生成，可以下载。自动摆放未能确认/),
     ).toBeInTheDocument();
     expect(
       screen.queryByText("wipe_tower_manual_adjustment_required"),

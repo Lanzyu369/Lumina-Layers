@@ -9,7 +9,7 @@ import type {
   LutReference,
   LuminaRecipe,
 } from "./types";
-import { DEFAULT_CONVERTER_RECIPE_PUZZLE, WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES } from "./types";
+import { DEFAULT_CONVERTER_RECIPE_PUZZLE, EDITOR_PROJECT_MAX_BYTES, WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES } from "./types";
 import {
   DEFAULT_MODEL_SURFACE_MODEL_ROTATION,
   DEFAULT_MODEL_SURFACE_PLACEMENT,
@@ -25,6 +25,7 @@ import type {
 } from "../api/types";
 import { extractRecipeFromPng } from "./pngMetadata";
 import { migrateRecipe } from "./migration";
+import { readCoatingMaterialReference } from "../stores/converter/coatingMaterial";
 import { base64ToFile } from "./utils";
 import {
   normalizeFridgeMagnetItems,
@@ -259,6 +260,13 @@ function validateRecipeAssets(recipe: LuminaRecipe): void {
   if (assetEntries?.heightmap !== undefined) {
     validateAsset(assetEntries.heightmap);
   }
+  if (assetEntries?.editor !== undefined) {
+    if (assetEntries.editor.byte_size > EDITOR_PROJECT_MAX_BYTES
+        || assetEntries.editor.payload_b64?.length > Math.ceil(EDITOR_PROJECT_MAX_BYTES / 3) * 4) {
+      throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
+    }
+    validateAsset(assetEntries.editor);
+  }
 }
 
 function validateAsset(
@@ -431,6 +439,10 @@ export function restoreConverterRecipe(
     const hm = recipe.asset.heightmap;
     heightmapFile = base64ToFile(hm.payload_b64, hm.filename, hm.mime_type);
   }
+  const editor = recipe.asset.editor;
+  const pendingEditorProject = editor
+    ? base64ToFile(editor.payload_b64, editor.filename, editor.mime_type)
+    : null;
 
   // --- Restore source-specific LUT selection ---
   const source = conv.source;
@@ -492,7 +504,7 @@ export function restoreConverterRecipe(
       };
     },
   );
-  if (recipeOverrides.length > 0) {
+  if (recipeOverrides.length > 0 && !pendingEditorProject) {
     warnings.push(RECIPE_IMPORT_WARNING_REGION_RECIPES_NOT_RESTORED);
   }
 
@@ -678,6 +690,7 @@ export function restoreConverterRecipe(
         : conv.geometry.structure_mode
     ) as ConverterState["structure_mode"],
     separate_backing: conv.geometry.separate_backing,
+    backingOutput: conv.geometry.backing_output ?? "same_project",
     add_loop: addLoop,
     loop_width: conv.geometry.loop_width,
     loop_length: conv.geometry.loop_length,
@@ -705,17 +718,16 @@ export function restoreConverterRecipe(
     // Coating
     enable_coating: conv.coating.enable_coating,
     coating_height_mm: conv.coating.coating_height_mm,
+    coatingMaterial: readCoatingMaterialReference(conv.coating.coating_material),
 
     // Color ops
     replacement_regions: replacementRegions,
     free_color_set: freeColorSet,
-    // Region IDs and masks belong to the old preview session. Keep the
-    // serialized field for file compatibility, but never activate those
-    // overrides in a fresh session; history entries remain available for the
-    // user to apply after selecting a new region.
-    // 区域 ID 与掩码属于旧预览会话。文件字段继续保留以兼容旧项目，但新会话
-    // 不直接激活；用户可重新选区后从自定义配方历史中应用。
+    // Activate spatial overrides only after the checkpoint has been validated
+    // against the new preview's source and working-coordinate grid.
+    // 空间覆盖在快照通过新预览的来源和工作坐标校验后才激活。
     recipe_overrides: [],
+    pendingEditorProject,
     customRecipeHistory: customRecipeHistory,
     // Clear remap state — replacement_regions already contains merged data
     colorRemapMap: {},

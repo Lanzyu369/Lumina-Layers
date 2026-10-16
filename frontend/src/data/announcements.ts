@@ -29,6 +29,15 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
       }, {
         zh: "首次启动时会等待本机服务准备好，再自动进入工作区，无需手动刷新。耗材预设之间的共同设置冲突也会在生成前明确提示。",
         en: "The first start now waits for the local service before opening the workspace automatically, without a manual refresh. Conflicting shared filament settings are also explained before generation.",
+      }, {
+        zh: "保存 JSON 项目或 PNG 分享卡时，会带上局部换色、区域配方和选区。重新导入后可以继续编辑；旧文件没有保存的区域信息仍会明确提示。",
+        en: "JSON projects and PNG share cards now retain local color edits, regional recipes and selections for continued editing after import. Older files still explain when region data was not saved.",
+      }, {
+        zh: "启用涂层后，需要明确选择使用哪种耗材，可沿用当前配色耗材或另选耗材档案；混用不同材料类型时会提示，生成前也会检查原生预设和打印板。",
+        en: "Coating now requires an explicit material choice from the current palette or a separate material archive. Mixed material types are explained, and native presets and plates are checked before generation.",
+      }, {
+        zh: "单面模型的分离底板可选择独立工程输出，下载的压缩包保留模型和底板原尺寸，并分别安排打印位置。自动摆放未找到安全位置时，仍会生成文件并持续提示手动检查；请分别打开每个工程，确认切片通过后再打印。",
+        en: "Single-sided models can export a separated backing as its own project. The ZIP keeps the original model and backing sizes and lays out each independently. If automatic placement cannot verify a safe layout, the files remain available with a manual-check warning. Open each project and confirm slicing succeeds before printing.",
       }],
     }],
   },

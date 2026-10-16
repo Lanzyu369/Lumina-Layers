@@ -123,9 +123,9 @@ describe("ActionBar — auto batch mode", () => {
 
     render(<ActionBar />);
 
-    expect(screen.getByText("打印前必须手动调整擦料塔")).toBeInTheDocument();
+    expect(screen.getByText("打印前请手动检查摆放")).toBeInTheDocument();
     expect(
-      screen.getByText(/没有缩小模型，也没有关闭擦料塔/),
+      screen.getByText(/模型尺寸、原生工艺和擦料塔均已保留/),
     ).toBeInTheDocument();
   });
 

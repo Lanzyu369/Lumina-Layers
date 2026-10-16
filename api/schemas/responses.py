@@ -10,7 +10,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from api.schemas.dynamic_material import DynamicMaterialResultResponse
-from api.schemas.converter import SelectionDocumentResponse
+from api.schemas.converter import RecipeOverrideItem, SelectionDocumentResponse
 from api.schemas.lut import (
     LutCoverageStatsResponse,
     LutHullPoint,
@@ -858,6 +858,7 @@ class RecipeOverrideApplyResponse(DynamicMaterialResultResponse):
     source: str
     runtime_mode_key: str | None = None
     override_count: int = 0
+    recipe_overrides: list[RecipeOverrideItem] = Field(default_factory=list)
     can_undo: bool = False
     can_redo: bool = False
     selection: SelectionDocumentResponse | None = None

@@ -29,7 +29,6 @@ import Dropdown from "./Dropdown";
 import { useI18n } from "../../i18n/context";
 import { workstationInputClass } from "./panelPrimitives";
 import {
-  applyRecipeOverride,
   fetchRegionRecipe,
   predictCustomRecipe,
 } from "../../api/converter";
@@ -118,7 +117,7 @@ interface Props {
    * 否则 ``/generate`` 无法重建扩展调色板，worker 会把虚拟索引像素坍缩回 LUT
    * 原生通道（表现为 mesh 缺失 / 3MF 漏对象 / 透明失效）。
    */
-  onApplied: (
+  onApplied?: (
     response: RecipeOverrideApplyResponse,
     recipe: number[],
     colorLayers: number,
@@ -1148,7 +1147,7 @@ export default function CustomRecipeDialog({
     setErrorKind("general");
     try {
       const { apiRecipe, virtualMaterials } = buildApiRecipePayload(recipe);
-      const response = await applyRecipeOverride({
+      const response = await useConverterStore.getState().commitRecipeOverride({
         session_id: sessionId,
         recipe: apiRecipe,
         layer_order: layerOrder,
@@ -1159,7 +1158,10 @@ export default function CustomRecipeDialog({
           ? { virtual_materials: virtualMaterials }
           : {}),
       });
-      onApplied(response, apiRecipe, recipe.length, layerHeightMm, virtualMaterials);
+      if (!response) {
+        throw new Error(useConverterStore.getState().error ?? t("recipe_custom_apply_failed"));
+      }
+      onApplied?.(response, apiRecipe, recipe.length, layerHeightMm, virtualMaterials);
       // Keep the per-layer visual intent (the 8-primary picks) alongside the
       // LUT-translated recipe so the side-panel history row echoes exactly
       // what the user clicked — even when a sparse LUT forces a substitute

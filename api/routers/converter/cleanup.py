@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import (
-    get_preview_cache_field_path,
+    get_preview_cache_metadata,
     is_preview_cache_artifact_ref,
 )
 from api.replacement_history import collect_checkpoint_artifact_paths
@@ -23,26 +23,23 @@ from api.structured_logging import get_logger
 router = APIRouter()
 log = get_logger(__name__)
 
-_GENERATE_PREVIEW_CACHE_ARTIFACT_FIELDS = frozenset(
-    ("matched_rgb", "mask_solid", "material_matrix")
-)
-
-
 def _collect_preview_cache_artifact_paths(session_data: dict | None) -> set[str]:
-    """Return current preview-cache artifact paths required by generate."""
+    """Keep the active editor cache and history until the source session closes."""
 
     if not session_data:
         return set()
     preview_cache = session_data.get("preview_cache")
-    if not is_preview_cache_artifact_ref(preview_cache):
-        return set()
-
-    keep_paths: set[str] = set()
-    keep_paths.update(collect_checkpoint_artifact_paths(session_data))
-    for field_name in _GENERATE_PREVIEW_CACHE_ARTIFACT_FIELDS:
-        path = get_preview_cache_field_path(preview_cache, field_name)
-        if path and os.path.exists(path):
-            keep_paths.add(path)
+    keep_paths = collect_checkpoint_artifact_paths(session_data)
+    if is_preview_cache_artifact_ref(preview_cache):
+        for field in preview_cache.get("fields", {}).values():
+            path = field.get("path")
+            if isinstance(path, str) and os.path.exists(path):
+                keep_paths.add(path)
+    if isinstance(preview_cache, dict):
+        metadata = get_preview_cache_metadata(preview_cache)
+        vector_source = metadata.get("vector_parse_clip_cache_path")
+        if isinstance(vector_source, str) and os.path.exists(vector_source):
+            keep_paths.add(vector_source)
     return keep_paths
 
 

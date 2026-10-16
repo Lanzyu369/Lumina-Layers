@@ -127,6 +127,7 @@ export interface AdvancedParamsGeneration {
   use_lut_constrained: boolean;
   auto_dynamic_range: boolean;
   separate_backing: boolean;
+  backing_output?: import("../api/types").BackingOutput;
   material_dynamic_layer_count_enabled: boolean;
   material_min_layer_count: number | null;
   material_max_layer_count: number | null;
@@ -198,6 +199,7 @@ export interface AdvancedParamsCloisonne {
 export interface AdvancedParamsCoating {
   enable_coating: boolean;
   coating_height_mm: number | null;
+  coating_material: import("../api/types").CoatingMaterialReference | null;
 }
 
 /**
