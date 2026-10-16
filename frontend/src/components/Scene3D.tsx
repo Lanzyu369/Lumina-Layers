@@ -41,6 +41,7 @@ import {
   getThreePerfDebugConfig,
 } from "../utils/threeDebug";
 import { postClientLog } from "../utils/clientLog";
+import { HeaderTooltip } from "./ui/HeaderTooltip";
 import {
   ActivityIcon,
   CameraIcon,
@@ -1257,44 +1258,60 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           right: "calc(var(--lumina-right-dock-width, 0px) + 12px)",
         }}
       >
-        <button
-          onClick={togglePerformance}
-          aria-pressed={performanceVisible}
-          aria-label={t("viewer_performance_toggle")}
-          title={t("viewer_performance_toggle")}
-          data-testid="scene3d-performance-toggle"
-          className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
+        <HeaderTooltip
+          label={t("viewer_performance_toggle")}
+          suppressed={performanceVisible || diagnosticsVisible}
         >
-          <StopwatchIcon className="h-4 w-4" />
-        </button>
-        <button
-          onClick={toggleDiagnostics}
-          aria-pressed={diagnosticsVisible}
-          aria-label={t("viewer_diagnostics_toggle")}
-          title={t("viewer_diagnostics_toggle")}
-          data-testid="scene3d-diagnostics-toggle"
-          className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
-        >
-          <ActivityIcon className="h-4 w-4" />
-        </button>
-        {fullscreenSupported && (
           <button
-            onClick={toggleFullscreen}
-            aria-label={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
-            title={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
+            onClick={togglePerformance}
+            aria-pressed={performanceVisible}
+            aria-label={t("viewer_performance_toggle")}
+            data-testid="scene3d-performance-toggle"
             className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
           >
-            {isFullscreen ? <MinimizeIcon className="h-4 w-4" /> : <MaximizeIcon className="h-4 w-4" />}
+            <StopwatchIcon className="h-4 w-4" />
           </button>
-        )}
-        <button
-          onClick={takeScreenshot}
-          aria-label={t("viewer_screenshot")}
-          title={t("viewer_screenshot")}
-          className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
+        </HeaderTooltip>
+        <HeaderTooltip
+          label={t("viewer_diagnostics_toggle")}
+          suppressed={performanceVisible || diagnosticsVisible}
         >
-          <CameraIcon className="h-4 w-4" />
-        </button>
+          <button
+            onClick={toggleDiagnostics}
+            aria-pressed={diagnosticsVisible}
+            aria-label={t("viewer_diagnostics_toggle")}
+            data-testid="scene3d-diagnostics-toggle"
+            className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
+          >
+            <ActivityIcon className="h-4 w-4" />
+          </button>
+        </HeaderTooltip>
+        {fullscreenSupported && (
+          <HeaderTooltip
+            label={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
+            suppressed={performanceVisible || diagnosticsVisible}
+          >
+            <button
+              onClick={toggleFullscreen}
+              aria-label={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
+              className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
+            >
+              {isFullscreen ? <MinimizeIcon className="h-4 w-4" /> : <MaximizeIcon className="h-4 w-4" />}
+            </button>
+          </HeaderTooltip>
+        )}
+        <HeaderTooltip
+          label={t("viewer_screenshot")}
+          suppressed={performanceVisible || diagnosticsVisible}
+        >
+          <button
+            onClick={takeScreenshot}
+            aria-label={t("viewer_screenshot")}
+            className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
+          >
+            <CameraIcon className="h-4 w-4" />
+          </button>
+        </HeaderTooltip>
       </div>
 
       {performanceVisible && (
