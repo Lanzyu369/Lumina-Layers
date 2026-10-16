@@ -102,12 +102,13 @@ export function hasSubTabs(activeTab: TabId): boolean {
 interface TabNavBarProps {
   activeTab: TabId;
   onTabChange: (tab: TabId) => void;
+  onIndicatorAnimationComplete?: (tab: TabId) => void;
   compact?: boolean;
   /** Exposes the tab strip so the header can measure its full width. */
   navRef?: Ref<HTMLElement>;
 }
 
-export default function TabNavBar({ activeTab, onTabChange, compact = false, navRef }: TabNavBarProps) {
+export default function TabNavBar({ activeTab, onTabChange, onIndicatorAnimationComplete, compact = false, navRef }: TabNavBarProps) {
   const { t } = useI18n();
   const activePrimaryTab = resolvePrimaryTab(activeTab);
 
@@ -141,6 +142,7 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false, nav
                 layoutDependency={id}
                 className={NAV_TAB_INDICATOR_CLASS}
                 transition={NAV_TAB_INDICATOR_TRANSITION}
+                onLayoutAnimationComplete={() => onIndicatorAnimationComplete?.(activeTab)}
                 style={{ zIndex: -1 }}
               />
             )}

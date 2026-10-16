@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 
 import TabNavBar from "../widget/TabNavBar";
 import SubTabBar from "../widget/SubTabBar";
+const indicatorAnimation = vi.hoisted(() => ({ complete: undefined as (() => void) | undefined }));
 
 // jsdom runs no layout animation, so expose the props that decide when the
 // selected chip slides instead of asserting on motion.
@@ -13,23 +14,37 @@ vi.mock("framer-motion", () => ({
       layoutId,
       layoutDependency,
       className,
+      onLayoutAnimationComplete,
     }: {
       layoutId?: string;
       layoutDependency?: unknown;
       className?: string;
       children?: ReactNode;
-    }) => (
+      onLayoutAnimationComplete?: () => void;
+    }) => {
+      if (layoutId === "active-primary-tab-indicator") indicatorAnimation.complete = onLayoutAnimationComplete;
+      return (
       <div
         data-testid="selected-chip"
         data-layout-id={layoutId}
         data-layout-dependency={layoutDependency === undefined ? "missing" : String(layoutDependency)}
         className={className}
       />
-    ),
+      );
+    },
   },
 }));
 
 describe("selected tab chip", () => {
+  it("notifies the page only when the primary indicator has finished moving", () => {
+    const onComplete = vi.fn();
+    const { rerender } = render(<TabNavBar activeTab="vectorizer" onTabChange={vi.fn()} onIndicatorAnimationComplete={onComplete} />);
+    rerender(<TabNavBar activeTab="converter" onTabChange={vi.fn()} onIndicatorAnimationComplete={onComplete} />);
+    expect(onComplete).not.toHaveBeenCalled();
+    indicatorAnimation.complete?.();
+    expect(onComplete).toHaveBeenCalledWith("converter");
+  });
+
   it("slides between primary tabs only when the selected tab changes", () => {
     const { rerender } = render(<TabNavBar activeTab="converter" onTabChange={vi.fn()} />);
     const chip = () => screen.getByTestId("selected-chip");

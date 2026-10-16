@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   useEffect,
+  useLayoutEffect,
   useCallback,
   useMemo,
   type MouseEvent as ReactMouseEvent,
@@ -18,6 +19,12 @@ import InteractiveModelViewer, {
   resolvePreviewColorLayerHeightMm,
 } from "./InteractiveModelViewer";
 import BedPlatform from "./BedPlatform";
+import { SceneAssetReady, SceneTransitionBridge } from "./SceneTransitionBridge";
+import {
+  clearSceneTransitionSnapshot,
+  getSceneTransitionKey,
+  getSceneTransitionSnapshot,
+} from "./sceneTransitionSnapshot";
 import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
 import LargeFormatTileOverlay3D from "./LargeFormatTileOverlay3D";
@@ -65,6 +72,8 @@ declare global {
 
 interface Scene3DProps {
   modelUrl?: string;
+  /** Keep only the static frame while the primary tab indicator is moving. */
+  deferInitialization?: boolean;
 }
 
 export interface PreviewModelBounds {
@@ -774,11 +783,55 @@ function BatchPreviewModels({
   );
 }
 
-function Scene3D({ modelUrl }: Scene3DProps) {
+function Scene3D({ modelUrl, deferInitialization = false }: Scene3DProps) {
   const { t } = useI18n();
   const themeColors = useThemeConfig();
   const containerRef = useRef<HTMLDivElement>(null);
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
+  const getTransitionKey = useCallback(() => {
+    const settings = useSettingsStore.getState();
+    return getSceneTransitionKey(useConverterStore.getState(), [
+      settings.theme, settings.deviceProfileId, settings.buildPlateId,
+      settings.slicerSoftware, modelUrl ?? null,
+    ]);
+  }, [modelUrl]);
+  const transitionKey = getTransitionKey();
+  const [transitionSnapshot, setTransitionSnapshot] = useState(
+    () => getSceneTransitionSnapshot(transitionKey),
+  );
+  const snapshotCanvasRef = useRef<HTMLCanvasElement>(null);
+  const captureTransitionRef = useRef<(() => void) | null>(null);
+  const [environmentReady, setEnvironmentReady] = useState(false);
+  const [bedReady, setBedReady] = useState(false);
+  const [readyModelKey, setReadyModelKey] = useState<string | null>(null);
+  const visibleSnapshot = transitionSnapshot?.key === transitionKey ? transitionSnapshot : null;
+  const handleFrameReady = useCallback(() => {
+    setTransitionSnapshot(null);
+    clearSceneTransitionSnapshot();
+  }, []);
+
+  useLayoutEffect(() => () => {
+    // Capture before React removes the DOM; R3F can then dispose normally.
+    captureTransitionRef.current?.();
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!visibleSnapshot || !snapshotCanvasRef.current || !containerRef.current) return;
+    const { width, height } = containerRef.current.getBoundingClientRect();
+    if (Math.abs(width - visibleSnapshot.width) > 1 || Math.abs(height - visibleSnapshot.height) > 1) {
+      setTransitionSnapshot(null);
+      clearSceneTransitionSnapshot();
+      return;
+    }
+    try {
+      const context = snapshotCanvasRef.current.getContext("2d");
+      if (context) context.drawImage(visibleSnapshot.image, 0, 0);
+      else setTransitionSnapshot(null);
+    } catch {
+      setTransitionSnapshot(null);
+      clearSceneTransitionSnapshot();
+    }
+  }, [visibleSnapshot]);
   const activeOrbitPanPointerRef = useRef<ActiveOrbitPanPointer | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [screenshotNotice, setScreenshotNotice] = useState<string | null>(null);
@@ -1031,6 +1084,14 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   );
   const displayModelBounds = modelPreviewSpace?.displayBounds ?? null;
   const activeModelUrl = effectiveModelUrl || previewGlbUrl;
+  const modelReadyKey = showModelSurfaceSelector
+    ? modelSurfacePreviewUrl!
+    : batchPreviewItems.length > 0
+      ? JSON.stringify(batchPreviewItems.map((item) => item.url))
+      : activeModelUrl ?? "empty";
+  const handleModelReadyChange = useCallback((ready: boolean) => {
+    setReadyModelKey(ready ? modelReadyKey : null);
+  }, [modelReadyKey]);
   const activePreviewCanvasBounds =
     previewCanvasBoundsState?.sourceUrl === activeModelUrl
       ? previewCanvasBoundsState.bounds
@@ -1438,7 +1499,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
 
       {/* Loading indicator is now 3D-anchored inside Canvas */}
 
-      <Canvas
+      {!deferInitialization && <Canvas
+        style={visibleSnapshot ? { visibility: "hidden" } : undefined}
         frameloop="demand"
         camera={{
           position: [...DEFAULT_CAMERA_POSITION],
@@ -1490,6 +1552,14 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         }}
       >
         <ScreenshotHelper onGlReady={handleGlReady} />
+        <SceneTransitionBridge
+          snapshotKey={transitionKey}
+          getCurrentKey={getTransitionKey}
+          snapshot={visibleSnapshot}
+          ready={environmentReady && bedReady && (modelReadyKey === "empty" || readyModelKey === modelReadyKey)}
+          captureRef={captureTransitionRef}
+          onFrameReady={handleFrameReady}
+        />
         <RendererDiagnosticsBridge
           enabled={diagnosticsSamplingEnabled}
           onSample={handleDiagnosticsSample}
@@ -1514,6 +1584,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             background={false}
             environmentIntensity={themeColors.environmentIntensity}
           />
+          <SceneAssetReady onReadyChange={setEnvironmentReady} />
         </Suspense>
         <directionalLight
           position={[...LIGHTING_CONFIG.keyLight.position]}
@@ -1531,6 +1602,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         <BedPlatform
           surfaceModelActive={showModelSurfaceSelector}
           gridVisible={showModelSurfaceSelector ? modelSurfaceBedGridVisible : true}
+          onReadyChange={setBedReady}
         />
         {showModelSurfaceSelector && modelSurfacePreviewUrl && modelSurfaceFile ? (
           <ModelSurfaceSelector3D
@@ -1551,6 +1623,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             onUpdateModelRotation={updateModelSurfaceModelRotation}
             onFitArtwork={fitModelSurfaceArtwork}
             onBedGridVisibleChange={setModelSurfaceBedGridVisible}
+            onReadyChange={handleModelReadyChange}
           />
         ) : batchPreviewItems.length > 0 ? (
           <Suspense fallback={null}>
@@ -1571,6 +1644,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               rasterCellSize={rasterCellSize}
               colorLayerHeightMm={colorLayerHeightMm}
             />
+            <SceneAssetReady onReadyChange={handleModelReadyChange} />
           </Suspense>
         ) : effectiveModelUrl ? (
           <Suspense fallback={null}>
@@ -1597,6 +1671,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               colorLayerHeightMm={colorLayerHeightMm}
               onPreviewCanvasBoundsChange={handlePreviewCanvasBoundsChange}
             />
+            <SceneAssetReady onReadyChange={handleModelReadyChange} />
           </Suspense>
         ) : previewGlbUrl ? (
           <Suspense fallback={null}>
@@ -1629,6 +1704,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               coatingHeightMm={coatingHeightMm}
               printingLayerHeightMm={layerHeightMm ?? 0.08}
             />
+            <SceneAssetReady onReadyChange={handleModelReadyChange} />
           </Suspense>
         ) : null}
         {batchPreviewItems.length === 0 && addLoop && displayModelBounds && (
@@ -1701,7 +1777,17 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             </div>
           </Html>
         )}
-      </Canvas>
+      </Canvas>}
+      {visibleSnapshot && (
+        <canvas
+          ref={snapshotCanvasRef}
+          width={visibleSnapshot.image.width}
+          height={visibleSnapshot.image.height}
+          className="absolute inset-0 h-full w-full"
+          aria-hidden="true"
+          data-testid="scene3d-transition-snapshot"
+        />
+      )}
 
       {modelSurfaceBusy ? (
         <div

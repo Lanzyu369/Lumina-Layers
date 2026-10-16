@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, Suspense, Component } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense, Component } from "react";
 import type { ReactNode } from "react";
 import apiClient from "./api/client";
 import type { HealthResponse } from "./api/types";
@@ -104,8 +104,6 @@ class SceneErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryStat
 }
 
 /* ---------- Widget Toggle Buttons ---------- */
-
-import { useRef } from "react";
 
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -286,6 +284,18 @@ function AppContent() {
   const activeTab = useWidgetStore((s) => s.activeTab);
   const activeConverterSubTab = useWidgetStore((s) => s.activeConverterSubTab);
   const setActiveTab = useWidgetStore((s) => s.setActiveTab);
+  const converterEntrySequence = useRef(0);
+  const [deferredConverterEntry, setDeferredConverterEntry] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (activeTab !== "converter") setDeferredConverterEntry(null);
+  }, [activeTab]);
+
+  const handleIndicatorAnimationComplete = useCallback((tab: typeof activeTab) => {
+    if (tab !== "converter") return;
+    // Ignore completion from an earlier entry interrupted by another click.
+    setDeferredConverterEntry((current) => current === deferredConverterEntry ? null : current);
+  }, [deferredConverterEntry]);
   const extractorColorcheckerFullIds = useExtractorStore(
     useShallow((s) => [
       s.colorchecker_phase === "done" ? s.calibratedFullFileId : null,
@@ -335,12 +345,16 @@ function AppContent() {
   // 直接调 store，不受这里影响。
   const handleTabChange = useCallback(
     (tab: typeof activeTab) => {
+      if (tab !== activeTab) {
+        const entry = ++converterEntrySequence.current;
+        setDeferredConverterEntry(tab === "converter" ? entry : null);
+      }
       if (tab === "gradient-card-extract") {
         clearMaterialVerification();
       }
       setActiveTab(tab);
     },
-    [setActiveTab, clearMaterialVerification],
+    [activeTab, setActiveTab, clearMaterialVerification],
   );
 
   useEffect(() => {
@@ -447,6 +461,7 @@ function AppContent() {
               navRef={primaryTabsRef}
               activeTab={activeTab}
               onTabChange={handleTabChange}
+              onIndicatorAnimationComplete={handleIndicatorAnimationComplete}
               compact={workspace.isCompact}
             />
           </AlignedNavStrip>
@@ -490,7 +505,7 @@ function AppContent() {
                 }
               >
                 <Suspense fallback={<LoadingSpinner />}>
-                  <Scene3D />
+                  <Scene3D deferInitialization={deferredConverterEntry !== null} />
                 </Suspense>
               </SceneErrorBoundary>
             </WidgetWorkspace>

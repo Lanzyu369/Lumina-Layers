@@ -1,7 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import type { ComponentProps } from "react";
+import type { TabId } from "../types/widget";
 import App from "../App";
 import { useWidgetStore } from "../stores/widgetStore";
+const indicatorCompletions = vi.hoisted(() => [] as Array<(tab: TabId) => void>);
+
+vi.mock("../components/widget/TabNavBar", async (original) => {
+  const actual = await original<typeof import("../components/widget/TabNavBar")>();
+  return {
+    ...actual,
+    default: (props: ComponentProps<typeof actual.default>) => {
+      if (props.onIndicatorAnimationComplete) indicatorCompletions.push(props.onIndicatorAnimationComplete);
+      // Control animation completion explicitly in jsdom, which has no layout.
+      return <actual.default {...props} onIndicatorAnimationComplete={undefined} />;
+    },
+  };
+});
 
 // Mock apiClient to prevent real HTTP calls (health check)
 vi.mock("../api/client", () => ({
@@ -16,8 +31,8 @@ vi.mock("../api/client", () => ({
 
 // Mock Scene3D to avoid Three.js rendering in jsdom
 vi.mock("../components/Scene3D", () => ({
-  default: ({ modelUrl }: { modelUrl?: string }) => (
-    <div data-testid="scene3d-mock">{modelUrl ?? "no-model"}</div>
+  default: ({ modelUrl, deferInitialization }: { modelUrl?: string; deferInitialization?: boolean }) => (
+    <div data-testid="scene3d-mock" data-deferred={String(deferInitialization ?? false)}>{modelUrl ?? "no-model"}</div>
   ),
 }));
 
@@ -37,12 +52,52 @@ vi.mock("../api/converter", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  indicatorCompletions.length = 0;
   // Reset widget store to default layout before each test
   useWidgetStore.getState().resetLayout();
   useWidgetStore.getState().setActiveTab("converter");
 });
 
 describe("App Widget Toggles", () => {
+  it("defers only converter re-entry until the indicator finishes and keeps the page shell visible", () => {
+    render(<App />);
+    expect(screen.getByTestId("scene3d-mock")).toHaveAttribute("data-deferred", "false");
+    fireEvent.click(screen.getByTestId("tab-vectorizer"));
+    expect(screen.queryByTestId("scene3d-mock")).toBeNull();
+    fireEvent.click(screen.getByTestId("tab-converter"));
+    expect(screen.getByTestId("scene3d-mock")).toHaveAttribute("data-deferred", "true");
+    expect(screen.getByTestId("panel-controls-toggle")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("tab-converter"));
+    expect(screen.getByTestId("scene3d-mock")).toHaveAttribute("data-deferred", "true");
+    act(() => indicatorCompletions.at(-1)!("converter"));
+    expect(screen.getByTestId("scene3d-mock")).toHaveAttribute("data-deferred", "false");
+  });
+
+  it("ignores completion from a converter entry interrupted by another tab", () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId("tab-vectorizer"));
+    fireEvent.click(screen.getByTestId("tab-converter"));
+    const previousCompletion = indicatorCompletions.at(-1)!;
+    fireEvent.click(screen.getByTestId("tab-vectorizer"));
+    expect(screen.queryByTestId("scene3d-mock")).toBeNull();
+    fireEvent.click(screen.getByTestId("tab-converter"));
+    const currentCompletion = indicatorCompletions.at(-1)!;
+    act(() => previousCompletion("converter"));
+    expect(screen.getByTestId("scene3d-mock")).toHaveAttribute("data-deferred", "true");
+    act(() => currentCompletion("converter"));
+    expect(screen.getByTestId("scene3d-mock")).toHaveAttribute("data-deferred", "false");
+  });
+
+  it("clears a pending initialization when navigation is changed outside the header", () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId("tab-vectorizer"));
+    fireEvent.click(screen.getByTestId("tab-converter"));
+    act(() => useWidgetStore.getState().setActiveTab("vectorizer"));
+    expect(screen.queryByTestId("scene3d-mock")).toBeNull();
+    act(() => useWidgetStore.getState().setActiveTab("converter"));
+    expect(screen.getByTestId("scene3d-mock")).toHaveAttribute("data-deferred", "false");
+  });
+
   function openWidgetMenu() {
     fireEvent.click(screen.getByTestId("panel-controls-toggle"));
   }

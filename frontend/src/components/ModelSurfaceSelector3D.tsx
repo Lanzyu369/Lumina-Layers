@@ -129,6 +129,7 @@ interface ModelSurfaceSelector3DProps {
   onUpdateModelRotation?: (rotation: ModelSurfaceModelRotation) => void;
   onFitArtwork?: () => void;
   onBedGridVisibleChange?: (visible: boolean) => void;
+  onReadyChange?: (ready: boolean) => void;
 }
 
 type LoadedSurfaceModel =
@@ -1331,6 +1332,7 @@ export function drawSurfaceArtworkCanvas(
 
 function useSurfaceArtworkImage(
   artworkAsset: ModelSurfaceArtworkAsset | null | undefined,
+  onReadyChange?: (ready: boolean) => void,
 ): LoadedSurfaceArtwork | null {
   const [loadedArtwork, setLoadedArtwork] = useState<LoadedSurfaceArtwork | null>(null);
   const artworkKey = getModelSurfaceArtworkAssetKey(artworkAsset);
@@ -1356,6 +1358,7 @@ function useSurfaceArtworkImage(
     nextImage.onerror = () => {
       if (!canceled) {
         setLoadedArtwork(null);
+        onReadyChange?.(true);
       }
     };
     nextImage.src = currentArtworkAsset.url;
@@ -1363,7 +1366,7 @@ function useSurfaceArtworkImage(
     return () => {
       canceled = true;
     };
-  }, [artworkKey]);
+  }, [artworkKey, onReadyChange]);
 
   if (!artworkAsset || !loadedArtwork) {
     return null;
@@ -1389,10 +1392,16 @@ function useSurfaceArtworkTexture(
   placement: ModelSurfacePlacement,
   budget: SurfaceArtworkPreviewBudget,
   invalidate: () => void,
+  onReadyChange?: (ready: boolean) => void,
 ): THREE.Texture | null {
-  const loadedArtwork = useSurfaceArtworkImage(artworkAsset);
+  const loadedArtwork = useSurfaceArtworkImage(artworkAsset, onReadyChange);
   const image = loadedArtwork?.image ?? null;
   const artworkKey = getModelSurfaceArtworkAssetKey(artworkAsset);
+  const hasArtwork = Boolean(artworkAsset);
+  useEffect(() => {
+    onReadyChange?.(!hasArtwork);
+    return () => onReadyChange?.(false);
+  }, [artworkKey, hasArtwork, onReadyChange]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textureRef = useRef<THREE.CanvasTexture | null>(null);
   const [texture, setTexture] = useState<THREE.Texture | null>(null);
@@ -1418,6 +1427,7 @@ function useSurfaceArtworkTexture(
       canvasRef.current = null;
       setTexture(null);
       invalidate();
+      onReadyChange?.(true);
       return;
     }
     const insetMm = placement.mode === "inset" ? Math.max(0, placement.inset_mm) : 0;
@@ -1449,7 +1459,8 @@ function useSurfaceArtworkTexture(
     nextTexture.userData.artworkSizeMm = artworkSizeMm;
     nextTexture.needsUpdate = true;
     invalidate();
-  }, [artworkKey, budget, image, invalidate, loadedArtwork, placement, surface]);
+    onReadyChange?.(true);
+  }, [artworkKey, budget, image, invalidate, loadedArtwork, onReadyChange, placement, surface]);
 
   useEffect(() => {
     return () => {
@@ -2572,6 +2583,7 @@ function SurfaceArtworkPlane({
   placement,
   activeTool,
   onUpdatePlacement,
+  onReadyChange,
 }: {
   surface: ResolvedSurfaceFootprint;
   modelOffset: THREE.Vector3;
@@ -2581,6 +2593,7 @@ function SurfaceArtworkPlane({
   placement: ModelSurfacePlacement;
   activeTool: SurfaceTool;
   onUpdatePlacement?: (updates: Partial<ModelSurfacePlacement>) => void;
+  onReadyChange?: (ready: boolean) => void;
 }) {
   const invalidate = useThree((state) => state.invalidate);
   const controls = useThree((state) => state.controls);
@@ -2598,6 +2611,7 @@ function SurfaceArtworkPlane({
     placement,
     textureBudget,
     invalidate,
+    onReadyChange,
   );
   const dragRef = useRef<DragState | null>(null);
   const artworkRotationRingDragRef = useRef<{
@@ -3046,6 +3060,7 @@ export default function ModelSurfaceSelector3D({
   onUpdateModelRotation,
   onFitArtwork,
   onBedGridVisibleChange,
+  onReadyChange,
 }: ModelSurfaceSelector3DProps) {
   const resolvedArtworkAsset = artworkAsset ?? (
     artworkUrl
@@ -3058,6 +3073,7 @@ export default function ModelSurfaceSelector3D({
   const { t } = useI18n();
   const [model, setModel] = useState<LoadedSurfaceModel | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [artworkReady, setArtworkReady] = useState(false);
   const [activeTool, setActiveTool] = useState<SurfaceTool>("select");
   const [localModelRotation, setLocalModelRotation] = useState<ModelRotation>(DEFAULT_MODEL_ROTATION);
   const modelRotation = useMemo<ModelRotation>(() => storedModelRotation ? {
@@ -3227,6 +3243,11 @@ export default function ModelSurfaceSelector3D({
     resolvedSurface && resolvedArtworkAsset && onUpdatePlacement && !forceReselect,
   );
   const showSurfaceCandidates = activeTool === "select" && (!resolvedSurface || forceReselect);
+  const artworkVisible = Boolean(resolvedSurface && !forceReselect);
+  useEffect(() => {
+    onReadyChange?.(loadState === "error" || (loadState === "ready" && (!artworkVisible || artworkReady)));
+    return () => onReadyChange?.(false);
+  }, [artworkReady, artworkVisible, loadState, onReadyChange]);
   const showGroupedSurfaceCandidates = showSurfaceCandidates && surfaceSelectionMode === "grouped";
   const showTriangleFacetHover =
     showSurfaceCandidates &&
@@ -4455,6 +4476,7 @@ export default function ModelSurfaceSelector3D({
             placement={placement}
             activeTool={activeTool}
             onUpdatePlacement={onUpdatePlacement}
+            onReadyChange={setArtworkReady}
           />
         ) : null}
         </group>
