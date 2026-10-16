@@ -1,7 +1,6 @@
 import anycubicSlicerNextLogo from "../assets/slicer-logos/anycubic-slicer-next.png";
 import bambuStudioLogo from "../assets/slicer-logos/bambu-studio.svg";
 import elegooSlicerLogo from "../assets/slicer-logos/elegoo-slicer.png";
-import flashStudioLogo from "../assets/slicer-logos/flash-studio.png";
 import orcaSlicerLogo from "../assets/slicer-logos/orca-slicer.svg";
 import prusaSlicerLogo from "../assets/slicer-logos/prusa-slicer.svg";
 import snapmakerOrcaLogo from "../assets/slicer-logos/snapmaker-orca.png";
@@ -17,7 +16,6 @@ const SLICER_LOGOS: Readonly<Record<string, string>> = {
   SnapmakerOrca: snapmakerOrcaLogo,
   ElegooSlicer: elegooSlicerLogo,
   AnycubicSlicerNext: anycubicSlicerNextLogo,
-  FlashStudio: flashStudioLogo,
   PrusaSlicer: prusaSlicerLogo,
   Cura: curaLogo,
 };

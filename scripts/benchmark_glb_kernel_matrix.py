@@ -50,10 +50,10 @@ if str(_REPO_ROOT) not in sys.path:
 # Defer heavy imports so --help is fast
 import numpy as np  # noqa: E402
 
-DEFAULT_IMAGE = _REPO_ROOT / "test_images" / "benchmark.jpg"
+DEFAULT_IMAGE = _REPO_ROOT / "test_images" / "LUT_Stress_Test_HD.png"
 TMP_DIR = _REPO_ROOT / "artifacts" / "glb-bench-tmp"
-REPORT_MD = _REPO_ROOT / "progress" / "glb-benchmark-jpg-multisize-multimode.md"
-REPORT_JSON = _REPO_ROOT / "progress" / "glb-benchmark-jpg-multisize-multimode.json"
+REPORT_MD = _REPO_ROOT / "progress" / "glb-benchmark-synthetic-multisize-multimode.md"
+REPORT_JSON = _REPO_ROOT / "progress" / "glb-benchmark-synthetic-multisize-multimode.json"
 
 # Mode -> LUT discovery (verified to load via load_lut() in the pre-flight).
 MODE_TO_LUT: dict[str, Path] = {

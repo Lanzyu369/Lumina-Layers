@@ -7,14 +7,14 @@ from pathlib import Path
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_PATH = PACKAGE_ROOT / "benchmarks" / "proxy_manifest.json"
+MANIFEST_PATH = PACKAGE_ROOT / "benchmarks" / "synthetic_manifest.json"
 
 def test_proxy_manifest_contains_reproducible_full_entrypoint_evidence() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
     assert manifest["schema_version"] == 2
     assert manifest["fixture"]["classification"] == (
-        "derived_supported_scale"
+        "owned_synthetic_scale"
     )
     assert {
         "sha256",

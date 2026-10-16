@@ -18,11 +18,14 @@ describe("slicer branding", () => {
     );
   });
 
-  it("renders a generic fallback for an unknown slicer", () => {
-    render(<SlicerLogo slicerId="unknown_slicer" />);
+  it.each(["unknown_slicer", "FlashStudio"])(
+    "renders a generic fallback when no licensed image is bundled for %s",
+    (slicerId) => {
+      render(<SlicerLogo slicerId={slicerId} />);
 
-    expect(screen.getByTestId("slicer-logo-fallback")).toBeInTheDocument();
-  });
+      expect(screen.getByTestId("slicer-logo-fallback")).toBeInTheDocument();
+    },
+  );
 
   it("keeps the plate in place and falls back when a bundled image fails", () => {
     render(<SlicerLogo slicerId="OrcaSlicer" />);
