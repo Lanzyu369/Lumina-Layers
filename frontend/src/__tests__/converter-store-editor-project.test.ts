@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ModelingMode } from "../api/types";
 import type { EditorCommitStatusResponse, PreviewResponse, SelectionDocumentResponse } from "../api/types";
 
 vi.mock("../api/converter", async () => ({
@@ -67,7 +68,7 @@ describe("portable editor project orchestration", () => {
     expect(exportEditorProject).not.toHaveBeenCalled();
   });
 
-  it("waits for a dialog recipe commit and saves the server-confirmed revisions", async () => {
+  it.each(["save", "preview"] as const)("waits for a dialog recipe commit before %s", async (action) => {
     useConverterStore.setState({ sessionId: "recipe-editor", selectionDocument: selection,
       regionReplacementCount: 1, downloadUrl: "/api/files/previous-model.3mf", color_layers: 5 });
     const commit = deferred<Awaited<ReturnType<typeof applyRecipeOverride>>>();
@@ -76,15 +77,24 @@ describe("portable editor project orchestration", () => {
       session_id: "recipe-editor", region_ids: ["region:2"], recipe: [0, 1, 0],
       layer_order: "Top2Bottom", color_layers: 3, layer_height_mm: 0.08,
     });
-    const saving = useConverterStore.getState().prepareRecipeExport();
+    const saving = action === "save"
+      ? useConverterStore.getState().prepareRecipeExport()
+      : useConverterStore.getState().submitPreview();
     expect(exportEditorProject).not.toHaveBeenCalled();
     const committedSelection = { ...selection, editor_content_revision: 6, content_revision: 2 };
     const committedRecipes = [
       { region_id: "previous-region", recipe: [1, 1, 1], layer_order: "Top2Bottom" },
       { region_id: "region:2", recipe: [0, 1, 0], layer_order: "Top2Bottom" },
     ];
+    if (action === "preview") {
+      vi.mocked(convertPreview).mockResolvedValue({ ...preview, session_id: "recipe-commit-preview" });
+    }
     vi.mocked(getEditorSelection).mockResolvedValue(committedSelection);
     vi.mocked(exportEditorProject).mockResolvedValue(new File(["checkpoint"], "editor.json.gz"));
+    vi.mocked(restoreEditorProject).mockResolvedValue({
+      ...restored, editor_content_revision: 6,
+      result: { ...restored.result, recipe_overrides: committedRecipes },
+    });
     commit.resolve({ status: "ok", message: "applied", source: "model", rgb: [100, 20, 20], lab: [30, 10, 10],
       override_count: 2, recipe_overrides: committedRecipes, preview_url: "/api/files/recipe.png", selection: committedSelection, editor_content_revision: 6 });
     await editing;
@@ -154,5 +164,103 @@ describe("portable editor project orchestration", () => {
     await previewing;
     expect(closeSession).toHaveBeenCalledWith("restored-preview");
     expect(useConverterStore.getState().sessionId).toBeNull();
+  });
+
+  it.each([ModelingMode.HIGH_FIDELITY, ModelingMode.VECTOR])(
+    "carries the current %s editor checkpoint through another preview",
+    async (modelingMode) => {
+      const checkpoint = new File(["latest edits and spatial masks"], "editor.json.gz");
+      const recipes = [{ region_id: "__editor_selection__:2", recipe: [4, 4, 4], layer_order: "Top2Bottom" }];
+      useConverterStore.setState({
+        sessionId: `active-${modelingMode}`, modeling_mode: modelingMode,
+        regionReplacementCount: 1, recipe_overrides: recipes, selectionDocument: selection,
+      });
+      vi.mocked(exportEditorProject).mockResolvedValue(checkpoint);
+      vi.mocked(restoreEditorProject).mockResolvedValue({
+        ...restored, result: { ...restored.result, recipe_overrides: recipes },
+      });
+
+      await useConverterStore.getState().submitPreview();
+
+      expect(exportEditorProject).toHaveBeenCalledWith(`active-${modelingMode}`, 3, 2);
+      expect(restoreEditorProject).toHaveBeenCalledWith("restored-preview", checkpoint, expect.any(String));
+      expect(useConverterStore.getState()).toMatchObject({
+        sessionId: "restored-preview", recipe_overrides: recipes, regionReplacementCount: 1,
+        previewImageUrl: "/api/files/edited.png", previewBaseImageUrl: "/api/files/edited.png",
+        originalPreviewUrl: preview.preview_url, imagePreviewUrl: "/source-upload.png",
+      });
+    },
+  );
+
+  it("does not replace an active editor when checkpoint capture fails", async () => {
+    useConverterStore.setState({ sessionId: "capture-failed", regionReplacementCount: 1, selectionDocument: selection });
+    vi.mocked(exportEditorProject).mockRejectedValue(new Error("capture unavailable"));
+
+    await useConverterStore.getState().submitPreview();
+
+    expect(convertPreview).not.toHaveBeenCalled();
+    expect(useConverterStore.getState()).toMatchObject({
+      sessionId: "capture-failed", regionReplacementCount: 1, error: "capture unavailable", isLoading: false,
+    });
+  });
+
+  it("keeps active edits when the fresh preview rejects their source binding", async () => {
+    const recipes = [{ region_id: "original-region", recipe: [0, 0], layer_order: "Top2Bottom" }];
+    useConverterStore.setState({ sessionId: "binding-rejected", regionReplacementCount: 1,
+      recipe_overrides: recipes, selectionDocument: selection });
+    vi.mocked(exportEditorProject).mockResolvedValue(new File(["checkpoint"], "editor.json.gz"));
+    vi.mocked(restoreEditorProject).mockRejectedValue(new Error("Project edit source or coordinates do not match"));
+
+    await useConverterStore.getState().submitPreview();
+
+    expect(closeSession).toHaveBeenCalledWith("restored-preview");
+    expect(useConverterStore.getState()).toMatchObject({
+      sessionId: "binding-rejected", recipe_overrides: recipes, regionReplacementCount: 1,
+      error: "Project edit source or coordinates do not match", isLoading: false,
+    });
+  });
+
+  it.each(["building", "restoring"] as const)("rejects a later selection while %s the replacement preview", async (phase) => {
+    useConverterStore.setState({ sessionId: "changed-selection", regionReplacementCount: 1, selectionDocument: selection });
+    vi.mocked(exportEditorProject).mockResolvedValue(new File(["checkpoint"], "editor.json.gz"));
+    const response = deferred<PreviewResponse>();
+    const restoration = deferred<EditorCommitStatusResponse>();
+    vi.mocked(convertPreview).mockReturnValue(response.promise);
+    vi.mocked(restoreEditorProject).mockReturnValue(restoration.promise);
+    const previewing = useConverterStore.getState().submitPreview();
+    await vi.waitFor(() => expect(convertPreview).toHaveBeenCalled());
+    if (phase === "restoring") {
+      response.resolve(preview);
+      await vi.waitFor(() => expect(restoreEditorProject).toHaveBeenCalled());
+    }
+    useConverterStore.setState({ selectionDocument: { ...selection, selection_revision: 4 } });
+    response.resolve(preview);
+    restoration.resolve(restored);
+    await previewing;
+
+    expect(restoreEditorProject).toHaveBeenCalledTimes(phase === "restoring" ? 1 : 0);
+    expect(closeSession).toHaveBeenCalledWith("restored-preview");
+    expect(useConverterStore.getState()).toMatchObject({
+      sessionId: "changed-selection", regionReplacementCount: 1, isLoading: false,
+      selectionDocument: { selection_revision: 4 },
+    });
+    expect(useConverterStore.getState().error).toBeTruthy();
+  });
+
+  it("does not preview an old source after its checkpoint capture was superseded", async () => {
+    useConverterStore.setState({ sessionId: "old-source", regionReplacementCount: 1, selectionDocument: selection });
+    const capture = deferred<File>();
+    vi.mocked(exportEditorProject).mockReturnValue(capture.promise);
+    const previewing = useConverterStore.getState().submitPreview();
+    await vi.waitFor(() => expect(exportEditorProject).toHaveBeenCalled());
+    const newSource = new File(["different bytes"], "different.svg");
+    useConverterStore.setState({ imageFile: newSource, sessionId: null, isLoading: false,
+      previewRequestRevision: useConverterStore.getState().previewRequestRevision + 1 });
+    capture.resolve(new File(["old edits"], "editor.json.gz"));
+    await previewing;
+
+    expect(convertPreview).not.toHaveBeenCalled();
+    expect(restoreEditorProject).not.toHaveBeenCalled();
+    expect(useConverterStore.getState()).toMatchObject({ imageFile: newSource, sessionId: null, error: null });
   });
 });

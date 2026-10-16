@@ -6887,8 +6887,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     submitPreview: async () => {
-      const state = _get();
-      if (!state.imageFile) {
+      let state: ConverterState = _get();
+      const imageFile = state.imageFile;
+      if (!imageFile) {
         set({ error: "请先上传图片" });
         return;
       }
@@ -6947,17 +6948,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         hue_enable: state.hue_enable,
       });
 
-      const portableProjectColors = clonePortableProjectColorState(state);
-      const remapReplacementRegions = colorRemapToReplacementRegions(
-        state.colorRemapMap,
-        state.palette,
-      );
-      const previewReplacementRegions = [
-        ...portableProjectColors.replacement_regions,
-        ...remapReplacementRegions,
-      ];
-      const shouldReplayGlobalReplacements = previewReplacementRegions.length > 0;
-
       set({
         isLoading: true,
         error: null,
@@ -6971,7 +6961,39 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
       });
       console.log("[DEBUG] submitPreview: cleared layerImages");
+      let freshSessionId: string | null = null;
       try {
+        // Capture the current confirmed editor, not the original import asset.
+        // 重新预览前复用保存项目的确认屏障，保留后续编辑及其空间掩码。
+        const project = state.sessionId
+          ? await _get().prepareRecipeExport()
+          : { state, editorFile: state.pendingEditorProject };
+        if (isStalePreviewRequest()) return;
+        state = project.state;
+        const editorFile = project.editorFile;
+        const editorGuard = capturePreviewCommitGuard(state, replacementPreviewEpoch, "preview");
+        const selectionRevision = state.selectionDocument?.selection_revision;
+        const requireCurrentEditor = (): void => {
+          const current = _get();
+          if (editorFile && state.sessionId && (
+            !canCommitPreviewResponse(current, editorGuard, replacementPreviewEpoch)
+            || current.selectionDocument?.selection_revision !== selectionRevision
+            || current.contentCommitStatus === "pending"
+            || current.contentCommitStatus === "unknown"
+          )) {
+            throw new Error(tRuntime("recipe_export_wait_edits"));
+          }
+        };
+        const portableProjectColors = clonePortableProjectColorState(state);
+        const remapReplacementRegions = colorRemapToReplacementRegions(
+          state.colorRemapMap,
+          state.palette,
+        );
+        const previewReplacementRegions = [
+          ...portableProjectColors.replacement_regions,
+          ...remapReplacementRegions,
+        ];
+        const shouldReplayGlobalReplacements = previewReplacementRegions.length > 0;
         const colorMode = normalizePublicColorMode(state.color_mode);
         const sourceParams =
           buildConversionSourceParams(state);
@@ -7003,28 +7025,24 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           outline_width: previewParams.outline_width,
         });
         const response = await apiConvertPreview(
-          state.imageFile,
+          imageFile,
           previewParams,
           signal,
         );
+        freshSessionId = response.session_id;
         if (isStalePreviewRequest()) {
           return;
         }
+        requireCurrentEditor();
         let restoredEditor: Awaited<ReturnType<typeof apiRestoreEditorProject>> | null = null;
-        if (state.pendingEditorProject) {
-          try {
-            restoredEditor = await apiRestoreEditorProject(response.session_id, state.pendingEditorProject, createEditorOperationId());
-          } catch (error) {
-            void closeSession(response.session_id);
-            throw error;
-          }
+        if (editorFile) {
+          restoredEditor = await apiRestoreEditorProject(response.session_id, editorFile, createEditorOperationId());
         }
         if (isStalePreviewRequest()) {
-          if (state.pendingEditorProject) void closeSession(response.session_id);
           return;
         }
+        requireCurrentEditor();
         if (restoredEditor && (restoredEditor.status !== "committed" || !restoredEditor.result?.preview_url)) {
-          void closeSession(response.session_id);
           throw new Error(tRuntime("recipe_editor_restore_unconfirmed"));
         }
         const editorResult = restoredEditor?.result;
@@ -7290,6 +7308,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           "error",
         );
       } finally {
+        if (freshSessionId && _get().sessionId !== freshSessionId) {
+          void closeSession(freshSessionId);
+        }
         if (_previewAbortController === requestController) {
           _previewAbortController = null;
           _endPreviewTimer();
