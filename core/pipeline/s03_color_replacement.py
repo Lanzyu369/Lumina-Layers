@@ -1483,7 +1483,9 @@ def run(ctx: dict) -> dict:
         for orig_hex, repl_hex in effective_color_replacements.items():
             orig_rgb_tuple = ColorReplacementManager._hex_to_color(orig_hex)
             repl_rgb_tuple = ColorReplacementManager._hex_to_color(repl_hex)
-            orig_mask = np.all(old_rgb == orig_rgb_tuple, axis=-1)
+            orig_mask = np.all(old_rgb == orig_rgb_tuple, axis=-1) & np.asarray(
+                mask_solid, dtype=bool
+            )
             if not np.any(orig_mask):
                 continue
             repl_lab = processor._rgb_to_lab(np.array([repl_rgb_tuple], dtype=np.uint8))
