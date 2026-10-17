@@ -1,6 +1,6 @@
 import { useMemo, useState, useRef, useEffect, useCallback } from "react"
 import { createPortal } from "react-dom"
-import { buildLayerImagesSourceKey, resolveConverterSourceSelection, useConverterStore } from "../../stores/converter"
+import { buildLayerImagesSourceKey, CONVERTER_ERROR_KEYS, resolveConverterSourceSelection, useConverterStore } from "../../stores/converter"
 import Button from "../ui/Button"
 import BatchResultSummary from "../ui/BatchResultSummary"
 import CanvasPreviewSurface, { type CanvasPreviewSurfaceReadyPayload } from "../ui/CanvasPreviewSurface"
@@ -191,7 +191,8 @@ export default function ActionBar() {
   const [exportNotice, setExportNotice] = useState<string | null>(null)
 
   const canSubmit = !!imageFile && sourceSelection.isReady
-  const canGenerate = canSubmit && !!sessionId
+  const largeFormatModelSurfaceConflict = largeFormatEnabled && modelSurfaceEnabled
+  const canGenerate = canSubmit && !!sessionId && !largeFormatModelSurfaceConflict
   const canBatchSubmit = batchFiles.length > 0 && sourceSelection.isReady
   const singleSourceHintKey =
     sourceVersion === "material"
@@ -715,6 +716,11 @@ export default function ActionBar() {
                 />
               </WikiTooltip>
             </div>
+            {largeFormatModelSurfaceConflict && error !== CONVERTER_ERROR_KEYS.largeFormatModelSurfaceConflict && (
+              <p role="status" className="text-xs text-amber-700 dark:text-amber-300">
+                {t("large_format_model_surface_conflict")}
+              </p>
+            )}
             <Button
               label={t("native_material_edit_button")}
               variant="secondary"

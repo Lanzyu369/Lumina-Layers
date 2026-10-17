@@ -397,6 +397,41 @@ describe("BasicSettings", () => {
     expect(state.downloadUrl).toBe("/api/files/ready.zip");
   });
 
+  it("blocks large format while model texture is enabled instead of showing a flat tile count", () => {
+    useConverterStore.setState({
+      modelSurfaceEnabled: true,
+      largeFormatEnabled: false,
+      target_width_mm: 60,
+      target_height_mm: 30,
+      tileWidthMm: 240,
+      tileHeightMm: 240,
+      previewPixelWidth: 9600,
+      previewPixelHeight: 4800,
+    } as never);
+
+    const { rerender } = render(<BasicSettings />);
+
+    expect(screen.getByRole("checkbox", { name: "大画幅模式" })).toBeDisabled();
+    expect(screen.getByText("模型贴图开启时，大画幅模式会被禁用。")).toBeInTheDocument();
+
+    // A restored or imported project can still carry both modes; the user must
+    // see the conflict and be able to turn large format off again.
+    act(() => {
+      useConverterStore.setState({ largeFormatEnabled: true } as never);
+    });
+    rerender(<BasicSettings />);
+
+    expect(screen.getByTestId("large-format-model-surface-conflict")).toHaveTextContent(
+      "大画幅模式不支持模型贴图",
+    );
+    expect(screen.queryByText(/^\d+×\d+ = \d+/)).not.toBeInTheDocument();
+    const toggle = screen.getByRole("checkbox", { name: "大画幅模式" });
+    expect(toggle).toBeEnabled();
+    fireEvent.click(toggle);
+    expect(useConverterStore.getState().largeFormatEnabled).toBe(false);
+    expect(useConverterStore.getState().modelSurfaceEnabled).toBe(true);
+  });
+
   it("counts large-format rows from the backend-derived height", () => {
     // SVG case: browser height 400 mm (2 rows) but the backend preview ratio
     // gives 520 mm, which generation actually splits into 3 rows.

@@ -2561,6 +2561,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "拼图模式开启时，大画幅模式会被禁用。",
     en: "Large Format is disabled while puzzle mode is enabled.",
   },
+  model_surface_large_format_disabled_hint: {
+    zh: "模型贴图开启时，大画幅模式会被禁用。",
+    en: "Large Format is disabled while model texture is enabled.",
+  },
+  large_format_model_surface_conflict: {
+    zh: "大画幅模式不支持模型贴图：切片只会按平面图片和普通尺寸生成，不包含上传的模型。请关闭大画幅模式或模型贴图后再生成。",
+    en: "Large Format does not support model texture: tiles would be cut from the flat image at the ordinary size, without the uploaded model. Turn off Large Format or model texture, then generate again.",
+  },
   puzzle_loop_disabled_hint: {
     zh: "拼图模式开启时，挂件环会被禁用。",
     en: "Keychain Loop is disabled while puzzle mode is enabled.",
