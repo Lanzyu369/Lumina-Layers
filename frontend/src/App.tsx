@@ -66,7 +66,6 @@ import {
   useElectronLanguageSync,
 } from "./integrations/electron";
 import {
-  HEADER_MENU_DIVIDER_CLASS,
   HEADER_MENU_PANEL_CLASS,
 } from "./components/ui/headerControls";
 
@@ -193,7 +192,7 @@ function WidgetToggles() {
                 );
               })}
 
-              <div className={HEADER_MENU_DIVIDER_CLASS} />
+              <div className="mx-2 my-2 h-0.5 shrink-0 bg-[var(--surface-divider)]" />
 
               <button
                 data-testid="widget-reset-layout"
