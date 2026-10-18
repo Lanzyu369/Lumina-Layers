@@ -348,6 +348,180 @@ describe("WorkshopFrame", () => {
     );
   });
 
+  it("connects a runtime whose single ready message precedes the frame load event", async () => {
+    vi.useFakeTimers();
+    const channel = channelFixture();
+    const onStartFailure = vi.fn();
+    render(
+      <WorkshopFrame
+        module={installedFixture()}
+        createChannel={channel.createChannel}
+        onStartFailure={onStartFailure}
+      />,
+    );
+    const iframe = screen.getByTitle(
+      "Fixture Hello",
+    ) as HTMLIFrameElement;
+    const connectPort = vi.spyOn(iframe.contentWindow!, "postMessage");
+
+    act(() => {
+      postReady(iframe.contentWindow);
+    });
+    expect(connectPort).toHaveBeenCalledTimes(1);
+    expect(connectPort).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "lumina.workshop.connect" }),
+      "*",
+      [channel.port2],
+    );
+
+    fireEvent.load(iframe);
+    act(() => {
+      postReady(iframe.contentWindow);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(10_001);
+    });
+
+    expect(channel.createChannel).toHaveBeenCalledTimes(1);
+    expect(connectPort).toHaveBeenCalledTimes(1);
+    expect(onStartFailure).not.toHaveBeenCalled();
+    expect(screen.queryByText("模块启动超时")).not.toBeInTheDocument();
+    expect(screen.getByTitle("Fixture Hello")).toBe(iframe);
+  });
+
+  it("still connects when the frame load event precedes ready", () => {
+    vi.useFakeTimers();
+    const channel = channelFixture();
+    const onStartFailure = vi.fn();
+    render(
+      <WorkshopFrame
+        module={installedFixture()}
+        createChannel={channel.createChannel}
+        onStartFailure={onStartFailure}
+      />,
+    );
+    const iframe = screen.getByTitle(
+      "Fixture Hello",
+    ) as HTMLIFrameElement;
+    const connectPort = vi.spyOn(iframe.contentWindow!, "postMessage");
+
+    fireEvent.load(iframe);
+    act(() => {
+      vi.advanceTimersByTime(9_000);
+      postReady(iframe.contentWindow);
+    });
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+
+    expect(connectPort).toHaveBeenCalledTimes(1);
+    expect(onStartFailure).not.toHaveBeenCalled();
+  });
+
+  it("rejects early ready messages from other windows or mismatched identities", async () => {
+    vi.useFakeTimers();
+    const channel = channelFixture();
+    const onStartFailure = vi.fn();
+    const outsider = document.createElement("iframe");
+    document.body.appendChild(outsider);
+    render(
+      <WorkshopFrame
+        module={installedFixture()}
+        createChannel={channel.createChannel}
+        onStartFailure={onStartFailure}
+      />,
+    );
+    const iframe = screen.getByTitle(
+      "Fixture Hello",
+    ) as HTMLIFrameElement;
+    const connectPort = vi.spyOn(iframe.contentWindow!, "postMessage");
+
+    act(() => {
+      postReady(window);
+      postReady(outsider.contentWindow);
+      postReady(null);
+      postReady(iframe.contentWindow, { moduleId: "other.module" });
+      postReady(iframe.contentWindow, { moduleVersion: "9.0.0" });
+      postReady(iframe.contentWindow, { apiVersion: "2.0.0" });
+    });
+    fireEvent.load(iframe);
+    await act(async () => {
+      vi.advanceTimersByTime(10_001);
+    });
+
+    expect(channel.createChannel).not.toHaveBeenCalled();
+    expect(connectPort).not.toHaveBeenCalled();
+    expect(onStartFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "handshake-timeout" }),
+    );
+    outsider.remove();
+  });
+
+  it("ignores ready from a replaced frame and accepts only the current one", () => {
+    const channel = channelFixture();
+    const view = render(
+      <WorkshopFrame
+        module={installedFixture()}
+        createChannel={channel.createChannel}
+      />,
+    );
+    const staleWindow = (
+      screen.getByTitle("Fixture Hello") as HTMLIFrameElement
+    ).contentWindow;
+    view.rerender(
+      <WorkshopFrame
+        module={installedFixture({ moduleVersion: "1.0.1" })}
+        createChannel={channel.createChannel}
+      />,
+    );
+    const current = screen.getByTitle(
+      "Fixture Hello",
+    ) as HTMLIFrameElement;
+    expect(current.contentWindow === staleWindow).toBe(false);
+    const connectPort = vi.spyOn(current.contentWindow!, "postMessage");
+
+    act(() => {
+      postReady(staleWindow, { moduleVersion: "1.0.1" });
+    });
+    expect(channel.createChannel).not.toHaveBeenCalled();
+
+    act(() => {
+      postReady(current.contentWindow, { moduleVersion: "1.0.1" });
+    });
+    expect(connectPort).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes an early connection on unmount without a later timeout", async () => {
+    vi.useFakeTimers();
+    const channel = channelFixture();
+    const onStartFailure = vi.fn();
+    const view = render(
+      <WorkshopFrame
+        module={installedFixture()}
+        createChannel={channel.createChannel}
+        onStartFailure={onStartFailure}
+      />,
+    );
+    const iframe = screen.getByTitle(
+      "Fixture Hello",
+    ) as HTMLIFrameElement;
+    act(() => {
+      postReady(iframe.contentWindow);
+      postReady(iframe.contentWindow);
+    });
+    expect(channel.createChannel).toHaveBeenCalledTimes(1);
+    expect(channel.port1.start).toHaveBeenCalledTimes(1);
+
+    view.unmount();
+    await act(async () => {
+      vi.advanceTimersByTime(10_001);
+    });
+
+    expect(channel.port1.close).toHaveBeenCalledTimes(1);
+    expect(channel.port1.onmessage).toBeNull();
+    expect(onStartFailure).not.toHaveBeenCalled();
+  });
+
   it("keeps one active port and closes it on unmount", async () => {
     const channel = channelFixture();
     const view = render(
