@@ -64,7 +64,7 @@ describe("BasicSettings — auto batch mode (unified uploader)", () => {
   it("does NOT render a batch mode checkbox (removed)", () => {
     render(<BasicSettings />);
     expect(
-      screen.queryByRole("checkbox", { name: "批量模式" }),
+      screen.queryByRole("switch", { name: "批量模式" }),
     ).not.toBeInTheDocument();
   });
 
@@ -84,7 +84,7 @@ describe("BasicSettings — auto batch mode (unified uploader)", () => {
     });
     render(<BasicSettings />);
     expect(
-      screen.getByRole("checkbox", { name: "上传后裁剪" }),
+      screen.getByRole("switch", { name: "上传后裁剪" }),
     ).toBeInTheDocument();
   });
 
@@ -176,7 +176,7 @@ describe("BasicSettings — auto batch mode (unified uploader)", () => {
     });
     render(<BasicSettings />);
     expect(
-      screen.queryByRole("checkbox", { name: "上传后裁剪" }),
+      screen.queryByRole("switch", { name: "上传后裁剪" }),
     ).not.toBeInTheDocument();
   });
 

@@ -33,7 +33,7 @@ describe("FridgeMagnetSettings", () => {
     render(<FridgeMagnetSettings />);
 
     expect(
-      screen.getByRole("checkbox", { name: "启用冰箱贴磁铁槽" }),
+      screen.getByRole("switch", { name: "启用冰箱贴磁铁槽" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "添加磁铁" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "自动布局" })).toBeInTheDocument();

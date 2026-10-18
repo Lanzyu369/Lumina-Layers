@@ -368,7 +368,7 @@ describe("BasicSettings", () => {
     } as never);
     const { rerender } = render(<BasicSettings />);
     expect(
-      screen.queryByRole("checkbox", { name: "在预览中显示切割轮廓" }),
+      screen.queryByRole("switch", { name: "在预览中显示切割轮廓" }),
     ).not.toBeInTheDocument();
 
     act(() => {
@@ -386,7 +386,7 @@ describe("BasicSettings", () => {
     rerender(<BasicSettings />);
 
     expect(screen.getByText("3×2 = 6 (100×150mm)")).toBeInTheDocument();
-    const toggle = screen.getByRole("checkbox", { name: "在预览中显示切割轮廓" });
+    const toggle = screen.getByRole("switch", { name: "在预览中显示切割轮廓" });
     expect(toggle).toBeChecked();
 
     fireEvent.click(toggle);
@@ -779,7 +779,7 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
-    const dynamicToggle = screen.getByRole("checkbox", {
+    const dynamicToggle = screen.getByRole("switch", {
       name: /动态调整有效叠层数/,
     });
     expect(dynamicToggle).not.toBeChecked();
@@ -847,7 +847,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     expect(
-      screen.queryByRole("checkbox", { name: "动态调整有效叠层数" }),
+      screen.queryByRole("switch", { name: "动态调整有效叠层数" }),
     ).not.toBeInTheDocument();
   });
 
@@ -1114,8 +1114,8 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
-    expect(screen.getByRole("checkbox", { name: "模型辅助匹配" })).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "仅模型匹配" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "模型辅助匹配" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "仅模型匹配" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "模型阈值" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "模型边距" })).not.toBeInTheDocument();
   });
@@ -1152,8 +1152,8 @@ describe("BasicSettings", () => {
   it("does not render predictive model controls in legacy mode", () => {
     render(<BasicSettings />);
 
-    expect(screen.queryByRole("checkbox", { name: "模型辅助匹配" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: "仅模型匹配" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "模型辅助匹配" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "仅模型匹配" })).not.toBeInTheDocument();
   });
 
   it("does not render predictive model controls for non-predictive native brands", () => {
@@ -1176,8 +1176,8 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
-    expect(screen.queryByRole("checkbox", { name: "模型辅助匹配" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: "仅模型匹配" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "模型辅助匹配" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "仅模型匹配" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "模型阈值" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "模型边距" })).not.toBeInTheDocument();
   });
@@ -1242,7 +1242,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     expect(
-      screen.getByRole("checkbox", { name: /大画幅模式/ }),
+      screen.getByRole("switch", { name: /大画幅模式/ }),
     ).toBeDisabled();
     expect(
       screen.getByRole("radio", { name: "单面" }),

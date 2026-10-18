@@ -210,9 +210,9 @@ All hover tooltip hints across all tabs follow this single source of truth. A vi
 
 | Trigger type | When used | Implementation |
 |---|---|---|
-| **Switch** | Label needs a hint | `<HelpDot title={...} description={...} />` placed inline after the label text, inside the label row |
+| **Switch** (standalone pill) | Label needs a hint | `<HelpDot title={...} description={...} />` placed inline after the label text, inside the label row |
 | **Slider** | Label or value meaning is not obvious | `Slider` component prop: `tooltip={t("...")}` — renders a visible ⓘ icon inline after the label |
-| **Checkbox** | The option's effect needs explanation | `Checkbox` component prop: `tooltip={t("...")}` — renders a visible ⓘ icon inline after the label |
+| **Checkbox** (switch row by default) | The option's effect needs explanation | `Checkbox` component prop: `tooltip={t("...")}` — renders a visible ⓘ icon inline after the label, outside the clickable label so it never toggles the switch |
 | **Dropdown** | The choice needs explanation | `Dropdown` component prop: `tooltip={t("...")}` — renders a visible ⓘ icon after the label (ignored when `labelAccessory` is set) |
 | **RadioGroup** | The group or its options need explanation | `RadioGroup` component prop: `tooltip={t("...")}` — renders a visible ⓘ icon after the group legend; multi-line hints (one line per option) are supported via `\n` |
 
@@ -424,8 +424,17 @@ Text inputs, number boxes, the slider value box and the `Dropdown` trigger use `
 
 #### Selectable rows are borderless (可选行不画边框)
 
-`Checkbox` and `RadioGroup` rows (`workstationChoiceRowClass`) are transparent at rest with a ghost boundary on hover. The checked state lives in the indicator alone — a 6px-radius square for checkboxes, a dot for radios. Rows carry `-mx-2 px-2` so the hover fill extends past the text while labels stay aligned with the sliders above them.
-复选框与单选项行静止透明，悬停显示幽灵边界；选中状态只由左侧标记表达（复选框是小圆角方形，单选框是圆点）。
+`Checkbox` and `RadioGroup` rows (`workstationChoiceRowClass`) are transparent at rest with a ghost boundary on hover. The checked state lives in the indicator alone. Rows carry `-mx-2 px-2` so the hover fill extends past the text while labels stay aligned with the sliders above them.
+复选框与单选项行静止透明，悬停显示幽灵边界；选中状态只由标记本身表达。
+
+- **On/off setting → pill switch.** `Checkbox` defaults to `appearance="switch"`: label left, ⓘ inline after it, pill on the right edge, announced as `role="switch"`. Any single feature toggle (enable relief, crop after upload, outline, coating…) uses this.
+  单个功能的开/关一律用胶囊开关：文字在左、ⓘ 紧跟文字、胶囊靠右。
+- **Item in a multi-select list → square checkbox.** Pass `appearance="checkbox"` (e.g. the legacy LUT list), where a pill on every row would read as many independent settings.
+  多选列表中的一项（如反推 LUT 列表）才用小圆角方框。
+- **One of several exclusive choices → `RadioGroup` dot.** Source type, structure mode and modeling mode stay radios; never turn a 2+-option choice into a switch.
+  多选一（颜色来源、单/双面、建模方式）保持圆点单选。
+- **The pill is never wrapped.** `Switch` / `SwitchTrack` draw only the track and knob — no bordered rounded-rect shell around them; optional `checkedLabel` text sits beside the pill, unboxed.
+  胶囊开关不再外套圆角矩形边框；状态文字直接放在胶囊旁边。
 
 #### Dependent sub-settings use an indent, not a box (从属缩进)
 

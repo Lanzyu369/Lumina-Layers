@@ -212,6 +212,7 @@ export default function LegacyLutSelector({
             {allLutOptions.map((option) => (
               <Checkbox
                 key={option.value}
+                appearance="checkbox"
                 label={(
                   <span className="block min-w-0 whitespace-normal break-words leading-6">
                     {option.label}

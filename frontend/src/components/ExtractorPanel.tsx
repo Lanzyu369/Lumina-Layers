@@ -428,6 +428,7 @@ export default function ExtractorPanel() {
                       onChange={setEightColorFullExport}
                       checkedLabel={t("ext_8color_full_export_on")}
                       uncheckedLabel={t("ext_8color_full_export_off")}
+                      ariaLabel={t("ext_8color_full_export_label")}
                     />
                   </div>
                 </div>

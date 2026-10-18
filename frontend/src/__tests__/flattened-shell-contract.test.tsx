@@ -136,7 +136,7 @@ describe("Ghost control CSS contract", () => {
 describe("Selectable rows drop their border", () => {
   it("leaves the checkbox row transparent at rest", () => {
     render(<Checkbox label="模型覆面" checked={false} onChange={vi.fn()} />);
-    const row = screen.getByText("模型覆面").closest("label");
+    const row = screen.getByText("模型覆面").closest('[class~="rounded-[10px]"]');
     expect(row).not.toBeNull();
     // Tests elsewhere locate this row by the radius token, so it must survive.
     expect(row!).toHaveClass("rounded-[10px]");

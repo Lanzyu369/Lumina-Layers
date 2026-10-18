@@ -26,13 +26,13 @@ describe("AdvancedSettings — LUT-Constrained K-Means toggle", () => {
   it("renders the precise color matching checkbox", () => {
     render(<AdvancedSettings />);
     expect(
-      screen.getByRole("checkbox", { name: /高精度颜色匹配/ }),
+      screen.getByRole("switch", { name: /高精度颜色匹配/ }),
     ).toBeInTheDocument();
   });
 
   it("defaults to unchecked", () => {
     render(<AdvancedSettings />);
-    const checkbox = screen.getByRole("checkbox", {
+    const checkbox = screen.getByRole("switch", {
       name: /高精度颜色匹配/,
     });
     expect(checkbox).not.toBeChecked();
@@ -41,7 +41,7 @@ describe("AdvancedSettings — LUT-Constrained K-Means toggle", () => {
 
   it("toggles store state on click", () => {
     render(<AdvancedSettings />);
-    const checkbox = screen.getByRole("checkbox", {
+    const checkbox = screen.getByRole("switch", {
       name: /高精度颜色匹配/,
     });
 
@@ -56,7 +56,7 @@ describe("AdvancedSettings — LUT-Constrained K-Means toggle", () => {
     useConverterStore.setState({ use_lut_constrained: true } as never);
     render(<AdvancedSettings />);
 
-    const hueCheckbox = screen.getByRole("checkbox", {
+    const hueCheckbox = screen.getByRole("switch", {
       name: /色相保护/,
     });
     expect(hueCheckbox).toBeDisabled();
@@ -65,7 +65,7 @@ describe("AdvancedSettings — LUT-Constrained K-Means toggle", () => {
 
   it("renders the auto dynamic range checkbox", () => {
     render(<AdvancedSettings />);
-    const checkbox = screen.getByRole("checkbox", {
+    const checkbox = screen.getByRole("switch", {
       name: /自动动态范围/,
     });
     expect(checkbox).toBeInTheDocument();
@@ -75,7 +75,7 @@ describe("AdvancedSettings — LUT-Constrained K-Means toggle", () => {
 
   it("toggles auto dynamic range store state on click", () => {
     render(<AdvancedSettings />);
-    const checkbox = screen.getByRole("checkbox", {
+    const checkbox = screen.getByRole("switch", {
       name: /自动动态范围/,
     });
 
@@ -88,7 +88,7 @@ describe("AdvancedSettings — LUT-Constrained K-Means toggle", () => {
 
   it("toggles high-precision 3D preview store state on click", () => {
     render(<AdvancedSettings />);
-    const checkbox = screen.getByRole("checkbox", {
+    const checkbox = screen.getByRole("switch", {
       name: /3D高精度颜色预览/,
     });
 
@@ -123,7 +123,7 @@ describe("AdvancedSettings — LUT-Constrained K-Means toggle", () => {
 
     render(<AdvancedSettings />);
 
-    const hueCheckbox = screen.getByRole("checkbox", { name: /色相保护/ });
+    const hueCheckbox = screen.getByRole("switch", { name: /色相保护/ });
     expect(hueCheckbox).toBeDisabled();
     expect(hueCheckbox).not.toBeChecked();
     expect(
@@ -143,7 +143,7 @@ describe("AdvancedSettings — LUT-Constrained K-Means toggle", () => {
 
     render(<AdvancedSettings />);
 
-    const hueCheckbox = screen.getByRole("checkbox", { name: /色相保护/ });
+    const hueCheckbox = screen.getByRole("switch", { name: /色相保护/ });
     expect(hueCheckbox).toBeEnabled();
     fireEvent.click(hueCheckbox);
     expect(useConverterStore.getState().hue_enable).toBe(true);

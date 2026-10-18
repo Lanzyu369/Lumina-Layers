@@ -1437,6 +1437,7 @@ export default function BasicSettings() {
                 {selectedNativeBrand.db_options.map((dbOption) => (
                   <Checkbox
                     key={dbOption.name}
+                    appearance="checkbox"
                     label={dbOption.name}
                     checked={selectedNativeDbSet.has(dbOption.name)}
                     onChange={() => handleNativeDbToggle(dbOption.name)}

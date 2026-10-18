@@ -6,6 +6,7 @@ import ImageUpload from "../components/ui/ImageUpload";
 import Dropdown from "../components/ui/Dropdown";
 import RadioGroup from "../components/ui/RadioGroup";
 import Checkbox from "../components/ui/Checkbox";
+import Switch from "../components/ui/Switch";
 import Button from "../components/ui/Button";
 
 describe("Accordion", () => {
@@ -276,5 +277,42 @@ describe("Selection controls", () => {
     fireEvent.click(selectableRow!);
 
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("Switch-style toggles", () => {
+  it("renders an on/off Checkbox as a named switch by default", () => {
+    render(<Checkbox label="Enable Relief" checked onChange={vi.fn()} />);
+    const toggle = screen.getByRole("switch", { name: "Enable Relief" });
+    expect(toggle).toBeChecked();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("keeps the square checkbox for multi-select list rows", () => {
+    render(
+      <Checkbox appearance="checkbox" label="A 4C" checked={false} onChange={vi.fn()} />,
+    );
+    expect(screen.getByRole("checkbox", { name: "A 4C" })).not.toBeChecked();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("does not toggle when the help dot is clicked", () => {
+    const onChange = vi.fn();
+    render(
+      <Checkbox label="Enable Relief" tooltip="Raise colors" checked={false} onChange={onChange} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Raise colors" }));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("switch", { name: "Enable Relief" })).toBeInTheDocument();
+  });
+
+  it("draws the Switch as a bare pill without a bordered shell", () => {
+    const onChange = vi.fn();
+    render(<Switch checked={false} onChange={onChange} ariaLabel="Magnifier" />);
+    const toggle = screen.getByRole("switch", { name: "Magnifier" });
+    expect(toggle.className).not.toMatch(/(^|\s)border(\s|$|-)/);
+    expect(toggle.className).not.toMatch(/(^|\s)bg-/);
+    fireEvent.click(toggle);
+    expect(onChange).toHaveBeenCalledWith(true);
   });
 });
