@@ -5,11 +5,11 @@
 <h1 align="center">Lumina Studio 2.0</h1>
 
 <p align="center">
-  Turn a favourite image into something you can hold
+  Flat full-colour FDM printing
 </p>
 
 <p align="center">
-  Convert illustrations, reaction images, and photographs into slicer-ready multi-material models.
+  Layer filaments to reproduce the colours and tonal detail of an image.
 </p>
 
 <p align="center">
@@ -52,13 +52,13 @@
   <a href="https://mastodon.social/@wluf53gzlv98666"><img src="https://img.shields.io/badge/Mastodon-Lumina%20Studio-6364FF?style=flat-square&amp;logo=mastodon&amp;logoColor=white" alt="Mastodon"></a>
 </p>
 
-## From an image to a colour FDM print
+## Bring the print closer to the original
 
-Lumina helps turn images into colour FDM prints. Try a photograph, an illustration, or a reaction image, and make a keychain, framed picture, or something like the pieces people have made below.
+Lumina Studio 2.0 layers different filaments to reproduce an image's colours and shading in a flat full-colour FDM print.
 
-It uses your material data to find layer recipes for the image and builds a 3MF for your slicer. Check the preview, change colours you do not like, and print when you are happy with the result.
+It uses calibration data from your materials to match layer recipes to the image. Compare the preview with the original, change colours you do not like, and adjust gradients or recipes in individual regions. Then export a 3MF for your slicer.
 
-Use an existing LUT preset, or photograph gradient cards to build your own material profiles. Combine your materials, adjust colour layers and layer height, and start with the filaments you already have.
+Use an existing LUT preset, or photograph gradient cards to build your own material profiles. Combine your materials and adjust colour layers and layer height.
 
 ## Printed by users
 
@@ -72,7 +72,11 @@ Use an existing LUT preset, or photograph gradient cards to build your own mater
   <img src="assets/readme/showcase-color-counts.png" width="1000" alt="User prints labelled as 8 and 12 colours, including standing character cut-outs and framed artwork">
 </p>
 
-<p align="center"><sub>The same idea works for standing cut-outs and framed pictures.</sub></p>
+<p align="center"><sub>Colour, shading, and detail with different filament combinations.</sub></p>
+
+## What you can make
+
+Start with a photo, illustration, or piece of pixel art. Make framed pictures, standing cut-outs, keychains, or fridge magnets, or add your own structural design and try something different.
 
 <p align="center">
   <img src="assets/readme/showcase-creative-objects.png" width="1000" alt="Flat pixel characters and a jointed three-dimensional pixel figure">
@@ -98,7 +102,7 @@ These are physical prints made by Lumina users; colour counts follow the makers'
 
 | What you want to do | How to do it in Lumina |
 | --- | --- |
-| Work with photos, pixel art, or lettering | Choose high-fidelity, pixel, or SVG vector mode. Crop, handle transparency, or vectorise a bitmap, then compare the colour result with the original and inspect it in 3D. |
+| Reproduce colours and image detail | Choose high-fidelity, pixel, or SVG vector mode to suit the image. Crop, handle transparency, or vectorise a bitmap, then compare the colour result with the original and inspect it in 3D. |
 | Fix a colour you do not like | Select colours or a local region, replace colours, change recipes, and adjust gradients. Undo a change, or save a JSON project or PNG share card and carry on another day. |
 | Use your own filaments | Print and photograph gradient cards, then organise profiles and palettes in the material library. Fixed colour boards and existing LUT presets are still there. |
 | Make a keychain, fridge magnet, or similar piece | Add loops, magnet cavities, outlines, or transparent coating; choose single-sided, double-sided, relief, or cloisonné construction. Which options work together depends on the mode. |
