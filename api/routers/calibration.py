@@ -28,6 +28,7 @@ from core.calibration import (
     generate_smart_board_rybw,
 )
 from core.single_stage import generate_single_stage_kit
+from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 
 router = APIRouter(prefix="/api/calibration", tags=["Calibration"])
 STATELESS_EXPORT_TTL_SECONDS = 8 * 60 * 60
@@ -250,6 +251,8 @@ def calibration_generate(
             public_detail=CALIBRATION_GENERATION_FAILED_DETAIL,
         )
 
+    placement_warnings = read_wipe_tower_placement_warnings(path)
+
     # Register files via FileRegistry
     sid = _new_stateless_export_sid("calibration")
     preview_url = None
@@ -350,6 +353,7 @@ def calibration_generate(
         preview_url=preview_url,
         layer_urls=layer_urls if layer_urls else None,
         threemf_disk_path=None,
+        warnings=placement_warnings,
     )
 
 

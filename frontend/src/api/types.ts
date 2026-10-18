@@ -770,6 +770,7 @@ export interface CalibrationResponse {
   preview_url: string | null;
   layer_urls: string[] | null;
   threemf_disk_path?: string | null;
+  warnings?: string[];
 }
 
 export interface SingleStageJobSummary {

@@ -6,7 +6,10 @@ Validates:
 - Core exception returns HTTP 500 (Requirement 3.6)
 """
 
+import io
+import json
 import logging
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -455,6 +458,94 @@ class TestParameterMapping:
         assert kwargs["printer_id"] == "bambu-p1s"
         assert kwargs["slicer"] == "OrcaSlicer"
         assert kwargs["nozzle_size"] == "0.2"
+
+
+# Placement part as written for the X2D 0.2 / 5-Color Extended Page1 no-fit case.
+_MANUAL_PLACEMENT_JSON = json.dumps(
+    {
+        "adapted": False,
+        "available": True,
+        "enabled": True,
+        "envelope_policy": "axis_aligned_bounds_with_full_brim_allowance",
+        "model_size_mm": [218.4, 218.4],
+        "placement_applied": False,
+        "printable_bounds_mm": [235.5, 256.0],
+        "reason": "no_safe_layout_without_scaling_or_disabling_tower",
+        "requires_manual_adjustment": True,
+        "reserved_envelope_mm": [232.4, 232.4],
+        "schema_version": 1,
+        "warning_code": "wipe_tower_manual_adjustment_required",
+    },
+    indent=2,
+)
+
+
+def _project_bytes(placement_json: str | None) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as project:
+        project.writestr("3D/3dmodel.model", "<model/>")
+        if placement_json is not None:
+            project.writestr("Metadata/lumina_wipe_tower_placement.json", placement_json)
+    return buffer.getvalue()
+
+
+class TestPlacementWarnings:
+    """Generated wipe-tower warnings must reach the calibration response."""
+
+    def test_zip_kit_reports_manual_layout_warning_from_each_page(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        kit_path = tmp_path / "Lumina_Calibration_Kit_5C.zip"
+        with zipfile.ZipFile(kit_path, "w") as kit:
+            kit.writestr("Page1_5C.3mf", _project_bytes(_MANUAL_PLACEMENT_JSON))
+            kit.writestr("Page2_5C.3mf", _project_bytes(_MANUAL_PLACEMENT_JSON))
+        kit_bytes = kit_path.read_bytes()
+
+        with patch(
+            "api.routers.calibration.generate_5color_extended_batch_zip",
+            return_value=(str(kit_path), _mock_preview, "OK"),
+        ):
+            response = client.post(
+                "/api/calibration/generate",
+                json={
+                    "color_mode": "5-Color Extended (1444)",
+                    "block_size": 5,
+                    "gap": 0.84,
+                    "backing_thickness": 1.2,
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["warnings"] == ["wipe_tower_manual_adjustment_required"]
+        download = client.get(body["download_url"])
+        assert download.status_code == 200
+        assert download.content == kit_bytes
+
+    def test_project_without_placement_part_reports_no_warnings(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        project_path = tmp_path / "calibration.3mf"
+        project_path.write_bytes(_project_bytes(None))
+
+        with patch(
+            "api.routers.calibration.generate_calibration_board",
+            return_value=(str(project_path), _mock_preview, "OK"),
+        ):
+            response = client.post(
+                "/api/calibration/generate",
+                json={
+                    "color_mode": "4-Color (RYBW)",
+                    "block_size": 5,
+                    "gap": 0.84,
+                    "backing_thickness": 1.2,
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json()["warnings"] == []
 
 
 
