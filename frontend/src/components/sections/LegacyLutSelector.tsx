@@ -1,7 +1,7 @@
 import { useState } from "react";
 import WikiTooltip from "../ui/WikiTooltip";
 import LutPickerDialog, { type LutPickerBrand, type LutPickerOption } from "../ui/LutPickerDialog";
-import { cx, workstationInputClass, workstationFieldLabelClass } from "../ui/panelPrimitives";
+import { cx, workstationPickerTriggerClass, workstationFieldLabelClass } from "../ui/panelPrimitives";
 
 interface LegacyLutOption {
   label: string;
@@ -190,7 +190,7 @@ export default function LegacyLutSelector({
         data-testid="lut-picker-trigger"
         aria-label={labels.manufacturer}
         className={cx(
-          workstationInputClass,
+          workstationPickerTriggerClass,
           "flex min-h-11 items-center justify-between gap-2 text-left",
           triggerEmpty && "text-slate-400 dark:text-slate-500",
         )}

@@ -56,8 +56,15 @@ export const workstationFieldLabelClass =
 
 /** Field shell: filled at rest, boundary appears on hover, blue on focus.
  * 输入框外壳：静止时只有浅灰底，悬停才出现细边框，聚焦转蓝并加焦点环。 */
+const workstationFieldShellClass =
+  "min-h-11 w-full rounded-[10px] border border-transparent bg-[var(--surface-well)] px-3.5 py-2 text-sm text-slate-800 outline-none transition-all duration-200 hover:border-[color:var(--surface-card-outline)] disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-100";
+
 export const workstationInputClass =
-  "min-h-11 w-full rounded-[10px] border border-transparent bg-[var(--surface-well)] px-3.5 py-2 text-sm text-slate-800 outline-none transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus:border-blue-400 focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-100";
+  `${workstationFieldShellClass} focus:border-blue-400 focus:ring-2 focus:ring-[var(--focus-ring)]`;
+
+/** Picker buttons show a focus ring only for keyboard navigation. */
+export const workstationPickerTriggerClass =
+  `${workstationFieldShellClass} focus-visible:border-blue-400 focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]`;
 
 /** Standalone text input (no min-height, no vertical padding): same field
  *  treatment for compact search / hex rows. 紧凑输入框，沿用同一套字段样式。 */

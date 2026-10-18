@@ -43,7 +43,7 @@ import {
   RECIPE_IMPORT_NOT_SHARE_CARD_ERROR,
   type RecipeFileSource,
 } from "../../recipe/importRecipe";
-import { StatusBanner, cardDividerClass, workstationInputClass, cx } from "../ui/panelPrimitives";
+import { StatusBanner, cardDividerClass, workstationInputClass, workstationPickerTriggerClass, cx } from "../ui/panelPrimitives";
 import { type ImageRotationDegrees } from "../../utils/imageRotation";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
 import {
@@ -313,7 +313,7 @@ function NativeDbPicker({
           onClick={() => setOpen(true)}
           data-testid="native-db-picker-trigger"
           className={cx(
-            workstationInputClass,
+            workstationPickerTriggerClass,
             "flex min-h-10 items-center justify-between gap-2 text-left",
             selectedDbNames.length === 0 && "text-slate-400 dark:text-slate-500",
           )}
