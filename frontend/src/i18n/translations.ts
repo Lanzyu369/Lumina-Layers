@@ -2154,8 +2154,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Five-Color",
   },
   "widget.basicSettings": {
-    zh: "基础设置",
-    en: "Basic Settings",
+    zh: "图像导入和基础设置",
+    en: "Image Import and Basic Settings",
   },
   "widget.modelSurfaceSettings": {
     zh: "模型贴图",
