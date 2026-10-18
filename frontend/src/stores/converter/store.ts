@@ -1596,6 +1596,23 @@ function loadEnableCrop(): boolean {
   }
 }
 
+const STRUCTURE_MODE_STORAGE_KEY = "lumina_structureMode";
+
+function loadStructureMode(): StructureMode {
+  try {
+    const stored = localStorage.getItem(STRUCTURE_MODE_STORAGE_KEY);
+    if (
+      stored === StructureModeEnum.SINGLE_SIDED ||
+      stored === StructureModeEnum.DOUBLE_SIDED
+    ) {
+      return stored;
+    }
+  } catch {
+    // Local preferences are best-effort when browser storage is unavailable.
+  }
+  return StructureModeEnum.DOUBLE_SIDED;
+}
+
 function loadLutName(): string {
   try {
     return localStorage.getItem("lumina_lastLut") ?? "";
@@ -1780,7 +1797,7 @@ export const DEFAULT_STATE: ConverterState = {
   target_height_mm: 60,
   spacer_thick: 1.2,
   backing_infill_density_percent: loadBackingInfillDensityPercent(),
-  structure_mode: StructureModeEnum.DOUBLE_SIDED,
+  structure_mode: loadStructureMode(),
   color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
   modeling_mode: ModelingModeEnum.HIGH_FIDELITY,
   color_layers: null,
@@ -3085,18 +3102,33 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     setStructureMode: (mode: StructureMode) =>
-      set((state) => ({
-        structure_mode:
-          (state.enable_fridge_magnet ||
-            state.modelSurfaceEnabled ||
-            (state.enable_relief &&
-              state.modeling_mode === ModelingModeEnum.VECTOR)) &&
-          mode !== StructureModeEnum.SINGLE_SIDED
-            ? StructureModeEnum.SINGLE_SIDED
-            : mode,
-        threemfDiskPath: null,
-        downloadUrl: null,
-      })),
+      set((state) => {
+        // Automatic single-sided constraints must not replace the user's choice.
+        if (
+          !state.enable_fridge_magnet &&
+          !state.modelSurfaceEnabled &&
+          !state.enable_relief &&
+          state.color_mode !== ColorModeEnum.FIVE_COLOR_EXT
+        ) {
+          try {
+            localStorage.setItem(STRUCTURE_MODE_STORAGE_KEY, mode);
+          } catch {
+            // Keep the current selection usable even if it cannot be saved.
+          }
+        }
+        return {
+          structure_mode:
+            (state.enable_fridge_magnet ||
+              state.modelSurfaceEnabled ||
+              (state.enable_relief &&
+                state.modeling_mode === ModelingModeEnum.VECTOR)) &&
+            mode !== StructureModeEnum.SINGLE_SIDED
+              ? StructureModeEnum.SINGLE_SIDED
+              : mode,
+          threemfDiskPath: null,
+          downloadUrl: null,
+        };
+      }),
     setColorMode: (mode: ColorMode) =>
       set((state) => ({
         color_mode: mode,
