@@ -134,6 +134,7 @@ export default function SettingsPanel() {
   // Store state (task 5.3)
   const printerModel = useSettingsStore((s) => s.printerModel);
   const language = useSettingsStore((s) => s.language);
+  const setLanguage = useSettingsStore((s) => s.setLanguage);
   const setPrinterModel = useSettingsStore((s) => s.setPrinterModel);
   const slicerSoftware = useSettingsStore((s) => s.slicerSoftware);
   const setSlicerSoftware = useSettingsStore((s) => s.setSlicerSoftware);
@@ -895,9 +896,22 @@ export default function SettingsPanel() {
             <section
               className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5`}
             >
+              <div data-testid="settings-language-section">
+                <Dropdown
+                  label={t("settings.language_label")}
+                  value={language}
+                  options={[
+                    { value: "zh", label: t("settings.language_zh") },
+                    { value: "en", label: t("settings.language_en") },
+                  ]}
+                  onChange={(value) => {
+                    if (value === "zh" || value === "en") setLanguage(value);
+                  }}
+                />
+              </div>
               <div
                 data-testid="settings-completion-notifications-section"
-                className="flex flex-col gap-4"
+                className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">

@@ -3,7 +3,6 @@ import { AnimatePresence, motion, useIsPresent } from "framer-motion";
 import { useI18n } from "../i18n/context";
 import { useOutsideInteraction } from "../hooks/useOutsideInteraction";
 import { BugReportButton } from "./BugReportButton";
-import { LanguageToggle } from "./LanguageToggle";
 import { ThemeToggle } from "./ThemeToggle";
 import { TutorialLauncherButton } from "./tutorial/TutorialLauncherButton";
 import { HeaderTooltip } from "./ui/HeaderTooltip";
@@ -156,7 +155,6 @@ export function HeaderMenu({ backendStatus, reproTicketId, onReportBug }: Header
       <AnimatePresence>
         {open && (
           <HeaderMenuPanel id={panelId} onItemSelected={() => close(true)}>
-            <LanguageToggle />
             <ThemeToggle />
             <TutorialLauncherButton />
             <BugReportButton onClick={onReportBug} />
@@ -181,7 +179,7 @@ interface HeaderMenuPanelProps {
 
 function HeaderMenuPanel({ id, onItemSelected, children }: HeaderMenuPanelProps) {
   // While fading out the panel must not take a second click, which would
-  // toggle the language or theme straight back.
+  // toggle the theme straight back.
   const isPresent = useIsPresent();
 
   return (

@@ -26,7 +26,7 @@ function trigger() {
 
 async function expectClosed() {
   await waitFor(() => {
-    expect(screen.queryByTestId("header-menu-language")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "反馈问题" })).not.toBeInTheDocument();
   });
   expect(trigger()).toHaveAttribute("aria-expanded", "false");
 }
@@ -50,7 +50,7 @@ describe("HeaderMenu", () => {
     fireEvent.click(trigger());
 
     expect(trigger()).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("button", { name: /切换语言/ })).toHaveTextContent("English");
+    expect(screen.queryByRole("button", { name: /切换语言/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "深色模式" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "新手引导" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "反馈问题" })).toBeInTheDocument();
@@ -59,15 +59,12 @@ describe("HeaderMenu", () => {
     expect(screen.queryByText("更多选项")).not.toBeInTheDocument();
   });
 
-  it("switches the language, closes and returns focus to the trigger", async () => {
+  it("keeps language selection out of the header menu", () => {
     renderMenu();
     fireEvent.click(trigger());
 
-    fireEvent.click(screen.getByTestId("header-menu-language"));
-
-    expect(useSettingsStore.getState().language).toBe("en");
-    await expectClosed();
-    expect(trigger()).toHaveFocus();
+    expect(screen.queryByTestId("header-menu-language")).not.toBeInTheDocument();
+    expect(screen.queryByText("English")).not.toBeInTheDocument();
   });
 
   it("turns dark mode on from the menu", async () => {
@@ -78,6 +75,7 @@ describe("HeaderMenu", () => {
 
     expect(useSettingsStore.getState().theme).toBe("dark");
     await expectClosed();
+    expect(trigger()).toHaveFocus();
   });
 
   it("replays the beginner tour from the menu", async () => {
@@ -105,7 +103,7 @@ describe("HeaderMenu", () => {
   it("closes on Escape and returns focus to the trigger", async () => {
     renderMenu();
     fireEvent.click(trigger());
-    screen.getByTestId("header-menu-language").focus();
+    screen.getByRole("button", { name: "深色模式" }).focus();
 
     fireEvent.keyDown(document, { key: "Escape" });
 

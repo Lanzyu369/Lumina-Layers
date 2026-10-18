@@ -87,7 +87,6 @@ vi.mock("../components/LutComparePanel", () => ({ default: () => null }));
 vi.mock("../components/FiveColorQueryPanel", () => ({ default: () => null }));
 vi.mock("../components/SettingsPanel", () => ({ default: () => null }));
 vi.mock("../components/VectorizerPanel", () => ({ default: () => null }));
-vi.mock("../components/LanguageToggle", () => ({ LanguageToggle: () => null }));
 vi.mock("../components/ThemeToggle", () => ({ ThemeToggle: () => null }));
 vi.mock("../components/BugReportButton", () => ({ BugReportButton: () => null }));
 vi.mock("../components/BugReportModal", () => ({ BugReportModal: () => null }));

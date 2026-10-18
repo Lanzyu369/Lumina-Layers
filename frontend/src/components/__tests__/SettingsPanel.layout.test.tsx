@@ -331,6 +331,30 @@ describe("SettingsPanel information architecture", () => {
     );
   });
 
+  it("selects and remembers the interface language under General", () => {
+    useSettingsStore.getState().setLanguage("en");
+    renderPanel();
+    const navigation = screen.getByRole("navigation", { name: "设置分类" });
+    fireEvent.click(within(navigation).getByRole("button", { name: /常规/ }));
+
+    const languagePicker = within(screen.getByTestId("settings-language-section"))
+      .getByRole("combobox", { name: "界面语言 / Language" });
+    expect(languagePicker).toHaveTextContent("English");
+    fireEvent.click(languagePicker);
+    fireEvent.click(screen.getByRole("option", { name: "简体中文" }));
+    expect(useSettingsStore.getState().language).toBe("zh");
+    expect(JSON.parse(localStorage.getItem("lumina-settings")!).state.language).toBe("zh");
+
+    fireEvent.click(languagePicker);
+    fireEvent.click(screen.getByRole("option", { name: "English" }));
+    expect(useSettingsStore.getState().language).toBe("en");
+    expect(JSON.parse(localStorage.getItem("lumina-settings")!).state.language).toBe("en");
+    fireEvent.click(within(navigation).getByRole("button", { name: /打印与切片/ }));
+    fireEvent.click(within(navigation).getByRole("button", { name: /常规/ }));
+    expect(within(screen.getByTestId("settings-language-section"))
+      .getByRole("combobox")).toHaveTextContent("English");
+  });
+
   it("offers the centered or left top navigation choice under General", () => {
     renderPanel();
 

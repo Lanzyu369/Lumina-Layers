@@ -475,8 +475,8 @@ A swatch, a layer thumbnail or a preview tile is *content*, not a container. A b
   顶栏变紧时按固定顺序让步：只要收起“Lumina Studio 2”标题文字能给主导航腾出所需空间，就先收起、只留标志，再考虑移动主导航；居中时主导航在不碰到两侧的前提下尽量靠近窗口中线，子导航跟随同一条中线；只有标志和工具按钮之间也放不下时，主导航才移到下一行，标题文字随之恢复。
 - **Tab strips never show a scrollbar (`NavTabStrip`):** in a window narrower than a strip, it scrolls sideways with trackpads, keyboard focus, or a vertical mouse wheel. The selected chip slides only when the selected tab changes (`layoutDependency`); header layout changes such as alignment, title collapse or wrapping move it instantly.
   导航标签条从不显示滚动条：窗口比标签条还窄时，可用触控板、键盘或鼠标竖向滚轮横向滚动。选中块只在切换标签时滑动；对齐方式、标题收起或换行等顶栏布局变化时直接到位，不重播滑动。
-- **Header tools stay minimal:** only Panel Controls sits on the right of the header row. Language, dark mode, beginner tour, bug report and the backend / reproduction status live in the three-line "More options" menu (`HeaderMenu`), whose rows carry visible labels. The menu button shows a dot only when the backend is unreachable (red) or a bug report is being reproduced (amber).
-  顶栏右侧只保留“面板控件”；语言、深色模式、新手引导、问题反馈和后端/复现状态收进三横线“更多选项”菜单，菜单项带文字。只有后端不可达（红点）或正在复现问题（橙点）时，菜单按钮才显示提示点。
+- **Header tools stay minimal:** only Panel Controls sits on the right of the header row. Dark mode, beginner tour, bug report and the backend / reproduction status live in the three-line "More options" menu (`HeaderMenu`), whose rows carry visible labels. Interface language is selected under Settings → General. The menu button shows a dot only when the backend is unreachable (red) or a bug report is being reproduced (amber).
+  顶栏右侧只保留“面板控件”；深色模式、新手引导、问题反馈和后端/复现状态收进三横线“更多选项”菜单，菜单项带文字。界面语言在“设置 → 常规”中选择。只有后端不可达（红点）或正在复现问题（橙点）时，菜单按钮才显示提示点。
 
 ## 5. Layout Principles
 

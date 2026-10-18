@@ -2843,6 +2843,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "常规",
     en: "General",
   },
+  "settings.language_label": {
+    zh: "界面语言 / Language",
+    en: "Language / 界面语言",
+  },
+  "settings.language_zh": {
+    zh: "简体中文",
+    en: "简体中文",
+  },
+  "settings.language_en": {
+    zh: "English",
+    en: "English",
+  },
   "settings.category_general_desc": {
     zh: "通知、导出与界面体验偏好",
     en: "Notifications, exports, and interface preferences",
