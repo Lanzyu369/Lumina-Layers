@@ -768,12 +768,40 @@ def lut_row_indices_for_colors(lut_data: dict, colors: np.ndarray) -> np.ndarray
     return np.asarray(indices, dtype=np.int64).reshape(-1)
 
 
-def _require_preview_cache(session_data: dict) -> dict:
+def _require_preview_cache(
+    session_data: dict,
+    fields: frozenset[str] | None = None,
+) -> dict:
+    """Return the session preview cache, loading only ``fields`` from artifacts.
+    返回会话预览缓存；artifact 缓存仅加载 ``fields`` 指定的数组。
+
+    Args:
+        session_data (dict): Session payload. (会话数据)
+        fields (frozenset[str] | None): Array fields the caller reads; ``None``
+            loads every field. Fields absent from the manifest stay absent.
+            (调用方读取的数组字段；None 加载全部；清单中不存在的字段保持缺失)
+
+    Raises:
+        HTTPException(409): No preview, or a requested artifact is missing or
+            unreadable. (尚无预览，或所需 artifact 缺失/不可读)
+    """
     cache = session_data.get("preview_cache")
     if cache is None:
         raise HTTPException(status_code=409, detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL)
     if is_preview_cache_artifact_ref(cache):
-        return hydrate_preview_cache(cache)
+        try:
+            return hydrate_preview_cache(cache, fields=None if fields is None else set(fields))
+        except (OSError, EOFError, ValueError) as exc:
+            log.warning(
+                "Preview cache artifact unavailable",
+                extra={
+                    "event": "converter_preview_cache_artifact_unavailable",
+                    "fields": sorted(fields) if fields is not None else None,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            raise HTTPException(status_code=409, detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL) from exc
     return cache
 
 
