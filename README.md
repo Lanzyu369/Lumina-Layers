@@ -114,13 +114,14 @@ The interface has Chinese and English, plus light and dark themes. Use the previ
 
 ## Your first print
 
-1. **Choose colour data.** Use an existing LUT, or select profiles and a palette that match the materials you will load.
-2. **Import an image or SVG.** Set its physical size and modelling mode, then create a preview.
-3. **Edit the result.** Compare it with the original, adjust local colours, recipes, and structure, and explicitly select a coating material if needed. Save a JSON project or PNG share card to continue later.
-4. **Select a printer and generate.** Choose the slicer, device, nozzle, and build plate in Settings, then download the 3MF or multi-plate ZIP.
-5. **Check it in the slicer.** Confirm filament slots, temperatures, layer height, wipe tower, and bed limits before slicing and printing.
+1. **Prepare material profiles.** Import profiles that match the filaments you will use, or print and photograph gradient cards, then extract and save profiles in Material Extraction.
+2. **Choose your filament combination.** Set Source Type to Material Archive, select the filaments for this print, and set the number of colour layers and layer height.
+3. **Import an image or SVG.** Set its physical size and modelling mode, then create a preview.
+4. **Edit the result.** Compare it with the original, adjust local colours, recipes, and structure, and explicitly select a coating material if needed. Save a JSON project or PNG share card to continue later.
+5. **Select a printer and generate.** Choose the slicer, device, nozzle, and build plate in Settings, then download the 3MF or multi-plate ZIP.
+6. **Check it in the slicer.** Confirm filament slots, temperatures, layer height, wipe tower, and bed limits before slicing and printing.
 
-For a first try, start with an existing preset. If your materials or important print settings differ, calibrate your own set.
+For a first try, use a few profiled filaments to print a small sample and check how closely the colours and shading match the image. Recombine existing profiles when you want a different palette; when you add a new filament, create a profile for it.
 
 ## Why calibration matters
 
