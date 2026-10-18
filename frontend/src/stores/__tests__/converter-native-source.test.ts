@@ -1744,11 +1744,17 @@ describe("native bundle converter flow", () => {
       .toBe("Brand B");
   });
 
-  it("clears legacy lut_name when switching to a manufacturer that does not contain it", () => {
+  it("keeps applied LUTs and preview intact when browsing another manufacturer", () => {
+    localStorage.setItem("lumina_lastLut", "legacy-a");
     useConverterStore.setState({
       legacyCatalogGroups: makeLegacyDetailsCatalog().groups,
       selectedLegacyManufacturer: "Brand A",
       lut_name: "legacy-a",
+      lut_names: ["legacy-a", "legacy-b"],
+      sessionId: "session-applied",
+      previewUrl: "/api/files/applied-preview",
+      color_layers: 5,
+      layer_height_mm: 0.08,
       lutListFull: [
         {
           name: "legacy-a",
@@ -1762,7 +1768,15 @@ describe("native bundle converter flow", () => {
 
     expect(useConverterStore.getState().selectedLegacyManufacturer)
       .toBe("Brand B");
-    expect(useConverterStore.getState().lut_name).toBe("");
+    expect(useConverterStore.getState()).toMatchObject({
+      lut_name: "legacy-a",
+      lut_names: ["legacy-a", "legacy-b"],
+      sessionId: "session-applied",
+      previewUrl: "/api/files/applied-preview",
+      color_layers: 5,
+      layer_height_mm: 0.08,
+    });
+    expect(localStorage.getItem("lumina_lastLut")).toBe("legacy-a");
   });
 
   it("filters the native catalog down to the BambuLab PLA brand", async () => {

@@ -4774,17 +4774,13 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "图像旋转失败",
     en: "Failed to rotate image",
   },
-  basic_lut_label: {
-    zh: "LUT",
-    en: "LUT",
-  },
   basic_lut_manufacturer_label: {
-    zh: "LUT 品牌",
-    en: "LUT Brand",
+    zh: "LUT 数据库",
+    en: "LUT Database",
   },
   basic_lut_manufacturer_placeholder: {
-    zh: "选择 LUT 品牌",
-    en: "Select a LUT brand",
+    zh: "选择 LUT 数据库…",
+    en: "Choose a LUT database…",
   },
   basic_lut_unlabeled_brand: {
     zh: "个人",
@@ -4801,10 +4797,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_lut_no_brand_hint: {
     zh: "请先选择 LUT 品牌",
     en: "Pick a LUT brand first",
-  },
-  basic_lut_multi_select: {
-    zh: "同组多选 LUT",
-    en: "Multi-select LUTs in this group",
   },
   basic_lut_selected_count: {
     zh: "已选",
@@ -5466,6 +5458,38 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "未选择数据库",
     en: "No databases selected",
   },
+  basic_lut_picker_open: {
+    zh: "选择 LUT 数据库…",
+    en: "Choose LUT databases…",
+  },
+  basic_lut_picker_title: {
+    zh: "选择 LUT",
+    en: "Choose LUT",
+  },
+  basic_lut_picker_search_placeholder: {
+    zh: "搜索 LUT…",
+    en: "Search LUTs…",
+  },
+  basic_lut_picker_all_groups: {
+    zh: "全部色彩模式",
+    en: "All color modes",
+  },
+  basic_lut_picker_no_match: {
+    zh: "未找到匹配的 LUT",
+    en: "No matching LUTs",
+  },
+  basic_lut_picker_deselect_all: {
+    zh: "清空选择",
+    en: "Deselect all",
+  },
+  basic_lut_picker_confirm: {
+    zh: "确认",
+    en: "Confirm",
+  },
+  basic_lut_picker_cancel: {
+    zh: "取消",
+    en: "Cancel",
+  },
   basic_native_mode_label: {
     zh: "动态层模式",
     en: "Layer Mode",
@@ -5533,10 +5557,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_model_runtime_defaults_hint: {
     zh: "留空则使用运行时默认值。",
     en: "Leave blank to use runtime defaults.",
-  },
-  basic_dynamic_layers_legacy_hint: {
-    zh: "当前为旧 LUT，不支持动态层数或自定义配方。",
-    en: "This legacy LUT does not support dynamic layers or custom recipes.",
   },
   basic_width: {
     zh: "宽度",

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import BasicSettings from "../components/sections/BasicSettings";
 import BedSizeSelector from "../components/sections/BedSizeSelector";
 import { useConverterStore } from "../stores/converter";
@@ -666,8 +666,8 @@ describe("BasicSettings", () => {
     expect(screen.getByText("来源类型")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "传统 LUT" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "反推LUT" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "LUT 品牌" })).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "LUT" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("lut-picker-trigger")).toBeInTheDocument();
+    expect(screen.getByText("LUT 数据库")).toBeInTheDocument();
   });
 
   it("keeps a Snapmaker LUT independent from the configured Bambu printer", async () => {
@@ -723,8 +723,10 @@ describe("BasicSettings", () => {
       </>,
     );
 
-    fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
-    fireEvent.click(screen.getByRole("option", { name: "snapmaker" }));
+    fireEvent.click(screen.getByTestId("lut-picker-trigger"));
+    // Brand sidebar opens inside the dialog; click snapmaker brand
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "snapmaker" }));
 
     await waitFor(() => {
       expect(useConverterStore.getState().selectedLegacyManufacturer)
@@ -732,7 +734,7 @@ describe("BasicSettings", () => {
     });
     expect(useSettingsStore.getState().printerModel).toBe("bambu-p1s");
     expect(useConverterStore.getState().bed_label).toBe("Bambu Lab P1S");
-    expect(screen.getByText("LUT 品牌")).toBeInTheDocument();
+    expect(screen.getAllByText("LUT 数据库").length).toBeGreaterThan(0);
     expect(screen.getByText("打印机热床")).toBeInTheDocument();
     expect(
       screen.getByText("Bambu Lab P1S · 256×256 毫米"),
@@ -924,43 +926,46 @@ describe("BasicSettings", () => {
   it("shows brand options from the loaded legacy details catalog", () => {
     render(<BasicSettings />);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
+    // Open the picker dialog and check brand options in the sidebar
+    fireEvent.click(screen.getByTestId("lut-picker-trigger"));
 
-    expect(screen.getByRole("option", { name: "Brand A" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Brand B" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "个人" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: "Brand A" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Brand B" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "个人" })).toBeInTheDocument();
   });
 
   it("enables grouped LUT choices after selecting a legacy brand", async () => {
     render(<BasicSettings />);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
-    fireEvent.click(screen.getByRole("option", { name: "Brand A" }));
+    // Open picker dialog and select a brand from the sidebar
+    fireEvent.click(screen.getByTestId("lut-picker-trigger"));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Brand A" }));
 
+    // Brand selection is immediate (sync store update)
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "LUT 品牌" }))
-        .toHaveTextContent("Brand A");
-      expect(screen.getByText(/品牌信息/)).toBeInTheDocument();
+      expect(useConverterStore.getState().selectedLegacyManufacturer)
+        .toBe("Brand A");
     });
-    expect(useConverterStore.getState().selectedLegacyManufacturer)
-      .toBe("Brand A");
     expect(useConverterStore.getState().legacyCatalogGroups).toHaveLength(3);
 
+    // LUT options should now appear in the dialog
     await waitFor(() => {
-      expect(screen.getByText(/品牌信息/)).toBeInTheDocument();
-      expect(screen.getAllByText(/数据库/).length).toBeGreaterThan(0);
+      expect(within(dialog).getByText("A 4C")).toBeInTheDocument();
+      expect(within(dialog).getByText("A 4C Alt")).toBeInTheDocument();
+      expect(within(dialog).getByText("A 8C")).toBeInTheDocument();
     });
-    const fourColor = screen.getByRole("checkbox", { name: "A 4C" });
-    const alternateFourColor = screen.getByRole("checkbox", {
-      name: "A 4C Alt",
-    });
-    const eightColor = screen.getByRole("checkbox", { name: "A 8C" });
-    expect(fourColor).toBeEnabled();
-    expect(alternateFourColor).toBeEnabled();
-    expect(eightColor).toBeEnabled();
 
-    fireEvent.click(fourColor);
-    fireEvent.click(eightColor);
+    const fourColor = within(dialog).getAllByRole("checkbox").find((el) => el.textContent?.includes("A 4C") && !el.textContent?.includes("Alt"));
+    const eightColor = within(dialog).getAllByRole("checkbox").find((el) => el.textContent?.includes("A 8C"));
+    expect(fourColor).toBeDefined();
+    expect(eightColor).toBeDefined();
+
+    fireEvent.click(fourColor!);
+    fireEvent.click(eightColor!);
+    // Confirm selection
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认" }));
 
     await waitFor(() => {
       expect(useConverterStore.getState().lut_names).toEqual([
@@ -970,20 +975,76 @@ describe("BasicSettings", () => {
     });
   });
 
+  it("applies cross-brand LUTs together and leaves applied selection intact on cancel", async () => {
+    useConverterStore.setState({
+      lut_name: "Brand A - A4",
+      lut_names: ["Brand A - A4"],
+      selectedLegacyManufacturer: "Brand A",
+      sessionId: "existing-preview",
+    });
+    render(<BasicSettings />);
+    fireEvent.click(screen.getByTestId("lut-picker-trigger"));
+    let dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Brand B" }));
+    expect(useConverterStore.getState().sessionId).toBe("existing-preview");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /B BW/ }));
+    expect(useConverterStore.getState().lut_names).toEqual(["Brand A - A4"]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认" }));
+    await waitFor(() => {
+      expect(useConverterStore.getState().lut_names)
+        .toEqual(["Brand A - A4", "Brand B - BW"]);
+    });
+    const trigger = screen.getByTestId("lut-picker-trigger");
+    expect(trigger).toHaveTextContent("A 4C");
+    expect(trigger).toHaveTextContent("B BW");
+    fireEvent.click(trigger);
+    dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Brand B" }));
+    expect(within(dialog).getByRole("checkbox", { name: /B BW/ }))
+      .toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /B BW/ }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(useConverterStore.getState().lut_names)
+      .toEqual(["Brand A - A4", "Brand B - BW"]);
+  });
+
   it("submits the LUTManager name when a catalog LUT path maps to a shorter legacy LUT name", async () => {
+    // Ensure clean slate so staged starts empty
+    useConverterStore.setState({
+      lut_name: "",
+      lut_names: [],
+      selectedLegacyManufacturer: "",
+    } as never);
+
     render(<BasicSettings />);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
-    fireEvent.click(screen.getByRole("option", { name: "Brand A" }));
+    // Open picker dialog and select Brand A from sidebar
+    fireEvent.click(screen.getByTestId("lut-picker-trigger"));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Brand A" }));
 
-    const fourColor = await screen.findByRole("checkbox", { name: "A 4C" });
-    fireEvent.click(fourColor);
+    // Wait for A 4C option to appear (not Alt)
+    await waitFor(() => {
+      expect(within(dialog).getAllByRole("checkbox").some(
+        (el) => el.textContent?.includes("A 4C") && !el.textContent?.includes("Alt"),
+      )).toBe(true);
+    });
+
+    // Click only "A 4C" (not Alt); staged starts empty so this adds it
+    const allCheckboxes = within(dialog).getAllByRole("checkbox");
+    const fourColor = allCheckboxes.find(
+      (el) => el.textContent?.includes("A 4C") && !el.textContent?.includes("Alt"),
+    );
+    expect(fourColor).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(fourColor!);
+    expect(fourColor).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认" }));
 
     await waitFor(() => {
       expect(useConverterStore.getState().lut_name).toBe("Brand A - A4");
     });
-    expect(fourColor).toBeChecked();
-    expect(screen.getByText(/数据库/).parentElement).toHaveTextContent("A 4C");
+    expect(screen.getByTestId("lut-picker-trigger")).toHaveTextContent("A 4C");
   });
 
   it("hides LUT choices until LUTManager names are mapped", () => {
@@ -996,7 +1057,11 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
-    expect(screen.queryByRole("checkbox", { name: "A 4C" })).not.toBeInTheDocument();
+    // No LUT options shown on trigger (no chips)
+    const trigger = screen.getByTestId("lut-picker-trigger");
+    expect(trigger).not.toHaveTextContent("A 4C");
+    // Open the dialog to confirm loading hint
+    fireEvent.click(trigger);
     expect(screen.getByText("品牌目录加载中…")).toBeInTheDocument();
     expect(useConverterStore.getState().lut_name).toBe("");
   });
@@ -1010,8 +1075,9 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
+    // After catalog loads, Brand B chip should appear on the trigger
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "LUT 品牌" }))
+      expect(screen.getByTestId("lut-picker-trigger"))
         .toHaveTextContent("Brand B");
     });
   });

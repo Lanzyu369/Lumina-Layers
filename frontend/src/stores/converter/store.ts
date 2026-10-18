@@ -2687,41 +2687,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     setLegacyManufacturer: (name: string) => {
-      const state = _get();
-      const index = buildLutCatalogIndex(state.legacyCatalogGroups);
-      const currentLutInfo = state.lut_name
-        ? state.lutListFull.find((l) => l.name === state.lut_name)
-        : null;
-      const currentLocation = currentLutInfo
-        ? findLutLocationByPath(index, currentLutInfo.path)
-        : null;
-      const keepCurrentLut = currentLocation?.manufacturer === name;
-      const updates: Partial<ConverterState> = {
-        source_version: "legacy",
+      // Browsing the catalog must not change the applied LUTs or preview.
+      set({
         selectedLegacyManufacturer: name,
-        selectedNativeBrandKey: "",
-        selectedNativeDbNames: [],
-      };
-
-      if (!keepCurrentLut) {
-        updates.lut_name = "";
-        updates.lut_names = [];
-        updates.selectedLutInfo = null;
-        updates.color_layers = null;
-        updates.layer_height_mm = null;
-        updates.model_enable = false;
-        updates.model_only = false;
-        updates.model_threshold = null;
-        updates.model_margin = null;
-        Object.assign(updates, buildPreviewSessionResetState(state, true));
-        try {
-          localStorage.removeItem("lumina_lastLut");
-        } catch {
-          /* noop */
-        }
-      }
-
-      set(updates);
+      });
     },
 
     setSourceVersion: (version: SourceVersion) =>

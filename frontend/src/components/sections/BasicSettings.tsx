@@ -747,6 +747,13 @@ export default function BasicSettings() {
       };
     });
   }, [lutIndex, selectedLegacyManufacturer, t, lutNameByPath]);
+  const allLegacyLutOptions = useMemo(
+    () => legacyCatalogGroups.flatMap((group) => group.items.flatMap((item) => {
+      const value = lutNameByPath.get(normalizeLutPath(item.path));
+      return value ? [{ label: item.name, value }] : [];
+    })),
+    [legacyCatalogGroups, lutNameByPath],
+  );
   const selectedLegacyBrandInfo = useMemo(() => {
     if (!selectedLegacyManufacturer) {
       return null;
@@ -1307,6 +1314,7 @@ export default function BasicSettings() {
             selectedLutNames={lut_names.length > 0 ? lut_names : (lut_name ? [lut_name] : [])}
             manufacturerOptions={manufacturerOptions}
             groupedLutOptions={groupedLutOptions}
+            allLutOptions={allLegacyLutOptions}
             brandInfo={selectedLegacyBrandInfo}
             onManufacturerChange={setLegacyManufacturer}
             onLutChange={setLutName}
@@ -1316,23 +1324,26 @@ export default function BasicSettings() {
             loading={legacyCatalogLoading}
             lutLoading={lutListLoading}
             refreshing={isRefreshingLut}
-            compact={workspace.isCompact}
             labels={{
               manufacturer: t("basic_lut_manufacturer_label"),
               manufacturerPlaceholder: t("basic_lut_manufacturer_placeholder"),
-              lut: t("basic_lut_label"),
               lutPlaceholder: t("basic_lut_lut_placeholder"),
               refreshTooltip: t("basic_lut_refresh_tooltip"),
               upload: `+ ${t("basic_lut_upload")}`,
               loadingHint: t("basic_brand_loading"),
               noBrandHint: t("basic_lut_no_brand_hint"),
-              multiSelect: t("basic_lut_multi_select"),
               selectedCount: t("basic_lut_selected_count"),
               brandInfo: t("basic_native_brand_summary_label"),
               materialType: t("basic_native_material_label"),
               vendor: t("basic_native_vendor_label"),
-              database: t("basic_native_db_label"),
-              databasePlaceholder: t("basic_native_db_placeholder"),
+              dialogTitle: t("basic_lut_picker_title"),
+              dialogSearchPlaceholder: t("basic_lut_picker_search_placeholder"),
+              dialogAllGroups: t("basic_lut_picker_all_groups"),
+              dialogNoMatch: t("basic_lut_picker_no_match"),
+              dialogDeselectAll: t("basic_lut_picker_deselect_all"),
+              dialogConfirm: t("basic_lut_picker_confirm"),
+              dialogCancel: t("basic_lut_picker_cancel"),
+              openPicker: t("basic_lut_picker_open"),
             }}
           />
           <input
@@ -1351,43 +1362,35 @@ export default function BasicSettings() {
             </div>
           )}
 
-          {lut_name && selectedLutInfo && (
+          {lut_name && selectedLutInfo && supportsDynamicLayers && (
             <div className="-mt-1 flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
               <div className="text-xs text-slate-500 dark:text-slate-400">
                 {t("basic_source_kind_label")}: {selectedLutInfo.source_kind ?? "legacy_lookup"}
               </div>
-              {supportsDynamicLayers ? (
-                <>
-                  <Slider
-                    label={t("basic_color_layers_label")}
-                    tooltip={t("basic_color_layers_hint")}
-                    wikiPath={WIKI_DOCS.legacyLutSource}
-                    value={color_layers ?? selectedLutInfo.max_color_layers ?? 5}
-                    min={1}
-                    max={10}
-                    step={1}
-                    onChange={(value) => setColorLayers(Math.round(value))}
-                  />
-                  <Dropdown
-                    label={t("basic_layer_height_label")}
-                    tooltip={t("basic_layer_height_hint")}
-                    wikiPath={WIKI_DOCS.legacyLutSource}
-                    value={String(layer_height_mm ?? selectedLutInfo.layer_height_mm ?? 0.08)}
-                    options={supportedLayerHeightOptions}
-                    onChange={(value) => setLayerHeightMm(Number(value))}
-                  />
-                  {supportedModes.length > 0 && (
-                    <div className="text-xs text-slate-500 dark:text-slate-400">
-                      {t("basic_supported_modes_label")}:{" "}
-                      {supportedModes
-                        .map((mode) => `${mode.color_layers}L @ ${mode.layer_height_mm.toFixed(2)}mm`)
-                        .join(", ")}
-                    </div>
-                  )}
-                </>
-              ) : (
+              <Slider
+                label={t("basic_color_layers_label")}
+                tooltip={t("basic_color_layers_hint")}
+                wikiPath={WIKI_DOCS.legacyLutSource}
+                value={color_layers ?? selectedLutInfo.max_color_layers ?? 5}
+                min={1}
+                max={10}
+                step={1}
+                onChange={(value) => setColorLayers(Math.round(value))}
+              />
+              <Dropdown
+                label={t("basic_layer_height_label")}
+                tooltip={t("basic_layer_height_hint")}
+                wikiPath={WIKI_DOCS.legacyLutSource}
+                value={String(layer_height_mm ?? selectedLutInfo.layer_height_mm ?? 0.08)}
+                options={supportedLayerHeightOptions}
+                onChange={(value) => setLayerHeightMm(Number(value))}
+              />
+              {supportedModes.length > 0 && (
                 <div className="text-xs text-slate-500 dark:text-slate-400">
-                  {t("basic_dynamic_layers_legacy_hint")}
+                  {t("basic_supported_modes_label")}:{" "}
+                  {supportedModes
+                    .map((mode) => `${mode.color_layers}L @ ${mode.layer_height_mm.toFixed(2)}mm`)
+                    .join(", ")}
                 </div>
               )}
             </div>
