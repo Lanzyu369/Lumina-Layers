@@ -5490,6 +5490,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "取消",
     en: "Cancel",
   },
+  basic_native_db_picker_title: {
+    zh: "选择数据库",
+    en: "Choose Databases",
+  },
+  basic_native_db_picker_search_placeholder: {
+    zh: "搜索数据库…",
+    en: "Search databases…",
+  },
+  basic_native_db_picker_no_match: {
+    zh: "未找到匹配的数据库",
+    en: "No matching databases",
+  },
   basic_native_mode_label: {
     zh: "动态层模式",
     en: "Layer Mode",

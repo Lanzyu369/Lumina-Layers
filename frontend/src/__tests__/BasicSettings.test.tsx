@@ -1093,16 +1093,29 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
+    // Brand dropdown stays inline in native mode
     expect(screen.getByRole("combobox", { name: "品牌" })).toBeInTheDocument();
     expect(screen.getByText(/品牌信息/)).toBeInTheDocument();
     expect(screen.getAllByText("Bambu PLA")).not.toHaveLength(0);
     expect(screen.getByText("材质类型: PLA")).toBeInTheDocument();
     expect(screen.getByText("供应商: Bambu Lab")).toBeInTheDocument();
     expect(screen.getByText(/数据库/)).toBeInTheDocument();
-    expect(screen.getByText("DB-A")).toBeInTheDocument();
-    expect(screen.getByText("DB-B")).toBeInTheDocument();
-    expect(screen.getByText("DB-C")).toBeInTheDocument();
 
+    // DB list is now in the db picker trigger, not inline
+    // Selected DBs (DB-B, DB-C) appear as chips on the native-db-picker-trigger
+    const dbTrigger = screen.getByTestId("native-db-picker-trigger");
+    expect(dbTrigger).toHaveTextContent("DB-B");
+    expect(dbTrigger).toHaveTextContent("DB-C");
+
+    // All DB options are accessible by opening the picker dialog
+    fireEvent.click(dbTrigger);
+    const dbDialog = screen.getByTestId("native-db-picker-dialog");
+    expect(within(dbDialog).getByText("DB-A")).toBeInTheDocument();
+    expect(within(dbDialog).getByText("DB-B")).toBeInTheDocument();
+    expect(within(dbDialog).getByText("DB-C")).toBeInTheDocument();
+
+    // Brand dropdown still works
+    fireEvent.keyDown(document, { key: "Escape" });
     fireEvent.click(screen.getByRole("combobox", { name: "品牌" }));
     expect(screen.getByRole("listbox")).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Bambu PLA" })).toBeInTheDocument();

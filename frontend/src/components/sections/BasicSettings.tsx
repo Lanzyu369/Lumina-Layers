@@ -1,4 +1,6 @@
-import { useRef, useEffect, useMemo, useState, useCallback } from "react";
+import { useRef, useEffect, useMemo, useState, useCallback, useId } from "react";
+import { createPortal } from "react-dom";
+import { XMarkIcon } from "@heroicons/react/24/outline";
 import { useShallow } from "zustand/react/shallow";
 import {
   useConverterStore,
@@ -33,7 +35,7 @@ import MaterialSolverCacheDialog from "../MaterialSolverCacheDialog";
 import LegacyLutSelector from "./LegacyLutSelector";
 import { tRuntime } from "../../i18n/runtime";
 import { useI18n } from "../../i18n/context";
-import { useWorkspaceMode } from "../../hooks/useWorkspaceMode";
+import { useWorkspaceMode as _useWorkspaceMode } from "../../hooks/useWorkspaceMode";
 import { prepareImport, applyImport, revokeImportCoverUrl } from "../../recipe/importFlow";
 import type { ImportPreview } from "../../recipe/importFlow";
 import {
@@ -41,7 +43,7 @@ import {
   RECIPE_IMPORT_NOT_SHARE_CARD_ERROR,
   type RecipeFileSource,
 } from "../../recipe/importRecipe";
-import { StatusBanner, cardDividerClass, workstationInputClass } from "../ui/panelPrimitives";
+import { StatusBanner, cardDividerClass, workstationInputClass, cx } from "../ui/panelPrimitives";
 import { type ImageRotationDegrees } from "../../utils/imageRotation";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
 import {
@@ -204,6 +206,269 @@ function legacyBucketLabel(bucket: ColorModeBucket, t: (key: string) => string):
   return key ? t(key) : bucket;
 }
 
+// ---------------------------------------------------------------------------
+// NativeDbPicker — compact trigger + staged dialog for native db selection
+// ---------------------------------------------------------------------------
+interface NativeDbPickerProps {
+  dbOptions: { name: string; path: string; color_mode: string }[];
+  selectedDbNames: string[];
+  onConfirm: (names: string[]) => void;
+  labels: {
+    dbLabel: string;
+    dbPlaceholder: string;
+    dialogTitle: string;
+    searchPlaceholder: string;
+    noMatch: string;
+    deselectAll: string;
+    confirm: string;
+    cancel: string;
+    selectedCount: string;
+  };
+  visibleDbs: string[];
+  overflowDb: number;
+}
+
+const FOCUSABLE_SELECTOR_DB = [
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+function NativeDbPicker({
+  dbOptions,
+  selectedDbNames,
+  onConfirm,
+  labels,
+  visibleDbs,
+  overflowDb,
+}: NativeDbPickerProps) {
+  const [open, setOpen] = useState(false);
+  const [staged, setStaged] = useState<string[]>(selectedDbNames);
+  const [query, setQuery] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const prevFocusRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+
+  useEffect(() => {
+    if (!open) return undefined;
+    prevFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setStaged(selectedDbNames);
+    setQuery("");
+    const timer = window.setTimeout(() => searchRef.current?.focus(), 0);
+    return () => {
+      window.clearTimeout(timer);
+      prevFocusRef.current?.focus();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Keep staged in sync when dialog is closed (recipe import etc.)
+  useEffect(() => {
+    if (!open) setStaged(selectedDbNames);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDbNames]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); setOpen(false); return; }
+      if (e.key !== "Tab") return;
+      const container = dialogRef.current;
+      if (!container) return;
+      const focusable = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR_DB));
+      if (focusable.length === 0) { e.preventDefault(); container.focus(); return; }
+      const first = focusable[0]; const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && active === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+      else if (!container.contains(active)) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [open]);
+
+  const stagedSet = useMemo(() => new Set(staged), [staged]);
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? dbOptions.filter((o) => o.name.toLowerCase().includes(q)) : dbOptions;
+  }, [dbOptions, query]);
+
+  const handleToggle = (name: string) => {
+    setStaged((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return dbOptions.map((o) => o.name).filter((n) => next.has(n));
+    });
+  };
+
+  return (
+    <>
+      {/* Trigger */}
+      <div className="flex flex-col gap-1">
+        <span className="text-xs text-slate-500 dark:text-slate-400">{labels.dbLabel}</span>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          data-testid="native-db-picker-trigger"
+          className={cx(
+            workstationInputClass,
+            "flex min-h-10 items-center justify-between gap-2 text-left",
+            selectedDbNames.length === 0 && "text-slate-400 dark:text-slate-500",
+          )}
+        >
+          <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+            {visibleDbs.map((name) => (
+              <span key={name} className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-500/15 dark:text-blue-200">
+                {name}
+              </span>
+            ))}
+            {overflowDb > 0 && (
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                +{overflowDb}
+              </span>
+            )}
+            {selectedDbNames.length === 0 && (
+              <span className="text-sm">{labels.dbPlaceholder}</span>
+            )}
+          </span>
+          {selectedDbNames.length > 0 && (
+            <span className="shrink-0 text-xs text-slate-400 dark:text-slate-500">
+              {labels.selectedCount}: {selectedDbNames.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* Dialog */}
+      {open && createPortal(
+        <div
+          role="presentation"
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 backdrop-blur-sm"
+          style={{ background: "var(--surface-scrim)" }}
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
+        >
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
+            tabIndex={-1}
+            data-testid="native-db-picker-dialog"
+            className="flex w-[min(36rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-[24px] border shadow-2xl"
+            style={{
+              maxHeight: "calc(100vh - 4rem)",
+              borderColor: "var(--surface-outline)",
+              background: "var(--surface-panel-strong)",
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b px-5 py-3.5" style={{ borderColor: "var(--surface-outline)" }}>
+              <h2 id={titleId} className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                {labels.dialogTitle}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                aria-label={labels.cancel}
+                className="ghost-control inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 dark:text-slate-400"
+              >
+                <XMarkIcon className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            {/* Search */}
+            <div className="border-b px-4 py-3" style={{ borderColor: "var(--surface-outline)" }}>
+              <input
+                ref={searchRef}
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={labels.searchPlaceholder}
+                data-testid="native-db-picker-search-input"
+                className={cx(workstationInputClass, "min-h-9 py-1.5")}
+              />
+            </div>
+
+            {/* List */}
+            <div className="dock-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
+              {visible.length === 0 ? (
+                <p className="flex min-h-24 items-center justify-center text-sm text-slate-500 dark:text-slate-400">
+                  {labels.noMatch}
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {visible.map((opt) => {
+                    const checked = stagedSet.has(opt.name);
+                    return (
+                      <button
+                        key={opt.name}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={checked}
+                        onClick={() => handleToggle(opt.name)}
+                        className={cx(
+                          "flex items-center gap-3 rounded-[12px] border px-3 py-2.5 text-left text-sm transition-all duration-150",
+                          "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]",
+                          checked
+                            ? "border-blue-300/80 bg-blue-50/60 dark:border-blue-400/60 dark:bg-blue-500/10"
+                            : "border-slate-200/80 bg-white/60 hover:border-[color:var(--surface-card-outline)] hover:bg-[var(--nav-chip-hover)] dark:border-slate-700/80 dark:bg-slate-900/55",
+                        )}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={cx(
+                            "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-all duration-200",
+                            checked
+                              ? "border-blue-500 bg-blue-500"
+                              : "border-slate-300/80 bg-white dark:border-slate-600/80 dark:bg-slate-800",
+                          )}
+                        >
+                          <span className={cx("h-2.5 w-2.5 rounded-sm", checked ? "bg-white" : "bg-transparent")} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium text-slate-800 dark:text-slate-100">{opt.name}</span>
+                          <span className="block truncate text-[11px] text-slate-500 dark:text-slate-400">{opt.color_mode}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between gap-3 border-t px-5 py-3" style={{ borderColor: "var(--surface-outline)" }}>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                <span aria-live="polite">
+                  {labels.selectedCount}: <span className="font-semibold text-slate-800 dark:text-slate-200">{staged.length}</span>
+                </span>
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  label={labels.deselectAll}
+                  onClick={() => setStaged([])}
+                  disabled={staged.length === 0}
+                  variant="secondary"
+                  size="sm"
+                />
+                <Button
+                  label={labels.confirm}
+                  onClick={() => { onConfirm(staged); setOpen(false); }}
+                  size="sm"
+                />
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 function ColorModeDots({ mode }: { mode: string }) {
   if (mode === ColorMode.MERGED) {
     return (
@@ -235,7 +500,6 @@ function ColorModeDots({ mode }: { mode: string }) {
 
 export default function BasicSettings() {
   const { t } = useI18n();
-  const workspace = useWorkspaceMode();
 
   const structureModeOptions = Object.values(StructureMode).map((v) => ({
     label: t(`structure_mode.${v}`),
@@ -939,7 +1203,6 @@ export default function BasicSettings() {
   const selectedNativeSupportedModes = sourceSelection.native.supported_modes;
   const selectedNativeMode = sourceSelection.native.supported_mode;
   const selectedNativePredictiveModelAvailable = sourceSelection.native.predictive_model_available;
-  const selectedNativeDbSet = useMemo(() => new Set(sourceSelection.native.db_names), [sourceSelection.native.db_names]);
   const nativeLayerCount = selectedNativeMode?.color_layers ?? color_layers ?? 5;
   const nativeLayerHeightMm = layer_height_mm ?? selectedNativeMode?.layer_height_mm ?? 0.08;
 
@@ -1004,18 +1267,6 @@ export default function BasicSettings() {
   const handleApplyImageRotation = useCallback(() => {
     void rotateImageForExport(selectedImageRotation);
   }, [rotateImageForExport, selectedImageRotation]);
-
-  const handleNativeDbToggle = (dbName: string) => {
-    if (!selectedNativeBrand) return;
-    const nextNames = selectedNativeDbSet.has(dbName)
-      ? sourceSelection.native.db_names.filter((name) => name !== dbName)
-      : [...sourceSelection.native.db_names, dbName];
-    const allowedNames = new Set(selectedNativeBrand.db_options.map((option) => option.name));
-    const ordered = selectedNativeBrand.db_options
-      .map((option) => option.name)
-      .filter((name) => allowedNames.has(name) && nextNames.includes(name));
-    setNativeDbNames(ordered);
-  };
 
   const handleNativeLayerCountChange = (count: number) => {
     const mode =
@@ -1398,20 +1649,16 @@ export default function BasicSettings() {
         </>
       ) : source_version === "native" ? (
         <>
-          <div className={`gap-2 ${workspace.isCompact ? "grid grid-cols-1" : "flex items-end"}`}>
-            <div className="min-w-0 flex-1">
-              <Dropdown
-                label={t("basic_brand_label")}
-                tooltip={t("basic_brand_hint")}
-                wikiPath={WIKI_DOCS.inferredLutSource}
-                value={selectedNativeBrand?.brand_key ?? ""}
-                options={nativeBrandOptions}
-                onChange={setNativeBrandKey}
-                placeholder={nativeBrandGroupsLoading ? t("basic_brand_loading") : t("basic_brand_placeholder")}
-                disabled={nativeBrandGroupsLoading || nativeBrandOptions.length === 0}
-              />
-            </div>
-          </div>
+          <Dropdown
+            label={t("basic_brand_label")}
+            tooltip={t("basic_brand_hint")}
+            wikiPath={WIKI_DOCS.inferredLutSource}
+            value={selectedNativeBrand?.brand_key ?? ""}
+            options={nativeBrandOptions}
+            onChange={setNativeBrandKey}
+            placeholder={nativeBrandGroupsLoading ? t("basic_brand_loading") : t("basic_brand_placeholder")}
+            disabled={nativeBrandGroupsLoading || nativeBrandOptions.length === 0}
+          />
 
           {selectedNativeBrand ? (
             <div className="-mt-1 flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
@@ -1427,26 +1674,35 @@ export default function BasicSettings() {
               <div className="text-xs text-slate-500 dark:text-slate-400">
                 {t("basic_native_vendor_label")}: {selectedNativeBrand.vendor}
               </div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {t("basic_native_db_label")}:
-                <span className="ml-1 text-slate-700 dark:text-slate-200">
-                  {sourceSelection.native.db_names.length > 0
-                    ? sourceSelection.native.db_names.join(", ")
-                    : t("basic_native_db_placeholder")}
-                </span>
-              </div>
 
-              <div className="grid gap-2">
-                {selectedNativeBrand.db_options.map((dbOption) => (
-                  <Checkbox
-                    key={dbOption.name}
-                    appearance="checkbox"
-                    label={dbOption.name}
-                    checked={selectedNativeDbSet.has(dbOption.name)}
-                    onChange={() => handleNativeDbToggle(dbOption.name)}
+              {/* Database picker — trigger button + dialog */}
+              {(() => {
+                const dbOptions = selectedNativeBrand.db_options;
+                const selectedDbNames = sourceSelection.native.db_names;
+                const VISIBLE_DB_LIMIT = 2;
+                const visibleDbs = selectedDbNames.slice(0, VISIBLE_DB_LIMIT);
+                const overflowDb = selectedDbNames.length - visibleDbs.length;
+                return (
+                  <NativeDbPicker
+                    dbOptions={dbOptions}
+                    selectedDbNames={selectedDbNames}
+                    onConfirm={(names) => setNativeDbNames(names)}
+                    labels={{
+                      dbLabel: t("basic_native_db_label"),
+                      dbPlaceholder: t("basic_native_db_placeholder"),
+                      dialogTitle: t("basic_native_db_picker_title"),
+                      searchPlaceholder: t("basic_native_db_picker_search_placeholder"),
+                      noMatch: t("basic_native_db_picker_no_match"),
+                      deselectAll: t("basic_lut_picker_deselect_all"),
+                      confirm: t("basic_lut_picker_confirm"),
+                      cancel: t("basic_lut_picker_cancel"),
+                      selectedCount: t("basic_lut_selected_count"),
+                    }}
+                    visibleDbs={visibleDbs}
+                    overflowDb={overflowDb}
                   />
-                ))}
-              </div>
+                );
+              })()}
 
               <Slider
                 label={t("basic_native_layer_count_label")}
