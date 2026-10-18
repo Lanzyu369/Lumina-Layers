@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" width="128" alt="Lumina Studio 标志">
+  <img src="electron/assets/icon.png" width="128" alt="Lumina Studio 标志">
 </p>
 
 <h1 align="center">Lumina Studio 2.0</h1>
