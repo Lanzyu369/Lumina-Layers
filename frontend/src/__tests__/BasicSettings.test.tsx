@@ -667,7 +667,7 @@ describe("BasicSettings", () => {
     expect(screen.getByRole("radio", { name: "传统 LUT" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "反推LUT" })).toBeInTheDocument();
     expect(screen.getByTestId("lut-picker-trigger")).toBeInTheDocument();
-    expect(screen.getByText("LUT 数据库")).toBeInTheDocument();
+    expect(screen.getByText("选择LUT")).toBeInTheDocument();
   });
 
   it("keeps a Snapmaker LUT independent from the configured Bambu printer", async () => {
@@ -734,7 +734,7 @@ describe("BasicSettings", () => {
     });
     expect(useSettingsStore.getState().printerModel).toBe("bambu-p1s");
     expect(useConverterStore.getState().bed_label).toBe("Bambu Lab P1S");
-    expect(screen.getAllByText("LUT 数据库").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("选择LUT").length).toBeGreaterThan(0);
     expect(screen.getByText("打印机热床")).toBeInTheDocument();
     expect(
       screen.getByText("Bambu Lab P1S · 256×256 毫米"),

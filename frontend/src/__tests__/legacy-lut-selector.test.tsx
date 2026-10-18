@@ -65,12 +65,16 @@ function renderSelector(overrides = {}) {
 }
 
 describe("LegacyLutSelector", () => {
-  it("renders the trigger button and refresh button", () => {
-    renderSelector();
+  it("keeps refresh inside the picker dialog", () => {
+    const onRefresh = vi.fn();
+    renderSelector({ onRefresh });
 
     // The trigger button opens the picker dialog
     expect(screen.getByTestId("lut-picker-trigger")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Reload LUT directory" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reload LUT directory" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("lut-picker-trigger"));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Reload LUT directory" }));
+    expect(onRefresh).toHaveBeenCalledOnce();
   });
 
   it("shows selected brand chip on the trigger", () => {

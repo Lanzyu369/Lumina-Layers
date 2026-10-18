@@ -4775,8 +4775,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Failed to rotate image",
   },
   basic_lut_manufacturer_label: {
-    zh: "LUT 数据库",
-    en: "LUT Database",
+    zh: "选择LUT",
+    en: "Select LUT",
   },
   basic_lut_manufacturer_placeholder: {
     zh: "选择 LUT 数据库…",

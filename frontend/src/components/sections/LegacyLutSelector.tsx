@@ -1,5 +1,4 @@
 import { useState } from "react";
-import WikiTooltip from "../ui/WikiTooltip";
 import LutPickerDialog, { type LutPickerBrand, type LutPickerOption } from "../ui/LutPickerDialog";
 import { cx, workstationPickerTriggerClass, workstationFieldLabelClass } from "../ui/panelPrimitives";
 
@@ -142,25 +141,6 @@ export default function LegacyLutSelector({
     }
   };
 
-  const refreshButton = (
-    <WikiTooltip title={labels.refreshTooltip} description="">
-      <button
-        type="button"
-        onClick={onRefresh}
-        disabled={refreshing}
-        aria-label={labels.refreshTooltip}
-        className="ghost-control inline-flex size-5 items-center justify-center rounded-full text-slate-500 dark:text-slate-400"
-      >
-        <span
-          className={cx("text-[13px] leading-none", refreshing && "animate-spin")}
-          aria-hidden="true"
-        >
-          ⟳
-        </span>
-      </button>
-    </WikiTooltip>
-  );
-
   // Summary chips shown on the trigger button
   const VISIBLE_LIMIT = 2;
   const visibleChips = selectedOptions.slice(0, VISIBLE_LIMIT);
@@ -177,10 +157,7 @@ export default function LegacyLutSelector({
   return (
     <div className="flex flex-col gap-2">
       {/* Brand / LUT label row */}
-      <div className="flex items-center gap-2">
-        <span className={workstationFieldLabelClass}>{labels.manufacturer}</span>
-        {refreshButton}
-      </div>
+      <span className={workstationFieldLabelClass}>{labels.manufacturer}</span>
 
       {/* Single trigger button: brand name + selected LUT chips */}
       <button
