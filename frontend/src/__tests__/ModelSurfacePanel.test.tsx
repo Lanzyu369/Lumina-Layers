@@ -88,7 +88,7 @@ describe("ModelSurfacePanel", () => {
     render(<ModelSurfacePanel />);
 
     const enableSwitch = screen.getByRole("switch", { name: "模型贴图" });
-    expect(enableSwitch).toHaveAttribute("aria-checked", "false");
+    expect(enableSwitch).not.toBeChecked();
     expect(
       screen.queryByRole("button", { name: "拖拽 STL/OBJ 模型到此处或点击上传" }),
     ).not.toBeInTheDocument();
@@ -96,10 +96,7 @@ describe("ModelSurfacePanel", () => {
     fireEvent.click(enableSwitch);
 
     expect(useConverterStore.getState().modelSurfaceEnabled).toBe(true);
-    expect(screen.getByRole("switch", { name: "模型贴图" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+    expect(screen.getByRole("switch", { name: "模型贴图" })).toBeChecked();
   });
 
   it("reveals the sub-controls only while enabled and hides them again when disabled", () => {

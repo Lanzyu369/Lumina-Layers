@@ -12,8 +12,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { isValidImageType, useConverterStore } from "../../stores/converter";
-import Switch from "../ui/Switch";
-import HelpDot from "../ui/HelpDot";
+import Checkbox from "../ui/Checkbox";
 import { StatusBanner } from "../ui/panelPrimitives";
 import { useI18n } from "../../i18n/context";
 import { isSupportedModelSurfaceFile } from "../../hooks/useConverterDropRouting";
@@ -149,19 +148,12 @@ export default function ModelSurfacePanel() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-3">
-        <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
-          {t("model_surface_enable")}
-          <HelpDot title={t("model_surface_enable")} description={t("model_surface_enable_hint")} />
-        </span>
-        <Switch
-          checked={modelSurfaceEnabled}
-          onChange={setModelSurfaceEnabled}
-          checkedLabel={t("model_surface_switch_on")}
-          uncheckedLabel={t("model_surface_switch_off")}
-          ariaLabel={t("model_surface_enable")}
-        />
-      </div>
+      <Checkbox
+        label={t("model_surface_enable")}
+        tooltip={t("model_surface_enable_hint")}
+        checked={modelSurfaceEnabled}
+        onChange={setModelSurfaceEnabled}
+      />
       {modelSurfaceEnabled && (
         <div className="flex flex-col gap-3">
           <input
