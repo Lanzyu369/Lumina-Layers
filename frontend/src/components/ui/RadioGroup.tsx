@@ -16,6 +16,7 @@ interface RadioGroupProps {
   onChange: (value: string) => void;
   disabled?: boolean;
   disabledValues?: string[];
+  columns?: 1 | 2;
   /** Optional hint text; renders a HelpDot after the group label. */
   tooltip?: string;
   /** Optional matching article in the public Lumina Wiki. */
@@ -29,6 +30,7 @@ export default function RadioGroup({
   onChange,
   disabled = false,
   disabledValues = [],
+  columns = 1,
   tooltip,
   wikiPath,
 }: RadioGroupProps) {
@@ -45,7 +47,7 @@ export default function RadioGroup({
         <span id={labelId} className={workstationFieldLabelClass}>{label}</span>
         {tooltip && <HelpDot title={label} description={tooltip} wikiPath={wikiPath} ariaLabel={tooltip} />}
       </div>
-      <div className="grid gap-2">
+      <div className={cx("grid gap-y-2", columns === 2 ? "grid-cols-2 gap-x-6" : "grid-cols-1")}>
         {options.map((opt) => {
           const isDisabled = disabled || disabledValues.includes(opt.value);
           const isActive = value === opt.value;
@@ -53,7 +55,7 @@ export default function RadioGroup({
             <label
               key={opt.value}
               className={cx(
-                "flex items-center gap-3 py-2 text-sm",
+                "flex min-w-0 items-center gap-3 py-2 text-sm",
                 workstationChoiceRowClass,
                 !isDisabled && workstationChoiceRowActiveClass,
                 isDisabled && workstationChoiceRowDisabledClass,
@@ -84,7 +86,7 @@ export default function RadioGroup({
                   )}
                 />
               </span>
-              <span className="font-medium text-slate-700 dark:text-slate-200">{opt.label}</span>
+              <span className="min-w-0 break-words font-medium text-slate-700 dark:text-slate-200">{opt.label}</span>
             </label>
           );
         })}

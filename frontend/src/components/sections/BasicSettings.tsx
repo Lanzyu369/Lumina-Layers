@@ -1631,6 +1631,7 @@ export default function BasicSettings() {
           wikiPath={WIKI_DOCS.structureMode}
           value={structure_mode}
           options={structureModeOptions}
+          columns={2}
           onChange={(v) => setStructureMode(v as StructureMode)}
           disabled={enable_relief || enable_fridge_magnet}
           disabledValues={isFiveColorExt ? [StructureMode.DOUBLE_SIDED] : []}
@@ -1643,6 +1644,7 @@ export default function BasicSettings() {
         wikiPath={WIKI_DOCS.modelingMode}
         value={modeling_mode}
         options={modelingModeOptions}
+        columns={2}
         onChange={(v) => setModelingMode(v as ModelingMode)}
         disabledValues={disabledModelingModes}
       />
