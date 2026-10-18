@@ -606,12 +606,13 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
           {/* Left Dock Layer — z-30 */}
           <div
             ref={leftDockRef}
-              className="dock-scrollbar dock-scrollbar-hover absolute inset-y-0 left-0 z-30 overflow-x-hidden"
+            className="dock-scrollbar dock-scrollbar-hover absolute top-0 left-0 z-30 max-h-full overflow-x-hidden"
             onScroll={() => lockDockHorizontalScroll('left')}
             data-testid="left-dock"
             style={{
               width: dockScrollWidth,
-              pointerEvents: 'none',
+              height: leftStackHeight,
+              pointerEvents: 'auto',
               overflowX: 'hidden',
               overscrollBehaviorX: 'none',
             }}
@@ -637,12 +638,13 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
           {/* Right Dock Layer — z-30 */}
           <div
             ref={rightDockRef}
-              className="dock-scrollbar dock-scrollbar-hover absolute inset-y-0 right-0 z-30 overflow-x-hidden"
+            className="dock-scrollbar dock-scrollbar-hover absolute top-0 right-0 z-30 max-h-full overflow-x-hidden"
             onScroll={() => lockDockHorizontalScroll('right')}
             data-testid="right-dock"
             style={{
               width: dockScrollWidth,
-              pointerEvents: 'none',
+              height: rightStackHeight,
+              pointerEvents: 'auto',
               overflowX: 'hidden',
               overscrollBehaviorX: 'none',
             }}
