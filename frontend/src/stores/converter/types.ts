@@ -7,7 +7,6 @@ import type {
   BedSizeItem,
   ColorMode,
   ColorReplacementItem,
-  CoatingMaterialReference,
   DynamicMaterialRecipe,
   ExportMaterialSelection,
   FridgeMagnetItem,
@@ -253,7 +252,6 @@ export interface ConverterState {
   // 涂层
   enable_coating: boolean;
   coating_height_mm: number;
-  coatingMaterial: CoatingMaterialReference | null;
 
   // 大画幅
   largeFormatEnabled: boolean;
@@ -557,7 +555,6 @@ export interface ConverterActions {
   setWireHeightMm: (height: number) => void;
   setEnableCoating: (enabled: boolean) => void;
   setCoatingHeightMm: (height: number) => void;
-  setCoatingMaterial: (material: CoatingMaterialReference | null) => void;
 
   // 大画幅
   setLargeFormatEnabled: (enabled: boolean) => void;

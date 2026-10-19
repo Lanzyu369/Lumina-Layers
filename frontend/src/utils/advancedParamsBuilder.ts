@@ -218,12 +218,11 @@ function buildCloisonne(state: ConverterState): AdvancedParamsCloisonne {
 
 function buildCoating(state: ConverterState): AdvancedParamsCoating {
   if (!state.enable_coating) {
-    return { enable_coating: false, coating_height_mm: null, coating_material: null };
+    return { enable_coating: false, coating_height_mm: null };
   }
   return {
     enable_coating: true,
     coating_height_mm: state.coating_height_mm,
-    coating_material: state.coatingMaterial,
   };
 }
 

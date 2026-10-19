@@ -110,6 +110,7 @@ export interface ConverterRecipeCloisonne {
 export interface ConverterRecipeCoating {
   enable_coating: boolean;
   coating_height_mm: number;
+  /** Historical selection retained for reading old recipes; ignored on restore. */
   coating_material?: CoatingMaterialReference | null;
 }
 

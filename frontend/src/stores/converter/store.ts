@@ -114,7 +114,6 @@ import {
 import { lutErrorToVisibleMessage } from "../lutErrorMessages";
 import { registerPrinterBedLabelSynchronizer } from "../printerBedLabelSync";
 import { useSettingsStore } from "../settingsStore";
-import { loadCoatingMaterial, persistCoatingMaterial } from "./coatingMaterial";
 import {
   newestEditorContentRevision
 } from "./editorRevision";
@@ -1850,7 +1849,6 @@ export const DEFAULT_STATE: ConverterState = {
   wire_height_mm: 0.4,
   enable_coating: false,
   coating_height_mm: 0.08,
-  coatingMaterial: loadCoatingMaterial(),
   largeFormatEnabled: false,
   tileWidthMm: 250,
   tileHeightMm: 250,
@@ -3618,12 +3616,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     setCoatingHeightMm: (height: number) => {
       invalidateGeneratedArtifacts({ preservePreviews: true });
       set({ coating_height_mm: clampValue(height, 0.04, 0.12),
-        threemfDiskPath: null, downloadUrl: null });
-    },
-    setCoatingMaterial: (coatingMaterial) => {
-      invalidateGeneratedArtifacts({ preservePreviews: true });
-      persistCoatingMaterial(coatingMaterial);
-      set({ coatingMaterial, nativeMaterialSelection: null, nativeMaterialSelectionError: null,
         threemfDiskPath: null, downloadUrl: null });
     },
 
@@ -8200,7 +8192,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         workshopSource: restoredWorkshopSource,
       });
       persistSvgHoleCompensationSettings(svgHoleCompensationOptions(_get()));
-      persistCoatingMaterial(_get().coatingMaterial);
 
       // Restore the optional heightmap after all project state is in place.
       if (heightmapFile) {

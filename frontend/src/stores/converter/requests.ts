@@ -65,7 +65,6 @@ function buildOutputParams(
     enable_relief: state.enable_relief,
     enable_coating: state.enable_coating,
     coating_height_mm: state.coating_height_mm,
-    coating_material: state.coatingMaterial,
     printer_id: settings.printerModel,
     slicer: settings.slicerSoftware,
     nozzle_size: settings.nozzleSize,
