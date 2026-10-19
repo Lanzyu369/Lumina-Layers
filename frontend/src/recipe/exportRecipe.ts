@@ -253,7 +253,6 @@ export function exportConverterRecipe(
     coating: {
       enable_coating: state.enable_coating,
       coating_height_mm: state.coating_height_mm,
-      coating_material: state.coatingMaterial,
     },
     color_ops: {
       replacement_regions: normalizedReplacements,

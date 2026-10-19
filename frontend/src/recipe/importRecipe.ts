@@ -25,7 +25,6 @@ import type {
 } from "../api/types";
 import { extractRecipeFromPng } from "./pngMetadata";
 import { migrateRecipe } from "./migration";
-import { readCoatingMaterialReference } from "../stores/converter/coatingMaterial";
 import { base64ToFile } from "./utils";
 import {
   normalizeFridgeMagnetItems,
@@ -718,7 +717,6 @@ export function restoreConverterRecipe(
     // Coating
     enable_coating: conv.coating.enable_coating,
     coating_height_mm: conv.coating.coating_height_mm,
-    coatingMaterial: readCoatingMaterialReference(conv.coating.coating_material),
 
     // Color ops
     replacement_regions: replacementRegions,

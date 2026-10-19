@@ -434,7 +434,7 @@ class RecipeOverrideItem(BaseModel):
 
 
 class CoatingMaterialReference(BaseModel):
-    """Explicit coating source; geometry role names never imply a material."""
+    """Legacy request field; coating now follows the source material types."""
 
     model_config = ConfigDict(extra="forbid")
     source: Literal["palette", "material_archive"]
@@ -623,7 +623,10 @@ class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
     wire_height_mm: float = Field(0.4, ge=0.04, le=1.0, description="金属丝高度 (mm)")
     enable_coating: bool = Field(False, description="启用涂层")
     coating_height_mm: float = Field(0.08, ge=0.04, le=0.12, description="涂层高度 (mm)")
-    coating_material: CoatingMaterialReference | None = None
+    coating_material: CoatingMaterialReference | None = Field(
+        default=None, deprecated=True,
+        description="Legacy selection, ignored; coating follows source types and mixed types default to PLA.",
+    )
     replacement_regions: Optional[List[ColorReplacementItem]] = Field(None, description="颜色替换列表")
     recipe_overrides: Optional[List[RecipeOverrideItem]] = Field(None, description="区域级配方覆盖列表")
     free_color_set: Optional[Set[str]] = Field(None, description="自由色集合 (hex)")

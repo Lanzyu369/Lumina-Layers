@@ -5959,21 +5959,13 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   adv_backing_output_separate: { zh: "独立分盘工程（ZIP）", en: "Independent plate projects (ZIP)" },
   adv_backing_output_hint: { zh: "保留原尺寸，模型和背板各输出一个 3MF。解压后分别打开切片，检查模型、底边（brim）和擦料塔的位置。", en: "Keeps the original size and writes one 3MF each for the model and backing. Unzip and slice each project separately, checking the model, brim and wipe tower positions." },
   adv_backing_output_unavailable: { zh: "独立背板工程用于单面、无浮雕的单模型导出。当前模式请使用同一工程或现有分块输出。", en: "Independent backing projects support a single-sided model without relief. Use the same project or the existing tile workflow for this mode." },
-  coating_material: { zh: "涂层耗材", en: "Coating material" },
-  coating_material_choose: { zh: "请选择实际使用的耗材", en: "Choose the actual filament" },
-  coating_material_palette: { zh: "当前模型耗材", en: "Current model materials" },
-  coating_material_archive: { zh: "独立耗材档案", en: "Independent material archive" },
-  coating_material_retry: { zh: "重试", en: "Retry" },
-  coating_material_load_failed: { zh: "耗材档案加载失败，已有选择保留。", en: "Could not load material archives. Your existing selection is retained." },
-  coating_material_hint: { zh: "涂层使用你选择的实际耗材。生成前会检查原生耗材预设和板型兼容性。", en: "The coating uses your selected filament. Native presets and build-plate compatibility are checked before generation." },
-  coating_material_mixed: { zh: "涂层与模型包含不同材料类型。请确认它们适合共同打印；将保留各自原生温度和流量，不自动替换材料。", en: "The coating and model use different material types. Confirm they can print together; each retains its native temperature and flow settings." },
   coating_enable: {
     zh: "启用透明镀层",
     en: "Enable Transparent Coating",
   },
   coating_enable_hint: {
-    zh: "在作品表面增加一层可用透明耗材打印的保护层。",
-    en: "Adds a surface layer intended to be printed with transparent filament.",
+    zh: "在作品表面增加透明耗材保护层。材质跟随模型耗材，混合材质默认使用 PLA。",
+    en: "Adds a protective layer for transparent filament. Follows the model material type; mixed types default to PLA.",
   },
   coating_height: {
     zh: "透明镀层高度",
