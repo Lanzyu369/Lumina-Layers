@@ -4913,8 +4913,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Source Type",
   },
   basic_source_version_hint: {
-    zh: "选择配色数据从哪里来：\n• 传统 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 反推LUT：由品牌耗材数据推算出来，不需要自己打印色卡。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。",
-    en: "Choose where the color data comes from:\n• Legacy LUT: data measured from actually printed color charts — most reliable.\n• Inferred LUT: computed from brand filament data, no printed chart needed.\n• Material Archive: freely combine materials you created in Material Extraction.",
+    zh: "选择配色数据从哪里来：\n• 传统 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。",
+    en: "Choose where the color data comes from:\n• Legacy LUT: data measured from actually printed color charts — most reliable.\n• Material Archive: freely combine materials you created in Material Extraction.",
   },
   basic_source_version_legacy: {
     zh: "传统 LUT",
@@ -8027,6 +8027,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_import_lut_missing: {
     zh: "LUT 未找到，请手动选择兼容的 LUT",
     en: "LUT not found, please select a compatible LUT manually",
+  },
+  recipe_import_predictive_lut_unavailable: {
+    zh: "此项目使用当前暂不可用的反推 LUT。请改用传统 LUT 或耗材档案。",
+    en: "This project uses an inferred LUT, which is currently unavailable. Use a legacy LUT or material archive instead.",
   },
   recipe_import_lut_degraded: {
     zh: "原 LUT 记录未找到，已按名称与颜色模式匹配，请确认选中了预期 LUT。",

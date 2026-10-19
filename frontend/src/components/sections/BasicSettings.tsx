@@ -8,7 +8,6 @@ import {
   inferDefaultMaterialBackingDirName,
   isValidImageType,
   hasOnlySvgInputs,
-  resolveConverterSourceSelection,
 } from "../../stores/converter";
 import {
   ColorMode,
@@ -43,6 +42,7 @@ import {
 import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
 import { type ImageRotationDegrees } from "../../utils/imageRotation";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
+import { isPredictiveLutSource } from "../../utils/lutVisibility";
 import {
   resolveLargeFormatTileGrid,
   resolveLargeFormatTotalHeightMm,
@@ -258,14 +258,11 @@ export default function BasicSettings() {
     legacyCatalogLoading,
     selectedLegacyManufacturer,
     nativeBrandGroups,
-    nativeBrandGroupsLoading,
     selectedNativeBrandKey,
     selectedNativeDbNames,
     color_mode,
     color_layers,
     layer_height_mm,
-    model_enable,
-    model_only,
     selectedLutInfo,
     lutColors,
     lutColorsLutName,
@@ -304,8 +301,6 @@ export default function BasicSettings() {
     modelSurfaceEnabled,
     setColorLayers,
     setLayerHeightMm,
-    setModelEnable,
-    setModelOnly,
     setSourceVersion,
     setSelectedMaterialDirNames,
     setMaterialLayerCount,
@@ -314,9 +309,6 @@ export default function BasicSettings() {
     setMaterialMaxLayerCount,
     setMaterialLayerHeightMm,
     setMaterialBackingMaterialDirName,
-    setNativeBrandKey,
-    setNativeSupportedMode,
-    setNativeDbNames,
     setLegacyManufacturer,
     setLegacyLutNames,
     fetchLutList,
@@ -333,14 +325,11 @@ export default function BasicSettings() {
     legacyCatalogLoading: s.legacyCatalogLoading,
     selectedLegacyManufacturer: s.selectedLegacyManufacturer,
     nativeBrandGroups: s.nativeBrandGroups,
-    nativeBrandGroupsLoading: s.nativeBrandGroupsLoading,
     selectedNativeBrandKey: s.selectedNativeBrandKey,
     selectedNativeDbNames: s.selectedNativeDbNames,
     color_mode: s.color_mode,
     color_layers: s.color_layers,
     layer_height_mm: s.layer_height_mm,
-    model_enable: s.model_enable,
-    model_only: s.model_only,
     selectedLutInfo: s.selectedLutInfo,
     lutColors: s.lutColors,
     lutColorsLutName: s.lutColorsLutName,
@@ -379,8 +368,6 @@ export default function BasicSettings() {
     modelSurfaceEnabled: s.modelSurfaceEnabled,
     setColorLayers: s.setColorLayers,
     setLayerHeightMm: s.setLayerHeightMm,
-    setModelEnable: s.setModelEnable,
-    setModelOnly: s.setModelOnly,
     setSourceVersion: s.setSourceVersion,
     setSelectedMaterialDirNames: s.setSelectedMaterialDirNames,
     setMaterialLayerCount: s.setMaterialLayerCount,
@@ -389,48 +376,11 @@ export default function BasicSettings() {
     setMaterialMaxLayerCount: s.setMaterialMaxLayerCount,
     setMaterialLayerHeightMm: s.setMaterialLayerHeightMm,
     setMaterialBackingMaterialDirName: s.setMaterialBackingMaterialDirName,
-    setNativeBrandKey: s.setNativeBrandKey,
-    setNativeSupportedMode: s.setNativeSupportedMode,
-    setNativeDbNames: s.setNativeDbNames,
     setLegacyManufacturer: s.setLegacyManufacturer,
     setLegacyLutNames: s.setLegacyLutNames,
     fetchLutList: s.fetchLutList,
     fetchLegacyCatalog: s.fetchLegacyCatalog,
   })));
-
-  const sourceSelection = useMemo(
-    () =>
-      resolveConverterSourceSelection({
-        source_version,
-        lut_name,
-        lut_names,
-        nativeBrandGroups,
-        selectedNativeBrandKey,
-        selectedNativeDbNames,
-        color_layers,
-        layer_height_mm,
-        selectedMaterialDirNames,
-        materialLayerCount,
-        materialLayerHeightMm,
-        lutListFull,
-        legacyCatalogGroups,
-      }),
-    [
-      source_version,
-      lut_name,
-      lut_names,
-      nativeBrandGroups,
-      selectedNativeBrandKey,
-      selectedNativeDbNames,
-      color_layers,
-      layer_height_mm,
-      selectedMaterialDirNames,
-      materialLayerCount,
-      materialLayerHeightMm,
-      lutListFull,
-      legacyCatalogGroups,
-    ],
-  );
 
   const [uploaderExpanded, setUploaderExpanded] = useState(true);
   const startupRetryMountedRef = useRef(false);
@@ -504,6 +454,14 @@ export default function BasicSettings() {
   const handleFilesSelect = useConverterStore((s) => s.handleFilesSelect);
   const setImageFile = useConverterStore((s) => s.setImageFile);
   const setLutName = useConverterStore((s) => s.setLutName);
+  useEffect(() => {
+    if (source_version === "native" || (
+      source_version === "legacy" && isPredictiveLutSource(selectedLutInfo?.source_kind)
+    )) {
+      // Preserve the image, but require a new source instead of reusing an inactive LUT.
+      setLutName("");
+    }
+  }, [source_version, selectedLutInfo?.source_kind, setLutName]);
   const setTargetWidthMm = useConverterStore((s) => s.setTargetWidthMm);
   const setTargetHeightMm = useConverterStore((s) => s.setTargetHeightMm);
   const setSpacerThick = useConverterStore((s) => s.setSpacerThick);
@@ -539,7 +497,6 @@ export default function BasicSettings() {
 
   const sourceVersionOptions = [
     { label: t("basic_source_version_legacy"), value: "legacy" },
-    { label: t("basic_source_version_native"), value: "native" },
     { label: t("basic_source_version_material"), value: "material" },
   ];
 
@@ -922,19 +879,6 @@ export default function BasicSettings() {
     { label: "0.08 mm", value: "0.08" },
     { label: "0.10 mm", value: "0.1" },
   ];
-  const nativeBrandOptions = nativeBrandGroups
-    .map((group) => ({
-      label: group.display_name,
-      value: group.brand_key,
-    }));
-  const selectedNativeBrand = sourceSelection.native.brand;
-  const selectedNativeSupportedModes = sourceSelection.native.supported_modes;
-  const selectedNativeMode = sourceSelection.native.supported_mode;
-  const selectedNativePredictiveModelAvailable = sourceSelection.native.predictive_model_available;
-  const selectedNativeDbSet = useMemo(() => new Set(sourceSelection.native.db_names), [sourceSelection.native.db_names]);
-  const nativeLayerCount = selectedNativeMode?.color_layers ?? color_layers ?? 5;
-  const nativeLayerHeightMm = layer_height_mm ?? selectedNativeMode?.layer_height_mm ?? 0.08;
-
   const lutFileRef = useRef<HTMLInputElement>(null);
 
   // 5-Color Extended and model-surface workflows only support one viewing side.
@@ -996,32 +940,6 @@ export default function BasicSettings() {
   const handleApplyImageRotation = useCallback(() => {
     void rotateImageForExport(selectedImageRotation);
   }, [rotateImageForExport, selectedImageRotation]);
-
-  const handleNativeDbToggle = (dbName: string) => {
-    if (!selectedNativeBrand) return;
-    const nextNames = selectedNativeDbSet.has(dbName)
-      ? sourceSelection.native.db_names.filter((name) => name !== dbName)
-      : [...sourceSelection.native.db_names, dbName];
-    const allowedNames = new Set(selectedNativeBrand.db_options.map((option) => option.name));
-    const ordered = selectedNativeBrand.db_options
-      .map((option) => option.name)
-      .filter((name) => allowedNames.has(name) && nextNames.includes(name));
-    setNativeDbNames(ordered);
-  };
-
-  const handleNativeLayerCountChange = (count: number) => {
-    const mode =
-      resolveNativeSupportedModeByCount(
-        selectedNativeSupportedModes,
-        count,
-        nativeLayerHeightMm,
-      ) ?? selectedNativeMode;
-    if (!mode) return;
-    setNativeSupportedMode({
-      color_layers: mode.color_layers,
-      layer_height_mm: mode.layer_height_mm,
-    });
-  };
 
   // Keep the range control useful for everyday dimensions while allowing the
   // precise text field to retain any finite large-format value.
@@ -1166,7 +1084,7 @@ export default function BasicSettings() {
           wikiPath={WIKI_DOCS.sourceType}
           value={source_version}
           options={sourceVersionOptions}
-          onChange={(value) => setSourceVersion(value as "legacy" | "native" | "material")}
+          onChange={(value) => setSourceVersion(value as "legacy" | "material")}
         />
       </div>
 
@@ -1296,7 +1214,7 @@ export default function BasicSettings() {
             />
           )}
         </div>
-      ) : source_version === "legacy" ? (
+      ) : source_version === "legacy" && !isPredictiveLutSource(selectedLutInfo?.source_kind) ? (
         <>
           <LegacyLutSelector
             manufacturer={selectedLegacyManufacturer}
@@ -1387,107 +1305,6 @@ export default function BasicSettings() {
                   {t("basic_dynamic_layers_legacy_hint")}
                 </div>
               )}
-            </div>
-          )}
-        </>
-      ) : source_version === "native" ? (
-        <>
-          <div className={`gap-2 ${workspace.isCompact ? "grid grid-cols-1" : "flex items-end"}`}>
-            <div className="min-w-0 flex-1">
-              <Dropdown
-                label={t("basic_brand_label")}
-                tooltip={t("basic_brand_hint")}
-                wikiPath={WIKI_DOCS.inferredLutSource}
-                value={selectedNativeBrand?.brand_key ?? ""}
-                options={nativeBrandOptions}
-                onChange={setNativeBrandKey}
-                placeholder={nativeBrandGroupsLoading ? t("basic_brand_loading") : t("basic_brand_placeholder")}
-                disabled={nativeBrandGroupsLoading || nativeBrandOptions.length === 0}
-              />
-            </div>
-          </div>
-
-          {selectedNativeBrand ? (
-            <div className="-mt-1 flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {t("basic_native_brand_summary_label")}:
-                <span className="ml-1 text-slate-700 dark:text-slate-200">
-                  {selectedNativeBrand.display_name}
-                </span>
-              </div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {t("basic_native_material_label")}: {selectedNativeBrand.material_type}
-              </div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {t("basic_native_vendor_label")}: {selectedNativeBrand.vendor}
-              </div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {t("basic_native_db_label")}:
-                <span className="ml-1 text-slate-700 dark:text-slate-200">
-                  {sourceSelection.native.db_names.length > 0
-                    ? sourceSelection.native.db_names.join(", ")
-                    : t("basic_native_db_placeholder")}
-                </span>
-              </div>
-
-              <div className="grid gap-2">
-                {selectedNativeBrand.db_options.map((dbOption) => (
-                  <Checkbox
-                    key={dbOption.name}
-                    label={dbOption.name}
-                    checked={selectedNativeDbSet.has(dbOption.name)}
-                    onChange={() => handleNativeDbToggle(dbOption.name)}
-                  />
-                ))}
-              </div>
-
-              <Slider
-                label={t("basic_native_layer_count_label")}
-                tooltip={t("basic_native_layer_count_hint")}
-                wikiPath={WIKI_DOCS.inferredLutSource}
-                value={nativeLayerCount}
-                min={1}
-                max={15}
-                step={1}
-                onChange={(value) => handleNativeLayerCountChange(Math.round(value))}
-                disabled={selectedNativeSupportedModes.length === 0}
-              />
-              {selectedNativeSupportedModes.length > 0 && (
-                <div className="text-xs text-slate-500 dark:text-slate-400">
-                  {t("basic_supported_modes_label")}:{" "}
-                  {selectedNativeSupportedModes
-                    .map((mode) => `${mode.color_layers}L @ ${mode.layer_height_mm.toFixed(2)}mm`)
-                    .join(", ")}
-                </div>
-              )}
-
-              {selectedNativePredictiveModelAvailable && (
-                <div className="flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-50/70 p-3 dark:border-slate-700/40 dark:bg-slate-950/30">
-                  <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
-                    {t("basic_model_gate_label")}
-                  </div>
-                  <div className="grid gap-2">
-                    <Checkbox
-                      label={t("basic_model_enable")}
-                      tooltip={t("basic_model_enable_hint")}
-                      wikiPath={WIKI_DOCS.modelAssistedMatching}
-                      checked={model_enable}
-                      onChange={setModelEnable}
-                    />
-                    <Checkbox
-                      label={t("basic_model_only")}
-                      tooltip={t("basic_model_only_hint")}
-                      wikiPath={WIKI_DOCS.modelAssistedMatching}
-                      checked={model_only}
-                      onChange={setModelOnly}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="-mt-1 rounded-lg border border-dashed border-slate-300/70 bg-slate-100/35 p-3 text-xs text-slate-500 dark:border-slate-700/60 dark:bg-slate-900/25 dark:text-slate-400">
-              {t("basic_native_brand_placeholder")}
             </div>
           )}
         </>
@@ -1695,36 +1512,4 @@ function QuantizeColorsControl() {
       </button>
     </div>
   );
-}
-
-function resolveNativeSupportedModeByCount(
-  modes: { color_layers: number; layer_height_mm: number }[],
-  colorLayers: number,
-  preferredLayerHeightMm: number,
-): { color_layers: number; layer_height_mm: number } | null {
-  if (modes.length === 0) {
-    return null;
-  }
-
-  const matchingLayers = modes.filter((mode) => mode.color_layers === colorLayers);
-  if (matchingLayers.length === 0) {
-    return null;
-  }
-
-  const exactHeight = matchingLayers.find((mode) => mode.layer_height_mm === preferredLayerHeightMm);
-  if (exactHeight) {
-    return exactHeight;
-  }
-
-  let preferred = matchingLayers[0];
-  let smallestDistance = Math.abs(preferred.layer_height_mm - preferredLayerHeightMm);
-  for (const mode of matchingLayers.slice(1)) {
-    const distance = Math.abs(mode.layer_height_mm - preferredLayerHeightMm);
-    if (distance < smallestDistance) {
-      preferred = mode;
-      smallestDistance = distance;
-    }
-  }
-
-  return preferred;
 }
