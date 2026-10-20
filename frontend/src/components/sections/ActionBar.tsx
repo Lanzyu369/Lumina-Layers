@@ -193,6 +193,9 @@ export default function ActionBar() {
   const canSubmit = !!imageFile && sourceSelection.isReady
   const largeFormatModelSurfaceConflict = largeFormatEnabled && modelSurfaceEnabled
   const canGenerate = canSubmit && !!sessionId && !largeFormatModelSurfaceConflict
+  // In large-format mode SlicerSelector only serves a retained downloadUrl;
+  // anything else would start a new generation that the conflict refuses.
+  const canSubmitSlicerOutput = canSubmit && (!largeFormatModelSurfaceConflict || !!downloadUrl)
   const canBatchSubmit = batchFiles.length > 0 && sourceSelection.isReady
   const singleSourceHintKey =
     sourceVersion === "material"
@@ -886,7 +889,7 @@ export default function ActionBar() {
       <SlicerSelector
         threemfDiskPath={threemfDiskPath}
         downloadUrl={downloadUrl}
-        canSubmit={!nativeMaterialSelectionLoading && (batchMode ? canBatchSubmit && !batchLoading : canSubmit)}
+        canSubmit={!nativeMaterialSelectionLoading && (batchMode ? canBatchSubmit && !batchLoading : canSubmitSlicerOutput)}
         largeFormat={batchMode ? false : largeFormatEnabled || (separatedBacking && backingOutput === "separate_project")}
         onAutoGenerate={async () => {
           if (batchMode) {

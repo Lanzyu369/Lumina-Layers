@@ -9,6 +9,7 @@ vi.mock("../api/converter", async () => {
     );
   return {
     ...actual,
+    convertPreview: vi.fn(),
     convertGenerate: vi.fn(),
     convertGenerateLargeFormat: vi.fn(),
     convertGeneratePuzzle: vi.fn(),
@@ -17,12 +18,14 @@ vi.mock("../api/converter", async () => {
 });
 
 import {
+  convertPreview,
   convertGenerate,
   convertGenerateLargeFormat,
   convertGeneratePuzzle,
   fetchExportMaterialSelection,
 } from "../api/converter";
 
+const mockedConvertPreview = vi.mocked(convertPreview);
 const mockedConvertGenerate = vi.mocked(convertGenerate);
 const mockedConvertGenerateLargeFormat = vi.mocked(convertGenerateLargeFormat);
 const mockedConvertGeneratePuzzle = vi.mocked(convertGeneratePuzzle);
@@ -126,6 +129,98 @@ describe("large format with model texture", () => {
     expect(mockedFetchExportMaterialSelection).toHaveBeenCalledOnce();
     expect(mockedConvertGenerate).toHaveBeenCalledOnce();
     expect(mockedConvertGenerateLargeFormat).not.toHaveBeenCalled();
+    expect(useConverterStore.getState().error).toBeNull();
+  });
+});
+
+describe("full pipeline with large format and model texture", () => {
+  const selectedSurface = {
+    modelSurfaceModelFileId: "model-1",
+    modelSurfaceSelectionId: "selection-1",
+    modelSurfaceSelection: { face_indices: [4, 6], normal: [0, 0, 1], plane_origin: [0, 0, 2.5], area_mm2: 460800, face_count: 2 },
+    modelSurfaceFootprint: { bounds_width_mm: 960, bounds_height_mm: 480, hole_count: 0, outer: [], holes: [] },
+  };
+
+  function enableBothWithoutSession(order: "large-format-first" | "model-surface-first"): void {
+    seedReadySession({ largeFormatEnabled: false, modelSurfaceEnabled: false });
+    useConverterStore.setState({
+      imageFile: new File(["png"], "art.png", { type: "image/png" }),
+    } as never);
+    const store = useConverterStore.getState();
+    if (order === "large-format-first") {
+      store.setLargeFormatEnabled(true);
+      useConverterStore.getState().setModelSurfaceEnabled(true);
+    } else {
+      store.setModelSurfaceEnabled(true);
+      useConverterStore.getState().setLargeFormatEnabled(true);
+    }
+    useConverterStore.setState(selectedSurface as never);
+  }
+
+  beforeEach(() => {
+    mockedConvertPreview.mockResolvedValue({
+      session_id: "fresh-preview",
+      status: "ok",
+      message: "ok",
+      preview_url: "/api/files/preview.png",
+      preview_glb_url: null,
+      palette: [],
+      contours: {},
+      dimensions: { width: 9600, height: 4800, preview_raw_url: "/api/files/raw.png" },
+    } as never);
+  });
+
+  it.each(["large-format-first", "model-surface-first"] as const)(
+    "refuses before preview when enabled %s with no session",
+    async (order) => {
+      enableBothWithoutSession(order);
+      expect(useConverterStore.getState().sessionId).toBeNull();
+
+      const result = await useConverterStore.getState().submitFullPipeline();
+
+      expect(result).toBeNull();
+      expect(mockedConvertPreview).not.toHaveBeenCalled();
+      expect(mockedFetchExportMaterialSelection).not.toHaveBeenCalled();
+      expect(mockedConvertGenerate).not.toHaveBeenCalled();
+      expect(mockedConvertGenerateLargeFormat).not.toHaveBeenCalled();
+      const state = useConverterStore.getState();
+      expect(state.error).toBe(CONVERTER_ERROR_KEYS.largeFormatModelSurfaceConflict);
+      expect(state.sessionId).toBeNull();
+      expect(state.largeFormatEnabled).toBe(true);
+      expect(state.modelSurfaceEnabled).toBe(true);
+      expect(state.modelSurfaceSelectionId).toBe("selection-1");
+    },
+  );
+
+  it("refuses with an existing session and keeps a retained download", async () => {
+    enableBothWithoutSession("large-format-first");
+    useConverterStore.setState({
+      sessionId: "existing-session",
+      downloadUrl: "/api/files/retained.zip",
+    } as never);
+
+    await useConverterStore.getState().submitFullPipeline();
+
+    expect(mockedConvertPreview).not.toHaveBeenCalled();
+    expect(mockedFetchExportMaterialSelection).not.toHaveBeenCalled();
+    expect(mockedConvertGenerateLargeFormat).not.toHaveBeenCalled();
+    expect(useConverterStore.getState().sessionId).toBe("existing-session");
+    expect(useConverterStore.getState().downloadUrl).toBe("/api/files/retained.zip");
+  });
+
+  it("still previews then generates large format without model texture", async () => {
+    seedReadySession({ largeFormatEnabled: false, modelSurfaceEnabled: false });
+    useConverterStore.setState({
+      imageFile: new File(["png"], "art.png", { type: "image/png" }),
+    } as never);
+    useConverterStore.getState().setLargeFormatEnabled(true);
+    useConverterStore.setState({ sessionId: null } as never);
+
+    await useConverterStore.getState().submitFullPipeline();
+
+    expect(mockedConvertPreview).toHaveBeenCalledOnce();
+    expect(mockedFetchExportMaterialSelection).toHaveBeenCalledOnce();
+    expect(mockedConvertGenerateLargeFormat).toHaveBeenCalledOnce();
     expect(useConverterStore.getState().error).toBeNull();
   });
 });
