@@ -55,6 +55,7 @@ class CalibrationResponse(_NoPublic3mfDiskPathMixin):
     preview_url: Optional[str] = None
     layer_urls: Optional[list[str]] = None
     threemf_disk_path: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SingleStageJobResponse(BaseModel):
