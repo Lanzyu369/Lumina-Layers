@@ -954,10 +954,70 @@ def _batch_compute_svg_xy_bbox_mm(
     return fallback, fallback
 
 
+def _batch_svg_uses_raster_conversion(
+    image_path: str,
+    modeling_mode: object,
+    color_mode: object,
+) -> bool:
+    """Return whether the converter rasterizes this SVG (effective mode).
+    判断转换器是否按光栅路径处理该 SVG（按实际生效的建模模式）。
+    """
+    from core.pipeline.svg_opacity import should_use_opacity_safe_svg_raster_fallback
+
+    mode_value = str(getattr(modeling_mode, "value", modeling_mode) or "")
+    if mode_value != "vector":
+        return True
+    return should_use_opacity_safe_svg_raster_fallback(
+        image_path=image_path,
+        color_mode=color_mode,
+        modeling_mode=mode_value,
+    )
+
+
+def _batch_compute_svg_content_xy_bbox_mm(
+    image_path: str,
+    target_width_mm: float,
+    pixels_per_mm: float,
+) -> tuple[float, float]:
+    """Compute the footprint of a rasterized SVG at the converter's scale.
+
+    The SVG raster branches alpha-crop the canvas and map the cropped width
+    to ``target_width_mm``; measure the solid (alpha >= 10) area of that
+    same raster under the same scale.
+    栅格 SVG 分支会按 alpha 裁掉画布边距并把裁后宽度映射到目标宽度；
+    这里用同一张栅格、同一比例测量实体（alpha >= 10）区域。
+    """
+    import numpy as np
+
+    from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
+
+    arr = np.asarray(
+        rasterize_svg(image_path, float(target_width_mm), pixels_per_mm=float(pixels_per_mm))
+    )
+    if arr.ndim < 2 or arr.shape[0] <= 0 or arr.shape[1] <= 0:
+        raise ValueError("SVG rasterizer returned a non-image array")
+    height_px, width_px = int(arr.shape[0]), int(arr.shape[1])
+    bbox_w_px, bbox_h_px = width_px, height_px
+    if arr.ndim == 3 and arr.shape[2] >= 4:
+        solid = arr[:, :, 3] >= 10
+        if np.any(solid):
+            cols = np.where(solid.any(axis=0))[0]
+            rows = np.where(solid.any(axis=1))[0]
+            bbox_w_px = int(cols[-1]) - int(cols[0]) + 1
+            bbox_h_px = int(rows[-1]) - int(rows[0]) + 1
+    px_to_mm = float(target_width_mm) / float(width_px)
+    return (
+        round(bbox_w_px * px_to_mm, 6),
+        round(bbox_h_px * px_to_mm, 6),
+    )
+
+
 def _batch_compute_xy_bbox_mm(
     image_path: str,
     target_width_mm: float,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
+    modeling_mode: object = "high-fidelity",
+    color_mode: object = None,
 ) -> tuple[float, float]:
     """Compute the occupied XY footprint in mm from an input image.
     根据输入图中实际有内容的区域推算 XY 占位包围盒（毫米）。
@@ -974,20 +1034,49 @@ def _batch_compute_xy_bbox_mm(
     Args:
         image_path: Path to the input image file. (输入图像文件路径)
         target_width_mm: Target physical width in mm. (目标物理宽度，毫米)
+        svg_pixels_per_mm: Requested high-fidelity SVG density.
+            (请求的高保真 SVG 采样密度)
+        modeling_mode: Requested modeling mode; selects SVG footprint scale.
+            (请求的建模模式，决定 SVG 占位比例)
+        color_mode: Color mode, used for the 5-Color opacity fallback.
+            (颜色模式，用于 5 色半透明回退判断)
 
     Returns:
         tuple[float, float]: ``(width_mm, depth_mm)`` rounded to 6 decimals.
-            The scale is based on the full source canvas width matching
-            ``target_width_mm``; the measured footprint is the non-transparent
-            alpha bbox under that scale.
-            (``(width_mm, depth_mm)``，按整张源图宽度映射到目标宽度后的
-            非透明区域尺寸，保留 6 位小数)
+            Raster images and native-vector SVGs map the full source canvas
+            width to ``target_width_mm``; SVGs the converter rasterizes map
+            the alpha-cropped width instead, matching the converted model.
+            (``(width_mm, depth_mm)``，保留 6 位小数。位图与原生矢量 SVG
+            按整张画布宽度映射；转换器光栅化的 SVG 按裁后宽度映射，与
+            转换结果一致)
     """
     import os
 
     from PIL import Image
 
     if os.path.splitext(image_path)[1].lower() in {".svg", ".svgz"}:
+        if _batch_svg_uses_raster_conversion(image_path, modeling_mode, color_mode):
+            from config import normalize_svg_pixels_per_mm
+
+            # Match the converter: only high-fidelity (including the vector
+            # opacity fallback, which runs as high-fidelity) uses the
+            # requested density; other raster modes use the default.
+            # 与转换器一致：仅高保真（含按高保真运行的矢量半透明回退）使用
+            # 请求密度，其他栅格模式使用默认密度。
+            mode_value = str(getattr(modeling_mode, "value", modeling_mode) or "")
+            pixels_per_mm = (
+                normalize_svg_pixels_per_mm(svg_pixels_per_mm)
+                if mode_value in {"high-fidelity", "vector"}
+                else SVG_PIXELS_PER_MM_DEFAULT
+            )
+            try:
+                return _batch_compute_svg_content_xy_bbox_mm(
+                    image_path,
+                    target_width_mm,
+                    pixels_per_mm,
+                )
+            except (OSError, ValueError, RuntimeError, TimeoutError, ImportError):
+                pass
         return _batch_compute_svg_xy_bbox_mm(
             image_path,
             target_width_mm,
@@ -1308,6 +1397,8 @@ def worker_batch_convert_item(
         image_path,
         target_width_mm,
         svg_pixels_per_mm=svg_pixels_per_mm,
+        modeling_mode=modeling_mode_value,
+        color_mode=color_mode,
     )
     from utils.fatcat_metadata import select_metadata_target
 

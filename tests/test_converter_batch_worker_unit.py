@@ -227,9 +227,10 @@ def test_batch_compute_xy_bbox_ignores_transparent_padding(tmp_path) -> None:
 
 
 def test_batch_compute_xy_bbox_supports_svg_alpha_bbox(tmp_path) -> None:
-    """SVG inputs should not fail batch layout footprint calculation.
+    """Native-vector SVG footprints keep the full-canvas scale.
 
-    批量 SVG 不应在排布占位尺寸计算阶段被 PIL 误判为无法打开。
+    原生矢量 SVG 的批量占位仍按整张画布比例计算，且不应被 PIL 误判为
+    无法打开。
     """
     svg_path = tmp_path / "sprite.svg"
     svg_path.write_text(
@@ -249,6 +250,8 @@ def test_batch_compute_xy_bbox_supports_svg_alpha_bbox(tmp_path) -> None:
             str(svg_path),
             target_width_mm=40.0,
             svg_pixels_per_mm=3.0,
+            modeling_mode="vector",
+            color_mode="4-Color (RYBW)",
         )
 
     assert width_mm == 20.0
@@ -262,6 +265,230 @@ def test_batch_compute_xy_bbox_supports_svg_alpha_bbox(tmp_path) -> None:
         _max_longest_px=2048,
         _cache_result=False,
     )
+
+
+# Content occupies the middle half of the canvas, so the converter's alpha
+# crop removes about half of the rendered width.
+# 内容只占画布中间一半，转换时的 alpha 裁切会去掉约一半渲染宽度。
+_MARGINED_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80" viewBox="0 0 100 80">'
+    '<rect x="25" y="20" width="50" height="40" fill="#cc0000"{opacity}/></svg>'
+)
+_FULL_BLEED_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80" viewBox="0 0 100 80">'
+    '<rect x="0" y="0" width="100" height="80" fill="#cc0000"/></svg>'
+)
+
+
+def _write_svg(tmp_path, name: str, text: str) -> str:
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+def _solid_extent_mm(mask_solid, pixel_scale: float) -> tuple[float, float]:
+    """Return the converted model's solid XY extent in millimetres."""
+    cols = np.where(np.asarray(mask_solid).any(axis=0))[0]
+    rows = np.where(np.asarray(mask_solid).any(axis=1))[0]
+    return (
+        (int(cols[-1]) - int(cols[0]) + 1) * float(pixel_scale),
+        (int(rows[-1]) - int(rows[0]) + 1) * float(pixel_scale),
+    )
+
+
+def _lut_conversion_extent_mm(tmp_path, image_path: str, modeling_mode: str, target_width_mm: float):
+    from config import ModelingMode
+    from core.image_processing import LuminaImageProcessor
+
+    lut = np.zeros((32, 3), dtype=np.uint8)
+    lut[16:] = 255
+    lut_path = tmp_path / "bw.npy"
+    np.save(lut_path, lut)
+    result = LuminaImageProcessor(str(lut_path), "BW", svg_pixels_per_mm=10).process_image(
+        image_path,
+        target_width_mm=target_width_mm,
+        modeling_mode=ModelingMode(modeling_mode),
+        quantize_colors=2,
+        blur_kernel=0,
+        smooth_sigma=0,
+    )
+    return _solid_extent_mm(result["mask_solid"], result["pixel_scale"])
+
+
+class _FakeMaterialCache:
+    """Pass-through ``MaterialSolverCache`` stand-in for geometry-only checks."""
+
+    palette_hash = "fake"
+    grid_resolution = 1
+    valid_cell_count = 1
+    metadata: dict = {"built_at": "t", "mean_delta_e": 0.0, "max_delta_e": 0.0}
+
+    def lookup(self, unique_colors, materials):
+        n = int(unique_colors.shape[0])
+        return (
+            unique_colors.astype(np.uint8, copy=True),
+            np.zeros((n, 5), dtype=np.int32),
+            np.zeros((n,), dtype=np.float32),
+        )
+
+
+def _fake_map_pixels_to_materials(
+    quantized_image, unique_colors, matched_rgb_unique, recipes_unique, target_h, target_w
+):
+    return (
+        np.zeros((target_h, target_w, 3), dtype=np.uint8),
+        np.zeros((target_h, target_w, 5), dtype=np.int32),
+    )
+
+
+def _material_conversion_extent_mm(image_path: str, target_width_mm: float):
+    from config import ModelingMode
+    from core.pipeline import p03_core_processing as p03_mod
+
+    ctx = {
+        "image_path": image_path,
+        "target_width_mm": target_width_mm,
+        "modeling_mode": ModelingMode.HIGH_FIDELITY,
+        "svg_pixels_per_mm": 10,
+        "quantize_colors": 16,
+        "auto_bg": False,
+        "bg_tol": 0,
+        "_material_params": [object()],
+        "color_layers": 5,
+        "layer_height_mm": 0.08,
+        "material_substrate": "white",
+        "material_source": "material_archive",
+    }
+    with patch(
+        "core.material_cache.load_material_solver_cache_with_fallback",
+        return_value=(_FakeMaterialCache(), 1),
+    ), patch(
+        "core.material_lut_synthesis.map_pixels_to_materials",
+        side_effect=_fake_map_pixels_to_materials,
+    ):
+        result = p03_mod._run_material_archive_branch(ctx)
+    assert result.get("error") is None, result.get("error")
+    return _solid_extent_mm(result["mask_solid"], result["pixel_scale"])
+
+
+@pytest.mark.parametrize("modeling_mode", ["high-fidelity", "pixel"])
+def test_batch_svg_footprint_matches_lut_conversion_extent(tmp_path, modeling_mode) -> None:
+    """Raster-mode batch footprints must equal the converted SVG model extent.
+
+    Converted SVG meshes map the alpha-cropped raster to ``target_width_mm``;
+    a canvas-scale footprint understates margined SVGs and makes neighbouring
+    batch items overlap.
+    栅格模式批量占位必须与转换后的 SVG 模型实际范围一致，否则带边距 SVG
+    的占位偏小，相邻批量模型会重叠。
+    """
+    pytest.importorskip("resvg_py")
+    svg_path = _write_svg(tmp_path, "margined.svg", _MARGINED_SVG.format(opacity=""))
+
+    footprint = _batch_compute_xy_bbox_mm(
+        svg_path,
+        target_width_mm=40.0,
+        svg_pixels_per_mm=10.0,
+        modeling_mode=modeling_mode,
+        color_mode="4-Color (RYBW)",
+    )
+    actual = _lut_conversion_extent_mm(tmp_path, svg_path, modeling_mode, 40.0)
+
+    assert footprint == pytest.approx(actual, abs=1e-6)
+    assert footprint[0] > 30.0  # content scale, not the 20 mm canvas scale
+
+
+def test_batch_svg_footprint_matches_material_conversion_extent(tmp_path) -> None:
+    """Material-archive batch footprints follow the material SVG branch scale."""
+    pytest.importorskip("resvg_py")
+    svg_path = _write_svg(tmp_path, "margined.svg", _MARGINED_SVG.format(opacity=""))
+
+    footprint = _batch_compute_xy_bbox_mm(
+        svg_path,
+        target_width_mm=40.0,
+        svg_pixels_per_mm=10.0,
+        modeling_mode="high-fidelity",
+        color_mode="4-Color (RYBW)",
+    )
+    actual = _material_conversion_extent_mm(svg_path, 40.0)
+
+    assert footprint == pytest.approx(actual, abs=1e-6)
+
+
+def test_batch_svg_layout_does_not_overlap_converted_extents(tmp_path) -> None:
+    """Shelf layout built from footprints keeps converted models apart."""
+    pytest.importorskip("resvg_py")
+    from core.batch_layout import XYBBox, layout_shelf_by_row
+
+    svg_path = _write_svg(tmp_path, "margined.svg", _MARGINED_SVG.format(opacity=""))
+    footprint = _batch_compute_xy_bbox_mm(
+        svg_path,
+        target_width_mm=40.0,
+        svg_pixels_per_mm=10.0,
+        modeling_mode="high-fidelity",
+        color_mode="4-Color (RYBW)",
+    )
+    actual_w, _actual_d = _lut_conversion_extent_mm(tmp_path, svg_path, "high-fidelity", 40.0)
+
+    layout = layout_shelf_by_row(
+        [XYBBox(width_mm=footprint[0], depth_mm=footprint[1])] * 2,
+        plate_width_mm=350.0,
+        plate_depth_mm=320.0,
+    )
+    first, second = layout.placements
+    assert second.ty_mm == first.ty_mm
+    assert second.tx_mm >= first.tx_mm + actual_w
+
+
+def test_batch_svg_footprint_full_bleed_keeps_target_width(tmp_path) -> None:
+    """Uncropped SVGs keep ``target_width_mm`` in every raster mode."""
+    pytest.importorskip("resvg_py")
+    svg_path = _write_svg(tmp_path, "full.svg", _FULL_BLEED_SVG)
+
+    footprint = _batch_compute_xy_bbox_mm(
+        svg_path,
+        target_width_mm=40.0,
+        svg_pixels_per_mm=10.0,
+        modeling_mode="high-fidelity",
+        color_mode="4-Color (RYBW)",
+    )
+
+    assert footprint == pytest.approx((40.0, 32.0), abs=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("color_mode", "opacity", "expect_content_scale"),
+    [
+        # Canonical 5-Color translucent fallback: converted on the raster path.
+        ("5-Color Extended", ' fill-opacity="0.5"', True),
+        # True native vector (opaque 5-Color, or 4-Color): canvas scale.
+        ("5-Color Extended", "", False),
+        ("4-Color (RYBW)", ' fill-opacity="0.5"', False),
+    ],
+)
+def test_batch_svg_footprint_follows_effective_vector_mode(
+    tmp_path, color_mode, opacity, expect_content_scale
+) -> None:
+    """Vector requests use the effective converter mode for footprint semantics.
+
+    5 色半透明 SVG 的矢量请求实际走高保真光栅合成，占位需按内容比例；
+    真正的原生矢量仍按画布比例。
+    """
+    pytest.importorskip("resvg_py")
+    svg_path = _write_svg(tmp_path, "margined.svg", _MARGINED_SVG.format(opacity=opacity))
+
+    footprint = _batch_compute_xy_bbox_mm(
+        svg_path,
+        target_width_mm=40.0,
+        svg_pixels_per_mm=10.0,
+        modeling_mode="vector",
+        color_mode=color_mode,
+    )
+
+    if expect_content_scale:
+        actual = _lut_conversion_extent_mm(tmp_path, svg_path, "high-fidelity", 40.0)
+        assert footprint == pytest.approx(actual, abs=1e-6)
+    else:
+        assert footprint == pytest.approx((20.0, 16.0), abs=1e-6)
 
 
 @pytest.fixture
@@ -304,7 +531,10 @@ def batch_worker_artifacts(tmp_path):
         with patch(
             "core.converter.convert_image_to_3d",
             return_value=fake_return,
-        ) as convert_mock:
+        ) as convert_mock, patch(
+            "api.workers.converter_workers._batch_compute_xy_bbox_mm",
+            wraps=_batch_compute_xy_bbox_mm,
+        ) as footprint_spy:
             result = worker_batch_convert_item(
                 image_path=str(image_path),
                 lut_path="dummy_lut.npy",
@@ -334,6 +564,9 @@ def batch_worker_artifacts(tmp_path):
             assert forwarded["backing_infill_density_percent"] == 25
             assert forwarded["enable_coating"] is False
             assert forwarded["coating_height_mm"] == 0.08
+            footprint_kwargs = footprint_spy.call_args.kwargs
+            assert footprint_kwargs["modeling_mode"] == "high-fidelity"
+            assert footprint_kwargs["color_mode"] == "4-Color (RYBW)"
 
         yield artifact_prefix, image_path, result
     finally:
