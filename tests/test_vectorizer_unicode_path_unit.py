@@ -111,6 +111,8 @@ class TestWorkerNonAsciiPath:
     def test_ascii_path_keeps_native_path_handoff(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, native_inputs: list[type]
     ) -> None:
+        if not str(tmp_path).isascii():
+            pytest.skip("ASCII-path control requires an ASCII temporary root")
         result = _run_worker(tmp_path / "ascii", "tmpinput.png", _png_bytes(), monkeypatch)
 
         assert (result["width"], result["height"]) == (64, 32)
