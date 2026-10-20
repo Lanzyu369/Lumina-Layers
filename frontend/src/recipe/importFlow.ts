@@ -38,6 +38,9 @@ const IMAGE_DECODE_TIMEOUT_MS = 30_000;
 export const MODEL_SURFACE_RECIPE_EXPORT_UNAVAILABLE_ERROR =
   "Model surface recipes are not supported";
 
+export const RECIPE_IMPORT_PREDICTIVE_LUT_UNAVAILABLE_ERROR =
+  "Inferred LUT is currently unavailable";
+
 /**
  * Warn for legacy spatial edits without a portable checkpoint.
  *
@@ -112,6 +115,12 @@ export async function isShareCardFile(file: File): Promise<boolean> {
   return false;
 }
 
+function assertRecipeSourceAvailable(recipe: LuminaRecipe): void {
+  if (recipe.recipe.converter?.source?.source_version === "native") {
+    throw new Error(RECIPE_IMPORT_PREDICTIVE_LUT_UNAVAILABLE_ERROR);
+  }
+}
+
 // ========== Import orchestration ==========
 
 export interface ImportPreview {
@@ -131,6 +140,7 @@ export interface ImportPreview {
  */
 export async function prepareImport(file: File): Promise<ImportPreview> {
   const { recipe, source } = await parseRecipeFile(file);
+  assertRecipeSourceAvailable(recipe);
 
   const converterState = useConverterStore.getState();
   const lutListFull = converterState.lutListFull;
@@ -248,6 +258,10 @@ export function applyImport(
   printerOptions: PrinterInfo[] = [],
   options: ApplyImportOptions = {},
 ): void {
+  assertRecipeSourceAvailable(restoreResult.recipe);
+  if (restoreResult.state.source_version === "native") {
+    throw new Error(RECIPE_IMPORT_PREDICTIVE_LUT_UNAVAILABLE_ERROR);
+  }
   const store = useConverterStore.getState();
   const conv = restoreResult.recipe.recipe.converter;
 

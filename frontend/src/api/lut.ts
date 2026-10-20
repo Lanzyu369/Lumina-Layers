@@ -1,4 +1,5 @@
 import apiClient, { type ApiRequestOptions } from "./client";
+import { isPredictiveLutSource } from "../utils/lutVisibility";
 import type {
   CompareRequest,
   CompareResponse,
@@ -63,7 +64,7 @@ export async function compareLuts(
   return response.data;
 }
 
-/** 获取旧版 LUT 与新版品牌包目录 */
+/** 获取转换器可见的 LUT 目录。 */
 export async function fetchLutCatalog(
   signal?: AbortSignal,
 ): Promise<LutCatalogResponse> {
@@ -72,7 +73,7 @@ export async function fetchLutCatalog(
         signal,
       })
     : await apiClient.get<LutCatalogResponse>("/lut/catalog");
-  return response.data;
+  return { ...response.data, native_brand_groups: [] };
 }
 
 /** 获取 LUT 详情目录，包含 manufacturer 分组与可搜索 tokens。 */
@@ -85,7 +86,15 @@ export async function fetchLutDetailsCatalog(
           suppressClientLog: true,
         })
       : await apiClient.get<LutDetailsCatalogResponse>("/lut/details/catalog");
-  return response.data;
+  return {
+    ...response.data,
+    groups: response.data.groups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => !isPredictiveLutSource(item.source_kind)),
+      }))
+      .filter((group) => group.items.length > 0),
+  };
 }
 
 /** 上传一个本地 LUT 到 Custom 预设目录。 */
