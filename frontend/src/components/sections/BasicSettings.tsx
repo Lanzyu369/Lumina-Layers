@@ -32,7 +32,12 @@ import LegacyLutSelector from "./LegacyLutSelector";
 import { tRuntime } from "../../i18n/runtime";
 import { useI18n } from "../../i18n/context";
 import { useWorkspaceMode } from "../../hooks/useWorkspaceMode";
-import { prepareImport, applyImport, revokeImportCoverUrl } from "../../recipe/importFlow";
+import {
+  prepareImport,
+  applyImport,
+  revokeImportCoverUrl,
+  RECIPE_IMPORT_PREDICTIVE_LUT_UNAVAILABLE_ERROR,
+} from "../../recipe/importFlow";
 import type { ImportPreview } from "../../recipe/importFlow";
 import {
   RECIPE_ASSET_CORRUPT_ERROR,
@@ -174,6 +179,9 @@ function resolveRecipeImportError(
   }
   if (message === RECIPE_ASSET_CORRUPT_ERROR) {
     return t("recipe_import_asset_corrupt");
+  }
+  if (message === RECIPE_IMPORT_PREDICTIVE_LUT_UNAVAILABLE_ERROR) {
+    return t("recipe_import_predictive_lut_unavailable");
   }
   return t("recipe_import_error_unreadable");
 }
