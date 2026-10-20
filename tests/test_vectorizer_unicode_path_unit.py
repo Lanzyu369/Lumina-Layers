@@ -157,7 +157,8 @@ class TestWorkerNonAsciiPath:
         directory.mkdir()
         monkeypatch.setattr(config, "TEMP_DIR", str(directory))
 
-        with pytest.raises(RuntimeError, match="Failed to load image"):
+        # Native diagnostic text differs across platform and codec builds.
+        with pytest.raises(RuntimeError):
             worker_vectorize(str(directory / "missing.png"), dict(_PARAMS))
 
         assert native_inputs == [str]
