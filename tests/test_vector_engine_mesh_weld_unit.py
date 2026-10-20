@@ -507,6 +507,7 @@ def test_double_sided_coating_stays_one_auxiliary_object() -> None:
     processor.enable_fridge_magnet = False
     processor.enable_coating = True
     processor.coating_height_mm = 0.08
+    processor.coating_material = None
     processor.enable_outline = False
     processor.layer_height_mm = 0.08
     processor._merge_backing_into_material = True
