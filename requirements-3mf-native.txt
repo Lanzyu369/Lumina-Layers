@@ -1,7 +1,7 @@
 # Native metadata dependencies for the selected slicer export routes.
 #
 # Public source: https://github.com/MOVIBALE/fatcat-metadata
-# Release source: 9635525d687506fa1f2a62cdaf96a94459249fdf.
+# Release source: acdf8abdf00560759ecdf660eb080bb2083fd5bb.
 # 0.1.2 preserves inherited native filament IDs required by startup G-code.
 # Lumina consumes the same public SDK without patching it or changing its version.
 # The temporary Production writer is distributed by the public Neroued fork.

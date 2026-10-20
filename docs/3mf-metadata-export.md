@@ -71,7 +71,7 @@ automatically; no SDK checkout, local wheelhouse or C++ compiler is needed.
 Lumina consumes the same public SDK without a downstream patch or version suffix.
 Maintainer builds use the public
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) root
-project at source revision `9635525d687506fa1f2a62cdaf96a94459249fdf` and pins
+project at source revision `acdf8abdf00560759ecdf660eb080bb2083fd5bb` and pins
 the writer contract in
 `scripts/fatcat_packaging_contract.py`; build and installation steps are in
 [the desktop setup guide](desktop-electron.md).
@@ -84,7 +84,7 @@ requirements 自动选择匹配的已发布 wheel，
 Lumina 直接使用公共 SDK，不再维护 FatCat 补丁或额外版本后缀。
 维护者从公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) 的根项目构建，
-源码提交固定为 `9635525d687506fa1f2a62cdaf96a94459249fdf`，并在
+源码提交固定为 `acdf8abdf00560759ecdf660eb080bb2083fd5bb`，并在
 `scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
 [桌面环境指南](desktop-electron.md)。
 
