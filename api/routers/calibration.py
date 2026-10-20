@@ -251,8 +251,6 @@ def calibration_generate(
             public_detail=CALIBRATION_GENERATION_FAILED_DETAIL,
         )
 
-    placement_warnings = read_wipe_tower_placement_warnings(path)
-
     # Register files via FileRegistry
     sid = _new_stateless_export_sid("calibration")
     preview_url = None
@@ -260,6 +258,7 @@ def calibration_generate(
     layer_urls = []
     download_id = None
     try:
+        placement_warnings = read_wipe_tower_placement_warnings(path)
         download_id = registry.register_path(
             sid,
             path,

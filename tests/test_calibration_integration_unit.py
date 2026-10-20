@@ -21,7 +21,10 @@ from PIL import Image
 from api.app import create_app
 from api.dependencies import get_file_registry
 from api.file_registry import FileRegistry
-from api.routers.calibration import CALIBRATION_GENERATION_FAILED_DETAIL
+from api.routers.calibration import (
+    CALIBRATION_GENERATION_FAILED_DETAIL,
+    CALIBRATION_OUTPUT_PREPARATION_FAILED_DETAIL,
+)
 from config import DEFAULT_PRINTER_ID, DEFAULT_SLICER_ID
 
 client: TestClient = TestClient(create_app())
@@ -556,6 +559,33 @@ class TestPlacementWarnings:
 
 class TestErrorHandling:
     """Verify core exceptions are translated to HTTP 500 responses."""
+
+    def test_missing_8color_data_keeps_output_error_boundary(self, caplog) -> None:
+        failing_client = TestClient(create_app(), raise_server_exceptions=False)
+        target_logger = logging.getLogger("lumina")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+        try:
+            with patch(
+                "core.calibration._load_selected_8color_stacks",
+                side_effect=FileNotFoundError("selected 8-color stacks unavailable"),
+            ):
+                response = failing_client.post(
+                    "/api/calibration/generate",
+                    json={"color_mode": "8-Color Max", "eight_color_full_export": False},
+                )
+        finally:
+            failing_client.close()
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 500
+        assert response.json() == {
+            "detail": CALIBRATION_OUTPUT_PREPARATION_FAILED_DETAIL,
+        }
+        events = {getattr(record, "event", None) for record in caplog.records}
+        assert "calibration_output_preparation_failed" in events
+        assert "api_unhandled_exception" not in events
 
     def test_core_exception_returns_500(self) -> None:
         private_path = "/Users/min/private/calibration.3mf"
