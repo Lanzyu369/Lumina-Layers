@@ -121,7 +121,7 @@ import {
   buildCurrentVisibleColorRemapMap,buildSourceChangeProjectColorState,chooseLastSelectedColor,clonePortableProjectColorState,cloneRecipeOverrides,cloneRemapHistory,cloneReplacementRegions,colorRemapFromReplacementRegions,createAdjustmentSnapshot,editorCommitResultStateFromResponse,EMPTY_LUT_MATCH_STATE,getPreviewBaseUrl,hasAdjustmentState,historyFlagsFromResponse,INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,matchesColorHighlightSnapshot,normalizeHexNoHash,normalizeReplacementRegionsFromHistory,selectionModeForTool,selectionStateFromDocument,selectionToolForLegacyMode,toggleHexInSet,
 } from "./editorState";
 import {
-  createGenerationActions,getElapsedMsSince,getErrorType,invalidateGenerationRequests,notifyCompletion,
+  CONVERTER_ERROR_KEYS,createGenerationActions,getElapsedMsSince,getErrorType,invalidateGenerationRequests,notifyCompletion,
 } from "./generationActions";
 import {
   buildLutCatalogIndex,
@@ -7966,6 +7966,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     // --- 完整流水线（preview → generate）---
     submitFullPipeline: async () => {
       const state = _get();
+
+      // Refuse the unsupported pair before starting a preview that generation
+      // would reject anyway.
+      if (state.largeFormatEnabled && state.modelSurfaceEnabled) {
+        set({ error: CONVERTER_ERROR_KEYS.largeFormatModelSurfaceConflict });
+        return null;
+      }
 
       // 步骤 1：如果没有 sessionId，先执行预览
       if (!state.sessionId) {

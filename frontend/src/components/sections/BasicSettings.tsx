@@ -955,8 +955,11 @@ export default function BasicSettings() {
   const dimMax = STANDARD_DIMENSION_SLIDER_MAX_MM;
   const dimInputMax = largeFormatEnabled ? Number.POSITIVE_INFINITY : undefined;
 
+  // Large-format tiles cut flat artwork, so they cannot represent a model
+  // surface; the conflict banner replaces the grid summary in that case.
+  const largeFormatModelSurfaceConflict = largeFormatEnabled && modelSurfaceEnabled;
   const tileGrid = useMemo(() => {
-    if (!largeFormatEnabled) return null;
+    if (!largeFormatEnabled || modelSurfaceEnabled) return null;
     // Match the height the backend derives for large-format generation.
     const grid = resolveLargeFormatTileGrid(
       target_width_mm,
@@ -975,6 +978,7 @@ export default function BasicSettings() {
     return { cols: grid.cols, rows: grid.rows, total: grid.total, lastW, lastH };
   }, [
     largeFormatEnabled,
+    modelSurfaceEnabled,
     target_width_mm,
     target_height_mm,
     previewPixelWidth,
@@ -1350,7 +1354,11 @@ export default function BasicSettings() {
         label={t("basic_large_format")}
         checked={largeFormatEnabled}
         onChange={setLargeFormatEnabled}
-        disabled={puzzleEnabled || enable_fridge_magnet}
+        disabled={
+          puzzleEnabled ||
+          enable_fridge_magnet ||
+          (modelSurfaceEnabled && !largeFormatEnabled)
+        }
         tooltip={t("basic_large_format_hint")}
         wikiPath={WIKI_DOCS.largeFormat}
       />
@@ -1359,6 +1367,20 @@ export default function BasicSettings() {
         <div className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400">
           {t("puzzle_large_format_disabled_hint")}
         </div>
+      )}
+
+      {modelSurfaceEnabled && !largeFormatEnabled && !puzzleEnabled && (
+        <div className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400">
+          {t("model_surface_large_format_disabled_hint")}
+        </div>
+      )}
+
+      {largeFormatModelSurfaceConflict && (
+        <StatusBanner tone="warning">
+          <p data-testid="large-format-model-surface-conflict">
+            {t("large_format_model_surface_conflict")}
+          </p>
+        </StatusBanner>
       )}
 
       {mergedLargeFormatWarnings.length > 0 ? (

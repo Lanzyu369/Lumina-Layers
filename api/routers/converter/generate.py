@@ -325,6 +325,10 @@ MODEL_SURFACE_SOURCE_UNAVAILABLE_DETAIL: str = (
 MODEL_SURFACE_CONFIG_UNAVAILABLE_DETAIL: str = (
     "Surface overlay configuration is unavailable. Select a model surface, run preview, and try again."
 )
+LARGE_FORMAT_MODEL_SURFACE_UNSUPPORTED_DETAIL: str = (
+    "Large-format tiled generation does not support model surface overlay. "
+    "Turn off large-format mode or model surface overlay, then generate again."
+)
 _MODEL_SURFACE_DEFAULT_POCKET_DEPTH_MM: float = 0.4
 _SELECT_ALL_COLOR_REGION_PREFIX = "__select_all_color__:"
 
@@ -3925,6 +3929,12 @@ async def convert_generate_large_format(
             "refresh the editor state and try again."
         ),
     )
+    if _should_use_model_surface_overlay(session_data):
+        # Tiles are cut from flat artwork, so the uploaded model would be lost.
+        raise HTTPException(
+            status_code=422,
+            detail=LARGE_FORMAT_MODEL_SURFACE_UNSUPPORTED_DETAIL,
+        )
     cache, cache_ref = _require_preview_cache_for_generate(session_data)
     validate_export_device_selection(
         printer_id=request.printer_id,
