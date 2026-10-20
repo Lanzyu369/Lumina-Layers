@@ -4,7 +4,10 @@
 WebP and TIFF uploads are accepted by the backend but the native loader cannot
 decode them, so they used to fail with a generic 500. These tests drive the
 real ``neroued_vectorizer`` and require WebP/TIFF results to match the result
-for the same pixels encoded as PNG, with all temp files cleaned up.
+for the same pixels encoded as PNG, with all temp files cleaned up. 16-bit grey
+TIFF must keep its exact 0..65535 values in every byte order. Exact native
+output is only compared on fixtures the native vectorizer renders
+deterministically; otherwise the decoded handoff pixels are the oracle.
 """
 
 from __future__ import annotations
@@ -12,9 +15,11 @@ from __future__ import annotations
 import io
 import os
 import shutil
+import struct
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -70,6 +75,57 @@ def _summary(result: dict) -> dict:
     return {k: result[k] for k in ("width", "height", "num_shapes", "num_colors", "palette")}
 
 
+def _hex_near(palette: list[str], rgb: tuple[int, int, int], tol: int = 16) -> bool:
+    return any(
+        max(abs(int(h[i:i + 2], 16) - c) for i, c in zip((1, 3, 5), rgb)) <= tol
+        for h in palette
+    )
+
+
+# Six vertical bands that span the full 16-bit range, and the review's values.
+_BANDS16 = [0, 8192, 16384, 32768, 49152, 65535]
+_REVIEW16 = [0, 255, 256, 1000, 65535]
+
+
+def _gray16_bands(levels: list[int], width: int = 160, height: int = 64) -> np.ndarray:
+    arr = np.zeros((height, width), dtype=np.uint16)
+    step = width // len(levels)
+    for i, value in enumerate(levels):
+        end = (i + 1) * step if i < len(levels) - 1 else width
+        arr[:, i * step:end] = value
+    return arr
+
+
+def _write_gray16_tiff(arr: np.ndarray, path, byte_order: str) -> str:
+    """Write an uncompressed baseline 16-bit grey TIFF by hand (II or MM)."""
+    e = "<" if byte_order == "II" else ">"
+    height, width = arr.shape
+    pixels = arr.astype(f"{e}u2").tobytes()
+    tags = [  # tag, type (3=SHORT, 4=LONG), value
+        (256, 3, width), (257, 3, height), (258, 3, 16), (259, 3, 1), (262, 3, 1),
+        (273, 4, 8 + 2 + 9 * 12 + 4), (277, 3, 1), (278, 3, height), (279, 4, len(pixels)),
+    ]
+    ifd = struct.pack(f"{e}H", len(tags))
+    for tag, typ, value in tags:
+        packed = struct.pack(f"{e}HH", value, 0) if typ == 3 else struct.pack(f"{e}I", value)
+        ifd += struct.pack(f"{e}HHI", tag, typ, 1) + packed
+    ifd += struct.pack(f"{e}I", 0)
+    magic = b"II*\x00" if byte_order == "II" else b"MM\x00*"
+    with open(path, "wb") as f:
+        f.write(magic + struct.pack(f"{e}I", 8) + ifd + pixels)
+    return str(path)
+
+
+def _write_gray16(arr: np.ndarray, path, source: str) -> str:
+    if source in ("II", "MM"):
+        return _write_gray16_tiff(arr, path, source)
+    fmt = "PNG" if source == "png" else "TIFF"
+    mode = "I;16B" if source == "pillow_I;16B" else "I;16"
+    data = arr.astype(">u2" if mode == "I;16B" else "<u2").tobytes()
+    Image.frombytes(mode, (arr.shape[1], arr.shape[0]), data).save(path, fmt)
+    return str(path)
+
+
 @pytest.mark.parametrize(
     ("name", "fmt", "kwargs"),
     [
@@ -100,17 +156,38 @@ def test_webp_and_tiff_match_png_result(tmp_path, temp_dir, name, fmt, kwargs):
     [("WEBP", {"lossless": True, "exact": True}), ("TIFF", {})],
 )
 def test_alpha_is_preserved_like_png(tmp_path, temp_dir, fmt, kwargs):
+    """RGBA WebP/TIFF hand over exact RGBA pixels and vectorize like the PNG.
+
+    The native output for this transparent fixture varies run to run (also for
+    the PNG itself), so the deterministic oracle is the decoded RGBA handoff;
+    the native result must still succeed with the same size and opaque colours.
+    """
+    from api.workers.vectorizer_workers import _transcode_for_native_loader
+
     src_dir = tmp_path / "src"
     src_dir.mkdir()
     img = _rgba_with_transparency()
     png = _write(img, src_dir / "ref.png", "PNG")
     other = _write(img, src_dir / ("img." + fmt.lower()), fmt, **kwargs)
 
-    png_result, png_svg = _vectorize(png, temp_dir)
+    handoff = _transcode_for_native_loader(other, str(temp_dir))
+    try:
+        with Image.open(handoff) as out:
+            assert (out.format, out.mode, out.size) == ("PNG", "RGBA", (80, 80))
+            assert out.tobytes() == img.tobytes()
+            assert sorted(set(out.getchannel("A").getdata())) == [0, 255]
+    finally:
+        os.unlink(handoff)
+
+    png_result, _ = _vectorize(png, temp_dir)
     result, svg = _vectorize(other, temp_dir)
 
-    assert _summary(result) == _summary(png_result)
-    assert svg == png_svg
+    for res in (png_result, result):
+        assert (res["width"], res["height"]) == (80, 80)
+        assert _hex_near(res["palette"], (255, 0, 0))
+        assert _hex_near(res["palette"], (0, 0, 255))
+    assert 'viewBox="0 0 80 80"' in svg
+    assert list(temp_dir.iterdir()) == []
 
 
 def test_handoff_png_keeps_decoded_pixels_and_alpha(tmp_path, temp_dir):
@@ -154,7 +231,12 @@ def test_webp_exif_orientation_matches_stored_pixel_png_oracle(tmp_path, temp_di
 
 
 def test_tiff_orientation_tag_matches_decoded_pixel_png_oracle(tmp_path, temp_dir):
-    """TIFF Orientation is applied by the decoder; the oracle is the rotated PNG."""
+    """TIFF Orientation is applied by the decoder; the oracle is the rotated PNG.
+
+    The native output for this rotated fixture varies run to run (also for the
+    oracle PNG itself), so the exact oracle is the rotated handoff pixels; both
+    real results must have the rotated size and all four band colours.
+    """
     from api.workers.vectorizer_workers import _transcode_for_native_loader
 
     src_dir = tmp_path / "src"
@@ -172,12 +254,15 @@ def test_tiff_orientation_tag_matches_decoded_pixel_png_oracle(tmp_path, temp_di
     finally:
         os.unlink(png_path)
 
-    oracle_result, oracle_svg = _vectorize(oracle_png, temp_dir)
+    oracle_result, _ = _vectorize(oracle_png, temp_dir)
     result, svg = _vectorize(tiff, temp_dir)
 
-    assert (result["width"], result["height"]) == (64, 96)
-    assert _summary(result) == _summary(oracle_result)
-    assert svg == oracle_svg
+    for res in (oracle_result, result):
+        assert (res["width"], res["height"]) == (64, 96)
+        for band in ((255, 255, 255), (220, 20, 60), (255, 230, 0), (0, 102, 255)):
+            assert _hex_near(res["palette"], band)
+    assert 'viewBox="0 0 64 96"' in svg
+    assert list(temp_dir.iterdir()) == []
 
 
 @pytest.mark.parametrize(
@@ -203,24 +288,29 @@ def test_pillow_pixel_guard_does_not_gate_native_formats(temp_dir, monkeypatch, 
     ("name", "fmt", "kwargs"),
     [("img.webp", "WEBP", {"lossless": True}), ("img.tiff", "TIFF", {})],
 )
-def test_pillow_pixel_guard_on_webp_tiff_keeps_baseline_failure(
+def test_pillow_pixel_guard_on_webp_tiff_hands_original_path_to_native(
     temp_dir, monkeypatch, name, fmt, kwargs
 ):
-    """Over-limit WebP/TIFF is not decoded; the native loader fails as before."""
-    from api.routers.vectorizer import _VECTORIZER_BOUNDARY_ERRORS
+    """Over-limit WebP/TIFF is not decoded; the native loader gets the original file.
+
+    Whether the native build can read WebP/TIFF depends on the runtime, so a
+    sentinel stops the call instead of asserting a native failure.
+    """
     from api.workers.vectorizer_workers import worker_vectorize
+
+    class _Sentinel(RuntimeError):
+        pass
 
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 200)
     upload = _write(_banded_rgb(), temp_dir / name, fmt, **kwargs)
     seen: list[str] = []
-    real_vectorize = nv.vectorize
 
     def _spy(path, config):
         seen.append(path)
-        return real_vectorize(path, config)
+        raise _Sentinel(path)
 
     with patch.object(nv, "vectorize", side_effect=_spy):
-        with pytest.raises(_VECTORIZER_BOUNDARY_ERRORS):
+        with pytest.raises(_Sentinel):
             worker_vectorize(upload, {})
 
     assert seen == [upload]
@@ -347,3 +437,98 @@ def test_api_vectorize_returns_same_svg_as_png(temp_dir, filename, fmt, content_
     leftovers = {p.suffix for p in temp_dir.iterdir()}
     assert leftovers <= {".svg"}
     assert len(list(temp_dir.iterdir())) == 2  # the two registered outputs
+
+
+@pytest.mark.parametrize("levels", [_BANDS16, _REVIEW16], ids=["bands", "review_values"])
+@pytest.mark.parametrize(
+    ("source", "decoded_mode"),
+    [("II", "I;16"), ("MM", "I;16B"), ("pillow_I;16", "I;16"), ("pillow_I;16B", "I;16B")],
+)
+def test_16bit_grey_tiff_handoff_keeps_exact_values(tmp_path, temp_dir, levels, source, decoded_mode):
+    """Every 16-bit grey byte order reaches the native loader as exact 0..65535 values."""
+    from api.workers.vectorizer_workers import _transcode_for_native_loader
+
+    arr = _gray16_bands(levels)
+    src = _write_gray16(arr, tmp_path / "img.tiff", source)
+    with Image.open(src) as im:
+        assert im.mode == decoded_mode
+
+    handoff = _transcode_for_native_loader(src, str(temp_dir))
+    try:
+        with Image.open(handoff) as out:
+            assert (out.format, out.mode, out.size) == ("PNG", "I;16", (160, 64))
+            decoded = np.asarray(out.convert("I")).astype(np.int64)
+        assert np.array_equal(decoded, arr.astype(np.int64))
+    finally:
+        os.unlink(handoff)
+    assert list(temp_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("levels", [_BANDS16, _REVIEW16], ids=["bands", "review_values"])
+@pytest.mark.parametrize("byte_order", ["II", "MM"])
+def test_16bit_grey_tiff_vectorizes_like_16bit_png(tmp_path, temp_dir, levels, byte_order):
+    """A 16-bit grey TIFF in either byte order matches the same pixels as a 16-bit PNG."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    arr = _gray16_bands(levels)
+    png16 = _write_gray16(arr, src_dir / "ref16.png", "png")
+    tiff = _write_gray16_tiff(arr, src_dir / "img.tiff", byte_order)
+
+    png_result, png_svg = _vectorize(png16, temp_dir)
+    result, svg = _vectorize(tiff, temp_dir)
+
+    assert _summary(result) == _summary(png_result)
+    assert svg == png_svg
+    if levels is _BANDS16:
+        oracle = Image.fromarray((arr >> 8).astype(np.uint8), "L")
+        _, oracle_svg = _vectorize(_write(oracle, src_dir / "oracle8.png", "PNG"), temp_dir)
+        assert result["num_colors"] == len(_BANDS16)
+        assert svg == oracle_svg
+    assert list(temp_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("byte_order", ["MM", "II"])
+def test_api_16bit_grey_tiff_returns_png_equivalent_svg(tmp_path, temp_dir, byte_order):
+    from fastapi.testclient import TestClient
+
+    from api.app import create_app
+    from api.dependencies import get_file_registry, get_worker_pool
+    from api.file_registry import FileRegistry
+
+    async def _run_inline(fn, *args):
+        return fn(*args)
+
+    arr = _gray16_bands(_BANDS16)
+    uploads = {
+        "png": ("bands16.png", _write_gray16(arr, tmp_path / "bands16.png", "png"), "image/png"),
+        "tiff": ("bands16.tiff", _write_gray16_tiff(arr, tmp_path / "bands16.tiff", byte_order), "image/tiff"),
+    }
+    app = create_app()
+    registry = FileRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    app.dependency_overrides[get_worker_pool] = lambda: SimpleNamespace(
+        submit=AsyncMock(side_effect=_run_inline)
+    )
+    client = TestClient(app)
+    bodies, svgs = {}, {}
+    try:
+        for key, (name, path, ctype) in uploads.items():
+            with open(path, "rb") as f:
+                response = client.post(
+                    "/api/vectorize",
+                    files={"image": (name, f.read(), ctype)},
+                    data={"params": "{}"},
+                )
+            assert response.status_code == 200, response.text
+            bodies[key] = response.json()
+            download = client.get(bodies[key]["svg_url"])
+            assert download.status_code == 200
+            svgs[key] = download.text
+    finally:
+        app.dependency_overrides.clear()
+
+    for field in ("width", "height", "num_shapes", "num_colors", "palette"):
+        assert bodies["tiff"][field] == bodies["png"][field]
+    assert bodies["tiff"]["num_colors"] == len(_BANDS16)
+    assert svgs["tiff"] == svgs["png"]
+    assert {p.suffix for p in temp_dir.iterdir()} <= {".svg"}
