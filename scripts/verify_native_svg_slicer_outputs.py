@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -133,7 +134,44 @@ def _is_model_feature(feature: str | None) -> bool:
     )
 
 
-def _toolpath_metrics(payload: bytes) -> dict[str, Any]:
+def _extrusion_distance_mm(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
+    command_code: int,
+    words: dict[str, float],
+) -> float:
+    """Distance to an XY line or a slicer's relative-I/J circular arc."""
+    if command_code in {2, 3}:
+        if "R" in words or not ("I" in words or "J" in words):
+            raise ValueError("coverage_requires_relative_ij_arcs")
+        center = start[0] + words.get("I", 0), start[1] + words.get("J", 0)
+        radius = math.dist(start, center)
+        first = math.atan2(start[1] - center[1], start[0] - center[0])
+        last = math.atan2(end[1] - center[1], end[0] - center[0])
+        query = math.atan2(point[1] - center[1], point[0] - center[0])
+        direction = 1 if command_code == 3 else -1
+        sweep = (direction * (last - first)) % math.tau
+        offset = (direction * (query - first)) % math.tau
+        if start == end or offset <= sweep:
+            return abs(math.dist(point, center) - radius)
+        return min(math.dist(point, start), math.dist(point, end))
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    length_squared = dx * dx + dy * dy
+    fraction = (
+        ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length_squared
+        if length_squared else 0.0
+    )
+    fraction = min(1.0, max(0.0, fraction))
+    return math.hypot(
+        point[0] - start[0] - fraction * dx,
+        point[1] - start[1] - fraction * dy,
+    )
+
+
+def _toolpath_metrics(
+    payload: bytes, *, coverage_probes: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Fingerprint motion and count model-region planar extrusion only."""
 
     normalized_commands: list[str] = []
@@ -147,6 +185,14 @@ def _toolpath_metrics(payload: bytes) -> dict[str, Any]:
     planar_positions: dict[str, float | None] = {"X": None, "Y": None}
     active_feature: str | None = None
     positive_extrusion_by_tool: dict[int, int] = {}
+    z_position: float | None = None
+    coverage = []
+    for probe in coverage_probes or []:
+        if not all(math.isfinite(float(probe[key])) for key in (
+            "x_mm", "y_mm", "z_mm", "max_distance_mm",
+        )) or float(probe["max_distance_mm"]) <= 0:
+            raise ValueError("invalid_toolpath_coverage_probe")
+        coverage.append({**probe, "nearest_mm": None, "covered": False})
     for raw_line in payload.decode("utf-8", errors="replace").splitlines():
         command_text, _separator, comment = raw_line.partition(";")
         feature_match = _GCODE_FEATURE_RE.match(comment.strip())
@@ -197,10 +243,21 @@ def _toolpath_metrics(payload: bytes) -> dict[str, Any]:
             for axis in ("X", "Y"):
                 if axis in words:
                     planar_positions[axis] = words[axis]
+            if "Z" in words:
+                z_position = words["Z"]
             continue
 
         motion_count += 1
-        has_planar_motion = False
+        start = planar_positions["X"], planar_positions["Y"]
+        previous_z = z_position
+        if "Z" in words:
+            z_position = (
+                words["Z"] if absolute_positioning
+                else (z_position or 0.0) + words["Z"]
+            )
+        has_planar_motion = command_code in {2, 3} and any(
+            words.get(key, 0) != 0 for key in ("I", "J", "R")
+        )
         for axis in ("X", "Y"):
             if axis not in words:
                 continue
@@ -237,8 +294,24 @@ def _toolpath_metrics(payload: bytes) -> dict[str, Any]:
             positive_extrusion_by_tool[active_tool] = (
                 positive_extrusion_by_tool.get(active_tool, 0) + 1
             )
+            end = planar_positions["X"], planar_positions["Y"]
+            if None not in (*start, *end) and z_position is not None and (
+                previous_z is not None and abs(previous_z - z_position) <= 1e-6
+            ):
+                for probe in coverage:
+                    if abs(z_position - float(probe["z_mm"])) > 1e-4:
+                        continue
+                    if "tool_id" in probe and int(probe["tool_id"]) != active_tool:
+                        continue
+                    distance = _extrusion_distance_mm(
+                        (float(probe["x_mm"]), float(probe["y_mm"])),
+                        start, end, command_code, words,
+                    )
+                    if probe["nearest_mm"] is None or distance < probe["nearest_mm"]:
+                        probe["nearest_mm"] = distance
+                    probe["covered"] = probe["nearest_mm"] <= float(probe["max_distance_mm"])
     normalized = "\n".join(normalized_commands).encode("utf-8")
-    return {
+    result = {
         "fingerprint": hashlib.sha256(normalized).hexdigest(),
         "normalized_byte_size": len(normalized),
         "motion_command_count": motion_count,
@@ -250,6 +323,9 @@ def _toolpath_metrics(payload: bytes) -> dict[str, Any]:
         "positive_extrusion_tool_ids": sorted(positive_extrusion_by_tool),
         "tool_change_count": tool_change_count,
     }
+    if coverage:
+        result["coverage"] = coverage
+    return result
 
 
 def _toolpath_payloads(output_dir: Path) -> tuple[bytes, list[str]]:
@@ -466,6 +542,7 @@ def _validate_slicer(
     *,
     timeout_seconds: float,
     validation_runs: int = 2,
+    coverage_probes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if validation_runs < 2:
         raise ValueError("validation_runs_must_be_at_least_two")
@@ -510,7 +587,7 @@ def _validate_slicer(
             break
 
         payload, payload_paths = _toolpath_payloads(output_dir)
-        toolpath = _toolpath_metrics(payload)
+        toolpath = _toolpath_metrics(payload, coverage_probes=coverage_probes)
         missing_expected_tool_ids = sorted(
             set(inspection["expected_tool_ids"])
             - set(toolpath["positive_extrusion_tool_ids"])
@@ -527,6 +604,9 @@ def _validate_slicer(
         elif missing_expected_tool_ids:
             run_status = "failed"
             run_reason = "toolpath_missing_material_extrusion"
+        elif any(not probe["covered"] for probe in toolpath.get("coverage", [])):
+            run_status = "failed"
+            run_reason = "toolpath_missing_region_extrusion"
         else:
             run_status = "passed"
             run_reason = ""
@@ -759,11 +839,19 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=float, default=300.0)
     parser.add_argument("--validation-runs", type=int, default=2)
     parser.add_argument(
+        "--coverage-probes", type=Path,
+        help="JSON mapping slicer names to x_mm/y_mm/z_mm/max_distance_mm probes; optional tool_id.",
+    )
+    parser.add_argument(
         "--report",
         type=Path,
         default=REPO_ROOT / "progress" / "native-svg-slicer-reality.json",
     )
     args = parser.parse_args()
+    probes = (
+        json.loads(args.coverage_probes.read_text(encoding="utf-8"))
+        if args.coverage_probes else {}
+    )
 
     generated = None
     if args.generate_artifacts or args.generate_only:
@@ -812,6 +900,7 @@ def main() -> int:
             output_root,
             timeout_seconds=args.timeout_seconds,
             validation_runs=args.validation_runs,
+            coverage_probes=probes.get("BambuStudio"),
         ),
         "OrcaSlicer": _validate_slicer(
             "OrcaSlicer",
@@ -820,6 +909,7 @@ def main() -> int:
             output_root,
             timeout_seconds=args.timeout_seconds,
             validation_runs=args.validation_runs,
+            coverage_probes=probes.get("OrcaSlicer"),
         ),
     }
     statuses = {result["status"] for result in slicer_results.values()}

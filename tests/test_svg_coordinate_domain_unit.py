@@ -335,11 +335,14 @@ def test_fractional_tile_boundary_reuses_one_global_partition(monkeypatch):
         assert restored.svg_coordinate_domain.source_bbox == domain.source_bbox
         assert shapely.get_precision(record["print_geometry"]) == 1.0
         origin = restored.svg_coordinate_domain.frame_origin_mm
+        grid = record[PRINT_GRID_KEY]
         global_parts.append(shapely.affinity.translate(
-            record["print_geometry"], xoff=round(origin[0]/0.0001), yoff=round(origin[1]/0.0001),
+            record["print_geometry"], xoff=round(origin[0]/grid), yoff=round(origin[1]/grid),
         ))
     assert global_parts[0].intersection(global_parts[1]).area == 0
-    assert shapely.union_all(global_parts, grid_size=1).equals(box(0, 0, 30000, 10000))
+    assert shapely.union_all(global_parts, grid_size=1).equals(
+        box(0, 0, round(3 / grid), round(1 / grid))
+    )
     def repeated_projection(*args, **kwargs):
         raise AssertionError("A tile must reuse the global print partition")
     monkeypatch.setattr("core.vector_engine.project_print_regions", repeated_projection)

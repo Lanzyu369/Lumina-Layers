@@ -42,8 +42,11 @@ def resolve_vector_writer_grid_mm(
     *,
     minimum_mm: float = VectorLayerGeometryPolicy().grid_mm,
 ) -> float:
-    """Resolve the physical grid that remains distinct in float32 output.
-    计算在 float32 写出域中仍能保持坐标可区分的物理网格。
+    """Resolve a binary grid whose coordinates are exact in float32 output.
+
+    Distinct decimal-grid points can still become collinear after independent
+    float32 rounding. A power-of-two grid avoids that second projection.
+    Four ULPs also bound integer coordinates below the float32 significand limit.
 
     Args:
         maximum_abs_coordinate_mm: Largest absolute XY coordinate in mm.
@@ -69,7 +72,9 @@ def resolve_vector_writer_grid_mm(
     writer_ulp = abs(float(np.spacing(writer_value)))
     if not math.isfinite(writer_ulp):
         raise ValueError("Vector physical coordinates exceed float32 writer range")
-    return max(minimum_grid, writer_ulp * 4.0)
+    required_grid = max(minimum_grid, writer_ulp * 4.0)
+    significand, exponent = math.frexp(required_grid)
+    return math.ldexp(1.0, exponent - 1 if significand == 0.5 else exponent)
 
 
 def snap_vector_writer_coordinate_mm(
@@ -764,6 +769,9 @@ def _expand_writer_degenerate_cap_faces(
     units = np.rint(
         np.asarray(vertices_2d, dtype=np.float64) / float(grid_mm)
     ).astype(np.int64)
+    # Test the geometry the writer actually stores. Doing the determinant in
+    # float32 can cancel a nonzero area even when every coordinate is exact.
+    writer_vertices = np.asarray(vertices_2d, dtype=np.float32).astype(np.float64)
     maximum_repairs = max(1, len(output))
     for _repair_index in range(maximum_repairs):
         areas = _integer_triangle_signed_twice_area(
@@ -771,7 +779,7 @@ def _expand_writer_degenerate_cap_faces(
             output,
             grid_mm=grid_mm,
         )
-        writer_triangles = np.asarray(vertices_2d, dtype=np.float32)[output]
+        writer_triangles = writer_vertices[output]
         writer_areas = _triangle_signed_twice_area(writer_triangles)
         degenerate = (areas == 0) | (writer_areas == 0.0)
         degenerate_indices = np.flatnonzero(degenerate)
@@ -828,7 +836,7 @@ def _expand_writer_degenerate_cap_faces(
                         grid_mm=grid_mm,
                     )
                     replacement_writer_areas = _triangle_signed_twice_area(
-                        np.asarray(vertices_2d, dtype=np.float32)[replacement]
+                        writer_vertices[replacement]
                     )
                     expected_twice_area = (
                         abs(int(areas[int(adjacent_index)]))
