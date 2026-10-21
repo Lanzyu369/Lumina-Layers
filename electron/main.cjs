@@ -6,6 +6,7 @@ const {
   Menu,
   net: electronNet,
   protocol,
+  screen,
   session,
   shell,
   webFrameMain,
@@ -23,6 +24,11 @@ const {
   setGeneratedFileDirectory,
 } = require("./generated-file-directory.cjs");
 const { assertPortsAvailable, selectBackendEndpoint, commitBackendEndpoint, validateHealthResponse } = require("./backend-endpoint.cjs");
+const {
+  createInterfaceScaleController,
+  getInterfaceScale,
+  setInterfaceScale,
+} = require("./interface-scale.cjs");
 const {
   fetchNativeBedModel,
   isAllowedBedModelIpcSender,
@@ -385,6 +391,7 @@ if (!gotLock) {
 // ═══════════════════════════════════════════════════════════
 
 let win = null;
+let interfaceScale = null;
 const generatedFileDirectory = createGeneratedFileDirectoryState();
 let splashWin = null;
 let isQuitting = false;
@@ -557,9 +564,15 @@ function closeSplash() {
 }
 
 function createWindow() {
+  interfaceScale = createInterfaceScaleController({
+    screen,
+    stateFile: path.join(app.getPath("userData"), "interface-scale.json"),
+    log: logSys,
+    logError: logErr,
+  });
+  const placement = interfaceScale.initialPlacement();
   const windowOptions = {
-    width: 1440,
-    height: 900,
+    ...placement.bounds,
     title: "Lumina Studio 2",
     icon: fs.existsSync(ICON_PATH) ? ICON_PATH : undefined,
     webPreferences: {
@@ -567,11 +580,20 @@ function createWindow() {
       nodeIntegration: false,
       preload: path.join(__dirname, "preload.cjs"),
       sandbox: false,
+      zoomFactor: placement.zoomFactor,
     },
+    // Matches the app background so the hidden window does not flash white
+    // while the page loads.
+    backgroundColor: "#f1f5f9",
     show: false,
   };
 
   win = new BrowserWindow(windowOptions);
+  interfaceScale.attach(win);
+  // Maximize before loading the page. The page relays out its pinned panels
+  // when the window resizes, and doing that while it is still loading leaves
+  // the right-hand panels one panel width past the window edge.
+  if (placement.maximize) win.maximize();
   win.once("ready-to-show", () => {
     closeSplash();
     win.show();
@@ -775,6 +797,23 @@ ipcMain.handle("pick-generated-file-directory", (event) =>
     trustedUrl: trustedMainFrameUrl,
     state: generatedFileDirectory,
     showOpenDialog: (owner, options) => dialog.showOpenDialog(owner, options),
+  }));
+
+ipcMain.handle("get-interface-scale", (event) =>
+  getInterfaceScale({
+    event,
+    window: win,
+    trustedUrl: trustedMainFrameUrl,
+    controller: interfaceScale,
+  }));
+
+ipcMain.handle("set-interface-scale", (event, preference) =>
+  setInterfaceScale({
+    event,
+    window: win,
+    trustedUrl: trustedMainFrameUrl,
+    controller: interfaceScale,
+    preference,
   }));
 
 ipcMain.handle("get-native-bed-model", async (event, deviceProfileId) => {

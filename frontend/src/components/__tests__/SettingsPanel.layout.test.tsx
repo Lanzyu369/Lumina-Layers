@@ -331,6 +331,17 @@ describe("SettingsPanel information architecture", () => {
     );
   });
 
+  it("leaves the interface scale to the browser's own zoom outside the desktop app", () => {
+    renderPanel();
+    const navigation = screen.getByRole("navigation", { name: "设置分类" });
+    fireEvent.click(within(navigation).getByRole("button", { name: /常规/ }));
+
+    expect(screen.getByTestId("settings-language-section")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("settings-interface-scale-section"),
+    ).not.toBeInTheDocument();
+  });
+
   it("selects and remembers the interface language under General", () => {
     useSettingsStore.getState().setLanguage("en");
     renderPanel();

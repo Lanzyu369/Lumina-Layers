@@ -6,6 +6,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("set-generated-file-directory", directory),
   pickGeneratedFileDirectory: () =>
     ipcRenderer.invoke("pick-generated-file-directory"),
+  getInterfaceScale: () => ipcRenderer.invoke("get-interface-scale"),
+  setInterfaceScale: (preference) =>
+    ipcRenderer.invoke("set-interface-scale", preference),
+  onInterfaceScaleChanged: (listener) => {
+    const forward = (_event, payload) => listener(payload);
+    ipcRenderer.on("interface-scale-changed", forward);
+    return () => ipcRenderer.removeListener("interface-scale-changed", forward);
+  },
   setLanguage: (lang) => ipcRenderer.send("set-language", lang),
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
   getNativeBedModel: (deviceProfileId) =>

@@ -20,10 +20,96 @@ interface ElectronAPI {
     directory?: string;
     code?: string;
   }>;
+  getInterfaceScale?: () => Promise<InterfaceScaleResult>;
+  setInterfaceScale?: (preference: string) => Promise<InterfaceScaleResult>;
+  onInterfaceScaleChanged?: (
+    listener: (payload: { preference: string }) => void,
+  ) => () => void;
 }
+
+type InterfaceScaleResult =
+  | { status: "ok"; preference: string }
+  | { status: "error"; code: string };
 
 export const electronAPI: ElectronAPI | null =
   (window as unknown as { electronAPI?: ElectronAPI }).electronAPI ?? null;
+
+/**
+ * Interface scales the desktop host accepts, smallest first. Each one is a
+ * direct multiple of the size the system gives the page, so 100% matches the
+ * other apps on the same screen.
+ * 桌面版可选的界面缩放，从小到大。每档都是系统给页面的尺寸的直接倍数，100% 与同屏其他软件一样大。
+ */
+export const INTERFACE_SCALE_PREFERENCES = [
+  "80",
+  "90",
+  "100",
+  "110",
+  "125",
+  "150",
+  "175",
+] as const;
+
+export type InterfaceScalePreference =
+  (typeof INTERFACE_SCALE_PREFERENCES)[number];
+
+export function isInterfaceScalePreference(
+  value: unknown,
+): value is InterfaceScalePreference {
+  return (
+    typeof value === "string" &&
+    (INTERFACE_SCALE_PREFERENCES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Whether this runtime lets the page choose the interface scale (desktop only;
+ * browsers keep their own zoom).
+ * 当前运行环境是否支持选择界面缩放（仅桌面版，浏览器使用自带缩放）。
+ */
+export function canChooseInterfaceScale(): boolean {
+  return typeof electronAPI?.setInterfaceScale === "function";
+}
+
+function interfaceScaleFrom(
+  result: InterfaceScaleResult | undefined,
+): InterfaceScalePreference {
+  if (result?.status === "ok" && isInterfaceScalePreference(result.preference)) {
+    return result.preference;
+  }
+  throw new Error(result?.status === "error" ? result.code : "unavailable");
+}
+
+/**
+ * Read the saved interface scale; throws when the desktop host refuses.
+ * 读取已保存的界面缩放；桌面主进程拒绝时抛错。
+ */
+export async function getInterfaceScale(): Promise<InterfaceScalePreference> {
+  return interfaceScaleFrom(await electronAPI?.getInterfaceScale?.());
+}
+
+/**
+ * Apply and save an interface scale; resolves to the scale now in effect.
+ * 应用并保存界面缩放，返回当前生效的档位。
+ */
+export async function setInterfaceScale(
+  preference: InterfaceScalePreference,
+): Promise<InterfaceScalePreference> {
+  return interfaceScaleFrom(await electronAPI?.setInterfaceScale?.(preference));
+}
+
+/**
+ * Follow scale changes made elsewhere, such as the Ctrl +/-/0 shortcuts.
+ * 跟随其他途径（如 Ctrl 加减号、Ctrl 0 快捷键）带来的缩放变化。
+ */
+export function onInterfaceScaleChanged(
+  listener: (preference: InterfaceScalePreference) => void,
+): () => void {
+  const unsubscribe = electronAPI?.onInterfaceScaleChanged?.(({ preference }) => {
+    if (isInterfaceScalePreference(preference)) listener(preference);
+  });
+  return unsubscribe ?? (() => {});
+}
 
 export function useElectronLanguageSync(): void {
   useEffect(() => {

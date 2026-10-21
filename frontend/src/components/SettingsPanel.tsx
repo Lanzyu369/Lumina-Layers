@@ -52,6 +52,7 @@ import BuildPlateSelector from "./settings/BuildPlateSelector";
 import Custom3mfTemplateSettings from "./settings/Custom3mfTemplateSettings";
 import GeneratedFileDirectorySetting from "./settings/GeneratedFileDirectorySetting";
 import HeaderNavAlignmentSetting from "./settings/HeaderNavAlignmentSetting";
+import InterfaceScaleSetting from "./settings/InterfaceScaleSetting";
 import SvgHoleCompensationSettings from "./sections/SvgHoleCompensationSettings";
 import SettingsCategoryNav, {
   type SettingsCategory,
@@ -909,6 +910,7 @@ export default function SettingsPanel() {
                   }}
                 />
               </div>
+              <InterfaceScaleSetting />
               <div
                 data-testid="settings-completion-notifications-section"
                 className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"

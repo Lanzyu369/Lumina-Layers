@@ -2855,6 +2855,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "English",
     en: "English",
   },
+  "settings.interface_scale_label": {
+    zh: "界面缩放",
+    en: "Interface scale",
+  },
+  "settings.interface_scale_description": {
+    zh: "界面的排版尺寸固定，不随屏幕分辨率或系统缩放变化：100% 时各种屏幕上的面板占比一致。想更大或更小再逐档调整，也可以按 Ctrl 加号或减号切换，Ctrl 0 回到 100%（Mac 上用 Command 键）。",
+    en: "The layout has one fixed size and does not follow the screen resolution or the system scaling: at 100% the panels take the same share of the screen everywhere. Pick a larger or smaller step if you want, or press Ctrl with plus or minus; Ctrl+0 returns to 100% (use Command on a Mac).",
+  },
+  "settings.interface_scale_failed": {
+    zh: "无法读取或更改界面缩放，请重启软件后重试。",
+    en: "The interface scale could not be read or changed. Restart the app and try again.",
+  },
   "settings.category_general_desc": {
     zh: "通知、导出与界面体验偏好",
     en: "Notifications, exports, and interface preferences",
