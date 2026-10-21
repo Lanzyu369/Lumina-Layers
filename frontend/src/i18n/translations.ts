@@ -5643,8 +5643,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Controls how the image becomes a 3D model:\n• High-Fidelity: faithfully reproduces photo detail — recommended for most images.\n• Pixel Art: keeps the blocky pixel look — for pixel art and mosaic styles.\n• Vector: smooth curved outlines — for logos, icons, and flat-color artwork.\n• Color Card: generates a calibration color chart — only for testing filament colors.",
   },
   basic_image_format_error: {
-    zh: "仅支持 JPG/PNG/SVG/WebP/HEIC 格式",
-    en: "Only JPG/PNG/SVG/WebP/HEIC formats are supported",
+    zh: "仅支持 JPG/JFIF/PNG/SVG/WebP/HEIC 格式",
+    en: "Only JPG/JFIF/PNG/SVG/WebP/HEIC formats are supported",
   },
   svg_hole_compensation: {
     zh: "SVG 小洞补偿",

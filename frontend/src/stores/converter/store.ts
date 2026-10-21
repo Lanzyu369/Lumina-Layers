@@ -1432,13 +1432,13 @@ export const ACCEPT_IMAGE_FORMATS =
   Array.from(VALID_IMAGE_TYPES).join(",") +
   "," +
   Array.from(RAW_EXTENSIONS_CONVERTER).join(",") +
-  ",.lumina.json";
+  ",.jfif,.lumina.json";
 
 export function isValidImageType(mimeType: string, fileName?: string): boolean {
   if (VALID_IMAGE_TYPES.has(mimeType)) return true;
   if (fileName) {
     const ext = fileName.toLowerCase().slice(fileName.lastIndexOf("."));
-    if (RAW_EXTENSIONS_CONVERTER.has(ext)) return true;
+    if (ext === ".jfif" || RAW_EXTENSIONS_CONVERTER.has(ext)) return true;
   }
   return false;
 }
