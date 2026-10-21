@@ -121,12 +121,16 @@ export default function ImportConfirmDialog({
 
             {conv && (
               <>
-                <dt className="text-slate-500 dark:text-slate-400">
-                  {t("recipe_import_lut_label")}
-                </dt>
-                <dd className="text-slate-800 dark:text-slate-200">
-                  {conv.base.lut.name}
-                </dd>
+                {(conv.source?.source_version ?? "legacy") === "legacy" && (
+                  <>
+                    <dt className="text-slate-500 dark:text-slate-400">
+                      {t("recipe_import_lut_label")}
+                    </dt>
+                    <dd className="text-slate-800 dark:text-slate-200">
+                      {conv.base.lut.name}
+                    </dd>
+                  </>
+                )}
 
                 <dt className="text-slate-500 dark:text-slate-400">
                   {t("recipe_import_color_mode_label")}

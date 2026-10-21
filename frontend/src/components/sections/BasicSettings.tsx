@@ -1,6 +1,5 @@
-import { useRef, useEffect, useMemo, useState, useCallback, useId } from "react";
-import { createPortal } from "react-dom";
-import { ScissorsIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import { useRef, useEffect, useMemo, useState, useCallback } from "react";
+import { ScissorsIcon } from "@heroicons/react/24/outline";
 import { useShallow } from "zustand/react/shallow";
 import {
   useConverterStore,
@@ -10,7 +9,6 @@ import {
   inferDefaultMaterialBackingDirName,
   isValidImageType,
   hasOnlySvgInputs,
-  resolveConverterSourceSelection,
 } from "../../stores/converter";
 import {
   ColorMode,
@@ -35,8 +33,12 @@ import MaterialSolverCacheDialog from "../MaterialSolverCacheDialog";
 import LegacyLutSelector from "./LegacyLutSelector";
 import { tRuntime } from "../../i18n/runtime";
 import { useI18n } from "../../i18n/context";
-import { useWorkspaceMode as _useWorkspaceMode } from "../../hooks/useWorkspaceMode";
-import { prepareImport, applyImport, revokeImportCoverUrl } from "../../recipe/importFlow";
+import {
+  prepareImport,
+  applyImport,
+  revokeImportCoverUrl,
+  RECIPE_IMPORT_PREDICTIVE_LUT_UNAVAILABLE_ERROR,
+} from "../../recipe/importFlow";
 import type { ImportPreview } from "../../recipe/importFlow";
 import {
   RECIPE_ASSET_CORRUPT_ERROR,
@@ -47,15 +49,14 @@ import {
   StatusBanner,
   blockHeaderClass,
   blockHeaderRuleClass,
-  cardDividerClass,
   dependentGroupClass,
   groupHeaderClass,
   workstationInputClass,
-  workstationPickerTriggerClass,
   cx,
 } from "../ui/panelPrimitives";
 import { isSvgImageFile } from "../../utils/imageRotation";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
+import { isPredictiveLutSource } from "../../utils/lutVisibility";
 import {
   resolveLargeFormatTileGrid,
   resolveLargeFormatTotalHeightMm,
@@ -189,6 +190,9 @@ function resolveRecipeImportError(
   if (message === RECIPE_ASSET_CORRUPT_ERROR) {
     return t("recipe_import_asset_corrupt");
   }
+  if (message === RECIPE_IMPORT_PREDICTIVE_LUT_UNAVAILABLE_ERROR) {
+    return t("recipe_import_predictive_lut_unavailable");
+  }
   return t("recipe_import_error_unreadable");
 }
 const LEGACY_BUCKET_I18N_KEY: Partial<Record<ColorModeBucket, string>> = {
@@ -209,269 +213,6 @@ const LEGACY_BUCKET_I18N_KEY: Partial<Record<ColorModeBucket, string>> = {
 function legacyBucketLabel(bucket: ColorModeBucket, t: (key: string) => string): string {
   const key = LEGACY_BUCKET_I18N_KEY[bucket];
   return key ? t(key) : bucket;
-}
-
-// ---------------------------------------------------------------------------
-// NativeDbPicker — compact trigger + staged dialog for native db selection
-// ---------------------------------------------------------------------------
-interface NativeDbPickerProps {
-  dbOptions: { name: string; path: string; color_mode: string }[];
-  selectedDbNames: string[];
-  onConfirm: (names: string[]) => void;
-  labels: {
-    dbLabel: string;
-    dbPlaceholder: string;
-    dialogTitle: string;
-    searchPlaceholder: string;
-    noMatch: string;
-    deselectAll: string;
-    confirm: string;
-    cancel: string;
-    selectedCount: string;
-  };
-  visibleDbs: string[];
-  overflowDb: number;
-}
-
-const FOCUSABLE_SELECTOR_DB = [
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "[tabindex]:not([tabindex='-1'])",
-].join(",");
-
-function NativeDbPicker({
-  dbOptions,
-  selectedDbNames,
-  onConfirm,
-  labels,
-  visibleDbs,
-  overflowDb,
-}: NativeDbPickerProps) {
-  const [open, setOpen] = useState(false);
-  const [staged, setStaged] = useState<string[]>(selectedDbNames);
-  const [query, setQuery] = useState("");
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const prevFocusRef = useRef<HTMLElement | null>(null);
-  const titleId = useId();
-
-  useEffect(() => {
-    if (!open) return undefined;
-    prevFocusRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setStaged(selectedDbNames);
-    setQuery("");
-    const timer = window.setTimeout(() => searchRef.current?.focus(), 0);
-    return () => {
-      window.clearTimeout(timer);
-      prevFocusRef.current?.focus();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  // Keep staged in sync when dialog is closed (recipe import etc.)
-  useEffect(() => {
-    if (!open) setStaged(selectedDbNames);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDbNames]);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); setOpen(false); return; }
-      if (e.key !== "Tab") return;
-      const container = dialogRef.current;
-      if (!container) return;
-      const focusable = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR_DB));
-      if (focusable.length === 0) { e.preventDefault(); container.focus(); return; }
-      const first = focusable[0]; const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-      if (e.shiftKey && active === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
-      else if (!container.contains(active)) { e.preventDefault(); first.focus(); }
-    };
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [open]);
-
-  const stagedSet = useMemo(() => new Set(staged), [staged]);
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return q ? dbOptions.filter((o) => o.name.toLowerCase().includes(q)) : dbOptions;
-  }, [dbOptions, query]);
-
-  const handleToggle = (name: string) => {
-    setStaged((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name); else next.add(name);
-      return dbOptions.map((o) => o.name).filter((n) => next.has(n));
-    });
-  };
-
-  return (
-    <>
-      {/* Trigger */}
-      <div className="flex flex-col gap-1">
-        <span className="text-xs text-slate-500 dark:text-slate-400">{labels.dbLabel}</span>
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          data-testid="native-db-picker-trigger"
-          className={cx(
-            workstationPickerTriggerClass,
-            "flex min-h-10 items-center justify-between gap-2 text-left",
-            selectedDbNames.length === 0 && "text-slate-400 dark:text-slate-500",
-          )}
-        >
-          <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-            {visibleDbs.map((name) => (
-              <span key={name} className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-500/15 dark:text-blue-200">
-                {name}
-              </span>
-            ))}
-            {overflowDb > 0 && (
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                +{overflowDb}
-              </span>
-            )}
-            {selectedDbNames.length === 0 && (
-              <span className="text-sm">{labels.dbPlaceholder}</span>
-            )}
-          </span>
-          {selectedDbNames.length > 0 && (
-            <span className="shrink-0 text-xs text-slate-400 dark:text-slate-500">
-              {labels.selectedCount}: {selectedDbNames.length}
-            </span>
-          )}
-        </button>
-      </div>
-
-      {/* Dialog */}
-      {open && createPortal(
-        <div
-          role="presentation"
-          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 backdrop-blur-sm"
-          style={{ background: "var(--surface-scrim)" }}
-          onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
-        >
-          <div
-            ref={dialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={titleId}
-            tabIndex={-1}
-            data-testid="native-db-picker-dialog"
-            className="flex w-[min(36rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-[24px] border shadow-2xl"
-            style={{
-              maxHeight: "calc(100vh - 4rem)",
-              borderColor: "var(--surface-outline)",
-              background: "var(--surface-panel-strong)",
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between border-b px-5 py-3.5" style={{ borderColor: "var(--surface-outline)" }}>
-              <h2 id={titleId} className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                {labels.dialogTitle}
-              </h2>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                aria-label={labels.cancel}
-                className="ghost-control inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 dark:text-slate-400"
-              >
-                <XMarkIcon className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </div>
-
-            {/* Search */}
-            <div className="border-b px-4 py-3" style={{ borderColor: "var(--surface-outline)" }}>
-              <input
-                ref={searchRef}
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={labels.searchPlaceholder}
-                data-testid="native-db-picker-search-input"
-                className={cx(workstationInputClass, "min-h-9 py-1.5")}
-              />
-            </div>
-
-            {/* List */}
-            <div className="dock-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
-              {visible.length === 0 ? (
-                <p className="flex min-h-24 items-center justify-center text-sm text-slate-500 dark:text-slate-400">
-                  {labels.noMatch}
-                </p>
-              ) : (
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {visible.map((opt) => {
-                    const checked = stagedSet.has(opt.name);
-                    return (
-                      <button
-                        key={opt.name}
-                        type="button"
-                        role="checkbox"
-                        aria-checked={checked}
-                        onClick={() => handleToggle(opt.name)}
-                        className={cx(
-                          "flex items-center gap-3 rounded-[12px] border px-3 py-2.5 text-left text-sm transition-all duration-150",
-                          "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]",
-                          checked
-                            ? "border-blue-300/80 bg-blue-50/60 dark:border-blue-400/60 dark:bg-blue-500/10"
-                            : "border-slate-200/80 bg-white/60 hover:border-[color:var(--surface-card-outline)] hover:bg-[var(--nav-chip-hover)] dark:border-slate-700/80 dark:bg-slate-900/55",
-                        )}
-                      >
-                        <span
-                          aria-hidden="true"
-                          className={cx(
-                            "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-all duration-200",
-                            checked
-                              ? "border-blue-500 bg-blue-500"
-                              : "border-slate-300/80 bg-white dark:border-slate-600/80 dark:bg-slate-800",
-                          )}
-                        >
-                          <span className={cx("h-2.5 w-2.5 rounded-sm", checked ? "bg-white" : "bg-transparent")} />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-medium text-slate-800 dark:text-slate-100">{opt.name}</span>
-                          <span className="block truncate text-[11px] text-slate-500 dark:text-slate-400">{opt.color_mode}</span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Footer */}
-            <div className="flex items-center justify-between gap-3 border-t px-5 py-3" style={{ borderColor: "var(--surface-outline)" }}>
-              <p className="text-sm text-slate-600 dark:text-slate-400">
-                <span aria-live="polite">
-                  {labels.selectedCount}: <span className="font-semibold text-slate-800 dark:text-slate-200">{staged.length}</span>
-                </span>
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  label={labels.deselectAll}
-                  onClick={() => setStaged([])}
-                  disabled={staged.length === 0}
-                  variant="primary"
-                  size="sm"
-                />
-                <Button
-                  label={labels.confirm}
-                  onClick={() => { onConfirm(staged); setOpen(false); }}
-                  size="sm"
-                />
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body,
-      )}
-    </>
-  );
 }
 
 /**
@@ -568,14 +309,11 @@ export default function BasicSettings() {
     legacyCatalogLoading,
     selectedLegacyManufacturer,
     nativeBrandGroups,
-    nativeBrandGroupsLoading,
     selectedNativeBrandKey,
     selectedNativeDbNames,
     color_mode,
     color_layers,
     layer_height_mm,
-    model_enable,
-    model_only,
     selectedLutInfo,
     lutColors,
     lutColorsLutName,
@@ -614,8 +352,6 @@ export default function BasicSettings() {
     modelSurfaceEnabled,
     setColorLayers,
     setLayerHeightMm,
-    setModelEnable,
-    setModelOnly,
     setSourceVersion,
     setSelectedMaterialDirNames,
     setMaterialLayerCount,
@@ -624,9 +360,6 @@ export default function BasicSettings() {
     setMaterialMaxLayerCount,
     setMaterialLayerHeightMm,
     setMaterialBackingMaterialDirName,
-    setNativeBrandKey,
-    setNativeSupportedMode,
-    setNativeDbNames,
     setLegacyManufacturer,
     setLegacyLutNames,
     fetchLutList,
@@ -643,14 +376,11 @@ export default function BasicSettings() {
     legacyCatalogLoading: s.legacyCatalogLoading,
     selectedLegacyManufacturer: s.selectedLegacyManufacturer,
     nativeBrandGroups: s.nativeBrandGroups,
-    nativeBrandGroupsLoading: s.nativeBrandGroupsLoading,
     selectedNativeBrandKey: s.selectedNativeBrandKey,
     selectedNativeDbNames: s.selectedNativeDbNames,
     color_mode: s.color_mode,
     color_layers: s.color_layers,
     layer_height_mm: s.layer_height_mm,
-    model_enable: s.model_enable,
-    model_only: s.model_only,
     selectedLutInfo: s.selectedLutInfo,
     lutColors: s.lutColors,
     lutColorsLutName: s.lutColorsLutName,
@@ -689,8 +419,6 @@ export default function BasicSettings() {
     modelSurfaceEnabled: s.modelSurfaceEnabled,
     setColorLayers: s.setColorLayers,
     setLayerHeightMm: s.setLayerHeightMm,
-    setModelEnable: s.setModelEnable,
-    setModelOnly: s.setModelOnly,
     setSourceVersion: s.setSourceVersion,
     setSelectedMaterialDirNames: s.setSelectedMaterialDirNames,
     setMaterialLayerCount: s.setMaterialLayerCount,
@@ -699,48 +427,11 @@ export default function BasicSettings() {
     setMaterialMaxLayerCount: s.setMaterialMaxLayerCount,
     setMaterialLayerHeightMm: s.setMaterialLayerHeightMm,
     setMaterialBackingMaterialDirName: s.setMaterialBackingMaterialDirName,
-    setNativeBrandKey: s.setNativeBrandKey,
-    setNativeSupportedMode: s.setNativeSupportedMode,
-    setNativeDbNames: s.setNativeDbNames,
     setLegacyManufacturer: s.setLegacyManufacturer,
     setLegacyLutNames: s.setLegacyLutNames,
     fetchLutList: s.fetchLutList,
     fetchLegacyCatalog: s.fetchLegacyCatalog,
   })));
-
-  const sourceSelection = useMemo(
-    () =>
-      resolveConverterSourceSelection({
-        source_version,
-        lut_name,
-        lut_names,
-        nativeBrandGroups,
-        selectedNativeBrandKey,
-        selectedNativeDbNames,
-        color_layers,
-        layer_height_mm,
-        selectedMaterialDirNames,
-        materialLayerCount,
-        materialLayerHeightMm,
-        lutListFull,
-        legacyCatalogGroups,
-      }),
-    [
-      source_version,
-      lut_name,
-      lut_names,
-      nativeBrandGroups,
-      selectedNativeBrandKey,
-      selectedNativeDbNames,
-      color_layers,
-      layer_height_mm,
-      selectedMaterialDirNames,
-      materialLayerCount,
-      materialLayerHeightMm,
-      lutListFull,
-      legacyCatalogGroups,
-    ],
-  );
 
   const [uploaderExpanded, setUploaderExpanded] = useState(true);
   const startupRetryMountedRef = useRef(false);
@@ -814,6 +505,14 @@ export default function BasicSettings() {
   const handleFilesSelect = useConverterStore((s) => s.handleFilesSelect);
   const setImageFile = useConverterStore((s) => s.setImageFile);
   const setLutName = useConverterStore((s) => s.setLutName);
+  useEffect(() => {
+    if (source_version === "native" || (
+      source_version === "legacy" && isPredictiveLutSource(selectedLutInfo?.source_kind)
+    )) {
+      // Preserve the image, but require a new source instead of reusing an inactive LUT.
+      setLutName("");
+    }
+  }, [source_version, selectedLutInfo?.source_kind, setLutName]);
   const setTargetWidthMm = useConverterStore((s) => s.setTargetWidthMm);
   const setTargetHeightMm = useConverterStore((s) => s.setTargetHeightMm);
   const setSpacerThick = useConverterStore((s) => s.setSpacerThick);
@@ -848,7 +547,6 @@ export default function BasicSettings() {
 
   const sourceVersionOptions = [
     { label: t("basic_source_version_legacy"), value: "legacy" },
-    { label: t("basic_source_version_native"), value: "native" },
     { label: t("basic_source_version_material"), value: "material" },
   ];
 
@@ -1238,18 +936,6 @@ export default function BasicSettings() {
     { label: "0.08 mm", value: "0.08" },
     { label: "0.10 mm", value: "0.1" },
   ];
-  const nativeBrandOptions = nativeBrandGroups
-    .map((group) => ({
-      label: group.display_name,
-      value: group.brand_key,
-    }));
-  const selectedNativeBrand = sourceSelection.native.brand;
-  const selectedNativeSupportedModes = sourceSelection.native.supported_modes;
-  const selectedNativeMode = sourceSelection.native.supported_mode;
-  const selectedNativePredictiveModelAvailable = sourceSelection.native.predictive_model_available;
-  const nativeLayerCount = selectedNativeMode?.color_layers ?? color_layers ?? 5;
-  const nativeLayerHeightMm = layer_height_mm ?? selectedNativeMode?.layer_height_mm ?? 0.08;
-
   const lutFileRef = useRef<HTMLInputElement>(null);
 
   // 5-Color Extended and model-surface workflows only support one viewing side.
@@ -1313,20 +999,6 @@ export default function BasicSettings() {
     void submitCrop(data.x, data.y, data.width, data.height, data.rotation);
   };
 
-  const handleNativeLayerCountChange = (count: number) => {
-    const mode =
-      resolveNativeSupportedModeByCount(
-        selectedNativeSupportedModes,
-        count,
-        nativeLayerHeightMm,
-      ) ?? selectedNativeMode;
-    if (!mode) return;
-    setNativeSupportedMode({
-      color_layers: mode.color_layers,
-      layer_height_mm: mode.layer_height_mm,
-    });
-  };
-
   const printerModel = useSettingsStore((s) => s.printerModel);
   const dimensionLimits = useConverterStore(useShallow((state) =>
     getPrinterBedDimensions(state, printerModel),
@@ -1334,8 +1006,11 @@ export default function BasicSettings() {
   // Large-format text entry can exceed one bed; the sliders follow its size.
   const dimInputMax = largeFormatEnabled ? Number.POSITIVE_INFINITY : undefined;
 
+  // Large-format tiles cut flat artwork, so they cannot represent a model
+  // surface; the conflict banner replaces the grid summary in that case.
+  const largeFormatModelSurfaceConflict = largeFormatEnabled && modelSurfaceEnabled;
   const tileGrid = useMemo(() => {
-    if (!largeFormatEnabled) return null;
+    if (!largeFormatEnabled || modelSurfaceEnabled) return null;
     // Match the height the backend derives for large-format generation.
     const grid = resolveLargeFormatTileGrid(
       target_width_mm,
@@ -1354,6 +1029,7 @@ export default function BasicSettings() {
     return { cols: grid.cols, rows: grid.rows, total: grid.total, lastW, lastH };
   }, [
     largeFormatEnabled,
+    modelSurfaceEnabled,
     target_width_mm,
     target_height_mm,
     previewPixelWidth,
@@ -1479,7 +1155,7 @@ export default function BasicSettings() {
           wikiPath={WIKI_DOCS.sourceType}
           value={source_version}
           options={sourceVersionOptions}
-          onChange={(value) => setSourceVersion(value as "legacy" | "native" | "material")}
+          onChange={(value) => setSourceVersion(value as "legacy" | "material")}
         />
       </div>
 
@@ -1607,7 +1283,7 @@ export default function BasicSettings() {
             />
           )}
         </div>
-      ) : source_version === "legacy" ? (
+      ) : source_version === "legacy" && !isPredictiveLutSource(selectedLutInfo?.source_kind) ? (
         <>
           <LegacyLutSelector
             manufacturer={selectedLegacyManufacturer}
@@ -1694,104 +1370,6 @@ export default function BasicSettings() {
             </div>
           )}
         </>
-      ) : source_version === "native" ? (
-        <>
-          <Dropdown
-            label={t("basic_brand_label")}
-            tooltip={t("basic_brand_hint")}
-            wikiPath={WIKI_DOCS.inferredLutSource}
-            value={selectedNativeBrand?.brand_key ?? ""}
-            options={nativeBrandOptions}
-            onChange={setNativeBrandKey}
-            placeholder={nativeBrandGroupsLoading ? t("basic_brand_loading") : t("basic_brand_placeholder")}
-            disabled={nativeBrandGroupsLoading || nativeBrandOptions.length === 0}
-          />
-
-          {selectedNativeBrand ? (
-            <div className={dependentGroupClass}>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                {selectedNativeBrand.display_name}
-                {" · "}
-                {selectedNativeBrand.material_type}
-                {" · "}
-                {selectedNativeBrand.vendor}
-              </p>
-
-              {/* Database picker — trigger button + dialog */}
-              {(() => {
-                const dbOptions = selectedNativeBrand.db_options;
-                const selectedDbNames = sourceSelection.native.db_names;
-                const VISIBLE_DB_LIMIT = 2;
-                const visibleDbs = selectedDbNames.slice(0, VISIBLE_DB_LIMIT);
-                const overflowDb = selectedDbNames.length - visibleDbs.length;
-                return (
-                  <NativeDbPicker
-                    dbOptions={dbOptions}
-                    selectedDbNames={selectedDbNames}
-                    onConfirm={(names) => setNativeDbNames(names)}
-                    labels={{
-                      dbLabel: t("basic_native_db_label"),
-                      dbPlaceholder: t("basic_native_db_placeholder"),
-                      dialogTitle: t("basic_native_db_picker_title"),
-                      searchPlaceholder: t("basic_native_db_picker_search_placeholder"),
-                      noMatch: t("basic_native_db_picker_no_match"),
-                      deselectAll: t("basic_lut_picker_deselect_all"),
-                      confirm: t("basic_lut_picker_confirm"),
-                      cancel: t("basic_lut_picker_cancel"),
-                      selectedCount: t("basic_lut_selected_count"),
-                    }}
-                    visibleDbs={visibleDbs}
-                    overflowDb={overflowDb}
-                  />
-                );
-              })()}
-
-              <Slider
-                label={t("basic_native_layer_count_label")}
-                tooltip={t("basic_native_layer_count_hint")}
-                wikiPath={WIKI_DOCS.inferredLutSource}
-                value={nativeLayerCount}
-                min={1}
-                max={15}
-                step={1}
-                onChange={(value) => handleNativeLayerCountChange(Math.round(value))}
-                disabled={selectedNativeSupportedModes.length === 0}
-              />
-              {selectedNativeSupportedModes.length > 0 && (
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {t("basic_supported_modes_label")}:{" "}
-                  {selectedNativeSupportedModes
-                    .map((mode) => `${mode.color_layers}L @ ${mode.layer_height_mm.toFixed(2)}mm`)
-                    .join(", ")}
-                </p>
-              )}
-
-              {selectedNativePredictiveModelAvailable && (
-                <div className={cx(cardDividerClass, "flex flex-col gap-2 pt-3")}>
-                  <SubGroupHeading label={t("basic_model_gate_label")} />
-                  <Checkbox
-                    label={t("basic_model_enable")}
-                    tooltip={t("basic_model_enable_hint")}
-                    wikiPath={WIKI_DOCS.modelAssistedMatching}
-                    checked={model_enable}
-                    onChange={setModelEnable}
-                  />
-                  <Checkbox
-                    label={t("basic_model_only")}
-                    tooltip={t("basic_model_only_hint")}
-                    wikiPath={WIKI_DOCS.modelAssistedMatching}
-                    checked={model_only}
-                    onChange={setModelOnly}
-                  />
-                </div>
-              )}
-            </div>
-          ) : (
-            <p className="rounded-[10px] border border-dashed border-slate-300/70 px-3 py-2.5 text-xs text-slate-500 dark:border-slate-700/60 dark:text-slate-400">
-              {t("basic_native_brand_placeholder")}
-            </p>
-          )}
-        </>
       ) : null}
 
       <QuantizeColorsControl />
@@ -1868,7 +1446,7 @@ export default function BasicSettings() {
               label={t("basic_large_format")}
               checked={largeFormatEnabled}
               onChange={setLargeFormatEnabled}
-              disabled={puzzleEnabled || enable_fridge_magnet}
+              disabled={puzzleEnabled || enable_fridge_magnet || (modelSurfaceEnabled && !largeFormatEnabled)}
               tooltip={t("basic_large_format_hint")}
               wikiPath={WIKI_DOCS.largeFormat}
             />
@@ -1879,6 +1457,20 @@ export default function BasicSettings() {
           <p className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400">
             {t("puzzle_large_format_disabled_hint")}
           </p>
+        )}
+
+        {modelSurfaceEnabled && !largeFormatEnabled && !puzzleEnabled && (
+          <p className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400">
+            {t("model_surface_large_format_disabled_hint")}
+          </p>
+        )}
+
+        {largeFormatModelSurfaceConflict && (
+          <StatusBanner tone="warning">
+            <p data-testid="large-format-model-surface-conflict">
+              {t("large_format_model_surface_conflict")}
+            </p>
+          </StatusBanner>
         )}
 
         {mergedLargeFormatWarnings.length > 0 ? (
@@ -2026,36 +1618,4 @@ function QuantizeColorsControl() {
       />
     </div>
   );
-}
-
-function resolveNativeSupportedModeByCount(
-  modes: { color_layers: number; layer_height_mm: number }[],
-  colorLayers: number,
-  preferredLayerHeightMm: number,
-): { color_layers: number; layer_height_mm: number } | null {
-  if (modes.length === 0) {
-    return null;
-  }
-
-  const matchingLayers = modes.filter((mode) => mode.color_layers === colorLayers);
-  if (matchingLayers.length === 0) {
-    return null;
-  }
-
-  const exactHeight = matchingLayers.find((mode) => mode.layer_height_mm === preferredLayerHeightMm);
-  if (exactHeight) {
-    return exactHeight;
-  }
-
-  let preferred = matchingLayers[0];
-  let smallestDistance = Math.abs(preferred.layer_height_mm - preferredLayerHeightMm);
-  for (const mode of matchingLayers.slice(1)) {
-    const distance = Math.abs(mode.layer_height_mm - preferredLayerHeightMm);
-    if (distance < smallestDistance) {
-      preferred = mode;
-      smallestDistance = distance;
-    }
-  }
-
-  return preferred;
 }

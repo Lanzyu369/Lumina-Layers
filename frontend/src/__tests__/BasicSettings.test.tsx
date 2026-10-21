@@ -788,7 +788,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     expect(
-      screen.getByText(/文件已继续生成，但当前模型和擦料塔无法在所选热床上同时安全摆放/),
+      screen.getByText(/自动摆放未能确认模型、底边（brim）和擦料塔的安全位置/),
     ).toBeInTheDocument();
     expect(
       screen.queryByText("wipe_tower_manual_adjustment_required"),
@@ -800,7 +800,7 @@ describe("BasicSettings", () => {
 
     expect(screen.getByText("来源类型")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "传统 LUT" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "反推LUT" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "反推LUT" })).not.toBeInTheDocument();
     expect(screen.getByTestId("lut-picker-trigger")).toBeInTheDocument();
     expect(screen.getByText("选择LUT")).toBeInTheDocument();
   });
@@ -1217,183 +1217,85 @@ describe("BasicSettings", () => {
     });
   });
 
-  it("renders only the BambuLab native brand in native mode", async () => {
+  it("blocks large format while model texture is enabled instead of showing a flat tile count", () => {
     useConverterStore.setState({
-      source_version: "native",
-      lut_name: "",
-      nativeBrandGroups: [makePredictiveBrand()],
-      selectedNativeBrandKey: "bambulab_pla",
-      selectedNativeDbNames: ["DB-B", "DB-C"],
+      modelSurfaceEnabled: true,
+      largeFormatEnabled: false,
+      target_width_mm: 60,
+      target_height_mm: 30,
+      tileWidthMm: 240,
+      tileHeightMm: 240,
+      previewPixelWidth: 9600,
+      previewPixelHeight: 4800,
     } as never);
 
-    render(<BasicSettings />);
+    const { rerender } = render(<BasicSettings />);
 
-    // Brand dropdown stays inline in native mode
-    expect(screen.getByRole("combobox", { name: "品牌" })).toBeInTheDocument();
-    // Brand summary reads as one line instead of three labelled rows.
-    expect(
-      screen.getByText("Bambu PLA · PLA · Bambu Lab"),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/数据库/)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "大画幅模式" })).toBeDisabled();
+    expect(screen.getByText("模型贴图开启时，大画幅模式会被禁用。")).toBeInTheDocument();
 
-    // DB list is now in the db picker trigger, not inline
-    // Selected DBs (DB-B, DB-C) appear as chips on the native-db-picker-trigger
-    const dbTrigger = screen.getByTestId("native-db-picker-trigger");
-    expect(dbTrigger).toHaveTextContent("DB-B");
-    expect(dbTrigger).toHaveTextContent("DB-C");
+    // A restored or imported project can still carry both modes; the user must
+    // see the conflict and be able to turn large format off again.
+    act(() => {
+      useConverterStore.setState({ largeFormatEnabled: true } as never);
+    });
+    rerender(<BasicSettings />);
 
-    // All DB options are accessible by opening the picker dialog
-    fireEvent.click(dbTrigger);
-    const dbDialog = screen.getByTestId("native-db-picker-dialog");
-    expect(within(dbDialog).getByText("DB-A")).toBeInTheDocument();
-    expect(within(dbDialog).getByText("DB-B")).toBeInTheDocument();
-    expect(within(dbDialog).getByText("DB-C")).toBeInTheDocument();
-
-    // Brand dropdown still works
-    fireEvent.keyDown(document, { key: "Escape" });
-    fireEvent.click(screen.getByRole("combobox", { name: "品牌" }));
-    expect(screen.getByRole("listbox")).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Bambu PLA" })).toBeInTheDocument();
+    expect(screen.getByTestId("large-format-model-surface-conflict")).toHaveTextContent(
+      "大画幅模式不支持模型贴图",
+    );
+    expect(screen.queryByText(/^\d+×\d+ = \d+/)).not.toBeInTheDocument();
+    const toggle = screen.getByRole("switch", { name: "大画幅模式" });
+    expect(toggle).toBeEnabled();
+    fireEvent.click(toggle);
+    expect(useConverterStore.getState().largeFormatEnabled).toBe(false);
+    expect(useConverterStore.getState().modelSurfaceEnabled).toBe(true);
   });
 
-  it("renders a native layer-count slider instead of the mode dropdown", () => {
+  it("resets a restored native source without displaying predictive controls", async () => {
+    const imageFile = new File(["image"], "kept.png", { type: "image/png" });
     useConverterStore.setState({
       source_version: "native",
-      lut_name: "",
+      imageFile,
+      lut_name: "A 4C",
       nativeBrandGroups: [makePredictiveBrand()],
       selectedNativeBrandKey: "bambulab_pla",
       selectedNativeDbNames: ["DB-B", "DB-C"],
+      model_enable: true,
+      model_only: true,
       color_layers: 5,
       layer_height_mm: 0.08,
-    } as never);
+    });
 
     render(<BasicSettings />);
 
-    expect(screen.getByRole("slider", { name: "层数" })).toBeInTheDocument();
-    expect(screen.getByRole("slider", { name: "层数" })).toHaveAttribute("min", "1");
-    expect(screen.getByRole("slider", { name: "层数" })).toHaveAttribute("max", "15");
-    expect(screen.getByRole("slider", { name: "层数" })).toHaveAttribute("step", "1");
-    expect(screen.queryByRole("combobox", { name: "动态层模式" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "品牌" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "模型辅助匹配" })).not.toBeInTheDocument();
+    expect(screen.queryByText("DB-B")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(useConverterStore.getState()).toMatchObject({
+        source_version: "legacy", lut_name: "", selectedNativeBrandKey: "",
+        selectedNativeDbNames: [], model_enable: false, model_only: false,
+      });
+    });
+    expect(useConverterStore.getState().imageFile).toBe(imageFile);
+    expect(screen.getByTestId("lut-picker-trigger")).toBeInTheDocument();
   });
 
-  it("renders object-shaped native DB options without React key or child warnings", () => {
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
+  it("clears predictive packages restored through the legacy LUT path", async () => {
     useConverterStore.setState({
-      source_version: "native",
-      lut_name: "",
-      nativeBrandGroups: [
-        {
-          brand_key: "bambulab_pla",
-          material_type: "PLA",
-          vendor: "Bambu Lab",
-          display_name: "Bambu PLA",
-          db_options: [makeDbOption("DB-A"), makeDbOption("DB-B")],
-          default_db_names: ["DB-A"],
-          supported_modes: [{ color_layers: 5, layer_height_mm: 0.08 }],
-        },
-      ],
-      selectedNativeBrandKey: "bambulab_pla",
-      selectedNativeDbNames: ["DB-A"],
-    } as never);
-
-    render(<BasicSettings />);
-
-    const errorMessages = consoleErrorSpy.mock.calls
-      .flatMap((call) => call)
-      .map((value) => String(value));
-
-    expect(errorMessages).not.toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Objects are not valid as a React child"),
-      ]),
-    );
-    expect(errorMessages).not.toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Encountered two children with the same key"),
-      ]),
-    );
-  });
-
-  it("renders the predictive model controls for predictive native sources", () => {
-    useConverterStore.setState({
-      source_version: "native",
-      lut_name: "",
-      nativeBrandGroups: [makePredictiveBrand()],
-      selectedNativeBrandKey: "bambulab_pla",
-      selectedNativeDbNames: ["DB-B", "DB-C"],
-      color_layers: 5,
-      layer_height_mm: 0.08,
-    } as never);
-
-    render(<BasicSettings />);
-
-    expect(screen.getByRole("switch", { name: "模型辅助匹配" })).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "仅模型匹配" })).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "模型阈值" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "模型边距" })).not.toBeInTheDocument();
-  });
-
-  it("shows dynamic layer controls for predictive sources", () => {
-    useConverterStore.setState({
-      lut_name: "ReferencePack - bambulab_pla",
+      source_version: "legacy",
+      lut_name: "A 4C",
       selectedLutInfo: {
-        name: "ReferencePack - bambulab_pla",
-        color_mode: "8-Color Max",
-        color_count: 64,
-        max_color_layers: 10,
-        layer_height_mm: 0.08,
-        supports_predictive_match: true,
-        supports_dynamic_layer_count: true,
-        supports_custom_recipe: true,
-        source_kind: "predictive_package",
-        supported_modes: [
-          { color_layers: 5, layer_height_mm: 0.08 },
-          { color_layers: 10, layer_height_mm: 0.08 },
-        ],
+        name: "A 4C", color_mode: "8-Color Max", color_count: 8,
+        source_kind: "predictive_package", supports_dynamic_layer_count: true,
       },
-      color_layers: 5,
-      layer_height_mm: 0.08,
-    } as never);
+    });
 
     render(<BasicSettings />);
 
-    expect(screen.getByText("叠色层数")).toBeInTheDocument();
-    expect(screen.getByText("叠色层高")).toBeInTheDocument();
-    expect(screen.getByText(/支持模式/)).toBeInTheDocument();
-  });
-
-  it("does not render predictive model controls in legacy mode", () => {
-    render(<BasicSettings />);
-
-    expect(screen.queryByRole("switch", { name: "模型辅助匹配" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: "仅模型匹配" })).not.toBeInTheDocument();
-  });
-
-  it("does not render predictive model controls for non-predictive native brands", () => {
-    useConverterStore.setState({
-      source_version: "native",
-      nativeBrandGroups: [{
-        brand_key: "plain-pla",
-        material_type: "PLA",
-        vendor: "Vendor B",
-        display_name: "Vendor B PLA",
-        db_options: [makeDbOption("DB-X")],
-        default_db_names: ["DB-X"],
-        supported_modes: [{ color_layers: 5, layer_height_mm: 0.08 }],
-      }],
-      selectedNativeBrandKey: "plain-pla",
-      selectedNativeDbNames: ["DB-X"],
-      color_layers: 5,
-      layer_height_mm: 0.08,
-    } as never);
-
-    render(<BasicSettings />);
-
-    expect(screen.queryByRole("switch", { name: "模型辅助匹配" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: "仅模型匹配" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "模型阈值" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "模型边距" })).not.toBeInTheDocument();
+    await waitFor(() => expect(useConverterStore.getState().lut_name).toBe(""));
+    expect(screen.queryByText("叠色层数")).not.toBeInTheDocument();
   });
 
   it("anchors the thickness slider to the 0.08mm layer grid", () => {

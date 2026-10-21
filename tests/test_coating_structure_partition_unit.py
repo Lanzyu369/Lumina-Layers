@@ -11,6 +11,7 @@ from shapely.ops import unary_union
 from core.pipeline.vector_branch import _generate_vector_outline_mesh
 from core.pipeline.vector_glb_preview import build_vector_preview_parts_from_analysis
 from core.vector_engine import VectorProcessor
+from core.export_materials import ExportMaterial
 
 
 def _analysis():
@@ -43,6 +44,7 @@ def _scene_and_outline(analysis, coating=True):
     processor.outline_width_mm = 2.0
     processor.enable_coating = coating
     processor.coating_height_mm = 0.08
+    processor.coating_material = ExportMaterial("White PETG", "PETG", (246, 247, 248))
     scene = processor.build_mesh(analysis, thickness_mm=1.2)
     outline = _generate_vector_outline_mesh(
         analysis, 2.0, [255, 255, 255, 255], "White",
@@ -65,6 +67,8 @@ def test_vector_outline_uses_structure_not_optical_seams(coating):
 def test_vector_coating_and_outline_share_surface_not_volume():
     scene, outline = _scene_and_outline(_analysis())
     coating = scene.geometry["Coating"]
+    assert coating.metadata["bambu_material_name"] == "White PETG"
+    assert coating.visual.face_colors[0].tolist() == [246, 247, 248, 255]
     assert outline.bounds[0, 2] == pytest.approx(coating.bounds[1, 2])
     assert _top_footprint(outline).difference(_top_footprint(coating)).area < 1e-8
 

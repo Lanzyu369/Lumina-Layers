@@ -20,6 +20,8 @@ import {
   fetchLutList as apiFetchLutList,
   getEditorCommitStatus as apiGetEditorCommitStatus,
   getEditorSelection as apiGetEditorSelection,
+  exportEditorProject as apiExportEditorProject,
+  restoreEditorProject as apiRestoreEditorProject,
   mutateEditorSelection as apiMutateEditorSelection,
   mutateFreeColors as apiMutateFreeColors,
   regionReplace as apiRegionReplace,
@@ -42,6 +44,7 @@ import {
 } from "../../api/lut";
 import { fetchMaterialColorSuggestions } from "../../api/materialCache";
 import { uploadImagePreview } from "../../api/system";
+import { closeSession } from "../../api/session";
 import type {
   AutoHeightMode,
   ColorMode,
@@ -105,6 +108,7 @@ import { createPreviewSpace,type PreviewSpaceBounds } from "../../utils/previewS
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
 import { computeScaleFactor } from "../../utils/scaleUtils";
 import {
+  invalidateGeneratedArtifacts,
   registerPreviewArtifactInvalidator
 } from "../generatedArtifactInvalidation";
 import { lutErrorToVisibleMessage } from "../lutErrorMessages";
@@ -118,7 +122,7 @@ import {
   buildCurrentVisibleColorRemapMap,buildSourceChangeProjectColorState,chooseLastSelectedColor,clonePortableProjectColorState,cloneRecipeOverrides,cloneRemapHistory,cloneReplacementRegions,colorRemapFromReplacementRegions,createAdjustmentSnapshot,editorCommitResultStateFromResponse,EMPTY_LUT_MATCH_STATE,getPreviewBaseUrl,hasAdjustmentState,historyFlagsFromResponse,INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,matchesColorHighlightSnapshot,normalizeHexNoHash,normalizeReplacementRegionsFromHistory,selectionModeForTool,selectionStateFromDocument,selectionToolForLegacyMode,toggleHexInSet,
 } from "./editorState";
 import {
-  createGenerationActions,getElapsedMsSince,getErrorType,invalidateGenerationRequests,notifyCompletion,
+  CONVERTER_ERROR_KEYS,createGenerationActions,getElapsedMsSince,getErrorType,invalidateGenerationRequests,notifyCompletion,
 } from "./generationActions";
 import {
   buildLutCatalogIndex,
@@ -712,6 +716,11 @@ function finishContentCommit(replacementEpoch: number, success: boolean): void {
   if (!handle || handle.settled) return;
   handle.settled = true;
   contentCommitHandles.delete(replacementEpoch);
+  if (success && useConverterStore.getState().sessionId === handle.sessionId) {
+    // A committed edit invalidates the current launch shortcut. Its existing
+    // TTL download remains on the server for anyone who already saved the URL.
+    useConverterStore.setState({ threemfDiskPath: null, downloadUrl: null });
+  }
   handle.resolve(success);
 }
 
@@ -1455,6 +1464,10 @@ function buildPreviewSessionResetState(
     : null;
   return {
     sessionId: null,
+    nativeMaterialSelection: null,
+    nativeMaterialSelectionAction: null,
+    nativeMaterialSelectionLoading: false,
+    nativeMaterialSelectionError: null,
     isLoading: false,
     previewImageUrl: null,
     originalPreviewUrl: null,
@@ -1484,6 +1497,7 @@ function buildPreviewSessionResetState(
     contentCommitStatus: "idle",
     contentCommitOperationId: null,
     replacement_regions: [],
+    pendingEditorProject: preserveProjectComparisonState ? current.pendingEditorProject : null,
     recipe_overrides: [],
     customRecipeHistory: [],
     free_color_set: new Set<string>(),
@@ -1888,6 +1902,7 @@ export const DEFAULT_STATE: ConverterState = {
   auto_dynamic_range: false,
   chroma_gate: 15,
   separate_backing: false,
+  backingOutput: "same_project",
   add_loop: false,
   loop_width: 4.0,
   loop_length: 8.0,
@@ -1944,6 +1959,7 @@ export const DEFAULT_STATE: ConverterState = {
   historyBusy: false,
   contentCommitStatus: "idle",
   contentCommitOperationId: null,
+  pendingEditorProject: null,
   colorContours: {},
   autoHeightMode: "darker-higher" as AutoHeightMode,
   heightmapFile: null,
@@ -1969,6 +1985,12 @@ export const DEFAULT_STATE: ConverterState = {
   autoDetectColorsLoading: false,
   isLoading: false,
   isGenerating: false,
+  native_filament_profiles: {},
+  nativeFilamentProfileScope: null,
+  nativeMaterialSelection: null,
+  nativeMaterialSelectionAction: null,
+  nativeMaterialSelectionLoading: false,
+  nativeMaterialSelectionError: null,
   error: null,
   previewImageUrl: null,
   modelUrl: null,
@@ -3330,6 +3352,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }),
     setSeparateBacking: (enabled: boolean) =>
       set({ separate_backing: enabled }),
+    setBackingOutput: (backingOutput) => {
+      invalidateGeneratedArtifacts({ preservePreviews: true });
+      set({ backingOutput, threemfDiskPath: null, downloadUrl: null });
+    },
 
     // --- 鎸備欢鐜?---
     setAddLoop: (enabled: boolean) =>
@@ -3628,14 +3654,21 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({ wire_height_mm: clampValue(height, 0.04, 1.0) }),
 
     // --- 涂层 ---
-    setEnableCoating: (enabled: boolean) =>
+    setEnableCoating: (enabled: boolean) => {
+      invalidateGeneratedArtifacts({ preservePreviews: true });
       set({
         enable_coating: enabled,
+        nativeMaterialSelection: null,
+        nativeMaterialSelectionError: null,
         threemfDiskPath: null,
         downloadUrl: null,
-      }),
-    setCoatingHeightMm: (height: number) =>
-      set({ coating_height_mm: clampValue(height, 0.04, 0.12) }),
+      });
+    },
+    setCoatingHeightMm: (height: number) => {
+      invalidateGeneratedArtifacts({ preservePreviews: true });
+      set({ coating_height_mm: clampValue(height, 0.04, 0.12),
+        threemfDiskPath: null, downloadUrl: null });
+    },
 
     // --- 大画幅 ---
     setLargeFormatEnabled: (enabled: boolean) =>
@@ -5263,8 +5296,28 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       layerOrder: string = "Top2Bottom",
       virtualMaterials?: VirtualMaterial[],
     ) => {
+      const state = _get();
+      if (!state.sessionId) {
+        set({ error: "请先预览图片" });
+        return;
+      }
+      await _get().commitRecipeOverride({
+        session_id: state.sessionId, region_ids: regionIds, recipe,
+        layer_order: layerOrder,
+        color_layers: isDynamicMaterialActive(state) ? recipe.length
+          : Math.max(recipe.length, state.color_layers ?? recipe.length),
+        layer_height_mm: state.layer_height_mm ?? state.selectedLutInfo?.layer_height_mm ?? 0.08,
+        ...(virtualMaterials?.length ? { virtual_materials: virtualMaterials } : {}),
+      });
+    },
+
+    commitRecipeOverride: async (request) => {
+      const regionIds = request.region_ids ?? [];
+      const recipe = [...request.recipe];
+      const layerOrder = request.layer_order;
+      const virtualMaterials = request.virtual_materials;
       const initialState = _get();
-      if (!initialState.sessionId) {
+      if (!initialState.sessionId || initialState.sessionId !== request.session_id) {
         set({ error: "请先预览图片" });
         return;
       }
@@ -5294,11 +5347,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       // preview's physical print depth remains in the session and the backend
       // pads it with the configured backing material; sending the maximum
       // depth here turns a valid short recipe into a 422 mismatch.
-      const resolvedLayers = isDynamicMaterialActive(state)
-        ? recipe.length
-        : Math.max(recipe.length, state.color_layers ?? recipe.length);
-      const resolvedHeight =
-        state.layer_height_mm ?? state.selectedLutInfo?.layer_height_mm ?? 0.08;
+      const resolvedLayers = request.color_layers;
+      const resolvedHeight = request.layer_height_mm;
       // Deep-copy virtuals to isolate the payload / state from later
       // caller-side mutations; 422 on ``recipe[i] >= LUT.N`` requires this
       // list to be present, so forward it when non-empty.
@@ -5340,15 +5390,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           operation_id: previewCommit.operationId,
         });
         if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
-        // After a custom recipe, the preview content changed, so any previous
-        // selection mask is invalid. Clear the selection entirely rather than
-        // trying to sync a stale mask. The user can re-select after the recipe
-        // is applied. This fixes the "can't deselect / clear-all broken" bug.
-        const currentSelection = _get().selectionDocument;
-        if (currentSelection && currentSelection.selected_component_count > 0) {
-          await _get().applySelectionMutation({ operation: "clear" });
-        }
-        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
+        // The response owns the post-edit mask and revisions. A second
+        // selection mutation here would race dependent save/generate work.
         set((current) => ({
           replacePreviewLoading: false,
           previewImageUrl:
@@ -5361,7 +5404,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
           ...dynamicMaterialResultState(response),
           ...historyFlagsFromResponse(response),
-          recipe_overrides: [
+          recipe_overrides: response.recipe_overrides ?? [
             ...current.recipe_overrides.filter(
               (item) => !targetRegionIds.includes(item.region_id),
             ),
@@ -5392,7 +5435,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             response.selection,
           ),
         }));
+        if (!response.selection) void _get().hydrateSelectionDocument();
         _get()._pollAsyncGlb();
+        return response;
       } catch (err) {
         const settlement = await settleReplacementPreviewError(
           _get(),
@@ -6889,8 +6934,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     submitPreview: async () => {
-      const state = _get();
-      if (!state.imageFile) {
+      let state: ConverterState = _get();
+      const imageFile = state.imageFile;
+      if (!imageFile) {
         set({ error: "请先上传图片" });
         return;
       }
@@ -6949,17 +6995,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         hue_enable: state.hue_enable,
       });
 
-      const portableProjectColors = clonePortableProjectColorState(state);
-      const remapReplacementRegions = colorRemapToReplacementRegions(
-        state.colorRemapMap,
-        state.palette,
-      );
-      const previewReplacementRegions = [
-        ...portableProjectColors.replacement_regions,
-        ...remapReplacementRegions,
-      ];
-      const shouldReplayGlobalReplacements = previewReplacementRegions.length > 0;
-
       set({
         isLoading: true,
         error: null,
@@ -6973,7 +7008,39 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
       });
       console.log("[DEBUG] submitPreview: cleared layerImages");
+      let freshSessionId: string | null = null;
       try {
+        // Capture the current confirmed editor, not the original import asset.
+        // 重新预览前复用保存项目的确认屏障，保留后续编辑及其空间掩码。
+        const project = state.sessionId
+          ? await _get().prepareRecipeExport()
+          : { state, editorFile: state.pendingEditorProject };
+        if (isStalePreviewRequest()) return;
+        state = project.state;
+        const editorFile = project.editorFile;
+        const editorGuard = capturePreviewCommitGuard(state, replacementPreviewEpoch, "preview");
+        const selectionRevision = state.selectionDocument?.selection_revision;
+        const requireCurrentEditor = (): void => {
+          const current = _get();
+          if (editorFile && state.sessionId && (
+            !canCommitPreviewResponse(current, editorGuard, replacementPreviewEpoch)
+            || current.selectionDocument?.selection_revision !== selectionRevision
+            || current.contentCommitStatus === "pending"
+            || current.contentCommitStatus === "unknown"
+          )) {
+            throw new Error(tRuntime("recipe_export_wait_edits"));
+          }
+        };
+        const portableProjectColors = clonePortableProjectColorState(state);
+        const remapReplacementRegions = colorRemapToReplacementRegions(
+          state.colorRemapMap,
+          state.palette,
+        );
+        const previewReplacementRegions = [
+          ...portableProjectColors.replacement_regions,
+          ...remapReplacementRegions,
+        ];
+        const shouldReplayGlobalReplacements = previewReplacementRegions.length > 0;
         const colorMode = normalizePublicColorMode(state.color_mode);
         const sourceParams =
           buildConversionSourceParams(state);
@@ -7005,19 +7072,45 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           outline_width: previewParams.outline_width,
         });
         const response = await apiConvertPreview(
-          state.imageFile,
+          imageFile,
           previewParams,
           signal,
         );
+        freshSessionId = response.session_id;
         if (isStalePreviewRequest()) {
           return;
         }
+        requireCurrentEditor();
+        let restoredEditor: Awaited<ReturnType<typeof apiRestoreEditorProject>> | null = null;
+        if (editorFile) {
+          restoredEditor = await apiRestoreEditorProject(response.session_id, editorFile, createEditorOperationId());
+        }
+        if (isStalePreviewRequest()) {
+          return;
+        }
+        requireCurrentEditor();
+        if (restoredEditor && (restoredEditor.status !== "committed" || !restoredEditor.result?.preview_url)) {
+          throw new Error(tRuntime("recipe_editor_restore_unconfirmed"));
+        }
+        const editorResult = restoredEditor?.result;
+        // Apply the normal content-commit contract in the same publication as
+        // the fresh session, so its stable 2D base cannot retain unedited raw pixels.
+        const restoredEditorState = editorCommitResultStateFromResponse(
+          { ...state, sessionId: response.session_id },
+          response.session_id,
+          restoredEditor?.operation,
+          editorResult,
+        );
+        if (restoredEditor?.editor_content_revision !== undefined) {
+          rememberConfirmedEditorContentRevision(response.session_id, restoredEditor.editor_content_revision);
+        }
         _logPreviewTimer("response received");
         // 后端返回 JSON，preview_url 是相对路径如 /api/files/xxx
-        const previewUrl =
-          normalizeResourceUrl(response.preview_url) ?? response.preview_url;
-        const glbUrl = response.preview_glb_url
-          ? normalizeResourceUrl(response.preview_glb_url)
+        const sourcePreviewUrl = normalizeResourceUrl(response.preview_url) ?? response.preview_url;
+        const previewUrl = restoredEditorState.previewImageUrl ?? sourcePreviewUrl;
+        const responseGlb = editorResult ? editorResult.preview_glb_url : response.preview_glb_url;
+        const glbUrl = responseGlb
+          ? normalizeResourceUrl(responseGlb)
           : null;
         // Normalize palette hex values: strip leading '#' for frontend consistency
         const normalizedPalette = (response.palette ?? []).map((e) => ({
@@ -7058,10 +7151,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           isLoading: false,
           sessionId: response.session_id,
           previewImageUrl: previewUrl,
-          originalPreviewUrl: previewUrl,
+          originalPreviewUrl: sourcePreviewUrl,
           previewBaseImageUrl:
             normalizeResourceUrl(response.dimensions?.preview_raw_url) ??
-            previewUrl,
+            sourcePreviewUrl,
           lutMatchMode: response.lut_match_mode ?? "legacy",
           lutMatchInfo: response.lut_match_info ?? {
             match_mode: response.lut_match_mode ?? "legacy",
@@ -7097,6 +7190,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           historyBusy: false,
           replacement_regions: portableProjectColors.replacement_regions,
           recipe_overrides: [],
+          pendingEditorProject: null,
           customRecipeHistory: portableProjectColors.customRecipeHistory,
           free_color_set: portableProjectColors.free_color_set,
           regionReplacementCount: 0,
@@ -7133,9 +7227,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           gradientGroupsError: null,
           gradientGroupsSessionId: null,
           gradientSelection: null,
+          ...restoredEditorState,
         });
         await _get().hydrateSelectionDocument();
-        if (portableProjectColors.free_color_set.size > 0) {
+        if (!editorResult && portableProjectColors.free_color_set.size > 0) {
           const freeColorRestoreSessionId = response.session_id;
           try {
             await queueFreeColorMutation(freeColorRestoreSessionId, async () => {
@@ -7260,6 +7355,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           "error",
         );
       } finally {
+        if (freshSessionId && _get().sessionId !== freshSessionId) {
+          void closeSession(freshSessionId);
+        }
         if (_previewAbortController === requestController) {
           _previewAbortController = null;
           _endPreviewTimer();
@@ -7928,6 +8026,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     submitFullPipeline: async () => {
       const state = _get();
 
+      // Refuse the unsupported pair before starting a preview that generation
+      // would reject anyway.
+      if (state.largeFormatEnabled && state.modelSurfaceEnabled) {
+        set({ error: CONVERTER_ERROR_KEYS.largeFormatModelSurfaceConflict });
+        return null;
+      }
+
       // 步骤 1：如果没有 sessionId，先执行预览
       if (!state.sessionId) {
         await _get().submitPreview();
@@ -8070,6 +8175,37 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     // --- UI 状态 ---
     setError: (error: string | null) => set({ error }),
     clearError: () => set({ error: null }),
+
+    prepareRecipeExport: async () => {
+      const initial = _get();
+      if (initial.sessionId) {
+        const selection = waitForSelectionMutation(initial.sessionId);
+        if (selection && !(await selection)) throw new Error(tRuntime("recipe_export_wait_edits"));
+        const content = waitForContentCommits(initial.sessionId);
+        if (content && !(await content)) throw new Error(tRuntime("recipe_export_wait_edits"));
+        await _get().hydrateSelectionDocument();
+      }
+      const state = _get();
+      if (state.sessionId !== initial.sessionId || state.contentCommitStatus === "pending" || state.contentCommitStatus === "unknown") {
+        throw new Error(tRuntime("recipe_export_wait_edits"));
+      }
+      const hasSpatialData = state.regionReplacementCount > 0 || state.recipe_overrides.length > 0
+        || (state.selectionDocument?.selected_pixel_count ?? 0) > 0;
+      if (!hasSpatialData || !state.sessionId) return { state, editorFile: state.pendingEditorProject };
+      const revision = confirmedSelectionRevisions.get(state.sessionId)?.editorContentRevision
+        ?? state.selectionDocument?.editor_content_revision ?? undefined;
+      const selectionRevision = state.selectionDocument?.selection_revision;
+      const editorFile = await apiExportEditorProject(state.sessionId, revision, selectionRevision);
+      const latest = _get();
+      const latestRevision = confirmedSelectionRevisions.get(state.sessionId)?.editorContentRevision
+        ?? latest.selectionDocument?.editor_content_revision ?? undefined;
+      if (latest.sessionId !== state.sessionId || latestRevision !== revision
+          || latest.selectionDocument?.selection_revision !== selectionRevision
+          || latest.contentCommitStatus === "pending" || latest.contentCommitStatus === "unknown") {
+        throw new Error(tRuntime("recipe_export_wait_edits"));
+      }
+      return { state, editorFile };
+    },
 
     importRecipeState: (
       partial: Partial<ConverterState>,

@@ -110,6 +110,18 @@ async def _timed_submit_via_generate_mock(
 
 
 @pytest.fixture(autouse=True)
+def _resolved_native_material_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub material preflight for route tests that use synthetic source files.
+
+    只隔离虚构文件的材料预检，保留设备、缓存、worker 路由及错误断言。
+    """
+    monkeypatch.setattr(
+        "api.routers.converter.generate.require_material_selection",
+        MagicMock(return_value={"ready": True}),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _keep_generate_pool_timing_opt_in() -> object:
     """Keep legacy submit assertions while the route uses submit_timed."""
     previous = _mock_pool.submit_timed
@@ -5715,6 +5727,67 @@ class TestLargeFormatDimensionsAndRouting:
             8,
             0.4,
         )
+
+    @pytest.mark.parametrize("surface_overlay_enabled", [True, False])
+    def test_large_format_rejects_model_surface_overlay_before_tiling(
+        self,
+        surface_overlay_enabled: bool,
+    ) -> None:
+        """Overlay sessions must not be tiled as flat artwork at the ordinary width."""
+
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+        _test_store.put(sid, "recipe_overrides", [])
+        _test_store.put(sid, "selected_region_masks", {})
+        if surface_overlay_enabled:
+            _test_store.put(sid, "surface_overlay_enabled", True)
+            _test_store.put(sid, "surface_model_path", image_path)
+            _test_store.put(
+                sid,
+                "surface_footprint",
+                {"bounds_width_mm": 960.0, "bounds_height_mm": 480.0},
+            )
+        payload = _large_format_payload(
+            sid,
+            modeling_mode="high-fidelity",
+            use_cached_matched_rgb=False,
+            target_width_mm=60.0,
+            target_height_mm=40.0,
+        )
+        material_selection = MagicMock(return_value={"ready": True})
+
+        try:
+            with patch(
+                "api.routers.converter.generate.require_material_selection",
+                material_selection,
+            ), patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=_large_format_success_response("raster"),
+            ) as raster_helper, patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+                return_value=_large_format_success_response("svg"),
+            ) as svg_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=payload,
+                )
+
+            if surface_overlay_enabled:
+                assert response.status_code == 422, response.text
+                detail = response.json()["detail"]
+                assert "model surface overlay" in detail
+                assert "Turn off large-format mode or model surface overlay" in detail
+                material_selection.assert_not_called()
+                raster_helper.assert_not_called()
+                svg_helper.assert_not_called()
+            else:
+                assert response.status_code == 200, response.text
+                raster_helper.assert_called_once()
+                assert raster_helper.call_args.kwargs["total_width_mm"] == 60.0
+        finally:
+            _test_store.close(sid)
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
 
     def test_large_format_dynamic_mismatch_rejects_before_temp_preparation(
         self,

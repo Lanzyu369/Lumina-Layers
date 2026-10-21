@@ -53,19 +53,21 @@ jobs:
       - name: Download and verify the published runtime wheel
         shell: bash
         run: |
-          python -m pip download --no-index --only-binary=:all: --no-deps -r requirements-native-svg.txt --dest wheelhouse
+          python -m pip download --index-url https://pypi.org/simple --only-binary=:all: --no-deps -r requirements-native-svg.txt --dest wheelhouse
           python - <<'PY'
           import hashlib
+          import json
           from pathlib import Path
           from urllib.request import urlopen
 
           wheel, = Path("wheelhouse").glob("*.whl")
           version = wheel.name.split("-")[1]
-          url = f"https://github.com/lumina-layer-studio/lumina-svg-core/releases/download/v{version}/SHA256SUMS"
+          url = f"https://pypi.org/pypi/lumina-svg-core/{version}/json"
           with urlopen(url, timeout=60) as response:
-              checksums = dict(line.split("  ", 1)[::-1] for line in response.read().decode("utf-8").splitlines())
+              release = json.load(response)
+          published = next(item for item in release["urls"] if item["filename"] == wheel.name)
           with wheel.open("rb") as source:
-              assert hashlib.file_digest(source, "sha256").hexdigest() == checksums[wheel.name]
+              assert hashlib.file_digest(source, "sha256").hexdigest() == published["digests"]["sha256"]
           print(f"Verified published wheel: {wheel.name}")
           PY
           python native/lumina-svg-core/tools/verify_wheel.py wheelhouse/*.whl --contents-only
@@ -80,8 +82,8 @@ jobs:
           from pathlib import Path
           import lumina_svg_core
 
-          assert lumina_svg_core.__version__ == "0.3.1"
-          assert lumina_svg_core.__source_revision__ == "50c1dd5b57c15b4cccb3c51c08134aea01338a42"
+          assert lumina_svg_core.__version__ == "0.3.2"
+          assert lumina_svg_core.__source_revision__ == "6fc720451f64a3d3d239261bf924b37966bf6ba3"
           assert lumina_svg_core.__source_dirty__ is False
           assert lumina_svg_core.RESULT_SCHEMA_VERSION == 4
           fixture = Path("native/lumina-svg-core/tests/fixtures/fill_rules_transforms.svg")

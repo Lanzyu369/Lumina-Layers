@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useConverterStore } from "../stores/converter";
-import type { SelectionDocumentResponse } from "../api/types";
+import type { ExportMaterialSelection, SelectionDocumentResponse } from "../api/types";
 
 vi.mock("../api/converter", async () => {
   const actual =
@@ -11,6 +11,7 @@ vi.mock("../api/converter", async () => {
     ...actual,
     replacementHistory: vi.fn(),
     convertGenerate: vi.fn(),
+    fetchExportMaterialSelection: vi.fn(),
     getEditorSelection: vi.fn(),
     getEditorCommitStatus: vi.fn(),
   };
@@ -18,12 +19,14 @@ vi.mock("../api/converter", async () => {
 
 import {
   convertGenerate,
+  fetchExportMaterialSelection,
   getEditorSelection,
   replacementHistory,
 } from "../api/converter";
 
 const mockedReplacementHistory = vi.mocked(replacementHistory);
 const mockedConvertGenerate = vi.mocked(convertGenerate);
+const mockedFetchExportMaterialSelection = vi.mocked(fetchExportMaterialSelection);
 const mockedGetEditorSelection = vi.mocked(getEditorSelection);
 
 let sessionCounter = 0;
@@ -127,9 +130,38 @@ function sentRevisions(): unknown[] {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockedFetchExportMaterialSelection.mockResolvedValue({
+    ready: true,
+    slicer_id: "BambuStudio",
+    machine_uid: "bbl:bambu-lab-h2d",
+    nozzle_uid: "nozzle:0.4mm",
+    device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+    machine_profile_id: "bbl:bambu-lab-h2d",
+    build_plate_uid: "plate:textured-pei",
+    materials: [],
+    build_plates: [],
+    issues: [],
+  } satisfies ExportMaterialSelection);
 });
 
 describe("generate editor content revision", () => {
+  it.each([
+    ["coating enabled", () => useConverterStore.getState().setEnableCoating(true)],
+    ["coating height", () => useConverterStore.getState().setCoatingHeightMm(0.12)],
+    ["backing plates", () => useConverterStore.getState().setBackingOutput("separate_project")],
+  ] as const)("discards a late download after changing %s", async (_name, change) => {
+    seedEditorState();
+    useConverterStore.setState({ downloadUrl: null, enable_coating: false });
+    let complete!: (value: Awaited<ReturnType<typeof convertGenerate>>) => void;
+    mockedConvertGenerate.mockReturnValueOnce(new Promise((resolve) => { complete = resolve; }));
+    const generating = useConverterStore.getState().submitGenerate();
+    await vi.waitFor(() => expect(mockedConvertGenerate).toHaveBeenCalledOnce());
+    change();
+    complete(generated as never);
+    await generating;
+    expect(useConverterStore.getState().downloadUrl).toBeNull();
+  });
+
   it("sends the revision confirmed by an undo response without a selection", async () => {
     seedEditorState();
     mockedReplacementHistory.mockResolvedValueOnce(historyResponse(7));

@@ -291,6 +291,14 @@ _PLATE_UIDS = {
     "supertack-plate": "plate:supertack",
 }
 
+
+def native_build_plate_uid(build_plate_id: str) -> str:
+    """Return the SDK identity for an existing Lumina plate choice.
+
+    将已有 Lumina 打印板标识转换为 SDK 身份，不改变所选板型。
+    """
+    return build_plate_id if build_plate_id.startswith("prusa-sheet:") else _PLATE_UIDS.get(build_plate_id, "")
+
 def select_user_template_metadata_target(
     *,
     slicer: str,
@@ -310,11 +318,7 @@ def select_user_template_metadata_target(
         application_version=str(identity["application_version"]),
         machine_uid="",
         nozzle_uid="",
-        build_plate_uid=(
-            build_plate_id if build_plate_id is not None
-            and str(build_plate_id).startswith("prusa-sheet:")
-            else _PLATE_UIDS.get(build_plate_id or "", "")
-        ),
+        build_plate_uid=native_build_plate_uid(build_plate_id or ""),
     )
 
 
@@ -442,10 +446,7 @@ def select_metadata_target(
             registry.resolve_build_plate(profile.device_profile_id, selected_plate_id)
         except KeyError as exc:
             raise ValueError(str(exc).strip("'")) from exc
-        plate_uid = (
-            selected_plate_id if selected_plate_id.startswith("prusa-sheet:")
-            else _PLATE_UIDS.get(selected_plate_id, "")
-        )
+        plate_uid = native_build_plate_uid(selected_plate_id)
         if not plate_uid:
             raise ValueError(
                 f"Fat Cat has no build-plate identity for Lumina selection {selected_plate_id!r}"
@@ -605,6 +606,11 @@ def build_builtin_project_settings_request(
                 **(
                     {"material_type": str(material["material_type"])}
                     if material.get("material_type") is not None
+                    else {}
+                ),
+                **(
+                    {"native_filament_profile_name": str(material["native_filament_profile_name"])}
+                    if material.get("native_filament_profile_name")
                     else {}
                 ),
             }
@@ -1098,7 +1104,12 @@ def compose_project_settings(
     request_json = json.dumps(
         dict(request), ensure_ascii=False, separators=(",", ":")
     )
-    raw = fatcat.compose_project_settings(project_json, request_json)
+    try:
+        raw = fatcat.compose_project_settings(project_json, request_json)
+    except fatcat.ProjectValidationError as exc:
+        from core.errors import NativeMaterialSelectionError
+
+        raise NativeMaterialSelectionError(exc.detail) from exc
     return cast(ProjectComposition, _parse_native_json(raw))
 
 
@@ -1114,8 +1125,21 @@ def compose_builtin_project_settings(
     request_json = json.dumps(
         dict(request), ensure_ascii=False, separators=(",", ":")
     )
-    raw = fatcat.compose_project_settings(request_json)
+    try:
+        raw = fatcat.compose_project_settings(request_json)
+    except fatcat.ProjectValidationError as exc:
+        from core.errors import NativeMaterialSelectionError
+
+        raise NativeMaterialSelectionError(exc.detail) from exc
     return cast(ProjectComposition, _parse_native_json(raw))
+
+
+def resolve_project_materials(request: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve native presets and compatible plates through the composition policy.
+
+    使用组装器的同一规则预检原生耗材、候选预设和共同兼容板型。
+    """
+    return dict(_load_fatcat().resolve_project_materials(dict(request)))
 
 
 def compose_model_metadata(

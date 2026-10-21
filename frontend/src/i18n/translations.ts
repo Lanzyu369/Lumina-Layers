@@ -4,11 +4,78 @@
  * Contains all zh/en translation key-value pairs
  */
 export const translations: Record<string, Record<"zh" | "en", string>> = {
+  recipe_export_wait_edits: {
+    zh: "编辑或选区仍在提交，请等待完成或同步编辑状态后再保存。",
+    en: "An edit or selection is still being committed. Wait for it to finish or synchronize the editor before saving.",
+  },
+  recipe_editor_restore_unconfirmed: {
+    zh: "尚未确认项目局部编辑的恢复结果，原项目数据已保留，请重新预览。",
+    en: "The restored project edits could not be confirmed. Your project data is preserved; run preview again.",
+  },
+  native_material_edit_button: { zh: "打印耗材…", en: "Print filaments…" },
+  native_material_edit_title: { zh: "打印耗材", en: "Print filaments" },
+  native_material_edit_description: {
+    zh: "为每种材料选择切片软件中的耗材预设和兼容打印板。保存后用于下次生成，不会立即生成文件。",
+    en: "Choose a slicer filament preset for each material and a compatible build plate. These choices will be saved for the next generation without generating a file now.",
+  },
+  native_material_edit_cancel: { zh: "取消", en: "Cancel" },
+  native_material_edit_save: { zh: "保存选择", en: "Save choices" },
+  native_material_load_failed: { zh: "无法读取打印耗材预设，请重试。", en: "Could not load filament presets. Please retry." },
+  native_material_rechecking: { zh: "正在检查耗材预设和打印板兼容性…", en: "Checking filament presets and build plate compatibility…" },
+  native_material_recheck: { zh: "重新检查", en: "Check again" },
+  native_material_recheck_failed: { zh: "未能重新检查耗材与打印板兼容性，草稿已保留，请重试。", en: "Could not recheck filament and build plate compatibility. Your draft is preserved; please retry." },
+  native_material_template_managed: {
+    zh: "当前导出使用导入的 3MF 模板，耗材预设由该模板管理。",
+    en: "The imported 3MF template manages the filament presets for this export.",
+  },
+  native_material_dialog_title: { zh: "确认打印耗材", en: "Confirm print filaments" },
+  native_material_dialog_description: {
+    zh: "请为每种材料选择切片软件中的耗材预设和兼容打印板。确认后会继续生成。",
+    en: "Choose a slicer filament preset for each material and a compatible build plate. Generation will continue after confirmation.",
+  },
+  native_material_build_plate: { zh: "兼容打印板", en: "Compatible build plate" },
+  native_material_choose_plate: { zh: "选择打印板", en: "Choose a build plate" },
+  native_material_profile: { zh: "切片软件耗材预设", en: "Slicer filament preset" },
+  native_material_choose_profile: { zh: "请选择耗材预设", en: "Choose a filament preset" },
+  native_material_automatic: { zh: "自动匹配：{profile}", en: "Automatic: {profile}" },
+  native_material_automatic_option: { zh: "自动匹配", en: "Automatic" },
+  native_material_selected: { zh: "已选择：{profile}", en: "Selected: {profile}" },
+  native_material_cancel: { zh: "取消生成", en: "Cancel generation" },
+  native_material_apply: { zh: "确认并继续生成", en: "Confirm and continue" },
+  native_material_no_compatible_plate: {
+    zh: "当前耗材预设组合没有共同兼容的打印板。请调整耗材预设或设备后重试。",
+    en: "The current filament presets have no compatible build plate in common. Change the presets or machine and try again.",
+  },
+  native_material_ambiguous: {
+    zh: "“{material}”对应多个 {type} 耗材预设，请选择实际使用的耗材。",
+    en: "Several {type} presets match “{material}”. Choose the filament you will use.",
+  },
+  native_material_plate_incompatible: {
+    zh: "“{material}”当前选择的耗材预设不支持“{plate}”，请更换预设或打印板。",
+    en: "The selected filament preset for “{material}” does not support “{plate}”. Choose another preset or build plate.",
+  },
+  native_material_unavailable: {
+    zh: "当前设备和喷嘴没有可用的 {type} 原生耗材预设（材料：“{material}”）。请调整材料或设备后重试。",
+    en: "No native {type} filament preset is available for this machine and nozzle (material: “{material}”). Change the materials or machine and try again.",
+  },
+  native_material_selection_invalid: {
+    zh: "“{material}”之前选择的耗材预设不适用于当前设备或打印板，请重新选择。",
+    en: "The previous preset for “{material}” does not support the current machine or build plate. Choose it again.",
+  },
+  native_material_settings_incompatible: {
+    zh: "这组耗材预设的共同设置无法组合。请选择可共同使用的原生预设，或导入切片软件中已配置好的 3MF 模板。",
+    en: "These filament presets have incompatible shared settings. Choose compatible native presets or import a 3MF template configured in your slicer.",
+  },
   file_save_saved: { zh: "文件已保存", en: "File saved" },
   file_save_download_started: { zh: "已开始下载", en: "Download started" },
   file_save_failed: { zh: "保存失败，请检查文件名、目标目录权限和可用空间后重试。", en: "Save failed. Check the filename, folder permissions and available space, then retry." },
   file_save_too_large: { zh: "文件超过 128 MiB 保存上限，请减小图像后重试。", en: "The file exceeds the 128 MiB save limit. Reduce the image size and retry." },
   // ==================== Application Title and Header ====================
+  app_starting: { zh: "正在启动 Lumina", en: "Starting Lumina" },
+  app_starting_detail: {
+    zh: "正在等待本机服务就绪，首次启动可能需要更久。连接成功后会自动进入，无需刷新；如果一直停留在此处，请检查启动器或终端中的错误。",
+    en: "Waiting for the local service. The first start may take longer. Lumina will open automatically when connected; no refresh is needed. If this screen remains, check the launcher or terminal for errors.",
+  },
   app_subtitle: {
     zh: "多材料3D打印色彩系统 | v1.6.3",
     en: "Multi-Material 3D Print Color System | v1.6.3",
@@ -2515,6 +2582,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "拼图模式开启时，大画幅模式会被禁用。",
     en: "Large Format is disabled while puzzle mode is enabled.",
   },
+  model_surface_large_format_disabled_hint: {
+    zh: "模型贴图开启时，大画幅模式会被禁用。",
+    en: "Large Format is disabled while model texture is enabled.",
+  },
+  large_format_model_surface_conflict: {
+    zh: "大画幅模式不支持模型贴图：切片只会按平面图片和普通尺寸生成，不包含上传的模型。请关闭大画幅模式或模型贴图后再生成。",
+    en: "Large Format does not support model texture: tiles would be cut from the flat image at the ordinary size, without the uploaded model. Turn off Large Format or model texture, then generate again.",
+  },
   puzzle_loop_disabled_hint: {
     zh: "拼图模式开启时，挂件环会被禁用。",
     en: "Keychain Loop is disabled while puzzle mode is enabled.",
@@ -4907,8 +4982,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Source Type",
   },
   basic_source_version_hint: {
-    zh: "选择配色数据从哪里来：\n• 传统 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 反推LUT：由品牌耗材数据推算出来，不需要自己打印色卡。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。",
-    en: "Choose where the color data comes from:\n• Legacy LUT: data measured from actually printed color charts — most reliable.\n• Inferred LUT: computed from brand filament data, no printed chart needed.\n• Material Archive: freely combine materials you created in Material Extraction.",
+    zh: "选择配色数据从哪里来：\n• 传统 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。",
+    en: "Choose where the color data comes from:\n• Legacy LUT: data measured from actually printed color charts — most reliable.\n• Material Archive: freely combine materials you created in Material Extraction.",
   },
   basic_source_version_legacy: {
     zh: "传统 LUT",
@@ -5777,12 +5852,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Native vector tiling failed, so raster tiling was used automatically.",
   },
   wipe_tower_manual_adjustment_title: {
-    zh: "打印前必须手动调整擦料塔",
-    en: "Manual wipe tower adjustment required",
+    zh: "打印前请手动检查摆放",
+    en: "Check the layout before printing",
   },
   wipe_tower_manual_adjustment_warning: {
-    zh: "文件已继续生成，但当前模型和擦料塔无法在所选热床上同时安全摆放。Lumina 没有缩小模型，也没有关闭擦料塔；请务必在切片软件中手动移动模型，或调整擦料塔的宽度和位置后再打印。",
-    en: "The file was generated, but the model and wipe tower cannot both fit safely on the selected bed. Lumina did not scale the model or disable the tower; before printing, move the model or adjust the tower width and position manually in the slicer.",
+    zh: "文件已生成，可以下载。自动摆放未能确认模型、底边（brim）和擦料塔的安全位置；当前估算会预留完整底边，实际切片可能占用更少空间。模型尺寸、原生工艺和擦料塔均已保留。请在切片软件中检查并手动调整，确认切片通过后再打印。ZIP 中的每个工程都需要分别检查。",
+    en: "The file is ready to download. Automatic placement could not verify safe positions for the model, brim and wipe tower. The estimate reserves the full brim allowance; actual slicing may use less space. Model dimensions, native process settings and the tower were preserved. Check and adjust the layout in your slicer, and confirm slicing succeeds before printing. Check each project in a ZIP separately.",
   },
   basic_tile_width: {
     zh: "切片宽度",
@@ -6040,13 +6115,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== Coating Settings ====================
+  adv_backing_output: { zh: "背板输出", en: "Backing output" },
+  adv_backing_output_same: { zh: "同一工程", en: "Same project" },
+  adv_backing_output_separate: { zh: "独立分盘工程（ZIP）", en: "Independent plate projects (ZIP)" },
+  adv_backing_output_hint: { zh: "保留原尺寸，模型和背板各输出一个 3MF。解压后分别打开切片，检查模型、底边（brim）和擦料塔的位置。", en: "Keeps the original size and writes one 3MF each for the model and backing. Unzip and slice each project separately, checking the model, brim and wipe tower positions." },
+  adv_backing_output_unavailable: { zh: "独立背板工程用于单面、无浮雕的单模型导出。当前模式请使用同一工程或现有分块输出。", en: "Independent backing projects support a single-sided model without relief. Use the same project or the existing tile workflow for this mode." },
   coating_enable: {
     zh: "启用透明镀层",
     en: "Enable Transparent Coating",
   },
   coating_enable_hint: {
-    zh: "在作品表面增加一层可用透明耗材打印的保护层。",
-    en: "Adds a surface layer intended to be printed with transparent filament.",
+    zh: "在作品表面增加透明耗材保护层。材质跟随模型耗材，混合材质默认使用 PLA。",
+    en: "Adds a protective layer for transparent filament. Follows the model material type; mixed types default to PLA.",
   },
   coating_height: {
     zh: "透明镀层高度",
@@ -8117,6 +8197,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "LUT 未找到，请手动选择兼容的 LUT",
     en: "LUT not found, please select a compatible LUT manually",
   },
+  recipe_import_predictive_lut_unavailable: {
+    zh: "此项目使用当前暂不可用的反推 LUT。请改用传统 LUT 或耗材档案。",
+    en: "This project uses an inferred LUT, which is currently unavailable. Use a legacy LUT or material archive instead.",
+  },
   recipe_import_lut_degraded: {
     zh: "原 LUT 记录未找到，已按名称与颜色模式匹配，请确认选中了预期 LUT。",
     en: "Original LUT record unavailable; matched by name and color mode. Confirm the intended LUT is selected.",
@@ -8150,12 +8234,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "The imported recipe enabled puzzle back labels. Back labels are not available in this version and have been disabled.",
   },
   recipe_import_warning_spatial_edits_not_serialized: {
-    zh: "连通区域的局部改色仅属于当前会话，未写入分享配方；导入后需要重新应用。",
-    en: "Connected-region color edits belong to the current session and were not saved in the shared recipe; reapply them after import.",
+    zh: "这个旧项目未保存局部改色的空间数据，无法还原缺失的选区；原图和其他参数仍会恢复。",
+    en: "This older project did not save the spatial data for local color edits. Missing selections cannot be recovered; the original source and other settings will still be restored.",
   },
   recipe_import_warning_region_recipes_not_restored: {
-    zh: "区域自定义配方依赖原预览会话中的选区，导入后不会直接激活；配方历史已保留，可重新选区后应用。",
-    en: "Region-specific recipes depend on selections from the original preview session, so they are not activated on import. Their recipe history is kept for reuse after selecting a new region.",
+    zh: "这个旧项目缺少区域配方的实际掩码，不能确定原来的应用范围；已保留配方历史，可重新选区后应用。",
+    en: "This older project is missing the actual masks for region recipes, so their original scope cannot be recovered. Recipe history is kept for reuse after selecting a new region.",
   },
   recipe_import_workshop_degraded: {
     zh: "分享卡中的创意工坊编辑数据已损坏或当前不可用；主图和转换参数仍可正常导入。",

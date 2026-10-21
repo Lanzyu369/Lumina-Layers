@@ -1085,6 +1085,8 @@ def worker_batch_convert_item(
     svg_hole_max_width_mm: float = 0.1,
     enable_coating: bool = False,
     coating_height_mm: float = 0.08,
+    native_filament_profiles: dict[str, str] | None = None,
+    coating_material: dict[str, str] | None = None,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
@@ -1221,6 +1223,7 @@ def worker_batch_convert_item(
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
         enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
         material_source=material_source,
+        native_filament_profiles=native_filament_profiles,
         selected_materials=selected_materials,
         material_layer_count=material_layer_count,
         material_layer_height_mm=material_layer_height_mm,
@@ -1236,6 +1239,7 @@ def worker_batch_convert_item(
         material_delta_e00_tolerance=material_delta_e00_tolerance,
         enable_coating=enable_coating,
         coating_height_mm=coating_height_mm,
+        coating_material=coating_material,
     )
 
     # Conversion failure surfaces as no 3MF; keep the legacy contract
@@ -1599,6 +1603,7 @@ def worker_generate_model_surface_overlay(
             preview_colors=overlay.preview_colors,
             project_slot_names=overlay.project_slot_names,
             material_types=overlay.scene.metadata.get("material_types"),
+            native_filament_profiles=normalized_params.get("native_filament_profiles"),
             preserve_template_filament_slots=(
                 False if converter_params.get("material_source") == "material_archive" else None
             ),
@@ -1872,6 +1877,11 @@ def worker_generate_large_format_svg_native(
         worker_ctx["material_types"] = build_lut_material_types(
             lut_metadata, analysis.slot_names,
         )
+    from core.export_materials import configure_coating_material
+
+    worker_ctx["slot_names"] = list(analysis.slot_names)
+    worker_ctx["preview_colors"] = dict(analysis.preview_colors)
+    vector_processor.coating_material = configure_coating_material(worker_ctx)
     matched_rgb_path = params.get("matched_rgb_path")
     mask_solid_path = params.get("mask_solid_path")
     material_matrix_path = params.get("material_matrix_path")
@@ -2156,6 +2166,8 @@ def worker_generate_large_format_svg_native(
                 continue
 
             preview_colors = dict(tile.analysis.preview_colors)
+            if coating_material := worker_ctx.get("resolved_coating_material"):
+                preview_colors[coating_material.name] = [*coating_material.rgb, 255]
             slot_names = list(tile.analysis.slot_names)
             if vector_processor.enable_outline:
                 outline_color, outline_material = _resolve_vector_outline_base_aux_style(
@@ -2301,6 +2313,7 @@ def worker_generate_large_format_svg_native(
                 nozzle_size=params.get("nozzle_size", "0.4"),
                 project_slot_names=slot_names,
                 material_types=worker_ctx.get("material_types"),
+                native_filament_profiles=params.get("native_filament_profiles"),
                 enable_base_layer_height_modifier=bool(
                     worker_ctx.get("enable_base_layer_height_modifier", True)
                 ),

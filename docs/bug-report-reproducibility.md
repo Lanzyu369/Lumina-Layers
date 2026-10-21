@@ -66,6 +66,13 @@ tests together when introducing new summary fields.
 
 ## Materials And Server Upload
 
+- Coating captures its switch and thickness under `advanced_params.coating`.
+  Its material type follows the selected source materials; mixed or unknown types
+  default to PLA. Source LUT/material attachments provide the material facts for
+  reproduction. Historical explicit coating references remain readable but no longer
+  control generation. Independent backing output is recorded under geometry;
+  its final artifact is a ZIP containing the original-size model and backing projects.
+
 - `materials.zip` uses the canonical `MATERIALS_DIR` (including installed user-data locations and `LUMINA_MATERIALS_DIR`) and includes every file in selected/backing material directories. The actual `_solver_cache` is additionally preserved in `session-data.zip`, including launcher runtime overrides
 - Materials bundling defaults to no timeout (`LUMINA_FEEDBACK_MATERIALS_BUNDLE_TIMEOUT_S=0`). Remove or set old positive overrides to zero to preserve complete material bundles
 - Clients hold no SMTP or server credentials. `api/feedback_hosted.py` uploads `ticket.json` (without the volatile `submission` section), `index.md`, `summary.txt`, and every regular attachment in the ticket directory, including empty files and arbitrary source types

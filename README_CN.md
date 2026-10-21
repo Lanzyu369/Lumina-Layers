@@ -248,39 +248,57 @@ cd Lumina-studio
 
 ### 选项 1：本地安装
 
-**基础依赖**（必需，请使用 Python 3.12）：
+先准备普通 64 位 **CPython 3.12～3.14**、**Node.js 24.x**（或不低于 22.13 的
+22.x）和 **pnpm 10.33.2**。使用项目固定的 pnpm 版本，安装方式见
+[Node 官方下载](https://nodejs.org/en/download)和 [pnpm 指南](https://pnpm.io/installation)。
+Lumina 保持私有，克隆前需具备仓库访问权限。
+
+整套应用必需依赖的预编译交集为 Windows x64、glibc 2.28+ 的 Linux x86-64、
+macOS 14+ 的 Apple Silicon。Intel Mac、Linux ARM、Alpine/musl、Windows ARM、
+32 位及自由线程 Python 不在这套 wheel 覆盖范围；不能用 SVG 单库范围代替本体范围。
+
+先创建新环境：
+
 ```bash
-# Python 3.12+ 需要先为当前平台构建原生 3MF wheel。先克隆
-# https://github.com/MOVIBALE/fatcat-metadata 并检出
-# 63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b，再按桌面指南准备固定版本的
-# neroued 源码并应用 Lumina 的 B7 补丁：
-# python scripts/build_3mf_native_wheels.py \
-#   --fatcat-root ../fatcat-metadata \
-#   --neroued-source ../neroued-3mf \
-#   --install
+python -m venv .venv
+```
+
+按当前 shell 激活：
+
+| Shell | 命令 |
+| --- | --- |
+| Windows PowerShell | `.venv\Scripts\Activate.ps1` |
+| macOS / Linux | `source .venv/bin/activate` |
+
+然后在仓库根目录安装并启动：
+
+```bash
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 # 开发/测试另装：python -m pip install -r requirements-dev.txt
 # 可选 PostgreSQL 后端另装：python -m pip install -r requirements-postgres.txt
-corepack enable
-cd frontend
-pnpm install
-cd ..
+pnpm --dir frontend install --frozen-lockfile
 python start_all.py
 ```
 
 启动器会同时启动后端和前端。在浏览器中打开启动器显示的前端地址
 （默认：`http://localhost:4174`）。
 
-SVG 分析固定使用独立项目发布的 `lumina-svg-core==0.3.1`（AGPLv3）。
-`requirements-native-svg.txt` 会从 GitHub Releases 选择匹配 Python 3.12～3.14、
+SVG 分析固定使用独立项目发布的 `lumina-svg-core==0.3.3`（AGPLv3）。
+`requirements-native-svg.txt` 会从 PyPI 选择匹配 Python 3.12～3.14、
 系统和架构的安装包。Linux x86-64 要求 glibc 2.28+；Mac 的 Python 3.12/3.13
-包要求 macOS 12+，3.14 要求 macOS 14+。没有兼容 wheel 时会从发行源码包构建，
-需要 Git 和 C++17 编译器。详见[发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.1/docs/DISTRIBUTIONS.md)。
+包要求 macOS 12+，3.14 要求 macOS 14+。Lumina 要求匹配的原生预编译包；
+不支持的平台会在安装时明确失败，不会要求本地编译。
+详见[发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.3/docs/DISTRIBUTIONS.md)。
 
-本地或桌面安装必须先用固定提交的公开 Fat Cat 根项目和已打补丁的
-`neroued-3mf` 源码生成 `wheelhouse/3mf`，不要复制其他操作系统或 CPU 架构的
-wheel。Fat Cat 源码固定为提交 `63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b`，
-与 `scripts/fatcat_packaging_contract.py` 中的 `FATCAT_SOURCE_COMMIT` 保持一致。
+本分支需要 `fatcat-metadata==0.1.1`，requirements 会自动从
+[PyPI 正式发行](https://pypi.org/project/fatcat-metadata/0.1.1/)
+选择匹配 wheel，公开的 Production writer 保持不变。普通源码运行无需额外克隆 SDK、准备本地 wheelhouse、
+应用源码补丁或编译 C++。维护者构建所用的来源提交由
+`scripts/fatcat_packaging_contract.py` 统一维护。曾安装同为 0.1.1 的审核候选包时，
+请用 `python -m pip install --force-reinstall --no-cache-dir --only-binary=:all: fatcat-metadata==0.1.1`
+替换为正式 PyPI 构建。详见
+[原生依赖安装指南](docs/desktop-electron.md#2-原生-3mf-依赖)。
 
 Prusa 导出使用 **PrusaSlicer 3.0.0-alpha12** 预览版格式。在设置中选择 PrusaSlicer
 及对应设备；内置配置使用原生默认 0.4 mm 喷嘴和板型。多色模型需要 MMU 或足够的

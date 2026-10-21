@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, NamedTuple
+from typing import Annotated, Literal, NamedTuple
 
 import asyncio
 from concurrent.futures.process import BrokenProcessPool
@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image
-from pydantic import BaseModel, StrictBool, ValidationError
+from pydantic import BaseModel, StrictBool, TypeAdapter, ValidationError
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.editor_commit import get_editor_content_revision
@@ -40,6 +40,7 @@ from api.preview_cache_artifacts import (
 )
 from api.replacement_history import replacement_history_lock
 from api.schemas.converter import (
+    CoatingMaterialReference,
     ColorMode,
     ConvertGenerateRequest,
     LargeFormatConvertGenerateRequest,
@@ -72,7 +73,8 @@ from api.workers.converter_workers import (
     worker_generate_model_surface_overlay,
 )
 from core.batch_layout import LayoutResult, XYBBox, layout_shelf_by_row
-from core.errors import CachedPreviewAnalysisError, WipeTowerLayoutError
+from core.errors import CachedPreviewAnalysisError, NativeMaterialSelectionError, WipeTowerLayoutError
+from .export_materials import require_material_selection
 from core.model_surface.types import ModelSurfaceError
 from core.naming import generate_preserved_upload_3mf_filename
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
@@ -117,6 +119,14 @@ from core.single_stage import record_material_usage
 from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 from utils.lut_manager import LUTManager
 from .generation_params import build_generation_worker_params
+from api.recipe_override_resolution import (
+    _backfill_recipe_override_virtual_materials,
+    _native_palette_length_for_virtual_recovery,
+    _normalize_recipe_overrides,
+    _recover_virtual_materials_from_preview_cache,
+    _rgba_to_hex,
+    resolve_recipe_overrides as _resolve_recipe_overrides,
+)
 
 
 def _assert_editor_snapshot_current(
@@ -314,6 +324,10 @@ MODEL_SURFACE_SOURCE_UNAVAILABLE_DETAIL: str = (
 )
 MODEL_SURFACE_CONFIG_UNAVAILABLE_DETAIL: str = (
     "Surface overlay configuration is unavailable. Select a model surface, run preview, and try again."
+)
+LARGE_FORMAT_MODEL_SURFACE_UNSUPPORTED_DETAIL: str = (
+    "Large-format tiled generation does not support model surface overlay. "
+    "Turn off large-format mode or model surface overlay, then generate again."
 )
 _MODEL_SURFACE_DEFAULT_POCKET_DEPTH_MM: float = 0.4
 _SELECT_ALL_COLOR_REGION_PREFIX = "__select_all_color__:"
@@ -1625,108 +1639,6 @@ def _normalize_batch_string_list(value: list[str] | str | None) -> list[str]:
     return normalized
 
 
-def _normalize_recipe_overrides(recipe_overrides: object | None) -> list[dict[str, object]] | None:
-    """Normalize recipe overrides into per-region dict items.
-    将配方覆盖归一化为按单区域展开的字典条目。
-    """
-
-    if recipe_overrides is None:
-        return None
-
-    normalized: list[dict[str, object]] = []
-    for item in recipe_overrides:
-        if isinstance(item, dict):
-            item_data = item
-        else:
-            item_data = {
-                "region_id": getattr(item, "region_id", None),
-                "region_ids": getattr(item, "region_ids", None),
-                "recipe": getattr(item, "recipe", None),
-                "layer_order": getattr(item, "layer_order", None),
-                "color_layers": getattr(item, "color_layers", None),
-                "actual_recipe_top_to_bottom": getattr(
-                    item,
-                    "actual_recipe_top_to_bottom",
-                    None,
-                ),
-                "print_recipe_top_to_bottom": getattr(
-                    item,
-                    "print_recipe_top_to_bottom",
-                    None,
-                ),
-                "actual_layer_count": getattr(item, "actual_layer_count", None),
-                "padding_layer_count": getattr(item, "padding_layer_count", None),
-                "virtual_materials": getattr(item, "virtual_materials", None),
-            }
-
-        region_id = item_data.get("region_id")
-        region_ids = item_data.get("region_ids")
-        recipe = item_data.get("recipe")
-        layer_order = item_data.get("layer_order")
-        # Preserve virtual_materials through normalization so the worker can
-        # extend the pipeline palette with the user's declared extra colours.
-        # 透传 virtual_materials，让 worker 能把用户声明的额外颜色合并进管线
-        # 调色板里（preview_colors / slot_names）。
-        raw_virtuals = item_data.get("virtual_materials")
-        virtuals_payload: list[dict[str, str]] | None = None
-        if raw_virtuals:
-            accumulated: list[dict[str, str]] = []
-            for vm in raw_virtuals:
-                if isinstance(vm, dict):
-                    name = vm.get("name")
-                    hex_value = vm.get("hex")
-                else:
-                    name = getattr(vm, "name", None)
-                    hex_value = getattr(vm, "hex", None)
-                if name and hex_value:
-                    accumulated.append(
-                        {"name": str(name), "hex": str(hex_value)}
-                    )
-            virtuals_payload = accumulated or None
-
-        expanded_region_ids: list[str] = []
-        if isinstance(region_id, str) and region_id:
-            expanded_region_ids.append(region_id)
-        elif isinstance(region_ids, list):
-            expanded_region_ids.extend(str(value) for value in region_ids if value)
-
-        if not expanded_region_ids or recipe is None:
-            continue
-
-        recipe_values = [int(value) for value in recipe]
-        if not recipe_values:
-            continue
-
-        for expanded_region_id in expanded_region_ids:
-            payload: dict[str, object] = {
-                "region_id": expanded_region_id,
-                "recipe": list(recipe_values),
-                "layer_order": str(layer_order or "Top2Bottom"),
-            }
-            for count_field in (
-                "color_layers",
-                "actual_layer_count",
-                "padding_layer_count",
-            ):
-                raw_count = item_data.get(count_field)
-                if raw_count is not None:
-                    payload[count_field] = int(raw_count)
-            for recipe_field in (
-                "actual_recipe_top_to_bottom",
-                "print_recipe_top_to_bottom",
-            ):
-                raw_recipe = item_data.get(recipe_field)
-                if raw_recipe is not None:
-                    payload[recipe_field] = [
-                        int(value) for value in raw_recipe
-                    ]
-            if virtuals_payload:
-                payload["virtual_materials"] = [
-                    dict(entry) for entry in virtuals_payload
-                ]
-            normalized.append(payload)
-
-    return normalized or None
 
 
 def _serialize_recipe_override_for_worker(
@@ -1762,123 +1674,12 @@ def _serialize_recipe_override_for_worker(
     return payload
 
 
-def _rgba_to_hex(value: object) -> str | None:
-    try:
-        arr = np.asarray(value, dtype=np.uint8).reshape(-1)
-    except (TypeError, ValueError):
-        return None
-    if arr.shape[0] < 3:
-        return None
-    return f"#{int(arr[0]):02X}{int(arr[1]):02X}{int(arr[2]):02X}"
 
 
-def _native_palette_length_for_virtual_recovery(
-    session_data: dict,
-    cache: dict,
-) -> int:
-    """Return the native channel count before preview-cache virtuals.
-
-    LUT sessions normally get this from ``lut_metadata.palette``. Material
-    archives do not carry LUT metadata into generation, so their selected
-    material count is the native channel count and virtual recipe channels
-    start after it.
-
-    LUT 会话通常从 ``lut_metadata.palette`` 取原生通道数。耗材档案生成时
-    没有 LUT metadata，因此已选耗材数量就是原生通道数，虚拟配方通道从
-    其后开始。
-    """
-    lut_metadata = cache.get("lut_metadata")
-    native_palette = getattr(lut_metadata, "palette", None)
-    if native_palette:
-        return len(native_palette)
-
-    if str(session_data.get("material_source") or "lut") == "material_archive":
-        selected_materials = session_data.get("selected_materials") or []
-        if isinstance(selected_materials, (list, tuple)) and selected_materials:
-            return len(selected_materials)
-
-    return 0
 
 
-def _recover_virtual_materials_from_preview_cache(
-    session_data: dict,
-    recipe: list[int],
-) -> list[dict[str, str]] | None:
-    """Recover missing virtual material declarations from preview cache.
-
-    ``apply-recipe-override`` extends ``preview_cache`` with virtual entries.
-    If a stale client later sends only recipe indices, rebuild the local
-    ``virtual_materials`` list so worker generation can extend its palette.
-
-    ``apply-recipe-override`` 会把虚拟耗材写入 preview_cache。若旧前端后续
-    只发送 recipe 索引，这里从 cache 重建 virtual_materials，避免 worker
-    看到虚拟通道索引却没有对应调色板。
-    """
-    if not recipe:
-        return None
-    raw_cache = session_data.get("preview_cache") or {}
-    cache = (
-        get_preview_cache_metadata(raw_cache)
-        if isinstance(raw_cache, dict)
-        else {}
-    )
-    if not isinstance(cache, dict):
-        return None
-
-    native_count = _native_palette_length_for_virtual_recovery(session_data, cache)
-    if native_count <= 0:
-        return None
-    virtual_indices = sorted({int(ch) for ch in recipe if int(ch) >= native_count})
-    if not virtual_indices:
-        return None
-
-    max_offset = max(index - native_count for index in virtual_indices)
-    slot_names_src = cache.get("slot_names")
-    slot_names = (
-        list(slot_names_src)
-        if isinstance(slot_names_src, (list, tuple))
-        else list((cache.get("color_conf") or {}).get("slots") or [])
-    )
-    preview_colors = cache.get("preview_colors")
-    if not isinstance(preview_colors, dict):
-        preview_colors = (cache.get("color_conf") or {}).get("preview") or {}
-
-    recovered: list[dict[str, str]] = []
-    for offset in range(max_offset + 1):
-        global_index = native_count + offset
-        name = (
-            str(slot_names[global_index])
-            if global_index < len(slot_names) and slot_names[global_index]
-            else f"Virtual_{offset}"
-        )
-        rgba = preview_colors.get(global_index)
-        if rgba is None and global_index < len(slot_names):
-            rgba = preview_colors.get(slot_names[global_index])
-        hex_value = _rgba_to_hex(rgba) if rgba is not None else None
-        recovered.append({"name": name, "hex": hex_value or "#808080"})
-
-    return recovered or None
 
 
-def _backfill_recipe_override_virtual_materials(
-    session_data: dict,
-    recipe_overrides: list[dict[str, object]] | None,
-) -> list[dict[str, object]] | None:
-    if not recipe_overrides:
-        return recipe_overrides
-    for item in recipe_overrides:
-        if item.get("virtual_materials"):
-            continue
-        recipe = item.get("recipe")
-        if not isinstance(recipe, list):
-            continue
-        recovered = _recover_virtual_materials_from_preview_cache(
-            session_data,
-            [int(value) for value in recipe],
-        )
-        if recovered:
-            item["virtual_materials"] = recovered
-    return recipe_overrides
 
 
 def _resolve_session_material_backing_index(
@@ -1894,106 +1695,6 @@ def _resolve_session_material_backing_index(
     return _resolve_material_backing_index(selected_materials, requested_index)
 
 
-def _resolve_recipe_overrides(
-    session_data: dict,
-    request: ConvertGenerateRequest,
-) -> list[dict[str, object]] | None:
-    """Resolve effective recipe overrides from session state and request body.
-
-    When the request body provides non-empty ``recipe_overrides``, it is the
-    source of truth for recipes / layer_order. However, older clients (and
-    any caller that merely round-trips ``{region_id, recipe, layer_order}``
-    without carrying the virtual-material tail) may drop the
-    ``virtual_materials`` declared at apply time. The apply endpoint persists
-    per-region ``virtual_materials`` into ``session_data["recipe_overrides"]``
-    so the generate pipeline can rebuild the extended palette in a fresh
-    worker process. To keep the virtual palette extension alive across a
-    stale client, this resolver backfills ``virtual_materials`` from the
-    session by ``region_id`` whenever the request body leaves them unset for
-    that region — without ever overriding ``virtual_materials`` the request
-    explicitly provides.
-
-    Empty request arrays are treated like "not supplied" when the session
-    already has applied overrides. The frontend can briefly send
-    ``recipe_overrides: []`` from stale local state after the apply endpoint
-    has updated the backend session; letting that empty array clear the
-    session makes the 3MF generation silently ignore the custom recipe.
-
-    当请求体带了非空 ``recipe_overrides`` 时它是 recipe / layer_order 的事实
-    来源；但旧前端 / 第三方调用方可能只回传
-    ``{region_id, recipe, layer_order}``，把 apply 时声明的
-    ``virtual_materials`` 丢掉。apply 端点把每个 region 的
-    ``virtual_materials`` 一并持久化进 session，保证 worker 进程可以重建
-    扩展调色板；这里按 ``region_id`` 从 session 回补缺失的
-    ``virtual_materials``，同时绝不覆盖请求体显式给出的 virtuals。
-
-    空数组请求在 session 已有已应用配方时按"未提供"处理。前端局部状态
-    可能在 apply 成功后仍短暂发出 ``recipe_overrides: []``；如果让这个空
-    数组清掉 session，最终 3MF 会静默忽略用户刚应用的自定义配方。
-    """
-
-    session_overrides = _normalize_recipe_overrides(session_data.get("recipe_overrides") or None)
-    if request.recipe_overrides is None:
-        return _backfill_recipe_override_virtual_materials(
-            session_data,
-            session_overrides,
-        )
-
-    request_overrides = _normalize_recipe_overrides(request.recipe_overrides)
-    if not request_overrides:
-        return _backfill_recipe_override_virtual_materials(
-            session_data,
-            session_overrides,
-        )
-
-    if not session_overrides:
-        return _backfill_recipe_override_virtual_materials(
-            session_data,
-            request_overrides,
-        )
-
-    session_items_by_region: dict[str, dict[str, object]] = {}
-    session_virtuals_by_region: dict[str, list[dict[str, str]]] = {}
-    for session_item in session_overrides:
-        region_id = session_item.get("region_id")
-        if isinstance(region_id, str) and region_id:
-            session_items_by_region[region_id] = session_item
-        virtuals = session_item.get("virtual_materials")
-        if isinstance(region_id, str) and region_id and virtuals:
-            session_virtuals_by_region[region_id] = [
-                dict(entry) for entry in virtuals  # type: ignore[arg-type]
-            ]
-
-    for item in request_overrides:
-        region_id = item.get("region_id")
-        if not isinstance(region_id, str):
-            continue
-        session_item = session_items_by_region.get(region_id)
-        if (
-            session_item is not None
-            and item.get("recipe") == session_item.get("recipe")
-            and item.get("layer_order") == session_item.get("layer_order")
-        ):
-            for field_name in (
-                "color_layers",
-                "actual_recipe_top_to_bottom",
-                "print_recipe_top_to_bottom",
-                "actual_layer_count",
-                "padding_layer_count",
-            ):
-                if item.get(field_name) is None and session_item.get(
-                    field_name
-                ) is not None:
-                    item[field_name] = deepcopy(session_item[field_name])
-        if not item.get("virtual_materials"):
-            backfill = session_virtuals_by_region.get(region_id)
-            if backfill:
-                item["virtual_materials"] = [dict(entry) for entry in backfill]
-
-    return _backfill_recipe_override_virtual_materials(
-        session_data,
-        request_overrides,
-    )
 
 
 def _prepare_recipe_override_worker_inputs(
@@ -2327,6 +2028,7 @@ async def convert_generate(
         supports_custom_template=True,
     )
     _validate_native_vector_relief_compatibility(request)
+    require_material_selection(request, session_data)
 
     # Retrieve paths stored during preview
     image_path: str | None = session_data.get("image_path")
@@ -2887,6 +2589,8 @@ async def convert_generate(
     worker_fn = worker_generate_model
     worker_params = params
     if _should_use_model_surface_overlay(session_data):
+        if request.backing_output != "same_project":
+            raise HTTPException(status_code=422, detail="Independent backing projects are not supported for model surface generation.")
         if request.backing_infill_density_percent < 100:
             raise HTTPException(
                 status_code=422,
@@ -2926,7 +2630,7 @@ async def convert_generate(
             lut_path,
             worker_params,
         )
-    except WipeTowerLayoutError as exc:
+    except (WipeTowerLayoutError, NativeMaterialSelectionError) as exc:
         raise to_http_exception(exc, "3MF layout") from exc
     except ModelSurfaceError as exc:
         detail = public_model_surface_error_detail(exc)
@@ -3010,6 +2714,7 @@ async def convert_generate(
                 download_filename = generate_preserved_upload_3mf_filename(
                     session_data.get("source_basename")
                 )
+                download_filename = str(Path(download_filename).with_suffix(Path(threemf_path).suffix))
             download_id = registry.register_path(
                 str(uuid.uuid4()),
                 threemf_path,
@@ -3443,7 +3148,7 @@ async def _generate_large_format_svg_native(
             )
         finally:
             _remove_temp_path(native_heightmap_path)
-    except WipeTowerLayoutError as exc:
+    except (WipeTowerLayoutError, NativeMaterialSelectionError) as exc:
         raise to_http_exception(exc, "large-format 3MF layout") from exc
     except LargeFormatCachedAnalysisError as e:
         _log_large_format_failure(
@@ -4135,7 +3840,7 @@ async def _generate_large_format_raster(
             except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
                 _discard_pending_awaitables(futures, future_index + 1)
                 _handle_core_error(e, "large-format tile generation")
-            except WipeTowerLayoutError as exc:
+            except (WipeTowerLayoutError, NativeMaterialSelectionError) as exc:
                 _discard_pending_awaitables(futures, future_index + 1)
                 raise to_http_exception(exc, "large-format tile layout") from exc
             except ROUTER_HANDLED_ERRORS as e:
@@ -4224,6 +3929,12 @@ async def convert_generate_large_format(
             "refresh the editor state and try again."
         ),
     )
+    if _should_use_model_surface_overlay(session_data):
+        # Tiles are cut from flat artwork, so the uploaded model would be lost.
+        raise HTTPException(
+            status_code=422,
+            detail=LARGE_FORMAT_MODEL_SURFACE_UNSUPPORTED_DETAIL,
+        )
     cache, cache_ref = _require_preview_cache_for_generate(session_data)
     validate_export_device_selection(
         printer_id=request.printer_id,
@@ -4235,6 +3946,7 @@ async def convert_generate_large_format(
         supports_custom_template=True,
     )
     _validate_native_vector_relief_compatibility(request)
+    require_material_selection(request, session_data)
 
     if _has_requested_fridge_magnet_cavities(request):
         raise HTTPException(
@@ -4934,6 +4646,7 @@ async def convert_batch(
     device_profile_id: str | None = Form(None, description="机器注册表设备配置 ID"),
     build_plate_id: str | None = Form(None, description="切片软件原生打印板 ID"),
     custom_3mf_template_id: str | None = Form(None),
+    native_filament_profiles: str | None = Form(None),
     enable_base_layer_height_modifier: bool = Form(
         True,
         description="启用底板粗层高优化",
@@ -4946,6 +4659,8 @@ async def convert_batch(
     pool: WorkerPoolManager = Depends(get_worker_pool),
     enable_coating: bool = Form(False, description="启用透明镀层"),
     coating_height_mm: float = Form(0.08, ge=0.04, le=0.12, description="透明镀层厚度 (mm)"),
+    coating_material: str | None = Form(None),
+    backing_output: Literal["same_project", "separate_project"] = Form("same_project"),
 ) -> BatchResponse:
     """Batch-convert multiple images via process pool.
     通过进程池批量转换多张图像。
@@ -4963,6 +4678,8 @@ async def convert_batch(
         separate_backing: Emit the backing as a separate mesh object when true.
             (为 true 时将底板作为独立网格对象输出。)
     """
+    if backing_output != "same_project":
+        raise HTTPException(status_code=422, detail="Independent backing projects are available for single-model generation, not batch merging.")
     validate_export_device_selection(
         printer_id=printer_id,
         slicer=slicer,
@@ -5049,6 +4766,29 @@ async def convert_batch(
                 temp_native_bundle_path = resolved_lut_path
 
     try:
+        try:
+            selected_native_profiles = TypeAdapter(dict[str, str]).validate_json(
+                native_filament_profiles or "{}",
+            )
+            selected_coating_material = (
+                CoatingMaterialReference.model_validate_json(coating_material).model_dump()
+                if coating_material else None
+            )
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail="Native filament or coating material selections are invalid.") from exc
+        require_material_selection({
+            "source_kind": resolved_source_kind,
+            "lut_name": resolved_lut_name, "lut_names": _normalize_batch_string_list(lut_names),
+            "material_type": material_type, "vendor": vendor,
+            "db_names": _normalize_batch_string_list(db_names),
+            "material_source": material_source, "selected_materials": selected_material_names,
+            "printer_id": printer_id, "slicer": slicer, "nozzle_size": nozzle_size,
+            "device_profile_id": device_profile_id, "build_plate_id": build_plate_id,
+            "custom_3mf_template_id": custom_3mf_template_id, "color_mode": color_mode,
+            "native_filament_profiles": selected_native_profiles,
+            "enable_coating": enable_coating, "coating_material": selected_coating_material,
+            "lut_path": lut_path,
+        })
         # Validate modeling_mode string (main thread)
         for upload in images:
             _validate_svg_hole_compensation(
@@ -5220,6 +4960,8 @@ async def convert_batch(
         svg_hole_max_width_mm,
         enable_coating,
         coating_height_mm,
+        selected_native_profiles,
+        selected_coating_material,
     )
     batch_size = max(1, int(pool.max_workers))
     workers_completed = False
@@ -5262,7 +5004,7 @@ async def convert_batch(
                         ))
                 except (
                     BrokenProcessPool, DynamicMaterialCandidateError,
-                    DynamicMaterialSolverError, WipeTowerLayoutError,
+                    DynamicMaterialSolverError, WipeTowerLayoutError, NativeMaterialSelectionError,
                 ):
                     raise
                 except ROUTER_HANDLED_ERRORS as exc:
@@ -5281,7 +5023,7 @@ async def convert_batch(
         raise HTTPException(status_code=503, detail=BATCH_GENERATION_FAILED_DETAIL) from exc
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as exc:
         _handle_core_error(exc, "batch material generation")
-    except WipeTowerLayoutError as exc:
+    except (WipeTowerLayoutError, NativeMaterialSelectionError) as exc:
         raise to_http_exception(exc, "batch 3MF layout") from exc
     finally:
         # Release returned artifacts on cancellation or any fatal failure.
@@ -5444,7 +5186,7 @@ async def convert_batch(
             except Exception:
                 pass
         _remove_temp_path(temp_native_bundle_path)
-        if isinstance(exc, WipeTowerLayoutError):
+        if isinstance(exc, (WipeTowerLayoutError, NativeMaterialSelectionError)):
             raise to_http_exception(exc, "batch 3MF layout") from exc
         raise HTTPException(
             status_code=500,

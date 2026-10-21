@@ -160,6 +160,30 @@ def test_generation_replay_uses_current_raster_match() -> None:
     )
 
 
+def test_generation_replay_keeps_transparent_pixels_without_material() -> None:
+    """Transparent pixels sharing a replaced color must not gain printable stacks.
+    与被替换颜色相同的透明像素不得获得可打印的材料堆叠。
+    """
+    result = apply_color_replacements(
+        {
+            "matched_rgb": np.array(
+                [[[0xFE, 0xDC, 0xBA], [0xFE, 0xDC, 0xBA]]],
+                dtype=np.uint8,
+            ),
+            "material_matrix": np.array([[[0], [-1]]], dtype=np.int32),
+            "mask_solid": np.array([[True, False]]),
+            "quantized_image": np.array(
+                [[[0xAA, 0x00, 0x00], [0xAA, 0x00, 0x00]]],
+                dtype=np.uint8,
+            ),
+            "processor": _RasterProcessor(),
+            "replacement_regions": _saved_replacement(),
+        }
+    )
+
+    np.testing.assert_array_equal(result["material_matrix"], [[[7], [-1]]])
+
+
 class _VectorMatcher:
     def __init__(self) -> None:
         self.lut_rgb = np.array([[0x12, 0xAB, 0x34]], dtype=np.uint8)

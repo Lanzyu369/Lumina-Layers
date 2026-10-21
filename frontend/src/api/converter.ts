@@ -2,6 +2,7 @@ import apiClient, { type ApiRequestOptions } from "./client";
 import type {
   ConvertPreviewRequest,
   ConvertGenerateRequest,
+  ExportMaterialSelection,
   PreviewResponse,
   GenerateResponse,
   LargeFormatGenerateRequest,
@@ -88,6 +89,19 @@ export async function convertGenerate(
       params,
     },
     { timeout: 0 },
+  );
+  return response.data;
+}
+
+/** Check native filament choices before building printable geometry. */
+export async function fetchExportMaterialSelection(
+  sessionId: string | null,
+  params: ConvertGenerateRequest | BatchConvertParams,
+): Promise<ExportMaterialSelection> {
+  const response = await apiClient.post<ExportMaterialSelection>(
+    "/convert/export-materials",
+    { session_id: sessionId, params },
+    { timeout: 30_000 },
   );
   return response.data;
 }
@@ -854,6 +868,32 @@ export async function replacementHistory(
       ...(operationId ? { operation_id: operationId } : {}),
     },
     { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/** Capture editable pixels and spatial masks at the confirmed editor revisions. */
+export async function exportEditorProject(
+  sessionId: string,
+  editorContentRevision?: number,
+  selectionRevision?: number,
+): Promise<File> {
+  const response = await apiClient.get<Blob>(
+    `/convert/editor-project/${encodeURIComponent(sessionId)}`,
+    { responseType: "blob", params: { editor_content_revision: editorContentRevision, selection_revision: selectionRevision }, timeout: 60_000 },
+  );
+  return new File([response.data], "editor.json.gz", { type: "application/gzip" });
+}
+
+/** Initialize a fresh source preview with the embedded editable checkpoint. */
+export async function restoreEditorProject(
+  sessionId: string, file: File, operationId: string,
+): Promise<EditorCommitStatusResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("operation_id", operationId);
+  const response = await apiClient.post<EditorCommitStatusResponse>(
+    `/convert/editor-project/${encodeURIComponent(sessionId)}/restore`, form, { timeout: 60_000 },
   );
   return response.data;
 }

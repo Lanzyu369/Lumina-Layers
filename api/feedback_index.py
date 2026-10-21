@@ -357,6 +357,7 @@ def _format_advanced_params_section(context: dict[str, Any]) -> str:
             "svg_hole_compensation_enabled",
             "svg_hole_max_area_mm2",
             "svg_hole_max_width_mm",
+            "backing_output",
         ):
             if field in generation:
                 lines.append(f"- {field}: {_safe_str(generation[field])}")
@@ -380,6 +381,13 @@ def _format_advanced_params_section(context: dict[str, Any]) -> str:
             lines.append(f"- {toggle_key}: disabled")
         else:
             lines.append(f"- {toggle_key}: {_MISSING}")
+
+    coating = ap.get("coating")
+    if isinstance(coating, dict) and coating.get("enable_coating"):
+        lines.append("- coating_material: automatic (source material type; mixed defaults to PLA)")
+        reference = coating.get("coating_material")
+        if isinstance(reference, dict):
+            lines.append(f"- legacy_coating_material: {_safe_str(reference.get('source'))} / {_safe_str(reference.get('key'))}")
 
     color_replacement = ap.get("color_replacement")
     spatial_edit_count = (

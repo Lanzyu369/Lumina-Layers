@@ -5,8 +5,14 @@ import {
   convertGenerate as apiConvertGenerate,
   convertGenerateLargeFormat as apiConvertGenerateLargeFormat,
   convertGeneratePuzzle as apiConvertGeneratePuzzle,
+  fetchExportMaterialSelection,
 } from "../../api/converter";
-import type { ColorReplacementItem } from "../../api/types";
+import type {
+  BatchConvertParams,
+  ColorReplacementItem,
+  ConvertGenerateRequest,
+  ExportMaterialSelection,
+} from "../../api/types";
 import { ModelingMode as ModelingModeEnum } from "../../api/types";
 import {
   showBrowserCompletionNotification,
@@ -17,12 +23,18 @@ import { colorRemapToReplacementRegions } from "../../utils/colorUtils";
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
 import {
   captureGeneratedArtifactIdentity,
+  invalidateGeneratedArtifacts,
   isGeneratedArtifactIdentityCurrent,
   registerGeneratedArtifactInvalidator,
   registerSingleItemDownloadInvalidator,
 } from "../generatedArtifactInvalidation";
 import { useSettingsStore } from "../settingsStore";
 import { isGenerateRevisionConflict } from "./editorRevision";
+import {
+  materialSelectionFromExportError,
+  nativeFilamentProfileScope,
+  scopedNativeFilamentProfiles,
+} from "./nativeMaterialSelection";
 import { buildPuzzlePreviewParams, normalizeStoreResourceUrl } from "./previewArtifacts";
 import { buildBatchParams, buildGenerateParams, buildMissingAutoReliefHeightMap } from "./requests";
 import {
@@ -30,7 +42,7 @@ import {
   normalizePublicColorMode,
   resolveConverterSourceSelection,
 } from "./sources";
-import type { ConverterActions, ConverterState } from "./types";
+import type { ConverterActions, ConverterState, NativeMaterialSelectionAction } from "./types";
 
 const BATCH_PREVIEW_BROWSER_SAFE_LIMIT = 96;
 
@@ -42,6 +54,7 @@ export function notifyCompletion(kind: CompletionNotificationKind): void {
 
 export const CONVERTER_ERROR_KEYS = {
   heightmapUploadRequired: "relief_heightmap_generate_requires_upload",
+  largeFormatModelSurfaceConflict: "large_format_model_surface_conflict",
 } as const;
 
 let _generateStartTime: number | null = null;
@@ -139,6 +152,14 @@ export function invalidateGenerationRequests(): void {
   _endGenerateTimer();
 }
 
+function generationReplacements(state: ConverterState): ColorReplacementItem[] | undefined {
+  const replacements = [
+    ...state.replacement_regions,
+    ...colorRemapToReplacementRegions(state.colorRemapMap, state.palette),
+  ];
+  return replacements.length > 0 ? replacements : undefined;
+}
+
 export function createGenerationActions(
   set: (partial: Partial<ConverterState>) => void,
   _get: () => ConverterState & ConverterActions,
@@ -149,11 +170,66 @@ export function createGenerationActions(
     confirmedEditorRevision: (sessionId: string) => number | undefined;
     refreshConfirmedEditorContentRevision: (sessionId: string) => Promise<boolean>;
   },
-): Pick<ConverterActions, "submitGenerate" | "submitBatch"> {
+): Pick<ConverterActions,
+  | "submitGenerate"
+  | "submitBatch"
+  | "openNativeMaterialSelection"
+  | "refreshNativeMaterialSelection"
+  | "applyNativeMaterialSelection"
+  | "cancelNativeMaterialSelection"
+> {
   const { waitForSelectionMutation, waitForContentCommits, refreshConfirmedEditorContentRevision } = editor;
+  let pendingMaterialSelection: {
+    action: NativeMaterialSelectionAction;
+    response: ExportMaterialSelection;
+    sessionId: string | null;
+    params: ConvertGenerateRequest | BatchConvertParams;
+    refreshSequence: number;
+    isCurrent: () => boolean;
+  } | null = null;
+
+  function showMaterialSelection(
+    response: ExportMaterialSelection,
+    sessionId: string | null,
+    params: ConvertGenerateRequest | BatchConvertParams,
+    action: NativeMaterialSelectionAction,
+    isCurrent: () => boolean,
+  ): void {
+    pendingMaterialSelection = { action, response, sessionId, params, refreshSequence: 0, isCurrent };
+    set({
+      nativeMaterialSelection: response,
+      nativeMaterialSelectionAction: action,
+      nativeMaterialSelectionLoading: false,
+      nativeMaterialSelectionError: null,
+      isGenerating: false,
+      batchLoading: false,
+      error: null,
+    });
+  }
+
+  async function preflightMaterials(
+    sessionId: string | null,
+    params: ConvertGenerateRequest | BatchConvertParams,
+    action: NativeMaterialSelectionAction,
+    isCurrent: () => boolean,
+  ): Promise<boolean> {
+    const response = await fetchExportMaterialSelection(sessionId, params);
+    if (!isCurrent()) return false;
+    if (action === "edit" || !response.ready) {
+      showMaterialSelection(response, sessionId, params, action, isCurrent);
+      return false;
+    }
+    return true;
+  }
+
   registerGeneratedArtifactInvalidator(({ preservePreviews }) => {
+    pendingMaterialSelection = null;
     invalidateGenerationRequests();
     set({
+      nativeMaterialSelection: null,
+      nativeMaterialSelectionAction: null,
+      nativeMaterialSelectionLoading: false,
+      nativeMaterialSelectionError: null,
       isGenerating: false,
       batchLoading: false,
       batchResult: null,
@@ -203,6 +279,162 @@ export function createGenerationActions(
     });
   });
   return {
+    openNativeMaterialSelection: async () => {
+      let state = _get();
+      const sessionId = state.sessionId;
+      if (!sessionId || state.batchMode || state.isLoading || state.isGenerating ||
+        state.batchLoading || state.nativeMaterialSelectionLoading ||
+        state.contentCommitStatus === "unknown") return;
+      const settings = useSettingsStore.getState();
+      const identity = captureGeneratedArtifactIdentity(settings.deviceProfileId, settings.buildPlateId);
+      const sourceIdentity = JSON.stringify(buildConversionSourceParams(state));
+      const sequence = ++_generateRequestSequence;
+      pendingMaterialSelection = null;
+      set({
+        nativeMaterialSelection: null,
+        nativeMaterialSelectionAction: null,
+        nativeMaterialSelectionLoading: true,
+        nativeMaterialSelectionError: null,
+        error: null,
+      });
+      const isCurrentInput = (): boolean => {
+        const currentSettings = useSettingsStore.getState();
+        return _isCurrentGenerateRequest(sequence, sessionId, () => _get().sessionId) &&
+          !_get().batchMode &&
+          JSON.stringify(buildConversionSourceParams(_get())) === sourceIdentity &&
+          isGeneratedArtifactIdentityCurrent(identity, currentSettings.deviceProfileId, currentSettings.buildPlateId);
+      };
+      let isCurrent = isCurrentInput;
+      try {
+        const pendingSelection = waitForSelectionMutation(sessionId);
+        if (pendingSelection && !await pendingSelection) return;
+        if (!isCurrentInput()) return;
+        const pendingContentCommit = waitForContentCommits(sessionId);
+        if (pendingContentCommit && !await pendingContentCommit) return;
+        if (!isCurrentInput()) return;
+        state = _get();
+        const sourceParams = buildConversionSourceParams(state);
+        if (!sourceParams || !resolveConverterSourceSelection(state).isReady) return;
+        const replacementEpoch = editor.getReplacementEpoch();
+        const selectionRevision = state.selectionDocument?.selection_revision;
+        isCurrent = (): boolean => isCurrentInput() &&
+          editor.getReplacementEpoch() === replacementEpoch &&
+          _get().selectionDocument?.selection_revision === selectionRevision;
+        const params = buildGenerateParams(
+          state, settings, sourceParams, generationReplacements(state),
+          editor.confirmedEditorRevision(sessionId),
+        );
+        await preflightMaterials(sessionId, params, "edit", isCurrent);
+      } catch (error) {
+        if (isCurrent()) {
+          set({ error: visibleConverterError(error, "native_material_load_failed") });
+        }
+      } finally {
+        if (_generateRequestSequence === sequence) set({ nativeMaterialSelectionLoading: false });
+      }
+    },
+    refreshNativeMaterialSelection: async (profiles, buildPlateId) => {
+      const pending = pendingMaterialSelection;
+      if (!pending || _get().nativeMaterialSelection !== pending.response) return;
+      if (!pending.isCurrent()) {
+        _get().cancelNativeMaterialSelection();
+        return;
+      }
+      const sequence = ++pending.refreshSequence;
+      const params = {
+        ...pending.params,
+        native_filament_profiles: Object.fromEntries(
+          Object.entries(profiles).filter(([, name]) => Boolean(name)),
+        ),
+        build_plate_id: buildPlateId,
+      };
+      pending.params = params;
+      set({ nativeMaterialSelectionLoading: true, nativeMaterialSelectionError: null });
+      const isLatest = (): boolean => pendingMaterialSelection === pending &&
+        pending.refreshSequence === sequence && _get().nativeMaterialSelection === pending.response;
+      try {
+        const response = await fetchExportMaterialSelection(pending.sessionId, params);
+        if (!isLatest()) return;
+        if (!pending.isCurrent()) {
+          _get().cancelNativeMaterialSelection();
+          return;
+        }
+        pending.response = response;
+        set({ nativeMaterialSelection: response });
+      } catch (error) {
+        if (!isLatest()) return;
+        if (!pending.isCurrent()) {
+          _get().cancelNativeMaterialSelection();
+          return;
+        }
+        set({ nativeMaterialSelectionError: visibleConverterError(error, "native_material_recheck_failed") });
+      } finally {
+        if (isLatest()) set({ nativeMaterialSelectionLoading: false });
+      }
+    },
+    cancelNativeMaterialSelection: () => {
+      pendingMaterialSelection = null;
+      invalidateGenerationRequests();
+      set({
+        nativeMaterialSelection: null,
+        nativeMaterialSelectionAction: null,
+        nativeMaterialSelectionLoading: false,
+        nativeMaterialSelectionError: null,
+        isGenerating: false,
+        batchLoading: false,
+      });
+    },
+    applyNativeMaterialSelection: async (profiles, buildPlateId) => {
+      const pending = pendingMaterialSelection;
+      if (!pending || _get().nativeMaterialSelection !== pending.response) return;
+      if (_get().nativeMaterialSelectionLoading || _get().nativeMaterialSelectionError ||
+        !pending.response.ready) return;
+      if (!pending.isCurrent()) {
+        pendingMaterialSelection = null;
+        set({
+          nativeMaterialSelection: null,
+          nativeMaterialSelectionAction: null,
+          nativeMaterialSelectionError: null,
+          isGenerating: false,
+          batchLoading: false,
+        });
+        return;
+      }
+      const plate = pending.response.build_plates.find((row) => row.id === buildPlateId);
+      if (!plate?.compatible || plate.build_plate_uid !== pending.response.build_plate_uid) return;
+      const selectedProfiles: Record<string, string> = {};
+      for (const material of pending.response.materials) {
+        const requested = profiles[material.name] || undefined;
+        if (requested !== (pending.params.native_filament_profiles?.[material.name] || undefined)) return;
+        const selectedName = material.selected_profile_name;
+        if (!selectedName || (requested && selectedName !== requested)) return;
+        selectedProfiles[material.name] = selectedName;
+      }
+      const settings = useSettingsStore.getState();
+      const previousProfiles = scopedNativeFilamentProfiles(_get(), settings) ?? {};
+      const profilesChanged = Object.keys(previousProfiles).length !== Object.keys(selectedProfiles).length ||
+        Object.entries(selectedProfiles).some(([name, profile]) => previousProfiles[name] !== profile);
+      pendingMaterialSelection = null;
+      settings.setBuildPlateForMachine(
+        pending.response.machine_profile_id,
+        plate.id,
+      );
+      if (profilesChanged) invalidateGeneratedArtifacts({ preservePreviews: true });
+      void useSettingsStore.getState().syncToBackend();
+      set({
+        nativeMaterialSelection: null,
+        nativeMaterialSelectionAction: null,
+        nativeMaterialSelectionError: null,
+        native_filament_profiles: selectedProfiles,
+        nativeFilamentProfileScope: nativeFilamentProfileScope(useSettingsStore.getState()),
+        error: null,
+      });
+      if (pending.action === "batch") {
+        await _get().submitBatch();
+      } else if (pending.action === "generate") {
+        await _get().submitGenerate();
+      }
+    },
     submitGenerate: async () => {
       let state = _get();
       if (!state.sessionId) {
@@ -235,6 +467,12 @@ export function createGenerationActions(
         }
       }
       state = _get();
+      // Large-format tiles are cut from flat artwork, so the uploaded model
+      // would be dropped. Refuse before material preflight or any export call.
+      if (state.largeFormatEnabled && state.modelSurfaceEnabled) {
+        set({ error: CONVERTER_ERROR_KEYS.largeFormatModelSurfaceConflict });
+        return null;
+      }
       const sourceSelection = resolveConverterSourceSelection(state);
       if (!sourceSelection.isReady) {
         set({
@@ -283,7 +521,14 @@ export function createGenerationActions(
         generateSettings.buildPlateId,
       );
       const generateReplacementEpoch = editor.getReplacementEpoch();
+      const sourceIdentity = JSON.stringify(buildConversionSourceParams(state));
+      const generateSelectionRevision = state.selectionDocument?.selection_revision;
+      pendingMaterialSelection = null;
       set({
+        nativeMaterialSelection: null,
+        nativeMaterialSelectionAction: null,
+        nativeMaterialSelectionLoading: false,
+        nativeMaterialSelectionError: null,
         isGenerating: true,
         error: null,
         generatePerformanceTiming: null,
@@ -307,6 +552,8 @@ export function createGenerationActions(
             () => _get().sessionId,
           ) &&
           editor.getReplacementEpoch() === generateReplacementEpoch &&
+          _get().selectionDocument?.selection_revision === generateSelectionRevision &&
+          JSON.stringify(buildConversionSourceParams(_get())) === sourceIdentity &&
           isGeneratedArtifactIdentityCurrent(
             generateIdentity,
             latestSettings.deviceProfileId,
@@ -344,22 +591,12 @@ export function createGenerationActions(
         large_format_enabled: state.largeFormatEnabled,
       });
       _startGenerateTimer();
+      let preparedParams: ConvertGenerateRequest | null = null;
       try {
         // Merge global-only replacement mappings. Spatial edits stay in the
         // session preview cache and are selected by use_cached_matched_rgb.
         // 仅合并全局替色映射；空间局部改色保留在会话预览缓存中。
-        let mergedReplacements: ColorReplacementItem[] | undefined =
-          state.replacement_regions.length > 0
-            ? [...state.replacement_regions]
-            : undefined;
-
-        if (Object.keys(state.colorRemapMap).length > 0) {
-          const remapRegions = colorRemapToReplacementRegions(
-            state.colorRemapMap,
-            state.palette,
-          );
-          mergedReplacements = [...(mergedReplacements ?? []), ...remapRegions];
-        }
+        const mergedReplacements = generationReplacements(state);
         const colorMode = normalizePublicColorMode(state.color_mode);
         const sourceParams =
           buildConversionSourceParams(state);
@@ -371,6 +608,14 @@ export function createGenerationActions(
           return null;
         }
         const baseParams = buildGenerateParams(state, generateSettings, sourceParams, mergedReplacements, editor.confirmedEditorRevision(sessionId));
+        preparedParams = baseParams;
+
+        if (!await preflightMaterials(
+          sessionId,
+          baseParams,
+          "generate",
+          () => !shouldIgnoreStaleGenerateResponse(),
+        )) return null;
 
         _clientLog("generate: request prepared", {
           source_kind: sourceParams.source_kind,
@@ -548,6 +793,11 @@ export function createGenerationActions(
         if (shouldIgnoreStaleGenerateResponse()) {
           return null;
         }
+        const materialSelection = materialSelectionFromExportError(err);
+        if (materialSelection && preparedParams) {
+          showMaterialSelection(materialSelection, sessionId, preparedParams, "generate", () => !shouldIgnoreStaleGenerateResponse());
+          return null;
+        }
         // The editor revision this client sent was behind the server. All
         // pending edits were already awaited above, so re-read the committed
         // revision once and retry; a second conflict is surfaced to the user.
@@ -632,18 +882,30 @@ export function createGenerationActions(
         settings.buildPlateId,
       );
       const batchSequence = ++_batchRequestSequence;
+      const batchSourceIdentity = JSON.stringify(buildConversionSourceParams(state));
       const isCurrentBatchRequest = (): boolean => {
         const latestSettings = useSettingsStore.getState();
-        return (
+        const isCurrent = (
           batchSequence === _batchRequestSequence &&
+          _get().batchFiles === state.batchFiles &&
+          JSON.stringify(buildConversionSourceParams(_get())) === batchSourceIdentity &&
           isGeneratedArtifactIdentityCurrent(
             batchIdentity,
             latestSettings.deviceProfileId,
             latestSettings.buildPlateId,
           )
         );
+        if (!isCurrent && batchSequence === _batchRequestSequence) {
+          set({ batchLoading: false });
+        }
+        return isCurrent;
       };
+      pendingMaterialSelection = null;
       set({
+        nativeMaterialSelection: null,
+        nativeMaterialSelectionAction: null,
+        nativeMaterialSelectionLoading: false,
+        nativeMaterialSelectionError: null,
         batchLoading: true,
         batchResult: null,
         batchPreviewItems: [],
@@ -654,6 +916,7 @@ export function createGenerationActions(
         downloadUrl: null,
         error: null,
       });
+      let preparedParams: BatchConvertParams | null = null;
       try {
         const sourceParams =
           buildConversionSourceParams(state);
@@ -665,6 +928,8 @@ export function createGenerationActions(
           return;
         }
         const params = buildBatchParams(state, settings, sourceParams);
+        preparedParams = params;
+        if (!await preflightMaterials(null, params, "batch", isCurrentBatchRequest)) return;
         const result = await apiConvertBatch(state.batchFiles, params);
         if (!isCurrentBatchRequest()) return;
         const previewItems = (result.preview_items ?? [])
@@ -703,6 +968,11 @@ export function createGenerationActions(
         notifyCompletion("batch");
       } catch (err) {
         if (!isCurrentBatchRequest()) return;
+        const materialSelection = materialSelectionFromExportError(err);
+        if (materialSelection && preparedParams) {
+          showMaterialSelection(materialSelection, null, preparedParams, "batch", isCurrentBatchRequest);
+          return;
+        }
         set({
           batchLoading: false,
           error: visibleConverterError(err, "批量处理失败"),

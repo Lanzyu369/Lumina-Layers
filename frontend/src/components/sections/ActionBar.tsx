@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef, useEffect } from "react"
-import { buildLayerImagesSourceKey, resolveConverterSourceSelection, useConverterStore } from "../../stores/converter"
+import { buildLayerImagesSourceKey, CONVERTER_ERROR_KEYS, resolveConverterSourceSelection, useConverterStore } from "../../stores/converter"
 import Button from "../ui/Button"
 import { cardDividerClass } from "../ui/panelPrimitives"
 import BatchResultSummary from "../ui/BatchResultSummary"
@@ -98,9 +98,13 @@ export default function ActionBar() {
   const previewBaseImageUrl = useConverterStore((s) => s.previewBaseImageUrl)
   const puzzleOverlayUrl = useConverterStore((s) => s.puzzleOverlayUrl)
   const submitPreview = useConverterStore((s) => s.submitPreview)
+  const openNativeMaterialSelection = useConverterStore((s) => s.openNativeMaterialSelection)
+  const nativeMaterialSelectionLoading = useConverterStore((s) => s.nativeMaterialSelectionLoading)
   const submitFullPipeline = useConverterStore((s) => s.submitFullPipeline)
   const threemfDiskPath = useConverterStore((s) => s.threemfDiskPath)
   const downloadUrl = useConverterStore((s) => s.downloadUrl)
+  const backingOutput = useConverterStore((s) => s.backingOutput)
+  const separatedBacking = useConverterStore((s) => s.separate_backing)
   const generateWarnings = useConverterStore((s) => s.generateWarnings)
   const sessionId = useConverterStore((s) => s.sessionId)
   const largeFormatEnabled = useConverterStore((s) => s.largeFormatEnabled)
@@ -156,6 +160,9 @@ export default function ActionBar() {
   const [exportNotice, setExportNotice] = useState<string | null>(null)
 
   const canSubmit = !!imageFile && sourceSelection.isReady
+  const largeFormatModelSurfaceConflict = largeFormatEnabled && modelSurfaceEnabled
+  // Retained downloads remain available when the current modes cannot generate.
+  const canSubmitSlicerOutput = canSubmit && (!largeFormatModelSurfaceConflict || !!downloadUrl)
   const canBatchSubmit = batchFiles.length > 0 && sourceSelection.isReady
   const singleSourceHintKey =
     sourceVersion === "material"
@@ -287,6 +294,20 @@ export default function ActionBar() {
                 className="w-full"
               />
             </div>
+            {largeFormatModelSurfaceConflict && error !== CONVERTER_ERROR_KEYS.largeFormatModelSurfaceConflict && (
+              <p role="status" className="text-xs text-amber-700 dark:text-amber-300">
+                {t("large_format_model_surface_conflict")}
+              </p>
+            )}
+            <Button
+              label={t("native_material_edit_button")}
+              variant="primary"
+              size="sm"
+              onClick={() => void openNativeMaterialSelection()}
+              disabled={!hasPreview || !sourceSelection.isReady || isLoading || isGenerating || batchLoading || replacePreviewLoading || contentCommitStatus === "unknown"}
+              loading={nativeMaterialSelectionLoading}
+              className="justify-self-start"
+            />
             {hasPreview && (
               <>
                 <div className={cardDividerClass} aria-hidden="true" />
@@ -412,8 +433,8 @@ export default function ActionBar() {
         <SlicerSelector
           threemfDiskPath={threemfDiskPath}
           downloadUrl={downloadUrl}
-          canSubmit={batchMode ? canBatchSubmit && !batchLoading : canSubmit}
-          largeFormat={batchMode ? false : largeFormatEnabled}
+          canSubmit={!nativeMaterialSelectionLoading && (batchMode ? canBatchSubmit && !batchLoading : canSubmitSlicerOutput)}
+          largeFormat={batchMode ? false : largeFormatEnabled || (separatedBacking && backingOutput === "separate_project")}
           onAutoGenerate={async () => {
             if (batchMode) {
               await submitBatch()

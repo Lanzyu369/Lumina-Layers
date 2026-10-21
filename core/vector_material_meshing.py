@@ -754,6 +754,8 @@ def _record_material_result(
 
     if mesh is not None:
         result[name] = {"meshes": [mesh], "mat_id": int(data["mat_id"])}
+        if data.get("export_material") is not None:
+            result[name]["export_material"] = data["export_material"]
 
 
 def _stop_processes(pool: ProcessPoolExecutor) -> None:

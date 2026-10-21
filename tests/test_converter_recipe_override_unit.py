@@ -2414,6 +2414,8 @@ def test_apply_recipe_override_endpoint_supports_material_archive_session(
     assert body["rgb"] == [0, 255, 0], body
     assert body["source"] == "material_archive_preview"
     assert body["override_count"] == 1
+    assert body["recipe_overrides"][0]["region_id"] == "region-1"
+    assert body["recipe_overrides"][0]["recipe"] == [1, 1, 1, 1, 1]
 
     session_data = store.get(session_id)
     assert session_data is not None

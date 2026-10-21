@@ -18,6 +18,7 @@ import type { SettingsState } from "../stores/settingsStore";
 import type { ColorReplacementItem } from "../api/types";
 import type { WorkshopRecipeSource } from "../workshop/types";
 import { svgHoleCompensationOptions } from "../constants/svgHoleCompensation";
+import { scopedNativeFilamentProfiles } from "../stores/converter/nativeMaterialSelection";
 import {
   cloneDynamicMaterialRecipe,
   cloneMaterialLayerBenefitCurve,
@@ -113,8 +114,8 @@ export function exportConverterRecipe(
   lutPath?: string,
 ): ConverterRecipe {
   // Merge global-only colorRemapMap entries into global replacement_regions.
-  // Spatial region edits remain session-scoped and are never serialized here.
-  // 这里只合并全局替色映射；空间局部改色仅存在于当前会话。
+  // Local edits use the authoritative checkpoint embedded beside the source.
+  // 这里只合并全局映射；局部编辑通过原图旁的权威快照保存。
   let mergedReplacements: ColorReplacementItem[] = [
     ...state.replacement_regions,
   ];
@@ -143,6 +144,7 @@ export function exportConverterRecipe(
   }
   const selectedLegacyLutNames = normalizeLegacyLutNames(state);
   const isMaterialSource = state.source_version === "material";
+  const nativeFilamentProfiles = scopedNativeFilamentProfiles(state, settings);
   const hasDynamicResult =
     state.materialDynamicRecipes.length > 0 ||
     state.materialLayerBenefitCurve.length > 0;
@@ -223,6 +225,7 @@ export function exportConverterRecipe(
         state.backing_infill_density_percent,
       structure_mode: state.structure_mode,
       separate_backing: state.separate_backing,
+      backing_output: state.backingOutput,
       add_loop: state.add_loop,
       loop_width: state.loop_width,
       loop_length: state.loop_length,
@@ -311,6 +314,7 @@ export function exportConverterRecipe(
       nozzle_size: settings.nozzleSize,
       device_profile_id: settings.deviceProfileId,
       custom_3mf_template_id: settings.custom3mfTemplateId,
+      ...(nativeFilamentProfiles ? { native_filament_profiles: nativeFilamentProfiles } : {}),
       ...(settings.buildPlateId
         ? { build_plate_id: settings.buildPlateId }
         : {}),
@@ -367,11 +371,15 @@ export async function buildFullRecipe(
 export async function buildRecipeAssets(
   primaryFile: File,
   heightmapFile?: File | null,
+  editorFile?: File | null,
 ): Promise<RecipeAssets> {
   const primary = await buildAssetEntry(primaryFile);
   const assets: RecipeAssets = { primary };
   if (heightmapFile) {
     assets.heightmap = await buildAssetEntry(heightmapFile);
+  }
+  if (editorFile) {
+    assets.editor = await buildAssetEntry(editorFile);
   }
   return assets;
 }

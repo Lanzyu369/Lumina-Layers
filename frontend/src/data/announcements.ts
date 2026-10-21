@@ -16,16 +16,59 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
-    version: "2026-10-15",
-    title: { zh: "Lumina Layers — 10 月更新速览", en: "Lumina Layers — October updates" },
+    version: "2026-10-22",
+    title: {
+      zh: "Lumina Layers — 10 月更新速览",
+      en: "Lumina Layers — October updates",
+    },
     sections: [{
       category: { zh: "预览 & 交互", en: "Preview & Interaction" },
       items: [{
-        zh: "顶部导航更清爽：主导航和子导航去掉了外框，两行之间用一条细线分开，内容区域也更大了。可以在“设置 → 常规”里选择导航居中或居左；窗口变窄时会先收起左上角的标题文字、只保留标志，实在放不下时主导航才移到下一行。",
-        en: "The top navigation is cleaner: the main and sub tabs no longer sit inside boxes, a thin line separates the two rows, and the content area gets more room. Choose centered or left-aligned navigation in Settings → General. When the window gets narrow, the title at the top left is hidden first so only the logo remains, and the main tabs move to the next row only when they truly no longer fit.",
+        zh: "校准板底板厚度和逐色浮雕高度恢复显示毫米数值，可以直接输入精确尺寸。",
+        en: "Calibration-board backing thickness and per-colour relief height show their millimetre values again and accept precise typed values.",
       }, {
-        zh: "顶栏右侧更简洁：切换语言、深色模式、新手引导、反馈问题和连接状态都收进了右上角的三横线菜单，点开即可使用；软件连接出问题时，菜单按钮上会出现红点提醒。",
-        en: "The top-right corner is tidier: language, dark mode, the beginner tour, bug reports and the connection status now live in the three-line menu at the top right. If the app loses its connection, a red dot appears on the menu button.",
+        zh: "右上角更清爽了：语言、深浅色、新手导览、问题反馈和连接状态都收进右上角的三横线菜单，点开即可使用；软件连接出问题时，菜单按钮上会出现红点提醒。",
+        en: "Language, dark mode, the beginner tour, bug reports and connection status now live in the three-line menu at the top right. A red dot on the menu button warns when the app loses its connection.",
+      }],
+    }],
+  },
+  {
+    version: "2026-10-21",
+    title: {
+      zh: "Lumina Layers — 10 月更新速览",
+      en: "Lumina Layers — October updates",
+    },
+    sections: [{
+      category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+      items: [{
+        zh: "修正了高层数耗材配色计算遗漏大量配方的问题；之前计算过的旧数据会在下次使用时自动重新计算，原有项目和耗材档案不受影响。",
+        en: "Fixed missing recipe choices in higher-layer material colour calculations. Older calculated data is rebuilt automatically when next needed, without changing your projects or material profiles.",
+      }],
+    }],
+  },
+  {
+    version: "2026-10-15",
+    title: {
+      zh: "Lumina Layers — 10 月更新速览",
+      en: "Lumina Layers — October updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "生成打印文件前，会检查耗材预设和打印板是否兼容。遇到多个匹配预设或打印板不兼容时，可直接选择耗材、切换打印板并继续生成；分享卡也会保存耗材选择。",
+        en: "Filament presets and build plates are checked before generating print files. If several presets match or the plate is incompatible, choose a filament or switch plates and continue. Share cards also retain your filament choices.",
+      }, {
+        zh: "首次启动时会等待本机服务准备好，再自动进入工作区，无需手动刷新。耗材预设之间的共同设置冲突也会在生成前明确提示。",
+        en: "The first start now waits for the local service before opening the workspace automatically, without a manual refresh. Conflicting shared filament settings are also explained before generation.",
+      }, {
+        zh: "保存 JSON 项目或 PNG 分享卡时，会带上局部换色、区域配方和选区。重新导入后可以继续编辑；旧文件没有保存的区域信息仍会明确提示。",
+        en: "JSON projects and PNG share cards now retain local color edits, regional recipes and selections for continued editing after import. Older files still explain when region data was not saved.",
+      }, {
+        zh: "启用涂层后，需要明确选择使用哪种耗材，可沿用当前配色耗材或另选耗材档案；混用不同材料类型时会提示，生成前也会检查原生预设和打印板。",
+        en: "Coating now requires an explicit material choice from the current palette or a separate material archive. Mixed material types are explained, and native presets and plates are checked before generation.",
+      }, {
+        zh: "单面模型的分离底板可选择独立工程输出，下载的压缩包保留模型和底板原尺寸，并分别安排打印位置。自动摆放未找到安全位置时，仍会生成文件并持续提示手动检查；请分别打开每个工程，确认切片通过后再打印。",
+        en: "Single-sided models can export a separated backing as its own project. The ZIP keeps the original model and backing sizes and lays out each independently. If automatic placement cannot verify a safe layout, the files remain available with a manual-check warning. Open each project and confirm slicing succeeds before printing.",
       }],
     }],
   },

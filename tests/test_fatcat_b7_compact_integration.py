@@ -77,7 +77,20 @@ def test_compact_palette_size_does_not_confuse_source_group_width(tmp_path, monk
     # The approved A1 first-variant rule has one effective variant per slot.
     assert final["filament_self_index"] == [str(slot + 1) for slot in range(active_count)]
     if "flush_volumes_matrix" in source:
-        assert final["flush_volumes_matrix"] == source["flush_volumes_matrix"]
+        source_count = len(source["filament_settings_id"])
+        source_matrix = source["flush_volumes_matrix"]
+        final_matrix = final["flush_volumes_matrix"]
+        assert len(source_matrix) == source_count * source_count
+        assert len(final_matrix) == active_count * active_count
+        # Row strides change with the palette; transitions between the original
+        # slots retain their values at the corresponding two-dimensional index.
+        for row in range(source_count):
+            for column in range(source_count):
+                assert final_matrix[row * active_count + column] == (
+                    source_matrix[row * source_count + column]
+                )
+        assert all(float(final_matrix[slot * active_count + slot]) == 0
+                   for slot in range(active_count))
     else:
         assert "flush_volumes_matrix" not in final
 

@@ -10,7 +10,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from api.schemas.dynamic_material import DynamicMaterialResultResponse
-from api.schemas.converter import SelectionDocumentResponse
+from api.schemas.converter import RecipeOverrideItem, SelectionDocumentResponse
 from api.schemas.lut import (
     LutCoverageStatsResponse,
     LutHullPoint,
@@ -55,6 +55,7 @@ class CalibrationResponse(_NoPublic3mfDiskPathMixin):
     preview_url: Optional[str] = None
     layer_urls: Optional[list[str]] = None
     threemf_disk_path: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SingleStageJobResponse(BaseModel):
@@ -858,6 +859,7 @@ class RecipeOverrideApplyResponse(DynamicMaterialResultResponse):
     source: str
     runtime_mode_key: str | None = None
     override_count: int = 0
+    recipe_overrides: list[RecipeOverrideItem] = Field(default_factory=list)
     can_undo: bool = False
     can_redo: bool = False
     selection: SelectionDocumentResponse | None = None

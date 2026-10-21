@@ -138,6 +138,7 @@ function buildGeneration(
     use_lut_constrained: state.use_lut_constrained,
     auto_dynamic_range: state.auto_dynamic_range,
     separate_backing: state.separate_backing,
+    backing_output: state.backingOutput,
     material_dynamic_layer_count_enabled:
       isMaterialSource && state.materialDynamicLayerCountEnabled,
     material_min_layer_count: isMaterialSource
@@ -156,6 +157,10 @@ function buildGeneration(
       : null,
     enable_wipe_tower_auto_placement:
       options.enableWipeTowerAutoPlacement !== false,
+    native_filament_profiles: { ...state.native_filament_profiles },
+    native_filament_profile_scope: state.nativeFilamentProfileScope
+      ? { ...state.nativeFilamentProfileScope }
+      : null,
     ...(wipeTowerWarningCodes.length > 0
       ? { wipe_tower_warning_codes: wipeTowerWarningCodes }
       : {}),

@@ -72,6 +72,52 @@ def _assert_safe(result) -> None:
     assert result.model_outer_bounds.height > 0
 
 
+@pytest.mark.parametrize(
+    "bed_size,model_size",
+    [((256, 256), (188, 260)), ((180, 180), (100, 185)), ((220, 200), (225, 100))],
+)
+def test_oversized_model_envelope_is_distinguished_from_tower_search_failure(bed_size, model_size):
+    from utils.slicer_3mf_support import build_wipe_tower_patch_settings
+
+    request = _request(bed_size=bed_size, model_size=model_size)
+    result = solve_wipe_tower_placement(request)
+    assert result.reason == "model_envelope_exceeds_printable_bounds"
+    assert result.model_bounds.width == pytest.approx(model_size[0])
+    assert result.model_bounds.height == pytest.approx(model_size[1])
+    assert build_wipe_tower_patch_settings(result) == {}
+    assert result.requires_manual_adjustment is True
+    assert result.warning_code == "wipe_tower_manual_adjustment_required"
+
+
+@pytest.mark.parametrize("model_size", [(188.0, 250.7), (250.7, 188.0)])
+def test_brim_estimate_does_not_discard_a_valid_side_strip(model_size) -> None:
+    request = replace(
+        _request(
+            bed_size=(256, 256), model_size=model_size, material_count=7,
+            purge_volume=45, model_height=0.8, tower_width=35,
+        ),
+        tower_infill_spacing_ratio=1.5, tower_square_rib_body=True,
+        tower_rib_width=8, tower_wall_types=("rib", "rectangle"),
+    )
+    result = solve_wipe_tower_placement(request)
+
+    assert result.placement_available is True
+    assert result.model_brim_requires_review is True
+    assert result.requires_manual_adjustment is True
+    assert result.model_bounds.width == pytest.approx(model_size[0])
+    assert result.model_bounds.height == pytest.approx(model_size[1])
+    assert result.tower_wall_type == "rectangle"
+    assert result.model_bounds.expanded(request.edge_clearance).left >= 0
+    assert result.model_bounds.expanded(request.edge_clearance).bottom >= 0
+    assert result.model_bounds.expanded(request.edge_clearance).right <= 256
+    assert result.model_bounds.expanded(request.edge_clearance).top <= 256
+    assert result.tower_outer_bounds.left >= 0
+    assert result.tower_outer_bounds.bottom >= 0
+    assert result.tower_outer_bounds.right <= 256
+    assert result.tower_outer_bounds.top <= 256
+    assert result.model_outer_bounds.intersection_area(result.tower_outer_bounds) == 0
+
+
 @pytest.mark.parametrize("extra_length", [0.0, 6.0, -6.0])
 def test_native_rib_tower_reserves_wall_overhang_without_scaling(extra_length) -> None:
     request = replace(

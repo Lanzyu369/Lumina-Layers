@@ -791,7 +791,10 @@ def _resolve_merged_wipe_tower_placement(
     else:
         request = replace(request, model_translation_locked=model_translation_locked)
         placement = solve_wipe_tower_placement(request)
-        translation = placement.model_translation
+        translation = (
+            placement.model_translation if placement.placement_available
+            else (0.0, 0.0)
+        )
     return placement, translation
 
 
@@ -1132,10 +1135,13 @@ class MergedSlicer3MFWriter:
             build_transforms=build_transforms,
         )
         items, build_transforms = self._translate_sources(items, build_transforms, group_translation)
-        if enable_wipe_tower_auto_placement:
+        tower_changes = (
+            build_wipe_tower_patch_settings(placement)
+            if enable_wipe_tower_auto_placement else {}
+        )
+        if tower_changes:
             final_project = patch_wipe_tower(
-                final_project,
-                build_wipe_tower_patch_settings(placement),
+                final_project, tower_changes,
                 project_result["wipe_tower_dialect"],
             )
 
@@ -1561,7 +1567,7 @@ class MergedSlicer3MFWriter:
                         or str(uuid.uuid4())
                     )
                 ),
-                auto_drop=properties.get("auto_drop", ""),
+                attributes=properties,
             )
 
     @staticmethod

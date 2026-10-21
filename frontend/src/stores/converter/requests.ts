@@ -3,6 +3,7 @@ import { svgHoleCompensationOptions } from "../../constants/svgHoleCompensation"
 import { computeAutoHeightMap, toAbsoluteReliefHeightMap } from "../../utils/colorUtils";
 import type { SettingsState } from "../settingsStore";
 import { newestEditorContentRevision } from "./editorRevision";
+import { scopedNativeFilamentProfiles } from "./nativeMaterialSelection";
 import {
   buildConversionSourceParams,
   clampAbsoluteReliefHeightMap,
@@ -60,6 +61,7 @@ function buildOutputParams(
       state.backing_infill_density_percent,
     structure_mode: state.structure_mode,
     separate_backing: state.separate_backing,
+    backing_output: state.separate_backing ? state.backingOutput : "same_project",
     enable_relief: state.enable_relief,
     enable_coating: state.enable_coating,
     coating_height_mm: state.coating_height_mm,
@@ -69,6 +71,7 @@ function buildOutputParams(
     device_profile_id: settings.deviceProfileId,
     build_plate_id: settings.buildPlateId,
     custom_3mf_template_id: settings.custom3mfTemplateId,
+    native_filament_profiles: scopedNativeFilamentProfiles(state, settings),
     enable_base_layer_height_modifier:
       settings.enableBaseLayerHeightModifier,
     enable_wipe_tower_auto_placement:

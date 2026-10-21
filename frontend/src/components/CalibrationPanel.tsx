@@ -42,6 +42,7 @@ export default function CalibrationPanel() {
     previewImageUrl,
     layerImageUrls,
     statusMessage,
+    warnings,
     setColorMode,
     setBlockSize,
     setGap,
@@ -188,6 +189,18 @@ export default function CalibrationPanel() {
               {statusMessage}
             </StatusBanner>
           )}
+
+          {lastSubmittedWorkflow === "legacy" &&
+            downloadUrl &&
+            warnings.includes("wipe_tower_manual_adjustment_required") && (
+              <StatusBanner
+                data-testid="calibration-placement-warning"
+                tone="warning"
+                title={t("wipe_tower_manual_adjustment_title")}
+              >
+                {t("wipe_tower_manual_adjustment_warning")}
+              </StatusBanner>
+            )}
 
           {lastSubmittedWorkflow === "legacy" && error && (
             <StatusBanner data-testid="error-message" tone="error">

@@ -15,11 +15,13 @@ import trimesh
 
 from core.layered_coordinate_domain import (
     LAYERED_COORDINATE_DOMAIN_CERTIFIED_KEY,
+    LayeredCoordinateDomain,
     read_layered_coordinate_domain,
 )
 from core.vector_layer_geometry import (
     VectorLayerGeometryPolicy,
     build_vector_layered_volume,
+    resolve_vector_writer_grid_mm,
 )
 from core.vector_engine import VectorAnalysis, VectorProcessor
 from core.model_surface.assembly import (
@@ -779,13 +781,26 @@ def test_pattern_logical_xy_bounds_reject_geometry_outside_canvas():
         _pattern_xy_bounds_mm(pattern)
 
 
-def test_pattern_logical_xy_bounds_accept_float32_writer_rounding():
+@pytest.mark.parametrize("legacy_domain", [False, True])
+def test_pattern_logical_xy_bounds_accept_float32_writer_rounding(
+    legacy_domain: bool,
+) -> None:
     canvas_width = 814.0
     canvas_height = 947.0
     target_width_mm = 115.59999084472656
     scale_factor = target_width_mm / canvas_width
-    logical_width_mm = 115.6
-    logical_height_mm = 134.488
+    domain = LayeredCoordinateDomain.from_canvas_and_layers(
+        width_mm=target_width_mm,
+        height_mm=canvas_height * scale_factor,
+        xy_grid_mm=(
+            0.0001 if legacy_domain else resolve_vector_writer_grid_mm(
+                canvas_height * scale_factor,
+            )
+        ),
+        layer_heights_mm=(0.08,),
+    )
+    logical_width_mm = domain.canvas_max_units[0] * domain.xy_grid_mm
+    logical_height_mm = domain.canvas_max_units[1] * domain.xy_grid_mm
     writer_width_mm = max(
         logical_width_mm,
         float(np.float32(logical_width_mm)),
@@ -806,6 +821,7 @@ def test_pattern_logical_xy_bounds_accept_float32_writer_rounding():
                 bbox=(0.0, 0.0, canvas_width, canvas_height),
                 scale_factor=scale_factor,
                 num_layers=1,
+                coordinate_domain=domain if legacy_domain else None,
             ),
             "layer_height_mm": 0.08,
             "bambu_face_orientation": "down",

@@ -1,5 +1,5 @@
 name: Prepare native 3MF wheels
-description: Build the pinned Fat Cat binding and patched neroued writer for the current runner
+description: Build the pinned Fat Cat binding and Production writer for the current runner
 
 inputs:
   python:
@@ -20,7 +20,6 @@ runs:
         FATCAT_REF="$("$PYTHON_EXECUTABLE" "$contract" --get FATCAT_SOURCE_COMMIT)"
         NEROUED_REPOSITORY="$("$PYTHON_EXECUTABLE" "$contract" --get FATCAT_WRITER_REPOSITORY)"
         NEROUED_REF="$("$PYTHON_EXECUTABLE" "$contract" --get FATCAT_WRITER_SOURCE_COMMIT)"
-        writer_patch="$("$PYTHON_EXECUTABLE" "$contract" --get FATCAT_WRITER_PATCH)"
         native_root="$RUNNER_TEMP/lumina-3mf-native"
         fatcat_root="$native_root/fatcat"
         neroued_root="$native_root/neroued"
@@ -33,8 +32,6 @@ runs:
         git clone --no-checkout "$NEROUED_REPOSITORY" "$neroued_root"
         git -C "$neroued_root" fetch --depth=1 origin "$NEROUED_REF"
         git -C "$neroued_root" checkout --detach "$NEROUED_REF"
-        git -C "$neroued_root" apply \
-          "$GITHUB_WORKSPACE/$writer_patch"
 
         "$PYTHON_EXECUTABLE" -m pip install --upgrade build
         "$PYTHON_EXECUTABLE" scripts/build_3mf_native_wheels.py \

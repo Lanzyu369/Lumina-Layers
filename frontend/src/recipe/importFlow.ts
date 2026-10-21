@@ -38,13 +38,13 @@ const IMAGE_DECODE_TIMEOUT_MS = 30_000;
 export const MODEL_SURFACE_RECIPE_EXPORT_UNAVAILABLE_ERROR =
   "Model surface recipes are not supported";
 
+export const RECIPE_IMPORT_PREDICTIVE_LUT_UNAVAILABLE_ERROR =
+  "Inferred LUT is currently unavailable";
+
 /**
- * Mark a full recipe when session-scoped spatial edits were intentionally
- * omitted. The recipe section and schema stay unchanged; import surfaces the
- * warning through the existing localized warning mechanism.
+ * Warn for legacy spatial edits without a portable checkpoint.
  *
- * 当会话级空间局部改色被有意省略时标记完整配方。配方内容与 schema 保持不变，
- * 导入时通过现有本地化警告机制提示用户。
+ * 旧项目缺少可携带局部编辑快照时，通过既有本地化机制明确提示。
  *
  * @param recipe - Full recipe built for a share PNG or JSON sidecar.
  * @param spatialEditCount - Number of connected-region edits in the session.
@@ -54,7 +54,7 @@ export function annotateSpatialEditCompatibility(
   recipe: LuminaRecipe,
   spatialEditCount: number,
 ): LuminaRecipe {
-  if (!Number.isFinite(spatialEditCount) || spatialEditCount <= 0) {
+  if (recipe.asset.editor || !Number.isFinite(spatialEditCount) || spatialEditCount <= 0) {
     return recipe;
   }
 
@@ -115,6 +115,12 @@ export async function isShareCardFile(file: File): Promise<boolean> {
   return false;
 }
 
+function assertRecipeSourceAvailable(recipe: LuminaRecipe): void {
+  if (recipe.recipe.converter?.source?.source_version === "native") {
+    throw new Error(RECIPE_IMPORT_PREDICTIVE_LUT_UNAVAILABLE_ERROR);
+  }
+}
+
 // ========== Import orchestration ==========
 
 export interface ImportPreview {
@@ -134,6 +140,7 @@ export interface ImportPreview {
  */
 export async function prepareImport(file: File): Promise<ImportPreview> {
   const { recipe, source } = await parseRecipeFile(file);
+  assertRecipeSourceAvailable(recipe);
 
   const converterState = useConverterStore.getState();
   const lutListFull = converterState.lutListFull;
@@ -251,6 +258,10 @@ export function applyImport(
   printerOptions: PrinterInfo[] = [],
   options: ApplyImportOptions = {},
 ): void {
+  assertRecipeSourceAvailable(restoreResult.recipe);
+  if (restoreResult.state.source_version === "native") {
+    throw new Error(RECIPE_IMPORT_PREDICTIVE_LUT_UNAVAILABLE_ERROR);
+  }
   const store = useConverterStore.getState();
   const conv = restoreResult.recipe.recipe.converter;
 
@@ -368,7 +379,7 @@ export function applyImport(
  * 将当前 converter 状态导出为分享卡 PNG（触发下载）。
  */
 export async function exportShareCard(): Promise<SaveOutcome> {
-  const converterState = useConverterStore.getState();
+  const { state: converterState, editorFile } = await useConverterStore.getState().prepareRecipeExport();
   assertRecipeExportSupported(converterState.modelSurfaceEnabled);
 
   const { exportConverterRecipe, buildFullRecipe, buildRecipeAssets, buildCoverImage } =
@@ -401,6 +412,7 @@ export async function exportShareCard(): Promise<SaveOutcome> {
   const assets = await buildRecipeAssets(
     converterState.imageFile,
     converterState.heightmapFile,
+    editorFile,
   );
 
   // 3. Build cover image from preview
@@ -432,7 +444,7 @@ export async function exportShareCard(): Promise<SaveOutcome> {
  * 将当前 converter 状态导出为 .lumina.json sidecar 文件。
  */
 export async function exportSidecar(): Promise<SaveOutcome> {
-  const converterState = useConverterStore.getState();
+  const { state: converterState, editorFile } = await useConverterStore.getState().prepareRecipeExport();
   assertRecipeExportSupported(converterState.modelSurfaceEnabled);
 
   const { exportConverterRecipe, buildFullRecipe, buildRecipeAssets, buildCoverImage } =
@@ -460,6 +472,7 @@ export async function exportSidecar(): Promise<SaveOutcome> {
   const assets = await buildRecipeAssets(
     converterState.imageFile,
     converterState.heightmapFile,
+    editorFile,
   );
 
   const { cover } = await buildCoverImage(converterState.previewImageUrl);

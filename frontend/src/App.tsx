@@ -20,6 +20,7 @@ import Scene3D from "./components/Scene3D";
 import ExtractorCanvas from "./components/ExtractorCanvas";
 import LoadingSpinner from "./components/LoadingSpinner";
 import AnnouncementDialog from "./components/ui/AnnouncementDialog";
+import NativeMaterialSelectionDialog from "./components/ui/NativeMaterialSelectionDialog";
 import { I18nProvider, useI18n } from "./i18n/context";
 import { BugReportModal } from "./components/BugReportModal";
 import { ErrorTicketPrompt } from "./components/ErrorTicketPrompt";
@@ -27,6 +28,8 @@ import { buildErrorTicketDescription } from "./utils/errorTicketDescription";
 import { useErrorTicketPromptCapture } from "./hooks/useErrorTicketPromptCapture";
 import { useErrorTicketPromptStore } from "./stores/errorTicketPromptStore";
 import { HeaderMenu } from "./components/HeaderMenu";
+import { LanguageToggle } from "./components/LanguageToggle";
+import { ThemeToggle } from "./components/ThemeToggle";
 import { TutorialHost } from "./components/tutorial/TutorialHost";
 import { WidgetWorkspace } from "./components/widget/WidgetWorkspace";
 import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP, CONVERTER_SUB_TAB_WIDGET_MAP } from "./stores/widgetStore";
@@ -218,7 +221,7 @@ function WidgetToggles() {
 
 /* ---------- App Content (inside I18nProvider) ---------- */
 
-function AppContent() {
+function AppContent({ connected }: { connected: boolean | null }) {
   const { t } = useI18n();
   const announcement = useAnnouncement();
   const converterSessionId = useConverterStore((s) => s.sessionId);
@@ -257,7 +260,6 @@ function AppContent() {
     ? "px-3 sm:px-4"
     : "px-3 sm:px-4 lg:px-6";
 
-  const [connected, setConnected] = useState<boolean | null>(null);
   const [announcementReady, setAnnouncementReady] = useState(false);
   const [bugReportOpen, setBugReportOpen] = useState(false);
   const [bugReportPreset, setBugReportPreset] = useState("");
@@ -364,38 +366,6 @@ function AppContent() {
       workspace_mode: workspace.mode,
     });
   }, [activeTab, activeConverterSubTab, workspace.mode]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let checking = false;
-
-    const checkHealth = () => {
-      if (checking) return;
-      checking = true;
-      apiClient
-        .get<HealthResponse>("/health", { suppressClientLog: true })
-        .then((res) => {
-          if (!cancelled) {
-            setConnected(res.data.status === "ok");
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setConnected(false);
-          }
-        })
-        .finally(() => {
-          checking = false;
-        });
-    };
-
-    checkHealth();
-    const intervalId = window.setInterval(checkHealth, HEALTH_RECHECK_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setAnnouncementReady(true), 600);
@@ -579,16 +549,70 @@ function AppContent() {
           还是可停靠 widget 形式打开都能弹出；其显隐由提取器 store 的
           colorchecker 阶段自行控制。 */}
       <ColorcheckerConfirmDialogExtractor />
+      <NativeMaterialSelectionDialog />
     </div>
   );
 }
 
 /* ---------- App ---------- */
 
+function AppReadiness() {
+  const { t } = useI18n();
+  const [connected, setConnected] = useState<boolean | null>(null);
+  const [hasConnected, setHasConnected] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let checking = false;
+    const controller = new AbortController();
+    const checkHealth = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const response = await apiClient.get<HealthResponse>("/health", {
+          suppressClientLog: true,
+          timeout: 4_000,
+          signal: controller.signal,
+        });
+        if (!cancelled) {
+          const ready = response.data.status === "ok";
+          setConnected(ready);
+          if (ready) setHasConnected(true);
+        }
+      } catch {
+        if (!cancelled) setConnected(false);
+      } finally {
+        checking = false;
+      }
+    };
+    void checkHealth();
+    const intervalId = window.setInterval(() => void checkHealth(), HEALTH_RECHECK_MS);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  // Mount initialization effects only after the first successful health check.
+  // Later disconnects preserve the workspace and its ordinary error handling.
+  if (hasConnected) return <AppContent connected={connected} />;
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[var(--surface-panel-strong)] p-6">
+      <section className="max-w-md space-y-4 text-center" role="status" aria-live="polite">
+        <img src="/favicon.ico" alt={t("app_logo_alt")} className="mx-auto h-12 w-12 rounded" />
+        <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">{t("app_starting")}</h1>
+        <p className="text-sm leading-6 text-[var(--surface-text-muted)]">{t("app_starting_detail")}</p>
+        <div className="flex justify-center gap-2"><LanguageToggle /><ThemeToggle /></div>
+      </section>
+    </main>
+  );
+}
+
 function App() {
   return (
     <I18nProvider>
-      <AppContent />
+      <AppReadiness />
     </I18nProvider>
   );
 }

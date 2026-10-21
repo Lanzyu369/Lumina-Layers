@@ -9,7 +9,7 @@ import type {
   LutReference,
   LuminaRecipe,
 } from "./types";
-import { DEFAULT_CONVERTER_RECIPE_PUZZLE, WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES } from "./types";
+import { DEFAULT_CONVERTER_RECIPE_PUZZLE, EDITOR_PROJECT_MAX_BYTES, WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES } from "./types";
 import {
   DEFAULT_MODEL_SURFACE_MODEL_ROTATION,
   DEFAULT_MODEL_SURFACE_PLACEMENT,
@@ -259,6 +259,13 @@ function validateRecipeAssets(recipe: LuminaRecipe): void {
   if (assetEntries?.heightmap !== undefined) {
     validateAsset(assetEntries.heightmap);
   }
+  if (assetEntries?.editor !== undefined) {
+    if (assetEntries.editor.byte_size > EDITOR_PROJECT_MAX_BYTES
+        || assetEntries.editor.payload_b64?.length > Math.ceil(EDITOR_PROJECT_MAX_BYTES / 3) * 4) {
+      throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
+    }
+    validateAsset(assetEntries.editor);
+  }
 }
 
 function validateAsset(
@@ -431,19 +438,36 @@ export function restoreConverterRecipe(
     const hm = recipe.asset.heightmap;
     heightmapFile = base64ToFile(hm.payload_b64, hm.filename, hm.mime_type);
   }
+  const editor = recipe.asset.editor;
+  const pendingEditorProject = editor
+    ? base64ToFile(editor.payload_b64, editor.filename, editor.mime_type)
+    : null;
 
-  // --- LUT matching ---
-  const lutMatch = matchLut(conv.base.lut, localLuts);
-  let lutName = "";
-  if (lutMatch.matched) {
-    lutName = lutMatch.lutName;
-    if (lutMatch.matchType === "name" && conv.base.lut.path_hint) {
-      warnings.push(RECIPE_IMPORT_WARNING_LUT_DEGRADED);
-    }
-  } else {
-    warnings.push(RECIPE_IMPORT_WARNING_LUT_MISSING);
-  }
+  // --- Restore source-specific LUT selection ---
   const source = conv.source;
+  const sourceVersion = source?.source_version ?? "legacy";
+  let lutName = "";
+  let legacyLutNames: string[] = [];
+  if (sourceVersion === "legacy") {
+    const lutMatch = matchLut(conv.base.lut, localLuts);
+    if (lutMatch.matched) {
+      lutName = lutMatch.lutName;
+      if (lutMatch.matchType === "name" && conv.base.lut.path_hint) {
+        warnings.push(RECIPE_IMPORT_WARNING_LUT_DEGRADED);
+      }
+    } else {
+      warnings.push(RECIPE_IMPORT_WARNING_LUT_MISSING);
+    }
+    const restored = restoreLegacyLutNames(
+      lutName,
+      source?.selected_legacy_lut_names,
+      localLuts,
+    );
+    legacyLutNames = restored.names;
+    if (restored.missingSecondary) {
+      warnings.push(RECIPE_IMPORT_WARNING_SECONDARY_LUT_MISSING);
+    }
+  }
   const dynamicBounds = resolveImportedDynamicLayerBounds(source);
   const dynamicMaterialEnabled =
     source?.source_version === "material" &&
@@ -452,14 +476,6 @@ export function restoreConverterRecipe(
     conv.material_dynamic,
     dynamicMaterialEnabled,
   );
-  const restoredLegacyLutNames = restoreLegacyLutNames(
-    lutName,
-    source?.selected_legacy_lut_names,
-    localLuts,
-  );
-  if (restoredLegacyLutNames.missingSecondary) {
-    warnings.push(RECIPE_IMPORT_WARNING_SECONDARY_LUT_MISSING);
-  }
 
   // --- Normalize hex values (strip '#' for store) ---
   const replacementRegions: ColorReplacementItem[] =
@@ -487,7 +503,7 @@ export function restoreConverterRecipe(
       };
     },
   );
-  if (recipeOverrides.length > 0) {
+  if (recipeOverrides.length > 0 && !pendingEditorProject) {
     warnings.push(RECIPE_IMPORT_WARNING_REGION_RECIPES_NOT_RESTORED);
   }
 
@@ -584,6 +600,14 @@ export function restoreConverterRecipe(
   // --- Build partial state ---
   const state: Partial<ConverterState> = {
     workshopSource,
+    native_filament_profiles: { ...(conv.device.native_filament_profiles ?? {}) },
+    nativeFilamentProfileScope: conv.device.native_filament_profiles ? {
+      slicer: conv.device.slicer,
+      printer_id: conv.device.printer_id,
+      device_profile_id: conv.device.device_profile_id ?? "",
+      nozzle_size: conv.device.nozzle_size,
+    } : null,
+    nativeMaterialSelection: null,
 
     // Model-surface uploads and face selections are session-bound and are not
     // represented by the current recipe schema. Clear every related field so
@@ -605,9 +629,9 @@ export function restoreConverterRecipe(
     modelSurfaceWarnings: [],
 
     // Base
-    source_version: (source?.source_version ?? "legacy") as ConverterState["source_version"],
+    source_version: sourceVersion as ConverterState["source_version"],
     lut_name: lutName,
-    lut_names: restoredLegacyLutNames.names,
+    lut_names: legacyLutNames,
     color_mode: conv.base.color_mode as ConverterState["color_mode"],
     modeling_mode: conv.base.modeling_mode as ConverterState["modeling_mode"],
     target_width_mm: conv.base.target_width_mm,
@@ -665,6 +689,7 @@ export function restoreConverterRecipe(
         : conv.geometry.structure_mode
     ) as ConverterState["structure_mode"],
     separate_backing: conv.geometry.separate_backing,
+    backingOutput: conv.geometry.backing_output ?? "same_project",
     add_loop: addLoop,
     loop_width: conv.geometry.loop_width,
     loop_length: conv.geometry.loop_length,
@@ -696,13 +721,11 @@ export function restoreConverterRecipe(
     // Color ops
     replacement_regions: replacementRegions,
     free_color_set: freeColorSet,
-    // Region IDs and masks belong to the old preview session. Keep the
-    // serialized field for file compatibility, but never activate those
-    // overrides in a fresh session; history entries remain available for the
-    // user to apply after selecting a new region.
-    // 区域 ID 与掩码属于旧预览会话。文件字段继续保留以兼容旧项目，但新会话
-    // 不直接激活；用户可重新选区后从自定义配方历史中应用。
+    // Activate spatial overrides only after the checkpoint has been validated
+    // against the new preview's source and working-coordinate grid.
+    // 空间覆盖在快照通过新预览的来源和工作坐标校验后才激活。
     recipe_overrides: [],
+    pendingEditorProject,
     customRecipeHistory: customRecipeHistory,
     // Clear remap state — replacement_regions already contains merged data
     colorRemapMap: {},

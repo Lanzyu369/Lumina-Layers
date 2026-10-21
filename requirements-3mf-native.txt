@@ -1,13 +1,12 @@
 # Native metadata dependencies for the selected slicer export routes.
 #
 # Public source: https://github.com/MOVIBALE/fatcat-metadata
-# Pin: 63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b; build from its root pyproject.toml.
-# The build applies reference/fatcat-patches/fatcat-native-export-compatibility.patch
-# for native purge-chute comments and Orca's effective tower footprint defaults.
-# Run scripts/build_3mf_native_wheels.py --install before installing requirements.
-# Keeping this as a local wheelhouse
-# requirement prevents pip from silently replacing the patched writer with the
-# stock PyPI build.
---find-links ./wheelhouse/3mf
+# Release source: acdf8abdf00560759ecdf660eb080bb2083fd5bb.
+# 0.1.2 preserves inherited native filament IDs required by startup G-code.
+# Lumina consumes the same public SDK without patching it or changing its version.
+# The temporary Production writer is distributed by the public Neroued fork.
+# Its generic APIs are submitted upstream; Lumina applies no source patch.
+# See docs/desktop-electron.md for precompiled installation and maintainer builds.
+--find-links https://github.com/MOVIBALE/neroued_3mf/releases/expanded_assets/fatcat-production-1
 
-fatcat-metadata==0.1.0+lumina.1; python_version >= "3.12"
+fatcat-metadata==0.1.2

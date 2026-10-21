@@ -13,31 +13,63 @@ macOS/Linux 可使用 `python3`。桌面窗口会管理自己的后端和前端�
 
 ## 2. 原生 3MF 依赖
 
-Python 3.12 及以上的 3MF 导出链路要求 `wheelhouse/3mf` 中存在当前平台的
-`fatcat-metadata` C++ wheel（Python 导入名为 `fatcat_metadata`）和已打补丁的
-`neroued-3mf` wheel。当前元数据包构建版本固定为 `0.1.0+lumina.1`，来源提交、仓库、
-writer 版本和补丁位置统一由 `scripts/fatcat_packaging_contract.py` 维护。
-Fat Cat 来自公开仓库
-[`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata)，固定
-完整提交 `63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b`。该提交包含上游 C++17
-构建修正。构建脚本把 `--fatcat-root`
-视为该仓库根目录，从根 `pyproject.toml` 构建 wheel；无需进入 `cpp/` 子目录。
-CI 会匿名检出该提交，并在目标平台构建 wheel。构建脚本自动应用
-`reference/fatcat-patches/fatcat-native-export-compatibility.patch`，沿用 SDK
-已有的废料口标记修正，并补齐 OrcaSlicer 原生擦料塔占地默认值。
+本分支支持普通 64 位 CPython 3.12～3.14：Windows x64、Linux x86-64
+（glibc 2.28+）和 Apple Silicon macOS 14+。Intel Mac、Linux ARM、Alpine、
+Windows ARM、32 位或 free-threaded Python 尚无完整应用所需的 wheel 组合。
 
-Lumina 在 `reference/neroued-patches/neroued-3mf-v0.4.0-b7.patch` 保存精确的 B7
-补丁。生产 writer 仍固定在上游提交
-`331ac6fa62a719f0dddacf9f005861b187d54f0c`，应用补丁后版本为
-`neroued-3mf==0.4.0+fatcat.b7`。从 Lumina 仓库根目录准备本地源码并构建：
+3MF 导出链路使用两个独立依赖：
+
+- 元数据 SDK：`fatcat-metadata==0.1.2`，Python 导入名为 `fatcat_metadata`。
+  requirements 自动从
+  [PyPI 0.1.2](https://pypi.org/project/fatcat-metadata/0.1.2/) 选择预编译包。
+  Lumina 使用公共 SDK，不再应用 FatCat 补丁或添加 `+lumina.1` 版本后缀。
+- 写包库：`neroued-3mf==0.4.0+fatcat.production.1`，由
+  [公开 fork 的 GitHub Release](https://github.com/MOVIBALE/neroued_3mf/releases/tag/fatcat-production-1)
+  提供相同 Python/系统/架构的预编译包。这是等待
+  [上游 PR #17](https://github.com/Neroued/neroued_3mf/pull/17) 的临时兼容版本，
+  属于写包库的版本，与 FatCat SDK 的版本独立。
+
+### 使用预编译包
+
+在下一节创建并激活干净的虚拟环境后，从 Lumina 仓库根目录执行：
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+无需克隆 SDK、准备本地 wheelhouse、指定源码 SHA、应用补丁或安装 C++ 编译器。
+`requirements.txt` 对四个原生核心包要求二进制 wheel；平台或 Python 不匹配时会
+在安装阶段失败。GitHub Release 资产可公开下载，不依赖有时限的 Actions artifact。
+已有实验环境含旧版 `lumina-3mf-metadata-cpp` 或本地同版本构建时，建议重新创建
+虚拟环境，避免共享包文件或旧依赖混入；这不是首次安装步骤。
+
+如果之前安装过版本同为 `0.1.2` 的审核候选包，需替换成正式 PyPI 构建：
+
+```bash
+python -m pip install --force-reinstall --no-cache-dir --only-binary=:all: fatcat-metadata==0.1.2
+```
+
+### 维护者从源码构建
+
+来源提交、仓库和版本由 `scripts/fatcat_packaging_contract.py`
+统一维护。FatCat 来自公开仓库
+[`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata)，固定
+完整提交 `acdf8abdf00560759ecdf660eb080bb2083fd5bb`。构建脚本从其根目录
+的 `pyproject.toml` 构建 `0.1.2` wheel，无需进入 `cpp/`，不会修改 SDK 源码。
+以下仅供维护者准备发行包或进行原生开发，普通源码运行
+跳过本节。它需要 Git、CMake 和 C++20 编译器（FatCat 本身使用 C++17）。
+
+writer 固定在公开提交 `a6043434d6cd9a2a76553ffdcdf0dda081d9b19c`，
+版本为 `neroued-3mf==0.4.0+fatcat.production.1`。两个源码目录都应保持干净；
+Lumina 不再保存或应用 writer 补丁。上游合并并正式发布后，再切换到官方版本。
+从 Lumina 仓库根目录准备本地源码并构建：
 
 ```powershell
 git clone https://github.com/MOVIBALE/fatcat-metadata ..\fatcat-metadata
-git -C ..\fatcat-metadata checkout 63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b
-git clone https://github.com/neroued/neroued_3mf.git ..\neroued-3mf
-git -C ..\neroued-3mf checkout 331ac6fa62a719f0dddacf9f005861b187d54f0c
-$writerPatch = (Resolve-Path .\reference\neroued-patches\neroued-3mf-v0.4.0-b7.patch).Path
-git -C ..\neroued-3mf apply $writerPatch
+git -C ..\fatcat-metadata checkout acdf8abdf00560759ecdf660eb080bb2083fd5bb
+git clone https://github.com/MOVIBALE/neroued_3mf.git ..\neroued-3mf
+git -C ..\neroued-3mf checkout a6043434d6cd9a2a76553ffdcdf0dda081d9b19c
 
 python scripts/build_3mf_native_wheels.py `
   --fatcat-root ..\fatcat-metadata `
@@ -45,31 +77,40 @@ python scripts/build_3mf_native_wheels.py `
   --install
 ```
 
-不要把另一台机器生成的 wheel 直接复制进来；wheel 必须与当前 Python、操作系统
-和 CPU 架构匹配。`--install` 会校验 manifest 中的源码提交和 wheel SHA256，
+构建产物可以提供给使用相同 Python、操作系统和 CPU 架构的机器。
+`--install` 会校验 manifest 中的源码提交和 wheel SHA256，
 先卸载旧的 `lumina-3mf-metadata-cpp`，再以 `--no-deps --force-reinstall` 安装
 本次精确 wheel。两个包共用 `fatcat_metadata_data`，不能在新包安装后才卸载旧包。
-同一版本重新构建也需要此安装步骤，不能只依赖普通 `pip install -r`。
+本地修改 SDK 并以同一版本重新构建时也需要此安装步骤，不能只依赖普通 `pip install -r`。
 已有当前构建产物时可运行 `python scripts/build_3mf_native_wheels.py --install-only`。
-生成目录仅受控更新原生 wheel，其他文件保留。完成后再执行下面的
-`pip install -r requirements.txt`；原生依赖的构建流程也按此顺序安装。
+生成目录仅受控更新原生 wheel，其他文件保留。完成后再安装
+`requirements.txt` 中的其余应用依赖。
 
-SVG 运行时固定使用独立项目发布的 `lumina-svg-core==0.3.1`（AGPLv3）。
-`requirements-native-svg.txt` 会从 GitHub Releases 选择匹配 Python、系统和架构的安装包。
+SVG 运行时固定使用独立项目发布的 `lumina-svg-core==0.3.3`（AGPLv3）。
+`requirements-native-svg.txt` 会从公开 PyPI 选择匹配 Python、系统和架构的安装包。
 支持 Python 3.12～3.14；Linux x86-64 要求 glibc 2.28+，Mac 的 Python 3.12/3.13
-安装包要求 macOS 12+，3.14 要求 macOS 14+。没有兼容 wheel 时会从发行源码包构建，
-需要 Git 和 C++17 编译器。已有开发环境可单独执行
+安装包要求 macOS 12+，3.14 要求 macOS 14+。完整 Lumina 应用仍要求 macOS 14+，
+由全部原生依赖的支持交集决定。已有开发环境可单独执行
 `python -m pip install --upgrade -r requirements-native-svg.txt`。
 
 ## 3. 环境准备
 
-使用 Python 3.12，在仓库根目录创建并激活 `.venv`，先按上一节准备当前平台的 3MF 依赖，再安装其余依赖：
+先安装 Python 3.12～3.14、[Node.js 24.x LTS](https://nodejs.org/en/download)
+和 [pnpm 10.33.2](https://pnpm.io/installation)；Node.js 22.x 必须至少为 22.13。
+在仓库根目录创建虚拟环境：
 
 ```bash
+python -m venv .venv
+```
+
+Windows PowerShell 用 `.\.venv\Scripts\Activate.ps1` 激活；macOS/Linux 用
+`source .venv/bin/activate`（系统仅提供 `python3` 时，用它创建虚拟环境）。然后执行：
+
+```bash
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-corepack enable
-pnpm --dir frontend install
-pnpm --dir electron install
+pnpm --dir frontend install --frozen-lockfile
+pnpm --dir electron install --frozen-lockfile
 ```
 
 运行测试时另外安装 `requirements-dev.txt`；仅在明确启用 PostgreSQL 后端时安装 `requirements-postgres.txt`，配置方法见 [server-mode-scaffold.md](server-mode-scaffold.md)。
@@ -116,7 +157,7 @@ pnpm --dir electron start
 | 本地端口不可用 | 关闭自己不再使用的服务，再重试。 |
 | 窗口白屏 | 查看 Vite 输出，确认前端依赖完整、4174 端口可用。 |
 | Electron 运行时缺失 | 在 `electron/` 重跑 `pnpm install`，确认 Electron 安装脚本获准执行。 |
-| pnpm 无法识别 | 执行 `corepack enable`，或使用 `corepack pnpm`。 |
+| pnpm 无法识别 | 按 pnpm 官方安装说明安装 10.33.2；不要假定所有 Node.js 都自带 Corepack。 |
 
 项目启动器残留可用 `python start_all.py --kill` 清理。只清理本项目启动的进程。
 

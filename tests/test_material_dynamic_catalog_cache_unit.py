@@ -12,6 +12,7 @@ import threading
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -187,6 +188,42 @@ def test_cache_key_covers_version_palette_backing_range_height_substrate_and_bud
 
 def test_identity_safe_candidate_universe_uses_new_algorithm_version() -> None:
     assert DYNAMIC_CATALOG_ALGORITHM_VERSION == "dynamic-ciede2000-v2"
+
+
+def test_old_sampling_source_catalog_is_rebuilt_without_deleting_old_payload(
+    tmp_path: Path,
+) -> None:
+    materials = _materials()
+    current_key = _key(materials)
+    old_key = replace(current_key, candidate_source_version="hybrid-v2")
+    old_path = save_dynamic_candidate_catalog(
+        _catalog(), materials=materials, key=old_key,
+        candidate_count_before_dedup=3, cache_root=tmp_path,
+    )
+    old_bytes = old_path.read_bytes()
+    assert load_dynamic_candidate_catalog(
+        materials=materials, key=current_key, cache_root=tmp_path,
+    ) is None
+
+    rebuilt = load_or_build_dynamic_candidate_catalog(
+        materials=materials, key=current_key,
+        builder=lambda: (_catalog(), 3), cache_root=tmp_path,
+    )
+    assert rebuilt.cache_hit is False
+    assert rebuilt.rebuilt_corrupt is False
+
+    def forbidden_build():
+        raise AssertionError("the rebuilt catalog must be reusable")
+
+    reopened = load_or_build_dynamic_candidate_catalog(
+        materials=materials, key=current_key,
+        builder=forbidden_build, cache_root=tmp_path,
+    )
+    assert reopened.cache_hit is True
+    np.testing.assert_array_equal(
+        reopened.catalog.print_recipes, rebuilt.catalog.print_recipes,
+    )
+    assert old_path.read_bytes() == old_bytes
 
 
 def test_catalog_round_trip_rebinds_canonical_recipes_to_current_user_order(

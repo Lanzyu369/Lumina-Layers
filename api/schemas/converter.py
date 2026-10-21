@@ -433,6 +433,14 @@ class RecipeOverrideItem(BaseModel):
     )
 
 
+class CoatingMaterialReference(BaseModel):
+    """Legacy request field; coating now follows the source material types."""
+
+    model_config = ConfigDict(extra="forbid")
+    source: Literal["palette", "material_archive"]
+    key: str = Field(min_length=1)
+
+
 class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
     """Request model for generating a final 3MF model.
     生成最终 3MF 模型的请求模型。
@@ -577,6 +585,7 @@ class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
     high_precision_3d_preview: bool = Field(False, description="启用3D高精度颜色预览")
     recipe_overrides: list[RecipeOverrideItem] | None = Field(None, description="区域级自定义配方覆盖")
     separate_backing: bool = Field(False, description="底板作为独立对象")
+    backing_output: Literal["same_project", "separate_project"] = "same_project"
     add_loop: bool = Field(False, description="启用挂件环")
     loop_width: float = Field(4.0, ge=2, le=10, description="环宽度 (mm)")
     loop_length: float = Field(8.0, ge=4, le=15, description="环长度 (mm)")
@@ -614,12 +623,20 @@ class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
     wire_height_mm: float = Field(0.4, ge=0.04, le=1.0, description="金属丝高度 (mm)")
     enable_coating: bool = Field(False, description="启用涂层")
     coating_height_mm: float = Field(0.08, ge=0.04, le=0.12, description="涂层高度 (mm)")
+    coating_material: CoatingMaterialReference | None = Field(
+        default=None, deprecated=True,
+        description="Legacy selection, ignored; coating follows source types and mixed types default to PLA.",
+    )
     replacement_regions: Optional[List[ColorReplacementItem]] = Field(None, description="颜色替换列表")
     recipe_overrides: Optional[List[RecipeOverrideItem]] = Field(None, description="区域级配方覆盖列表")
     free_color_set: Optional[Set[str]] = Field(None, description="自由色集合 (hex)")
     printer_id: str = Field("bambu-h2d", description="Printer profile ID")
     slicer: str = Field("BambuStudio", description="Slicer software name")
     custom_3mf_template_id: str | None = None
+    native_filament_profiles: dict[str, str] = Field(
+        default_factory=dict,
+        description="Exact native filament preset selections keyed by exported material name",
+    )
     nozzle_size: str = Field("0.4", description="Printer nozzle size")
     device_profile_id: Optional[str] = Field(
         None,
@@ -667,6 +684,11 @@ class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
         """Reject geometry whose variable surface cannot use one safe Z range.
         拒绝无法用统一 Z 区间保护观赏面的可变高度几何。
         """
+        if self.backing_output == "separate_project" and (
+            not self.separate_backing or self.structure_mode != StructureMode.SINGLE_SIDED
+            or self.enable_relief or self.color_mode == ColorMode.FIVE_COLOR_EXT
+        ):
+            raise ValueError("Independent backing projects require a single-sided model with separated backing and no relief or 5-color extended structure")
         if self.enable_relief and self.backing_infill_density_percent < 100:
             raise ValueError(
                 "Sparse backing infill is not supported with relief mode; "
@@ -750,6 +772,12 @@ class LargeFormatConvertGenerateRequest(ConvertGenerateRequest):
         allow_inf_nan=False,
         description="目标宽度 (mm)",
     )
+
+    @model_validator(mode="after")
+    def validate_backing_output(self) -> "LargeFormatConvertGenerateRequest":
+        if self.backing_output != "same_project":
+            raise ValueError("Independent backing projects are available for single-model generation; large-format already has a tile output workflow")
+        return self
 
 
 LargeFormatGenerateRequest.model_rebuild()
@@ -851,6 +879,12 @@ class PuzzleGenerateRequest(PuzzleLayoutPreviewRequest):
     """
 
     params: ConvertGenerateRequest = Field(..., description="每块共享的生成参数")
+
+    @model_validator(mode="after")
+    def validate_backing_output(self) -> "PuzzleGenerateRequest":
+        if self.params.backing_output != "same_project":
+            raise ValueError("Independent backing projects are available for single-model generation; use the existing puzzle plate output for pieces")
+        return self
 
 class ConvertBatchRequest(BaseModel):
     """Request model for batch image conversion.

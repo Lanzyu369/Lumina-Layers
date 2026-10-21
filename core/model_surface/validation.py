@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import trimesh
 
 from core.model_surface.types import MODEL_SURFACE_FATAL_ERRORS, ModelSurfaceError
@@ -11,6 +12,55 @@ MODEL_SURFACE_INVALID_FILE = "model_surface_invalid_file"
 MODEL_SURFACE_THICKNESS_UNKNOWN = "model_surface_thickness_unknown"
 MODEL_SURFACE_INSUFFICIENT_THICKNESS = "model_surface_insufficient_thickness"
 MODEL_SURFACE_BOOLEAN_FAILED = "model_surface_boolean_failed"
+
+
+def prepare_surface_base_for_export(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Finalize the Boolean base after every model/print transform.
+
+    Quantize once to the writer's coordinates, then let Manifold contract
+    collapsed edges while preserving the closed solid. Use Mesh64 for that
+    topology operation: Mesh's float32 tolerance can retain collinear faces.
+    No independent triangle filtering or wider geometric tolerance is used.
+    """
+    vertices = np.asarray(mesh.vertices, dtype=np.float32).astype(np.float64)
+    if not np.all(np.isfinite(vertices)):
+        raise ModelSurfaceError(MODEL_SURFACE_BOOLEAN_FAILED)
+    result = trimesh.Trimesh(vertices, mesh.faces, process=False)
+    if np.any(result.area_faces == 0.0):
+        try:
+            import manifold3d as m3d
+
+            solid = m3d.Manifold(m3d.Mesh64(
+                vertices,
+                np.asarray(mesh.faces, dtype=np.uint64),
+            ))
+            if solid.status() != m3d.Error.NoError or solid.is_empty():
+                raise ModelSurfaceError(MODEL_SURFACE_BOOLEAN_FAILED)
+            data = solid.to_mesh64()
+            result = trimesh.Trimesh(
+                np.asarray(data.vert_properties)[:, :3],
+                np.asarray(data.tri_verts),
+                process=False,
+            )
+        except ModelSurfaceError:
+            raise
+        except MODEL_SURFACE_FATAL_ERRORS:
+            raise
+        except Exception as exc:
+            raise ModelSurfaceError(MODEL_SURFACE_BOOLEAN_FAILED) from exc
+
+    if (
+        not np.array_equal(
+            result.vertices, result.vertices.astype(np.float32).astype(np.float64),
+        )
+        or np.any(result.area_faces == 0.0)
+    ):
+        raise ModelSurfaceError(MODEL_SURFACE_BOOLEAN_FAILED)
+    validate_model_surface_mesh_for_boolean(result)
+    result.metadata.update(mesh.metadata)
+    # The base has one material/color; its face count may change on contraction.
+    result.visual.face_colors = mesh.visual.main_color
+    return result
 
 
 def validate_model_surface_mesh_for_boolean(mesh: trimesh.Trimesh) -> None:

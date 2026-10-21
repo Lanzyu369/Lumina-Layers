@@ -130,6 +130,28 @@ def _rng_points(count: int, layer_count: int, seed: int) -> np.ndarray:
     return rng.random((int(count), int(layer_count)), dtype=np.float64)
 
 
+def _validate_sample_points(
+    points: np.ndarray, count: int, layer_count: int,
+) -> np.ndarray:
+    points = np.asarray(points)
+    if (
+        points.shape != (int(count), int(layer_count))
+        or points.dtype.kind not in "fiu"
+    ):
+        raise ValueError("sample points must have the requested numeric shape")
+    if (
+        not np.all(np.isfinite(points))
+        or np.any(points < 0.0)
+        or np.any(points >= 1.0)
+    ):
+        raise ValueError("sample points must be finite and within [0, 1)")
+    # Sobol varies in every dimension, even for two samples. A missing SciPy
+    # resource can silently collapse a dimension; avoid sorting giant batches.
+    if int(count) > 1 and np.any(points.max(axis=0) == points.min(axis=0)):
+        raise ValueError("sample points must not collapse any dimension")
+    return points
+
+
 def _low_discrepancy_recipes(
     *,
     material_count: int,
@@ -138,9 +160,13 @@ def _low_discrepancy_recipes(
     seed: int,
 ) -> np.ndarray:
     try:
-        points = _sobol_points(count, layer_count, seed)
+        points = _validate_sample_points(
+            _sobol_points(count, layer_count, seed), count, layer_count,
+        )
     except Exception:
-        points = _rng_points(count, layer_count, seed)
+        points = _validate_sample_points(
+            _rng_points(count, layer_count, seed), count, layer_count,
+        )
     recipes = np.floor(points * int(material_count)).astype(np.uint16)
     return np.clip(recipes, 0, int(material_count) - 1)
 

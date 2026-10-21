@@ -2441,8 +2441,8 @@ class TestAnycubicWriterMetadata:
         expected_settings_id = template["filament_settings_id"][0]
 
         assert settings["filament_vendor"] == [expected_vendor, expected_vendor]
-        assert "filament_ids" not in template
-        assert "filament_ids" not in settings
+        assert template["filament_ids"] == ["GFPLA"]
+        assert settings["filament_ids"] == ["GFPLA", "GFPLA"]
         assert settings["filament_settings_id"] == [expected_settings_id, expected_settings_id]
         assert settings["filament_colour"] == ["#FF0000", "#00FF00"]
         assert all(value != "Bambu Lab" for value in settings["filament_vendor"])
@@ -2608,7 +2608,7 @@ class TestAnycubicWriterMetadata:
             "#FFFFFF",
             "#FFE600",
         ]
-        assert "filament_ids" not in captured_settings
+        assert captured_settings["filament_ids"] == ["GFA00"] * 8
         assert captured_source_colours == {
             str(index): colour
             for index, colour in enumerate(captured_settings["filament_colour"])

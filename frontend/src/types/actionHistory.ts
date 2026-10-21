@@ -127,6 +127,7 @@ export interface AdvancedParamsGeneration {
   use_lut_constrained: boolean;
   auto_dynamic_range: boolean;
   separate_backing: boolean;
+  backing_output?: import("../api/types").BackingOutput;
   material_dynamic_layer_count_enabled: boolean;
   material_min_layer_count: number | null;
   material_max_layer_count: number | null;
@@ -134,6 +135,13 @@ export interface AdvancedParamsGeneration {
   material_delta_e00_tolerance: number | null;
   enable_wipe_tower_auto_placement?: boolean;
   wipe_tower_warning_codes?: string[];
+  native_filament_profiles?: Record<string, string>;
+  native_filament_profile_scope?: {
+    slicer: string;
+    printer_id: string;
+    device_profile_id: string;
+    nozzle_size: string;
+  } | null;
 }
 
 /**

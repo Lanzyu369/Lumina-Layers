@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import pytest
 import trimesh
@@ -12,7 +13,10 @@ from config import ModelingMode
 from core.pipeline import s09_export_3mf
 
 
-def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("backing_output", ["same_project", "separate_project"])
+def test_s09_passes_full_slot_names_to_exporter(
+    monkeypatch, tmp_path, backing_output: str,
+) -> None:
     """S09 should preserve the full selected palette when exporting sparse scenes."""
 
     captured: dict[str, object] = {}
@@ -43,6 +47,8 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         preserve_template_filament_slots: bool | None = None,
         material_types: dict[str, str | None] | None = None,
         custom_3mf_template_id: str | None = None,
+        backing_output: str = "same_project",
+        native_filament_profiles: dict[str, str] | None = None,
     ) -> str:
         captured["scene"] = scene
         captured["output_path"] = output_path
@@ -71,7 +77,9 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         captured["preserve_template_filament_slots"] = preserve_template_filament_slots
         captured["material_types"] = material_types
         captured["custom_3mf_template_id"] = custom_3mf_template_id
-        return output_path
+        captured["backing_output"] = backing_output
+        captured["native_filament_profiles"] = native_filament_profiles
+        return str(Path(output_path).with_suffix(".zip")) if backing_output == "separate_project" else output_path
 
     monkeypatch.setattr(s09_export_3mf, "MODELS_DIR", str(tmp_path))
     monkeypatch.setattr(s09_export_3mf, "generate_model_filename", lambda *_args: "native-export.3mf")
@@ -95,11 +103,14 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         "slicer": "BambuStudio",
         "build_plate_id": "smooth-pei-plate",
         "custom_3mf_template_id": "selected-native-template",
+        "backing_output": backing_output,
+        "native_filament_profiles": {"yellow": "Generic PETG @BBL H2D"},
     }
 
     result = s09_export_3mf.run(ctx)
 
-    assert result["out_path"] == str(tmp_path / "native-export.3mf")
+    expected_suffix = ".zip" if backing_output == "separate_project" else ".3mf"
+    assert result["out_path"] == str(tmp_path / f"native-export{expected_suffix}")
     assert captured["slot_names"] == ["yellow"]
     assert captured["project_slot_names"] == [
         "bambugreen",
@@ -113,6 +124,8 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
     ]
     assert captured["build_plate_id"] == "smooth-pei-plate"
     assert captured["custom_3mf_template_id"] == "selected-native-template"
+    assert captured["backing_output"] == backing_output
+    assert captured["native_filament_profiles"] == ctx["native_filament_profiles"]
 
 
 def _make_minimal_s09_ctx(tmp_path, **extra_ctx) -> dict:
@@ -352,8 +365,10 @@ def test_s09_trims_template_filament_slots_for_material_archive(tmp_path) -> Non
 
 
 @pytest.fixture
-def capture_export_logs(caplog):
+def capture_export_logs(caplog, monkeypatch):
     target_logger = logging.getLogger("lumina.core.pipeline.s09_export_3mf")
+    # Capture at this logger once, independent of prior logging bootstrap.
+    monkeypatch.setattr(target_logger, "propagate", False)
     target_logger.addHandler(caplog.handler)
     try:
         yield
