@@ -642,7 +642,7 @@ export default function SettingsPanel() {
                   action={(
                     <Button
                       label={t("widget_retry")}
-                      variant="secondary"
+                      variant="primary"
                       size="sm"
                       loading={slicersLoading}
                       onClick={() => { void loadSlicerOptions(); }}
@@ -659,7 +659,7 @@ export default function SettingsPanel() {
                   action={(
                     <Button
                       label={t("widget_retry")}
-                      variant="secondary"
+                      variant="primary"
                       size="sm"
                       loading={printersLoading}
                       onClick={() => { void loadPrinterOptions(); }}
@@ -873,7 +873,7 @@ export default function SettingsPanel() {
                       <Button
                         label={t("settings.custom_slicer_clear")}
                         onClick={handleClearCustomSlicerPath}
-                        variant="secondary"
+                        variant="primary"
                         disabled={!customSlicerPath && !customSlicerPathInput}
                       />
                     </div>
@@ -1101,7 +1101,7 @@ export default function SettingsPanel() {
                   <Button
                     label={t("settings.svg_pixels_per_mm_reset")}
                     onClick={resetSvgPixelsPerMm}
-                    variant="secondary"
+                    variant="primary"
                     disabled={svgPixelsPerMm === SVG_PIXELS_PER_MM_DEFAULT}
                     className="w-full min-[960px]:w-auto min-[960px]:min-w-max min-[960px]:self-end"
                   />
@@ -1182,7 +1182,7 @@ export default function SettingsPanel() {
                     label={t("settings.clear_cache")}
                     onClick={handleClearCache}
                     loading={clearing}
-                    variant="secondary"
+                    variant="primary"
                     className="w-full sm:w-auto"
                   />
                 </div>

@@ -222,6 +222,9 @@ beforeEach(() => {
     color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
     target_width_mm: 80,
     target_height_mm: 80,
+    aspectRatio: null,
+    bedSizes: [],
+    largeFormatEnabled: false,
     spacer_thick: 0.64,
     structure_mode: StructureModeEnum.SINGLE_SIDED,
     modeling_mode: ModelingModeEnum.HIGH_FIDELITY,
@@ -301,6 +304,54 @@ function isMultipleOfStep(value: number, step: number): boolean {
 }
 
 describe("BasicSettings", () => {
+  it.each([
+    [2, "宽度", "500", "250"],
+    [0.5, "高度", "150", "300"],
+  ])("keeps slider scales tied to the bed when aspect ratio is %s", (ratio, longEdgeLabel, width, height) => {
+    useConverterStore.setState({
+      aspectRatio: ratio as number,
+      bedSizes: [
+        { label: "Large", printer_id: "large", width_mm: 500, height_mm: 300, is_default: false },
+      ],
+    });
+    useSettingsStore.getState().setPrinterModel("large");
+    render(<BasicSettings />);
+
+    const widthSlider = screen.getByRole("slider", { name: "宽度" });
+    const heightSlider = screen.getByRole("slider", { name: "高度" });
+    expect(widthSlider).toHaveAttribute("max", "500");
+    expect(heightSlider).toHaveAttribute("max", "300");
+
+    const longEdgeSlider = screen.getByRole("slider", { name: longEdgeLabel as string });
+    fireEvent.change(longEdgeSlider, { target: { value: longEdgeSlider.getAttribute("max") } });
+    expect(widthSlider).toHaveValue(width);
+    expect(heightSlider).toHaveValue(height);
+
+    const shortEdgeSlider = ratio === 2 ? heightSlider : widthSlider;
+    expect(Number((shortEdgeSlider as HTMLInputElement).value)).toBeLessThan(Number(shortEdgeSlider.getAttribute("max")));
+  });
+
+  it("updates both dimension controls when the configured printer changes", () => {
+    useConverterStore.setState({
+      bedSizes: [
+        { label: "Small", printer_id: "small", width_mm: 180, height_mm: 200, is_default: false },
+        { label: "Large", printer_id: "large", width_mm: 500, height_mm: 300, is_default: false },
+      ],
+    });
+    useSettingsStore.getState().setPrinterModel("small");
+    render(<BasicSettings />);
+    expect(screen.getByRole("slider", { name: "宽度" })).toHaveAttribute("max", "180");
+    expect(screen.getByRole("slider", { name: "高度" })).toHaveAttribute("max", "200");
+
+    act(() => useSettingsStore.getState().setPrinterModel("large"));
+    expect(screen.getByRole("slider", { name: "宽度" })).toHaveAttribute("max", "500");
+    expect(screen.getByRole("slider", { name: "高度" })).toHaveAttribute("max", "300");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "宽度 value" }), { target: { value: "600" } });
+    fireEvent.blur(screen.getByRole("textbox", { name: "宽度 value" }));
+    expect(useConverterStore.getState().target_width_mm).toBe(500);
+  });
+
   it("shows exact fractional workshop dimensions without changing integer defaults", () => {
     useConverterStore.setState({
       target_width_mm: 20.8,
@@ -348,8 +399,8 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
-    expect(screen.getByRole("slider", { name: "宽度" })).toHaveAttribute("max", "400");
-    expect(screen.getByRole("slider", { name: "高度" })).toHaveAttribute("max", "400");
+    expect(screen.getByRole("slider", { name: "宽度" })).toHaveAttribute("max", "256");
+    expect(screen.getByRole("slider", { name: "高度" })).toHaveAttribute("max", "256");
     expect(screen.getByRole("slider", { name: "切片宽度" })).toHaveAttribute("max", "500");
     expect(screen.getByRole("slider", { name: "切片高度" })).toHaveAttribute("max", "500");
 
@@ -531,6 +582,57 @@ describe("BasicSettings", () => {
     expect(screen.queryByText("批量模式")).not.toBeInTheDocument();
   });
 
+  it("opens cropping repeatedly without enabling crop after upload", () => {
+    const file = new File(["img"], "edited.png", { type: "image/png" });
+    useConverterStore.setState({
+      imageFile: file,
+      imagePreviewUrl: "blob:edited-image",
+      enableCrop: false,
+    });
+    render(<BasicSettings />);
+
+    expect(screen.getByText("导入", { exact: true })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "裁切与旋转" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog")).getByRole("img")).toHaveAttribute(
+      "src", "blob:edited-image",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(useConverterStore.getState().imageFile).toBe(file);
+
+    fireEvent.click(screen.getByRole("button", { name: "裁切与旋转" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(useConverterStore.getState().enableCrop).toBe(false);
+    expect(useConverterStore.getState().imageFile).toBe(file);
+  });
+
+  it.each([
+    { imagePreviewUrl: null, isLoading: false, isCropping: false },
+    { imagePreviewUrl: "blob:image", isLoading: true, isCropping: false },
+    { imagePreviewUrl: "blob:image", isLoading: false, isCropping: true },
+  ])("disables cropping until the image is ready and idle: %o", (state) => {
+    useConverterStore.setState({
+      imageFile: new File(["img"], "photo.png", { type: "image/png" }),
+      ...state,
+    });
+    render(<BasicSettings />);
+    expect(screen.getByRole("button", { name: "裁切与旋转" })).toBeDisabled();
+  });
+
+  it("offers SVG rotation inside the tool without raster crop controls", () => {
+    useConverterStore.setState({
+      imageFile: new File(["<svg/>"], "drawing.svg", { type: "image/svg+xml" }),
+      imagePreviewUrl: "blob:drawing",
+    });
+    render(<BasicSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "裁切与旋转" }));
+    expect(screen.getByRole("button", { name: "向右旋转 90°" })).toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
+  });
+
   // Req 3.2: crop checkbox visible in SingleMode
   it("renders crop checkbox in SingleMode (imageFile set, batchFiles empty)", () => {
     const file = new File(["img"], "test.jpg", { type: "image/jpeg" });
@@ -558,6 +660,7 @@ describe("BasicSettings", () => {
     });
     render(<BasicSettings />);
     expect(screen.queryByText("上传后裁剪")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "裁切与旋转" })).not.toBeInTheDocument();
   });
 
   // UnifiedUploader is rendered (present in both modes)
@@ -569,7 +672,15 @@ describe("BasicSettings", () => {
     ).toBeInTheDocument();
   });
 
-  it("hides structure and backing-infill controls while model texture mode is enabled", () => {
+  it("lets users enable crop after upload before choosing an image", () => {
+    render(<BasicSettings />);
+    fireEvent.click(screen.getByRole("switch", { name: "上传后裁剪" }));
+    expect(useConverterStore.getState().enableCrop).toBe(true);
+    expect(screen.queryByRole("button", { name: "裁切与旋转" })).not.toBeInTheDocument();
+    expect(screen.queryByText("图像旋转")).not.toBeInTheDocument();
+  });
+
+  it("keeps structure and backing-infill controls visible but disabled in model texture mode", () => {
     useConverterStore.setState({
       structure_mode: StructureModeEnum.SINGLE_SIDED,
       modelSurfaceEnabled: true,
@@ -580,9 +691,33 @@ describe("BasicSettings", () => {
     expect(useConverterStore.getState().structure_mode).toBe(
       StructureModeEnum.SINGLE_SIDED,
     );
-    expect(screen.queryByText("结构模式")).not.toBeInTheDocument();
-    expect(screen.queryByRole("radio", { name: "双面" })).not.toBeInTheDocument();
-    expect(screen.queryByText("背板填充率")).not.toBeInTheDocument();
+    // The controls stay in place so the mode switch does not read as a
+    // vanished feature; they are disabled and explain themselves instead.
+    expect(screen.getByText("结构模式")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "双面" })).toBeDisabled();
+    expect(screen.getByRole("slider", { name: "底板填充率" })).toBeDisabled();
+    expect(
+      screen.getByText("模型覆面只生成单面结构，无法切换结构模式。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "模型覆面开启时由模型本身决定背衬，填充率不可调整。",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("names every block of the column", () => {
+    render(<BasicSettings />);
+
+    for (const block of [
+      "导入",
+      "颜色来源",
+      "尺寸和底板",
+      "结构",
+      "建模",
+    ]) {
+      expect(screen.getByText(block)).toBeInTheDocument();
+    }
   });
 
   it("lets users append one more image after a single image has a preview", async () => {
@@ -1095,10 +1230,10 @@ describe("BasicSettings", () => {
 
     // Brand dropdown stays inline in native mode
     expect(screen.getByRole("combobox", { name: "品牌" })).toBeInTheDocument();
-    expect(screen.getByText(/品牌信息/)).toBeInTheDocument();
-    expect(screen.getAllByText("Bambu PLA")).not.toHaveLength(0);
-    expect(screen.getByText("材质类型: PLA")).toBeInTheDocument();
-    expect(screen.getByText("供应商: Bambu Lab")).toBeInTheDocument();
+    // Brand summary reads as one line instead of three labelled rows.
+    expect(
+      screen.getByText("Bambu PLA · PLA · Bambu Lab"),
+    ).toBeInTheDocument();
     expect(screen.getByText(/数据库/)).toBeInTheDocument();
 
     // DB list is now in the db picker trigger, not inline
@@ -1264,7 +1399,7 @@ describe("BasicSettings", () => {
   it("anchors the thickness slider to the 0.08mm layer grid", () => {
     render(<BasicSettings />);
 
-    const slider = screen.getByRole("slider", { name: "厚度" }) as HTMLInputElement;
+    const slider = screen.getByRole("slider", { name: "底板厚度" }) as HTMLInputElement;
     const min = Number(slider.min);
     const max = Number(slider.max);
     const step = Number(slider.step);
@@ -1281,7 +1416,7 @@ describe("BasicSettings", () => {
   it("snaps manually entered thickness to the exported 0.08mm layer grid", async () => {
     render(<BasicSettings />);
 
-    const input = screen.getByRole("textbox", { name: "厚度 value" });
+    const input = screen.getByRole("textbox", { name: "底板厚度 value" });
     fireEvent.change(input, { target: { value: "0.3" } });
     fireEvent.keyDown(input, { key: "Enter" });
 

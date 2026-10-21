@@ -38,13 +38,14 @@ export function WidgetHeader({
       aria-expanded={!collapsed}
       aria-label={t(titleKey)}
       tabIndex={0}
-      className="flex items-center justify-between px-3 py-1.5 cursor-grab active:cursor-grabbing select-none touch-none"
+      className="flex items-center justify-between bg-[#f7f7f8] px-3 py-1.5 cursor-grab active:cursor-grabbing select-none touch-none dark:bg-[var(--surface-well)]"
       onDoubleClick={onToggleCollapse}
       onKeyDown={handleKeyDown}
       {...dragListeners}
       {...dragAttributes}
     >
-      <span className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
+      {/* A subtle gray surface separates the header while the title stays light. */}
+      <span className="truncate text-sm font-normal tracking-tight text-slate-800 dark:text-slate-50">
         {t(titleKey)}
       </span>
       <button

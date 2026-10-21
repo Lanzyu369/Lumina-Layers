@@ -1815,7 +1815,7 @@ function RotationPanel({
     ].join(" ");
   const quickButtonClassName = (axis: RotationAxis) =>
     [
-      "h-7 min-w-[46px] rounded-lg px-1.5 text-center text-[10px] font-semibold focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)]",
+      "action-control h-7 min-w-[46px] rounded-lg px-1.5 text-center text-[10px] font-semibold focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)]",
       isAxisActive(axis)
         ? "border border-current bg-sky-50 ring-2 ring-current hover:bg-sky-100 dark:bg-slate-800 dark:hover:bg-slate-700"
         : "border border-slate-300/80 bg-slate-50 text-slate-800 hover:bg-slate-200 dark:border-slate-500/80 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800",
@@ -1977,7 +1977,6 @@ function RotationPanel({
                           onFocus={() => onFocusAxis(axis)}
                           onClick={() => onQuickRotateAxis(axis, -90)}
                           className={quickButtonClassName(axis)}
-                          style={{ color: AXIS_COLORS[axis] }}
                         >
                           {panelKind === "model" ? `${axis.toUpperCase()} ` : ""}
                           {t("model_surface_rotation_step_minus_90")}
@@ -2000,7 +1999,6 @@ function RotationPanel({
                           onFocus={() => onFocusAxis(axis)}
                           onClick={() => onQuickRotateAxis(axis, 90)}
                           className={quickButtonClassName(axis)}
-                          style={{ color: AXIS_COLORS[axis] }}
                         >
                           {panelKind === "model" ? `${axis.toUpperCase()} ` : ""}
                           {t("model_surface_rotation_step_90")}
@@ -2036,7 +2034,7 @@ function RotationPanel({
                       aria-label={resetRelativeLabel}
                       title={resetRelativeLabel}
                       onClick={onResetRelative}
-                      className="h-7 whitespace-nowrap rounded-lg border border-slate-300/80 px-2 font-semibold text-slate-700 hover:bg-slate-200 dark:border-slate-500/80 dark:text-slate-100 dark:hover:bg-slate-800"
+                      className="action-control h-7 whitespace-nowrap rounded-lg border px-2 font-semibold"
                     >
                       {resetRelativeLabel}
                     </button>
@@ -2053,7 +2051,7 @@ function RotationPanel({
                       aria-label={resetZeroLabel}
                       title={resetZeroLabel}
                       onClick={onResetZero}
-                      className="h-7 whitespace-nowrap rounded-lg border border-slate-300/80 px-2 font-semibold text-slate-700 hover:bg-slate-200 dark:border-slate-500/80 dark:text-slate-100 dark:hover:bg-slate-800"
+                      className="action-control h-7 whitespace-nowrap rounded-lg border px-2 font-semibold"
                     >
                       {resetZeroLabel}
                     </button>
@@ -2070,7 +2068,7 @@ function RotationPanel({
                       aria-label={doneLabel}
                       title={doneLabel}
                       onClick={onDone}
-                      className="h-7 whitespace-nowrap rounded-lg bg-slate-900 px-2.5 font-semibold text-slate-100 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-slate-200"
+                      className="action-control h-7 whitespace-nowrap rounded-lg px-2.5 font-semibold"
                     >
                       {doneLabel}
                     </button>

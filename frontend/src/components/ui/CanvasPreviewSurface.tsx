@@ -871,12 +871,7 @@ export default function CanvasPreviewSurface({
           type="button"
           onClick={resetZoom}
           disabled={interactionsDisabled}
-          className="absolute right-2 top-2 rounded border px-2 py-1 text-xs transition-opacity hover:opacity-90 disabled:opacity-60"
-          style={{
-            borderColor: "var(--surface-outline)",
-            background: "color-mix(in srgb, var(--surface-panel-strong) 88%, transparent)",
-            color: "var(--surface-text-muted)",
-          }}
+          className="action-control absolute right-2 top-2 rounded border px-2 py-1 text-xs transition-opacity"
         >
           {resetLabel}
         </button>

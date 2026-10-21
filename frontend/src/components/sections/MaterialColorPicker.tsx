@@ -200,7 +200,7 @@ export default function MaterialColorPicker() {
               <button
                 type="button"
                 onClick={() => confirmReplacement()}
-                className="rounded-full bg-blue-600 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-blue-500"
+                className="action-control rounded-full bg-blue-600 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-blue-500"
               >
                 {t("replace_confirm_btn")}
               </button>
@@ -375,7 +375,7 @@ const TargetColorInputRow = memo(function TargetColorInputRow({
           type="button"
           onClick={handleSubmit}
           disabled={!normalizedTarget || loading}
-          className="rounded-full bg-blue-600 px-3 py-1.5 text-[clamp(0.6rem,0.75vw,0.65rem)] font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-400 disabled:opacity-60 dark:disabled:bg-slate-700"
+          className="action-control rounded-full bg-blue-600 px-3 py-1.5 text-[clamp(0.6rem,0.75vw,0.65rem)] font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-400 disabled:opacity-60 dark:disabled:bg-slate-700"
         >
           {t("material_picker_submit")}
         </button>

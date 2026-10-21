@@ -4774,6 +4774,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== Basic Settings ====================
+  basic_crop_image: {
+    zh: "裁切与旋转",
+    en: "Crop & Rotate",
+  },
   basic_crop_after_upload: {
     zh: "上传后裁剪",
     en: "Crop After Upload",
@@ -5611,16 +5615,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Printed output height (in mm). Must be within the printer's effective print area.",
   },
   basic_thickness: {
-    zh: "厚度",
-    en: "Thickness",
+    zh: "底板厚度",
+    en: "Base plate thickness",
   },
   basic_thickness_hint: {
     zh: "底板的厚度（毫米）。底板越厚成品越结实，但打印时间和耗材用量也会增加。滑块每格对应一层打印层。",
     en: "Thickness of the base plate (mm). A thicker base is sturdier but takes more time and material to print. Each slider step equals one print layer.",
   },
   basic_backing_infill_density: {
-    zh: "背板填充率",
-    en: "Backing Infill",
+    zh: "底板填充率",
+    en: "Base plate infill",
   },
   basic_backing_infill_density_hint: {
     zh: "控制深层背板的填充率，平面拼图也可使用。靠近观赏面的保护区域始终保持 100% 实心；浮雕模式固定为 100%。",
@@ -5637,6 +5641,58 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_modeling_mode: {
     zh: "建模模式",
     en: "Modeling Mode",
+  },
+  basic_group_input: {
+    zh: "导入",
+    en: "Import",
+  },
+  basic_group_color_source: {
+    zh: "颜色来源",
+    en: "Color Source",
+  },
+  basic_group_output_size: {
+    zh: "输出尺寸",
+    en: "Output Size",
+  },
+  basic_group_build: {
+    zh: "结构与质感",
+    en: "Structure",
+  },
+  basic_block_size_and_base_plate: {
+    zh: "尺寸和底板",
+    en: "Size and base plate",
+  },
+  basic_block_structure: {
+    zh: "结构",
+    en: "Structure",
+  },
+  basic_block_modeling: {
+    zh: "建模",
+    en: "Modeling",
+  },
+  basic_backing_infill_disabled_model_surface: {
+    zh: "模型覆面开启时由模型本身决定背衬，填充率不可调整。",
+    en: "Model surface mode derives the backing from the model, so infill is not adjustable.",
+  },
+  basic_backing_infill_disabled_relief: {
+    zh: "浮雕模式固定使用 100% 实心填充，填充率不可调整。",
+    en: "Relief mode always uses 100% solid infill, so this is not adjustable.",
+  },
+  basic_structure_mode_disabled_model_surface: {
+    zh: "模型覆面只生成单面结构，无法切换结构模式。",
+    en: "Model surface mode only produces a single-sided structure.",
+  },
+  basic_structure_mode_disabled_relief: {
+    zh: "浮雕模式只支持单面结构，无法切换结构模式。",
+    en: "Relief mode only supports a single-sided structure.",
+  },
+  basic_structure_mode_disabled_fridge_magnet: {
+    zh: "冰箱贴模式只生成单面结构，无法切换结构模式。",
+    en: "Fridge magnet mode only produces a single-sided structure.",
+  },
+  basic_structure_mode_five_color_hint: {
+    zh: "5 色扩展模式只支持单面结构。",
+    en: "5-color extended mode only supports a single-sided structure.",
   },
   basic_modeling_mode_hint: {
     zh: "决定图片如何变成 3D 模型：\n• 高保真：忠实还原照片细节，适合绝大多数图片（推荐）。\n• 像素艺术：保留方块像素感，适合像素画、马赛克风格。\n• 矢量模式：生成平滑的曲线轮廓，适合 Logo、图标等颜色分明的图形。\n• 验证色卡：生成用于校准颜色的标准色卡，仅在测试耗材颜色时使用。",
@@ -7022,8 +7078,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== Crop Modal ====================
   crop_modal_title: {
-    zh: "裁剪图片",
-    en: "Crop Image",
+    zh: "裁切与旋转",
+    en: "Crop & Rotate",
+  },
+  crop_modal_rotate_left: {
+    zh: "向左旋转 90°",
+    en: "Rotate left 90°",
+  },
+  crop_modal_rotate_right: {
+    zh: "向右旋转 90°",
+    en: "Rotate right 90°",
+  },
+  crop_modal_svg_rotation_only: {
+    zh: "SVG 图片支持旋转，保留原始矢量内容。",
+    en: "SVG images support rotation while preserving their vector content.",
   },
   crop_modal_close: {
     zh: "关闭",
@@ -7042,12 +7110,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Free",
   },
   crop_modal_use_original: {
-    zh: "使用原图",
-    en: "Use Original",
+    zh: "取消",
+    en: "Cancel",
   },
   crop_modal_confirm: {
-    zh: "确认裁剪",
-    en: "Confirm Crop",
+    zh: "应用更改",
+    en: "Apply Changes",
   },
 
   // ==================== Five Color Query Panel ====================
@@ -7714,14 +7782,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   crop_modal_axis_y: {
     zh: "Y 轴",
     en: "Y",
-  },
-  action_generate_model_title: {
-    zh: "生成 3D 模型",
-    en: "Generate 3D Model",
-  },
-  action_generate_model_desc: {
-    zh: "根据当前图像和 LUT 生成可打印的 3MF 模型文件。",
-    en: "Generate a printable 3MF model from current image and LUT.",
   },
   action_zoom_icon: {
     zh: "缩放",
@@ -10596,13 +10656,13 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "也可以平移，适合触控板",
     en: "Also pans, handy on a trackpad",
   },
-  tutorial_step_generate_title: {
-    zh: "第五步：生成打印文件",
-    en: "Step 5: Generate the print file",
+  tutorial_step_output_title: {
+    zh: "第五步：下载或打开切片软件",
+    en: "Step 5: Download or open in slicer",
   },
-  tutorial_step_generate_body: {
-    zh: "预览满意后，点击「生成」得到 3MF 打印文件。把它导入切片软件，确认每个耗材槽位对应的颜色正确，就可以开始打印了。",
-    en: "When the preview looks right, click Generate to get a 3MF print file. Open it in your slicer, check that each filament slot has the right color, and start printing.",
+  tutorial_step_output_body: {
+    zh: "预览满意后，直接下载 3MF 或打开切片软件，系统会自动生成所需的打印文件。在切片软件中确认每个耗材槽位对应的颜色正确，就可以开始打印了。",
+    en: "When the preview looks right, download the 3MF or open it in your slicer. The print file is generated automatically. In your slicer, check that each filament slot has the right color before printing.",
   },
   tutorial_step_help_title: {
     zh: "遇到问题时",

@@ -297,19 +297,19 @@ export default function FiveColorQueryPanel() {
                 onClick={removeLastSelection}
                 disabled={!hasSelection}
                 label={t("five_color_undo")}
-                variant="secondary"
+                variant="primary"
               />
               <Button
                 onClick={reverseSelection}
                 disabled={!canReverse}
                 label={t("five_color_reverse")}
-                variant="secondary"
+                variant="primary"
               />
               <Button
                 onClick={clearSelection}
                 disabled={!hasSelection}
                 label={t("five_color_clear")}
-                variant="secondary"
+                variant="primary"
                 className={workspace.isCompact ? "" : "col-span-2"}
               />
             </div>
@@ -451,14 +451,14 @@ export default function FiveColorQueryPanel() {
                           disabled={isDownloadingSwatch}
                           loading={isDownloadingSwatch}
                           label={t("five_color_download_swatch")}
-                          variant="secondary"
+                          variant="primary"
                         />
                       )}
                       {!swatchDownloadUrl && (
                         <Button
                           onClick={handleClearCollection}
                           label={t("five_color_collection_clear")}
-                          variant="secondary"
+                          variant="primary"
                         />
                       )}
                   </div>
@@ -478,7 +478,7 @@ export default function FiveColorQueryPanel() {
                   <Button
                     onClick={handleClearCollection}
                     label={t("five_color_collection_clear")}
-                    variant="secondary"
+                    variant="primary"
                   />
                 )}
               </div>

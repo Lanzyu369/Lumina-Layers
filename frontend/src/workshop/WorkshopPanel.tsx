@@ -439,23 +439,21 @@ function InstalledCard({
               }
               onClick={onOpenCandidate}
               disabled={!module.enabled || !candidateOpenAllowed}
-              variant={
-                module.active_version ? "secondary" : undefined
-              }
+              variant="primary"
               className="flex-1"
             />
           ) : null}
           {detail ? (
             <Button
               label={t("workshop.manager.details")}
-              variant="secondary"
+              variant="primary"
               onClick={() => onDetails(detail.details_url)}
             />
           ) : null}
           {update ? (
             <Button
               label={t("workshop.manager.update")}
-              variant="secondary"
+              variant="primary"
               onClick={() => onUpdate(update)}
               loading={busy}
             />
@@ -463,7 +461,7 @@ function InstalledCard({
           {module.previous_version ? (
             <Button
               label={t("workshop.manager.rollback")}
-              variant="secondary"
+              variant="primary"
               onClick={onRollback}
               loading={busy}
             />
@@ -475,14 +473,14 @@ function InstalledCard({
                   ? "workshop.manager.disable"
                   : "workshop.manager.enable",
               )}
-              variant="secondary"
+              variant="primary"
               onClick={onToggle}
               loading={busy}
             />
           ) : null}
           <Button
             label={t("workshop.manager.uninstall")}
-            variant="secondary"
+            variant="primary"
             onClick={onUninstall}
             disabled={busy}
           />
@@ -1262,7 +1260,7 @@ export function WorkshopPanel({
                 label={t(
                   "workshop.manager.recipeModuleDiscover",
                 )}
-                variant="secondary"
+                variant="primary"
                 onClick={() => openView("discover")}
               />
             </div>
@@ -1337,7 +1335,7 @@ export function WorkshopPanel({
               action={
                 <Button
                   label={t("workshop.manager.retry")}
-                  variant="secondary"
+                  variant="primary"
                   size="sm"
                   onClick={() => void loadCatalog()}
                 />

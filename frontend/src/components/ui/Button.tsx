@@ -3,9 +3,9 @@ import { motion } from "framer-motion";
 import { cx } from "./panelPrimitives";
 
 /** Button emphasis levels. 按钮层级。
- *  - `primary`   the one decisive action of a section (blue fill)
- *  - `secondary` a standalone action that must read as a button (bordered)
- *  - `ghost`     toolbar / row / minor actions: boundary hidden at rest,
+ *  - `primary`   opens an operation dialog or executes a function (blue fill)
+ *  - `secondary` neutral dismissal / navigation actions (bordered)
+ *  - `ghost`     mode selection / toggles / close controls: boundary hidden at rest,
  *                appears on hover and keyboard focus (see `.ghost-control`) */
 export type ButtonVariant = "primary" | "secondary" | "ghost";
 
@@ -58,7 +58,7 @@ export default function Button({
   // box-shadow 实现，会一并消失。
   const variantClasses =
     variant === "primary"
-      ? "bg-blue-600 text-white hover:bg-blue-700"
+      ? "action-control"
       : variant === "ghost"
         ? "ghost-control"
         : "border border-slate-200/80 bg-white/70 text-slate-700 hover:bg-white dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-900";

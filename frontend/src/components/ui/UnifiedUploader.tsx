@@ -1,13 +1,10 @@
 import { useState, useRef, useCallback } from "react";
 import { useI18n } from "../../i18n/context";
 import { isShareCardFile } from "../../recipe/importFlow";
+import { ArrowPathIcon, PlusIcon } from "@heroicons/react/24/outline";
+import Button from "./Button";
 
 const VISIBLE_BATCH_FILE_LIMIT = 40;
-/** Preview-row actions: boundary appears on hover, so the image stays the
- *  only visual weight in this block. 预览区次要操作：悬停才出现边界。 */
-const SINGLE_PREVIEW_ACTION_BUTTON_CLASS =
-  "ghost-control min-h-9 rounded-[10px] px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-200";
-
 interface UnifiedUploaderProps {
   /** 当前单图模式的预览 URL */
   singlePreview?: string;
@@ -275,20 +272,20 @@ export default function UnifiedUploader({
         </div>
 
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <button
-            type="button"
+          <Button
+            label={t("upload_replace_current")}
+            variant="primary"
+            size="sm"
+            leadingIcon={<ArrowPathIcon className="size-4" />}
             onClick={handleClick}
-            className={SINGLE_PREVIEW_ACTION_BUTTON_CLASS}
-          >
-            {t("upload_replace_current")}
-          </button>
-          <button
-            type="button"
+          />
+          <Button
+            label={t("upload_add_more")}
+            variant="primary"
+            size="sm"
+            leadingIcon={<PlusIcon className="size-4" />}
             onClick={handleAddMoreClick}
-            className={SINGLE_PREVIEW_ACTION_BUTTON_CLASS}
-          >
-            {t("upload_add_more")}
-          </button>
+          />
           <input
             ref={addMoreInputRef}
             type="file"

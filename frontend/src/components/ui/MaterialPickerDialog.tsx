@@ -884,7 +884,7 @@ export default function MaterialPickerDialog({
                       <Button
                         label={t("basic_material_picker_retry")}
                         onClick={onRetry}
-                        variant="secondary"
+                        variant="primary"
                         size="sm"
                       />
                     )}
@@ -942,7 +942,7 @@ export default function MaterialPickerDialog({
                   label={t("basic_material_picker_deselect_all")}
                   onClick={() => setStaged([])}
                   disabled={staged.length === 0}
-                  variant="secondary"
+                  variant="primary"
                   size="sm"
                 />
                 <Button
@@ -1008,7 +1008,7 @@ export default function MaterialPickerDialog({
               <button
                 type="button"
                 onClick={() => onConfirm(staged)}
-                className="min-h-10 rounded-xl bg-amber-500 px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-400 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)]"
+                className="action-control min-h-10 rounded-xl bg-amber-500 px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-400 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)]"
               >
                 {t("basic_material_picker_mixed_continue")}
               </button>

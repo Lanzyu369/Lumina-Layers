@@ -32,11 +32,11 @@ describe("structure mode preference", () => {
   );
 
   it.each([null, "", "invalid", "single-sided"])(
-    "uses the original default when the saved preference is %s",
+    "defaults to single-sided when the saved preference is %s",
     async (saved) => {
       if (saved !== null) localStorage.setItem(STORAGE_KEY, saved);
       const store = await startConverter();
-      expect(store.getState().structure_mode).toBe(StructureMode.DOUBLE_SIDED);
+      expect(store.getState().structure_mode).toBe(StructureMode.SINGLE_SIDED);
     },
   );
 
@@ -47,7 +47,7 @@ describe("structure mode preference", () => {
       return getItem(key);
     });
     const store = await startConverter();
-    expect(store.getState().structure_mode).toBe(StructureMode.DOUBLE_SIDED);
+    expect(store.getState().structure_mode).toBe(StructureMode.SINGLE_SIDED);
   });
 
   it("still switches modes and invalidates the download if saving fails", async () => {

@@ -1166,7 +1166,7 @@ export default function LutDetailsPanel() {
               type="button"
               onClick={handleLoadSelected}
               disabled={catalogLoading || !canLoadSelectedLut}
-              className="inline-flex min-h-11 items-center justify-center rounded-[10px] bg-blue-500 px-4 py-2 text-sm font-medium text-white shadow-[var(--shadow-control)] transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 dark:disabled:bg-slate-700 dark:disabled:text-slate-300"
+              className="action-control inline-flex min-h-11 items-center justify-center rounded-[10px] bg-blue-500 px-4 py-2 text-sm font-medium text-white shadow-[var(--shadow-control)] transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 dark:disabled:bg-slate-700 dark:disabled:text-slate-300"
             >
               {t("lut_details_load_action")}
             </button>
@@ -1183,7 +1183,7 @@ export default function LutDetailsPanel() {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={handleRetry}
-                      className="rounded-full border border-current/20 px-3 py-1 text-xs text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-300"
+                      className="action-control rounded-full border border-current/20 px-3 py-1 text-xs text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-300"
                     >
                       {t("widget_retry")}
                     </button>

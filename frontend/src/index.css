@@ -141,6 +141,39 @@ body.lumina-canvas-orbiting [data-widget-id] {
   box-shadow: none !important;
 }
 
+/* Function buttons share one blue/white treatment, including raw buttons.
+ * Keep this outside utility layers so page-specific gray styles cannot override it. */
+.action-control {
+  border-color: transparent;
+  background-color: rgb(37 99 235);
+  color: white;
+  transition: background-color 150ms ease, opacity 150ms ease;
+}
+
+.action-control svg {
+  color: inherit;
+}
+
+.action-control:hover:not(:disabled):not([aria-disabled="true"]),
+.action-control[aria-pressed="true"] {
+  background-color: rgb(29 78 216);
+}
+
+.action-control:active:not(:disabled):not([aria-disabled="true"]) {
+  background-color: rgb(30 64 175);
+}
+
+.action-control:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.action-control:disabled,
+.action-control[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 /* Ghost control: no boundary at rest, boundary appears on hover / focus.
  * Used by ghost Buttons, toolbar icon buttons, dialog close buttons and
  * collapse headers. 幽灵控件：静止时无边界，悬停或聚焦时才出现细边框与浅底。

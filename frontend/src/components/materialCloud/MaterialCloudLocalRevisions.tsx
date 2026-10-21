@@ -102,7 +102,7 @@ export default function MaterialCloudLocalRevisions({
                     <Button
                       key={revisionId}
                       size="sm"
-                      variant="secondary"
+                      variant="primary"
                       title={revisionId}
                       label={tRuntime("mat_sync_rollback_btn", {
                         revisionId: shortRevisionLabel(revisionId),

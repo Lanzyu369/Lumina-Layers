@@ -3,11 +3,10 @@
  * 主导航与子导航共用的标签样式。
  *
  * Both rows use the same borderless tab: no track behind the group, and the
- * selected tab is a raised light chip. The rows differ only in weight,
- * selected text colour and icon size; the divider between the rows carries
- * the hierarchy.
- * 两行都使用无描边、无底槽的标签，选中项是浅色浮起块；两行只在字重、选中文字
- * 颜色和图标大小上不同，层级由两行之间的分隔线表达。
+ * selected tab is a raised light chip with blue text. Both rows use semibold
+ * text; icon size and the divider between the rows carry the hierarchy.
+ * 两行都使用无描边、无底槽的标签，选中项是蓝字浅色浮起块，字重统一为半粗；
+ * 层级由图标大小和两行之间的分隔线表达。
  */
 /**
  * The strip scrolls horizontally only when a narrow window cannot hold the
@@ -25,6 +24,7 @@ const NAV_TAB_BASE_CLASS =
   "relative z-10 shrink-0 rounded-lg outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]";
 
 const NAV_TAB_INACTIVE_HOVER_CLASS = "hover:bg-[var(--nav-chip-hover)]";
+const NAV_TAB_ACTIVE_TEXT_CLASS = "text-blue-700 dark:text-blue-400";
 
 export const NAV_TAB_INDICATOR_CLASS =
   "absolute inset-0 rounded-lg bg-[var(--nav-chip-active)] shadow-[var(--shadow-nav-chip)]";
@@ -46,14 +46,14 @@ function navTabSizeClass(compact: boolean): string {
 
 export function primaryNavTabClass(isActive: boolean, compact: boolean): string {
   const tone = isActive
-    ? "text-blue-700 dark:text-blue-400"
-    : `text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 ${NAV_TAB_INACTIVE_HOVER_CLASS}`;
+    ? NAV_TAB_ACTIVE_TEXT_CLASS
+    : `text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 ${NAV_TAB_INACTIVE_HOVER_CLASS}`;
   return `${NAV_TAB_BASE_CLASS} ${navTabSizeClass(compact)} py-1.5 font-semibold ${tone}`;
 }
 
 export function secondaryNavTabClass(isActive: boolean, compact: boolean): string {
   const tone = isActive
-    ? "text-slate-900 dark:text-slate-100"
-    : `text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 ${NAV_TAB_INACTIVE_HOVER_CLASS}`;
-  return `${NAV_TAB_BASE_CLASS} ${navTabSizeClass(compact)} py-1 font-medium ${tone}`;
+    ? NAV_TAB_ACTIVE_TEXT_CLASS
+    : `text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 ${NAV_TAB_INACTIVE_HOVER_CLASS}`;
+  return `${NAV_TAB_BASE_CLASS} ${navTabSizeClass(compact)} py-1 font-semibold ${tone}`;
 }

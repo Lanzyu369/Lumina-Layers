@@ -457,27 +457,27 @@ export default function MaterialLibraryPanel() {
                 ? "mat_gradient_library_clear_selection_btn"
                 : "mat_gradient_library_select_all_btn",
             )}
-            variant="secondary"
+            variant="primary"
             onClick={toggleSelectAll}
             disabled={materials.length === 0 || isLoading || isExporting || isImporting}
           />
           <Button
             label={t("mat_gradient_library_import_btn")}
-            variant="secondary"
+            variant="primary"
             onClick={handleImportClick}
             disabled={isLoading || isExporting || pendingDeleteDirectoryName !== null}
             loading={isImporting}
           />
           <Button
             label={t("mat_gradient_library_export_btn")}
-            variant="secondary"
+            variant="primary"
             onClick={() => void handleExportSelected()}
             disabled={selectedCount === 0 || isLoading || isImporting || pendingDeleteDirectoryName !== null}
             loading={isExporting}
           />
           <Button
             label={t("mat_gradient_library_refresh_btn")}
-            variant="secondary"
+            variant="primary"
             onClick={() => void refreshMaterials()}
             disabled={isLoading || isImporting || isExporting}
             loading={isLoading}
@@ -925,28 +925,28 @@ export default function MaterialLibraryPanel() {
                       <div className="grid gap-3">
                   <Button
                     label={t("mat_gradient_library_edit_btn")}
-                    variant="secondary"
+                    variant="primary"
                     onClick={() => handleOpenEditDialog(item)}
                     disabled={pendingDeleteDirectoryName === item.directory_name}
                     className="w-full"
                   />
                   <Button
                     label={t("mat_gradient_library_reverify_btn")}
-                    variant="secondary"
+                    variant="primary"
                     onClick={() => handleStartVerification(item)}
                     disabled={pendingDeleteDirectoryName === item.directory_name || pendingUpdateDirectoryName === item.directory_name}
                     className="w-full"
                   />
                   <Button
                     label={t("mat_gradient_library_show_history_btn")}
-                    variant="secondary"
+                    variant="primary"
                     onClick={() => handleOpenHistoryDialog(item)}
                     disabled={pendingDeleteDirectoryName === item.directory_name || pendingUpdateDirectoryName === item.directory_name}
                     className="w-full"
                   />
                   <Button
                     label={t("mat_gradient_library_delete_btn")}
-                    variant="secondary"
+                    variant="primary"
                     onClick={() => void handleDeleteMaterial(item)}
                     disabled={pendingDeleteDirectoryName === item.directory_name}
                     loading={pendingDeleteDirectoryName === item.directory_name}

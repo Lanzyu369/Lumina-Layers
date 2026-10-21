@@ -316,6 +316,9 @@ Banners are **not** cards. They use a **3px left accent bar + tinted fill**, rad
 
 Small-caps eyebrow: `text-[11px] font-semibold uppercase tracking-[0.18em]`, muted color. For color-workstation toolbar groups, a **colored dot** prefixes the label to carry category — this replaces the old colored-border mini-cards. Category color lives in a 1.5×1.5 dot, not in a box outline.
 
+**A heading must outweigh the controls it introduces.** The eyebrow is deliberately quiet because it sits *below* the card and above a small cluster — it is a caption, not a title. When a long column is split into stages (input → color source → output size → build), each stage needs `stageHeadingClass`: 14px semibold in slightly softer ink than the panel title, with the hairline divider above it and a small top margin. The ladder is panel title (15px semibold, `WidgetHeader`) → stage (14px semibold) → field label (14px medium, secondary ink) → value. Stage headings do **not** grow a size larger than the panel title: separation comes from weight, ink, the divider and spacing, never from making the inner level the biggest thing on screen. Never name a stage with `groupHeaderClass`; 11px muted text next to a divider reads as a caption and inverts the hierarchy.
+**标题必须比它所辖控件更重。** 眉标之所以安静，是因为它在卡片之下、小簇之上，本质是说明文字而不是标题。当一个长栏目按阶段切分（输入 → 颜色来源 → 输出尺寸 → 结构与质感）时，每个阶段用 `stageHeadingClass`：14px 半粗，墨色略浅于面板标题，分割线在其上方并留一点上边距。层级为：面板标题（15px 半粗）→ 阶段标题（14px 半粗）→ 字段标签（14px 中等、次要色）→ 取值。阶段标题**不**比面板标题更大——区分靠字重、墨色、分割线与间距，而不是把内层做成屏幕上最大的字。不要把阶段名写成 `groupHeaderClass`——分割线旁的 11px 浅灰字会被读成说明，层级正好反过来。
+
 #### Token & primitive reference (令牌与原语)
 
 CSS layer — `frontend/src/index.css`:
@@ -329,7 +332,8 @@ JS layer — `frontend/src/components/ui/panelPrimitives.tsx`:
 - `cardClass` (`panel-card rounded-2xl`), `cardPadClass` (adds `px-5 py-5`)
 - `wellClass` (`panel-well rounded-[10px]`), `wellPadClass` (adds `px-3 py-2.5`)
 - `cardDividerClass` (`panel-divider border-t`)
-- `groupHeaderClass` (small-caps eyebrow)
+- `stageHeadingClass` (15px semibold primary ink — names a stage of a long column)
+- `groupHeaderClass` (11px muted eyebrow — sub-group caption inside a stage)
 
 #### Migration mapping (旧 → 新)
 
@@ -394,12 +398,18 @@ Legacy helpers scheduled for removal once the last user migrates: `sectionCardCl
 
 | Level | At rest | Used for |
 |---|---|---|
-| **Primary** | blue fill | the one decisive action of a section (`生成`) |
-| **Secondary** | hairline border + light fill | a standalone action that must read as a button (`预览`, `上传 LUT`, `应用旋转`, `取消`) |
-| **Ghost** | text / icon only | toolbar controls, per-row actions, dialog close, collapse headers, clear / reset (`查看分层`, `导出分享卡`, 撤销/重做, 编辑/历史/删除) |
+| **Primary / function** | blue fill + white text (`.action-control`) | every button that opens an operation dialog or executes a function: preview, generate, import, crop/rotate, apply, export, undo/redo, edit, history, clear/reset |
+| **Secondary** | hairline border + light fill | neutral dismissal or navigation, such as cancel, close and back |
+| **Ghost** | text / icon only | mode selections, toggles, dialog close icons and collapse headers |
 
-Reach for the weakest level that still communicates "this is clickable". Never make a block of centred text into ghost buttons without a leading icon — icon-less ghost buttons in a column read as a list of labels.
-优先用能读懂的最弱级别。一列没有图标的幽灵按钮会读成文字标签列表，所以成排出现时给每个按钮配前置图标。
+Function buttons use `Button variant="primary"`; raw function buttons use the same `.action-control` class. Do not use gray, bordered or ghost treatments to distinguish different functions. Field pickers, selectable options, tabs and switches retain their own component styles.
+功能按钮统一蓝底白字：打开操作窗或直接执行功能都使用 `Button variant="primary"`；原生功能按钮复用 `.action-control`。不再按功能主次混用灰底、描边或纯文字样式。字段选择器、选项、导航标签和开关沿用各自的控件样式。
+
+Exception: the slicer launch/download control (`SlicerSelector`, including "Generate and open in BBS") retains its slicer-specific brand colors and split-button styling.
+例外：切片软件启动/下载控件（`SlicerSelector`，包括「生成并在 BBS 中打开」）保留原有品牌配色和分体按钮样式。
+
+The four floating 3D viewer icons (performance, diagnostics, fullscreen and screenshot) also retain their original ghost-control styling.
+3D 视图的性能统计、诊断、全屏、截图四个悬浮图标按钮也保留原有幽灵按钮样式。
 
 #### Ghost control states (状态)
 
@@ -424,8 +434,8 @@ Text inputs, number boxes, the slider value box and the `Dropdown` trigger use `
 
 #### Selectable rows are borderless (可选行不画边框)
 
-`Checkbox` and `RadioGroup` rows (`workstationChoiceRowClass`) are transparent at rest with a ghost boundary on hover. The checked state lives in the indicator alone. Rows carry `-mx-2 px-2` so the hover fill extends past the text while labels stay aligned with the sliders above them.
-复选框与单选项行静止透明，悬停显示幽灵边界；选中状态只由标记本身表达。
+`Checkbox` and `RadioGroup` rows (`workstationChoiceRowClass`) are transparent at rest and show only a gray fill on hover, with no visible row border. The checked state lives in the indicator alone. Rows carry `-mx-2 px-2` so the hover fill extends past the text while labels stay aligned with the sliders above them.
+复选框与单选项行静止透明，悬停只显示灰色底，不显示行边框；选中状态只由标记本身表达。
 
 - **On/off setting → pill switch.** `Checkbox` defaults to `appearance="switch"`: label left, ⓘ inline after it, pill on the right edge, announced as `role="switch"`. Any single feature toggle (enable relief, crop after upload, outline, coating…) uses this.
   单个功能的开/关一律用胶囊开关：文字在左、ⓘ 紧跟文字、胶囊靠右。
@@ -467,8 +477,8 @@ A swatch, a layer thumbnail or a preview tile is *content*, not a container. A b
   两级导航使用同一种标签：无描边、无底槽，选中项是浅色浮起块（8px 圆角），悬停用浅灰底。
 - **Rows and dividers carry the hierarchy, not boxes:** the header row (brand, primary tabs, tools) and the sub-tab row share the chrome surface, one `panel-divider` hairline separates them and a second one closes the sub-tab row. Never add tracks, outlines or tinted bands to tell the levels apart.
   层级靠行和分隔线表达：顶栏行与子导航行同底色，中间一条细线，子导航行下方再一条；不要用底槽、描边或色带区分层级。
-- **Primary vs sub:** primary tabs are semibold with 16px icons and blue selected text; sub tabs are medium weight with 14px icons and ink selected text. Blue stays on the primary level only.
-  主导航半粗体、16px 图标、选中文字为蓝色；子导航中等字重、14px 图标、选中文字为深色。蓝色只用于主导航。
+- **Primary vs sub:** both levels use the same blue selected text in light and dark themes; primary tabs are semibold with 16px icons, while sub tabs are medium weight with 14px icons.
+  两级导航的选中文字在浅色和深色主题下均使用一致的蓝色；主导航半粗体、16px 图标，子导航中等字重、14px 图标。
 - **Alignment is a user setting (`headerNavAlignment`):** `center` keeps both rows on one shared centre line, which is the window axis whenever there is room; `left` places the primary tabs after the brand and starts the sub tabs at the first primary tab. Never truncate, overlap, or stretch the tab group to the full width.
   对齐方式由用户设置决定：居中时两行共用一条中线，空间足够时就是窗口中线；居左时主导航紧跟标题，子导航从第一个主导航项开始。不截断、不重叠，也不把标签组拉满整行。
 - **A tight header gives way in a fixed order (`headerNavLayout.ts`, `useHeaderNavFit`):** the "Lumina Studio 2" title collapses to the logo whenever that gives the tabs the room they need, before the tabs move; centered tabs leave the window axis only as far as the brand and the tools require, with the sub tabs following the same centre line; only when the tabs no longer fit between the logo and the tools do they move to a row of their own, and the title returns.

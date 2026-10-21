@@ -53,7 +53,7 @@ export interface ViewDisplayOptions {
 }
 
 function SurfaceToolButton({
-  active = false,
+  active,
   disabled = false,
   description,
   label,
@@ -87,7 +87,7 @@ function SurfaceToolButton({
         onClick={onClick}
         className={
           "inline-flex h-8 w-8 items-center justify-center rounded-xl border text-[11px] font-semibold backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 "
-          + (active
+          + (active === undefined ? "action-control" : active
             ? "border-blue-500/70 bg-blue-500/20 text-blue-700 dark:text-blue-200"
             : "border-slate-200/80 bg-slate-100/85 text-slate-600 hover:bg-slate-200/90 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80")
         }

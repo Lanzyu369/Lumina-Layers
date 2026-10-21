@@ -77,7 +77,7 @@ function NumberField({
 }
 
 const actionButtonClass =
-  "ghost-control rounded-[10px] px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-200";
+  "rounded-[10px] px-3 py-2 text-sm font-medium";
 
 function getCustomFridgeMagnetLabel(
   t: (key: string) => string,
@@ -225,7 +225,7 @@ export default function FridgeMagnetSettings() {
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          className={actionButtonClass}
+          className={`action-control ${actionButtonClass}`}
           onClick={addFridgeMagnet}
           disabled={!enableFridgeMagnet}
         >
@@ -233,7 +233,7 @@ export default function FridgeMagnetSettings() {
         </button>
         <button
           type="button"
-          className={actionButtonClass}
+          className={`action-control ${actionButtonClass}`}
           onClick={resetFridgeMagnetLayout}
           disabled={!enableFridgeMagnet || fridgeMagnets.length === 0}
         >
@@ -241,7 +241,7 @@ export default function FridgeMagnetSettings() {
         </button>
         <button
           type="button"
-          className={actionButtonClass}
+          className={`action-control ${actionButtonClass}`}
           data-tone="danger"
           onClick={() => selectedMagnet && removeFridgeMagnet(selectedMagnet.id)}
           disabled={!enableFridgeMagnet || !selectedMagnet}
@@ -391,7 +391,7 @@ export default function FridgeMagnetSettings() {
 
           <button
             type="button"
-            className={actionButtonClass}
+            className={`action-control ${actionButtonClass}`}
             onClick={clearSelectedFridgeMagnet}
           >
             {t("fridge_magnet_clear_selection")}

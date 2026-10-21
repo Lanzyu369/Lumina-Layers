@@ -179,7 +179,7 @@ describe("CanvasPreviewSurface", () => {
     expect(hoverSamples[2]).toBeNull()
   })
 
-  it("styles the shared reset button with theme-safe tokens instead of raw black and white classes", () => {
+  it("uses the shared function-button style for reset without inline color overrides", () => {
     installCanvasContextMock(() => ({
       clearRect: vi.fn(),
       save: vi.fn(),
@@ -199,15 +199,8 @@ describe("CanvasPreviewSurface", () => {
     )
 
     const resetButton = screen.getByRole("button", { name: "Reset" })
-    const inlineStyle = resetButton.getAttribute("style") ?? ""
-
-    expect(resetButton.className).not.toContain("bg-black")
-    expect(resetButton.className).not.toContain("text-white")
-    expect(inlineStyle).toContain("border-color: var(--surface-outline)")
-    expect(inlineStyle).toContain(
-      "background: color-mix(in srgb, var(--surface-panel-strong) 88%, transparent)",
-    )
-    expect(inlineStyle).toContain("color: var(--surface-text-muted)")
+    expect(resetButton).toHaveClass("action-control")
+    expect(resetButton).not.toHaveAttribute("style")
   })
 
   it("keeps default rendering quality for shared consumers unless crisp is requested", () => {

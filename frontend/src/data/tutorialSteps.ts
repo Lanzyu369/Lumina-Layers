@@ -20,7 +20,7 @@ export type TutorialStepId =
   | "output-size"
   | "preview"
   | "view-3d"
-  | "generate"
+  | "print-output"
   | "help";
 
 /** UI state a step needs before its anchor can be found. 步骤显示前需要的界面状态。 */
@@ -171,10 +171,10 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     prepare: { tab: "converter", converterSubTab: "core" },
   },
   {
-    id: "generate",
-    anchor: "generate-button",
-    titleKey: "tutorial_step_generate_title",
-    bodyKey: "tutorial_step_generate_body",
+    id: "print-output",
+    anchor: "print-output",
+    titleKey: "tutorial_step_output_title",
+    bodyKey: "tutorial_step_output_body",
     prepare: ACTION_BAR,
   },
   {

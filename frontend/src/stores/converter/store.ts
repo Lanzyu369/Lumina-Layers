@@ -110,6 +110,7 @@ import {
 import { lutErrorToVisibleMessage } from "../lutErrorMessages";
 import { registerPrinterBedLabelSynchronizer } from "../printerBedLabelSync";
 import { useSettingsStore } from "../settingsStore";
+import { fitTargetDimensions, getTargetDimensionLimits } from "./dimensions";
 import {
   newestEditorContentRevision
 } from "./editorRevision";
@@ -1610,7 +1611,66 @@ function loadStructureMode(): StructureMode {
   } catch {
     // Local preferences are best-effort when browser storage is unavailable.
   }
-  return StructureModeEnum.DOUBLE_SIDED;
+  return StructureModeEnum.SINGLE_SIDED;
+}
+
+const OUTPUT_DIMENSIONS_STORAGE_KEY = "lumina_outputDimensions";
+const BACKING_THICKNESS_STORAGE_KEY = "lumina_backingThickness";
+
+function loadOutputDimensions() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(OUTPUT_DIMENSIONS_STORAGE_KEY) ?? "null");
+    if (
+      saved && Number.isFinite(saved.target_width_mm) && saved.target_width_mm >= 10 &&
+      Number.isFinite(saved.target_height_mm) && saved.target_height_mm >= 10
+    ) {
+      return { target_width_mm: saved.target_width_mm as number, target_height_mm: saved.target_height_mm as number };
+    }
+  } catch {
+    // Browser preferences are best-effort.
+  }
+  return { target_width_mm: 60, target_height_mm: 60 };
+}
+
+function loadBackingThickness(): number {
+  try {
+    const saved = Number(localStorage.getItem(BACKING_THICKNESS_STORAGE_KEY));
+    if (Number.isFinite(saved) && saved >= 0.2 && saved <= 10) return saved;
+  } catch {
+    // Browser preferences are best-effort.
+  }
+  return 1.2;
+}
+
+function buildImageAspectRatioState(state: ConverterState, ratio: number): Partial<ConverterState> {
+  if (!Number.isFinite(ratio) || ratio <= 0) return {};
+  // An imported project already supplies explicit dimensions before its image loads.
+  if (state.aspectRatio !== null) return { aspectRatio: ratio };
+  const longestEdge = Math.max(state.target_width_mm, state.target_height_mm);
+  const dimensions = fitTargetDimensions({
+    target_width_mm: ratio >= 1 ? longestEdge : Math.max(10, Math.round(longestEdge * ratio)),
+    target_height_mm: ratio >= 1 ? Math.max(10, Math.round(longestEdge / ratio)) : longestEdge,
+  }, state, useSettingsStore.getState().printerModel);
+  return {
+    aspectRatio: ratio,
+    ...dimensions,
+    fridge_magnets: canonicalizeFridgeMagnets(
+      getFallbackModelBounds({ ...state, ...dimensions, modelBounds: null }),
+      state.fridge_magnets,
+    ),
+  };
+}
+
+function buildPrinterDimensionState(state: ConverterState): Partial<ConverterState> {
+  const dimensions = fitTargetDimensions(state, state, useSettingsStore.getState().printerModel);
+  if (dimensions.target_width_mm === state.target_width_mm && dimensions.target_height_mm === state.target_height_mm) return {};
+  return {
+    ...buildSvgHoleCompensationResizeState(state, dimensions),
+    ...dimensions,
+    fridge_magnets: canonicalizeFridgeMagnets(getFallbackModelBounds({ ...state, ...dimensions }), state.fridge_magnets),
+    threemfDiskPath: null,
+    downloadUrl: null,
+  };
 }
 
 function loadLutName(): string {
@@ -1793,9 +1853,8 @@ export const DEFAULT_STATE: ConverterState = {
   nativeBrandGroupsLoading: false,
   selectedNativeBrandKey: "",
   selectedNativeDbNames: [],
-  target_width_mm: 60,
-  target_height_mm: 60,
-  spacer_thick: 1.2,
+  ...loadOutputDimensions(),
+  spacer_thick: loadBackingThickness(),
   backing_infill_density_percent: loadBackingInfillDensityPercent(),
   structure_mode: loadStructureMode(),
   color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
@@ -1840,7 +1899,7 @@ export const DEFAULT_STATE: ConverterState = {
   enable_fridge_magnet: false,
   fridge_magnets: [],
   selectedFridgeMagnetId: null,
-  base_spacer_thick: 1.2,
+  base_spacer_thick: loadBackingThickness(),
   enable_relief: false,
   color_height_map: {},
   heightmap_max_height: 3.0,
@@ -2118,7 +2177,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             }
             set({
               imagePreviewUrl: preview_url,
-              aspectRatio: width / height,
+              ...buildImageAspectRatioState(_get(), width / height),
               error: null,
             });
           })
@@ -2143,7 +2202,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           return;
         }
         const ratio = img.naturalWidth / img.naturalHeight;
-        set({ aspectRatio: ratio });
+        set(buildImageAspectRatioState(_get(), ratio));
       };
       img.src = previewUrl;
 
@@ -2213,7 +2272,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         ) {
           return;
         }
-        set({ aspectRatio: img.naturalWidth / img.naturalHeight });
+        set(buildImageAspectRatioState(_get(), img.naturalWidth / img.naturalHeight));
       };
       img.src = previewUrl;
 
@@ -2305,16 +2364,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     setModelSurfaceEnabled: (enabled: boolean) => {
-      if (enabled) {
-        persistBackingInfillDensityPercent(
-          BACKING_INFILL_DENSITY_DEFAULT_PERCENT,
-        );
-      }
       set((state) => ({
         modelSurfaceEnabled: enabled,
         backing_infill_density_percent: enabled
           ? BACKING_INFILL_DENSITY_DEFAULT_PERCENT
-          : state.backing_infill_density_percent,
+          : state.enable_relief ? BACKING_INFILL_DENSITY_DEFAULT_PERCENT : loadBackingInfillDensityPercent(),
         structure_mode: enabled
           ? StructureModeEnum.SINGLE_SIDED
           : state.structure_mode,
@@ -2330,9 +2384,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         URL.revokeObjectURL(prev);
       }
       const previewUrl = URL.createObjectURL(file);
-      persistBackingInfillDensityPercent(
-        BACKING_INFILL_DENSITY_DEFAULT_PERCENT,
-      );
       set({
         modelSurfaceEnabled: true,
         backing_infill_density_percent:
@@ -3015,15 +3066,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     setTargetWidthMm: (width: number) =>
       set((state) => {
+        const limits = getTargetDimensionLimits(state, useSettingsStore.getState().printerModel);
+        const safeWidth = Number.isFinite(width) ? width : 10;
         const clamped = state.largeFormatEnabled
-          ? Math.max(10, Number.isFinite(width) ? width : 10)
-          : clampValue(width, 10, 400);
+          ? Math.max(10, safeWidth)
+          : clampValue(safeWidth, 10, limits.width);
         const dimensions = state.aspectRatio
           ? {
               target_width_mm: clamped,
               target_height_mm: state.largeFormatEnabled
                 ? Math.max(10, Math.round(clamped / state.aspectRatio))
-                : clampValue(Math.round(clamped / state.aspectRatio), 10, 400),
+                : clampValue(Math.round(clamped / state.aspectRatio), 10, limits.height),
             }
           : { target_width_mm: clamped };
         const fridgeMagnets = state.fridge_magnets.length > 0
@@ -3043,15 +3096,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     setTargetHeightMm: (height: number) =>
       set((state) => {
+        const limits = getTargetDimensionLimits(state, useSettingsStore.getState().printerModel);
+        const safeHeight = Number.isFinite(height) ? height : 10;
         const clamped = state.largeFormatEnabled
-          ? Math.max(10, Number.isFinite(height) ? height : 10)
-          : clampValue(height, 10, 400);
+          ? Math.max(10, safeHeight)
+          : clampValue(safeHeight, 10, limits.height);
         const dimensions = state.aspectRatio
           ? {
               target_height_mm: clamped,
               target_width_mm: state.largeFormatEnabled
                 ? Math.max(10, Math.round(clamped * state.aspectRatio))
-                : clampValue(Math.round(clamped * state.aspectRatio), 10, 400),
+                : clampValue(Math.round(clamped * state.aspectRatio), 10, limits.width),
             }
           : { target_height_mm: clamped };
         return {
@@ -3492,7 +3547,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           enable_relief: enabled,
           backing_infill_density_percent: enabled
             ? BACKING_INFILL_DENSITY_DEFAULT_PERCENT
-            : state.backing_infill_density_percent,
+            : state.modelSurfaceEnabled ? BACKING_INFILL_DENSITY_DEFAULT_PERCENT : loadBackingInfillDensityPercent(),
           enable_cloisonne: enabled ? false : state.enable_cloisonne,
           // Relief only supports single-sided structure
           structure_mode: enabled
@@ -3502,11 +3557,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           threemfDiskPath: null,
           downloadUrl: null,
         };
-        if (enabled) {
-          persistBackingInfillDensityPercent(
-            BACKING_INFILL_DENSITY_DEFAULT_PERCENT,
-          );
-        }
         // Requirement 6.5: When switching enable_relief from false to true,
         // auto-initialize color_height_map ONLY if it is currently empty.
         // Use computeAutoHeightMap to assign different heights based on
@@ -3771,6 +3821,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     // --- 热床尺寸 ---
     setBedLabel: (label: string) => {
       set({ bed_label: label });
+      const state = _get();
+      if (!state.bedSizes.some((bed) => bed.label === label)) return;
+      set(buildPrinterDimensionState(state));
     },
 
     // --- 调色板与选择 ---
@@ -6106,6 +6159,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           bedSizesLoading: false,
           ...(printerBed ? { bed_label: printerBed.label } : {}),
         });
+        if (printerBed) _get().setBedLabel(printerBed.label);
       } catch (err) {
         set({
           bedSizesLoading: false,
@@ -7229,7 +7283,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     setCropModalOpen: (open: boolean) => set({ cropModalOpen: open }),
 
-    submitCrop: async (x: number, y: number, width: number, height: number) => {
+    submitCrop: async (x: number, y: number, width: number, height: number, rotation: 0 | ImageRotationDegrees = 0) => {
       const state = _get();
       if (!state.imageFile) {
         set({ error: "No image file to crop" });
@@ -7237,8 +7291,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
       set({ isCropping: true, error: null });
       try {
+        // Keep rotation as a draft until the entire crop succeeds.
+        const cropSource = rotation && state.imagePreviewUrl
+          ? await rotateImageFile(state.imageFile, state.imagePreviewUrl, rotation)
+          : state.imageFile;
         const response = await apiCropImage(
-          state.imageFile,
+          cropSource,
           x,
           y,
           width,
@@ -7273,7 +7331,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({
           imageFile: croppedFile,
           imagePreviewUrl: newPreviewUrl,
-          aspectRatio: ratio,
+          ...buildImageAspectRatioState({ ...currentState, aspectRatio: null }, ratio),
           workshopSource: null,
           ...buildPreviewSessionResetState(currentState),
           cropModalOpen: false,
@@ -7356,7 +7414,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               }
               set({
                 imagePreviewUrl: preview_url,
-                aspectRatio: width / height,
+                ...buildImageAspectRatioState(_get(), width / height),
                 error: null,
               });
             })
@@ -7376,7 +7434,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ) {
               return;
             }
-            set({ aspectRatio: img.naturalWidth / img.naturalHeight });
+            set(buildImageAspectRatioState(_get(), img.naturalWidth / img.naturalHeight));
           };
           img.src = previewUrl;
 
@@ -7584,7 +7642,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               }
               set({
                 imagePreviewUrl: preview_url,
-                aspectRatio: width / height,
+                ...buildImageAspectRatioState(_get(), width / height),
                 error: null,
               });
             })
@@ -7607,7 +7665,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ) {
             return;
           }
-          set({ aspectRatio: img.naturalWidth / img.naturalHeight });
+          set(buildImageAspectRatioState(_get(), img.naturalWidth / img.naturalHeight));
         };
         img.src = previewUrl;
 
@@ -8041,6 +8099,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       });
       set({
         ...partial,
+        aspectRatio: nextState.target_width_mm / nextState.target_height_mm,
         modelBounds: null,
         ...fridgeMagnetState,
         engraveBackLabels: false,
@@ -8090,6 +8149,38 @@ registerPrinterBedLabelSynchronizer((printerId) => {
     setBedLabel(printerBed.label);
   }
 });
+
+useConverterStore.subscribe(
+  (state) => [state.target_width_mm, state.target_height_mm] as const,
+  ([width, height]) => {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 10 || height < 10) return;
+    try {
+      localStorage.setItem(OUTPUT_DIMENSIONS_STORAGE_KEY, JSON.stringify({ target_width_mm: width, target_height_mm: height }));
+    } catch {
+      // Keep editing available when browser storage is unavailable.
+    }
+  },
+  { equalityFn: (left, right) => left[0] === right[0] && left[1] === right[1] },
+);
+
+useConverterStore.subscribe(
+  (state) => state.base_spacer_thick,
+  (thickness) => {
+    if (!Number.isFinite(thickness) || thickness < 0.2 || thickness > 10) return;
+    try {
+      localStorage.setItem(BACKING_THICKNESS_STORAGE_KEY, String(thickness));
+    } catch {
+      // Keep editing available when browser storage is unavailable.
+    }
+  },
+);
+
+useConverterStore.subscribe(
+  (state) => state.largeFormatEnabled,
+  (enabled) => {
+    if (!enabled) useConverterStore.setState(buildPrinterDimensionState(useConverterStore.getState()));
+  },
+);
 
 // All source-entry paths share this boundary, including batch and project imports.
 // 所有素材入口（含批量与项目导入）共用此可用性边界。

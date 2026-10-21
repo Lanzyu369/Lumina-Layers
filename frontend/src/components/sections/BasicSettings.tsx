@@ -1,6 +1,6 @@
 import { useRef, useEffect, useMemo, useState, useCallback, useId } from "react";
 import { createPortal } from "react-dom";
-import { XMarkIcon } from "@heroicons/react/24/outline";
+import { ScissorsIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { useShallow } from "zustand/react/shallow";
 import {
   useConverterStore,
@@ -43,8 +43,18 @@ import {
   RECIPE_IMPORT_NOT_SHARE_CARD_ERROR,
   type RecipeFileSource,
 } from "../../recipe/importRecipe";
-import { StatusBanner, cardDividerClass, workstationInputClass, workstationPickerTriggerClass, cx } from "../ui/panelPrimitives";
-import { type ImageRotationDegrees } from "../../utils/imageRotation";
+import {
+  StatusBanner,
+  blockHeaderClass,
+  blockHeaderRuleClass,
+  cardDividerClass,
+  dependentGroupClass,
+  groupHeaderClass,
+  workstationInputClass,
+  workstationPickerTriggerClass,
+  cx,
+} from "../ui/panelPrimitives";
+import { isSvgImageFile } from "../../utils/imageRotation";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
 import {
   resolveLargeFormatTileGrid,
@@ -58,6 +68,8 @@ import {
   type ColorModeBucket,
 } from "../../stores/converter/legacyLutSelection";
 import WorkshopSourceBanner from "../../workshop/WorkshopSourceBanner";
+import { useSettingsStore } from "../../stores/settingsStore";
+import { getPrinterBedDimensions } from "../../stores/converter/dimensions";
 import {
   buildWorkshopColorLibrary,
   clearWorkshopMaterialCatalog,
@@ -85,7 +97,6 @@ const THICKNESS_SLIDER_MAX_MM = 10;
 const BACKING_INFILL_DENSITY_MIN_PERCENT = 5;
 const BACKING_INFILL_DENSITY_MAX_PERCENT = 100;
 const BACKING_INFILL_DENSITY_STEP_PERCENT = 5;
-const STANDARD_DIMENSION_SLIDER_MAX_MM = 400;
 const LARGE_FORMAT_TILE_SLIDER_MAX_MM = 500;
 const GENERIC_HTTP_STATUS_ERROR_RE =
   /(?:Request failed with status code|HTTP(?:\s+error)?|status(?:\s+code)?)\s*\d{3}\b/i;
@@ -180,12 +191,6 @@ function resolveRecipeImportError(
   }
   return t("recipe_import_error_unreadable");
 }
-const IMAGE_ROTATION_OPTIONS: { label: string; value: string }[] = [
-  { label: "90°", value: "90" },
-  { label: "180°", value: "180" },
-  { label: "270°", value: "270" },
-];
-
 const LEGACY_BUCKET_I18N_KEY: Partial<Record<ColorModeBucket, string>> = {
   [ColorMode.BW]: "basic_lut_color_mode_bw",
   [ColorMode.FOUR_COLOR_CMYW]: "basic_lut_color_mode_4color_cmyw",
@@ -451,7 +456,7 @@ function NativeDbPicker({
                   label={labels.deselectAll}
                   onClick={() => setStaged([])}
                   disabled={staged.length === 0}
-                  variant="secondary"
+                  variant="primary"
                   size="sm"
                 />
                 <Button
@@ -466,6 +471,46 @@ function NativeDbPicker({
         document.body,
       )}
     </>
+  );
+}
+
+/**
+ * Everything in this column is named by a label-plus-rule, not by a heading
+ * weight: the panel title already tops the hierarchy, so an inner heading that
+ * grows bigger or bolder only competes with it and with the field labels below.
+ * 这一列的所有分组都用「文字 + 细线」命名，不再用字重取胜：面板标题已经在最
+ * 上层，内层标题再加大加粗只会同时跟它和下面的字段标签抢注意力。
+ */
+/** Sub-group inside a block (e.g. model-assisted matching under a brand). */
+function SubGroupHeading({ label }: { label: string }) {
+  return <p className={groupHeaderClass}>{label}</p>;
+}
+
+/** Names a block: the label, then a hairline trailing to the right edge. */
+function BlockRule({ label }: { label: string }) {
+  return (
+    <p className={blockHeaderClass}>
+      <span className="shrink-0">{label}</span>
+      <span aria-hidden="true" className={blockHeaderRuleClass} />
+    </p>
+  );
+}
+
+/** A named block: the label-plus-rule, then its controls. */
+function Block({
+  label,
+  children,
+  className,
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cx("flex flex-col gap-3", className)}>
+      <BlockRule label={label} />
+      {children}
+    </div>
   );
 }
 
@@ -789,8 +834,7 @@ export default function BasicSettings() {
   const setLargeFormatTileOverlayVisible = useConverterStore(
     (s) => s.setLargeFormatTileOverlayVisible,
   );
-   const rotateImageForExport = useConverterStore((s) => s.rotateImageForExport);
-  const [selectedImageRotation, setSelectedImageRotation] = useState<ImageRotationDegrees>(90);
+  const rotateImageForExport = useConverterStore((s) => s.rotateImageForExport);
   const isVectorModelingAvailable = useConverterStore(hasOnlySvgInputs);
   const disabledModelingModes = isVectorModelingAvailable ? [] : [ModelingMode.VECTOR];
 
@@ -1261,12 +1305,13 @@ export default function BasicSettings() {
   }, [fetchLegacyCatalog, fetchLutCatalog, isRefreshingLut]);
 
   const handleCropConfirm = (data: CropData) => {
-    void submitCrop(data.x, data.y, data.width, data.height);
+    if (isSvgImageFile(imageFile)) {
+      if (data.rotation) void rotateImageForExport(data.rotation);
+      else setCropModalOpen(false);
+      return;
+    }
+    void submitCrop(data.x, data.y, data.width, data.height, data.rotation);
   };
-
-  const handleApplyImageRotation = useCallback(() => {
-    void rotateImageForExport(selectedImageRotation);
-  }, [rotateImageForExport, selectedImageRotation]);
 
   const handleNativeLayerCountChange = (count: number) => {
     const mode =
@@ -1282,10 +1327,11 @@ export default function BasicSettings() {
     });
   };
 
-  // Keep the range control useful for everyday dimensions while allowing the
-  // precise text field to retain any finite large-format value.
-  // 日常拖动保持可用尺度，精确输入框保留任意有限的大画幅尺寸。
-  const dimMax = STANDARD_DIMENSION_SLIDER_MAX_MM;
+  const printerModel = useSettingsStore((s) => s.printerModel);
+  const dimensionLimits = useConverterStore(useShallow((state) =>
+    getPrinterBedDimensions(state, printerModel),
+  ));
+  // Large-format text entry can exceed one bed; the sliders follow its size.
   const dimInputMax = largeFormatEnabled ? Number.POSITIVE_INFINITY : undefined;
 
   const tileGrid = useMemo(() => {
@@ -1328,99 +1374,105 @@ export default function BasicSettings() {
     [previewWarnings, generatedLargeFormatWarnings, t],
   );
 
+  // A control that silently disappears reads as a missing feature. Keep both
+  // visible and say why they are inactive instead.
+  // 控件直接消失会被当成功能丢了；保持可见并说明不可用的原因。
+  const backingInfillDisabledReason = modelSurfaceEnabled
+    ? t("basic_backing_infill_disabled_model_surface")
+    : enable_relief
+      ? t("basic_backing_infill_disabled_relief")
+      : null;
+  const structureModeDisabledReason = modelSurfaceEnabled
+    ? t("basic_structure_mode_disabled_model_surface")
+    : enable_relief
+      ? t("basic_structure_mode_disabled_relief")
+      : enable_fridge_magnet
+        ? t("basic_structure_mode_disabled_fridge_magnet")
+        : null;
+
   return (
     <div className="flex flex-col gap-4">
-      <div data-tutorial="image-upload">
-      {uploaderExpanded ? (
-        <UnifiedUploader
-          singlePreview={imagePreviewUrl ?? undefined}
-          batchFiles={batchFiles}
-          isBatchMode={batchMode}
-          onFilesSelect={handleFilesSelect}
-          onFileReplace={handleFileReplace}
-          onBatchFileRemove={removeBatchFile}
-          accept={ACCEPT_IMAGE_FORMATS}
-          onShareCardDetected={(file) => void handleShareCardDetected(file)}
-        />
-      ) : (
-        <button
-          type="button"
-          onClick={() => setUploaderExpanded(true)}
-          className="flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-slate-100/70 px-3 py-2 text-left transition-colors hover:bg-slate-100/90 dark:border-slate-700/60 dark:bg-slate-900/50 dark:hover:bg-slate-900/80"
-        >
-          {imagePreviewUrl && (
-            <img
-              src={imagePreviewUrl}
-              alt=""
-              className="h-8 w-8 shrink-0 rounded-lg object-cover"
+      <div data-tutorial="image-upload" className="flex flex-col gap-3">
+        <BlockRule label={t("basic_group_input")} />
+        {uploaderExpanded ? (
+          <UnifiedUploader
+            singlePreview={imagePreviewUrl ?? undefined}
+            batchFiles={batchFiles}
+            isBatchMode={batchMode}
+            onFilesSelect={handleFilesSelect}
+            onFileReplace={handleFileReplace}
+            onBatchFileRemove={removeBatchFile}
+            accept={ACCEPT_IMAGE_FORMATS}
+            onShareCardDetected={(file) => void handleShareCardDetected(file)}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setUploaderExpanded(true)}
+            className="flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-slate-100/70 px-3 py-2 text-left transition-colors hover:bg-slate-100/90 dark:border-slate-700/60 dark:bg-slate-900/50 dark:hover:bg-slate-900/80"
+          >
+            {imagePreviewUrl && (
+              <img
+                src={imagePreviewUrl}
+                alt=""
+                className="h-8 w-8 shrink-0 rounded-lg object-cover"
+              />
+            )}
+            <span className="min-w-0 flex-1 truncate text-[clamp(0.65rem,0.85vw,0.75rem)] text-slate-600 dark:text-slate-300">
+              {imageFile?.name ?? t("upload_unified_hint")}
+            </span>
+            <span className="shrink-0 text-[10px] text-slate-400 dark:text-slate-500">
+              {t("upload_tap_to_change")}
+            </span>
+          </button>
+        )}
+
+        {workshopSource ? (
+          <WorkshopSourceBanner
+            source={workshopSource}
+            colorLibrary={workshopColorLibrary}
+            colorLibrarySelectionKey={
+              workshopColorLibrarySelectionKey
+            }
+          />
+        ) : null}
+
+        {batchFiles.length === 0 && (
+          <div className="flex flex-col gap-3">
+            {imageFile !== null && (
+              <Button
+                label={t("basic_crop_image")}
+                leadingIcon={<ScissorsIcon className="size-4" />}
+                variant="primary"
+                size="sm"
+                onClick={() => setCropModalOpen(true)}
+                disabled={!imagePreviewUrl || isLoading || isCropping}
+              />
+            )}
+            <Checkbox
+              label={t("basic_crop_after_upload")}
+              tooltip={t("basic_crop_after_upload_hint")}
+              wikiPath={WIKI_DOCS.imageInputAndCrop}
+              checked={enableCrop}
+              onChange={setEnableCrop}
             />
-          )}
-          <span className="min-w-0 flex-1 truncate text-[clamp(0.65rem,0.85vw,0.75rem)] text-slate-600 dark:text-slate-300">
-            {imageFile?.name ?? t("upload_unified_hint")}
-          </span>
-          <span className="shrink-0 text-[10px] text-slate-400 dark:text-slate-500">
-            {t("upload_tap_to_change")}
-          </span>
-        </button>
-      )}
+
+          </div>
+        )}
+
+        <CropModal
+          open={cropModalOpen}
+          imageSrc={imagePreviewUrl ?? ""}
+          allowCrop={!isSvgImageFile(imageFile)}
+          onConfirm={handleCropConfirm}
+          onUseOriginal={() => setCropModalOpen(false)}
+          onClose={() => setCropModalOpen(false)}
+          isLoading={isCropping || isLoading}
+        />
       </div>
 
-      {workshopSource ? (
-        <WorkshopSourceBanner
-          source={workshopSource}
-          colorLibrary={workshopColorLibrary}
-          colorLibrarySelectionKey={
-            workshopColorLibrarySelectionKey
-          }
-        />
-      ) : null}
-
-      {batchFiles.length === 0 && imageFile !== null && (
-        <>
-          <Checkbox
-            label={t("basic_crop_after_upload")}
-            tooltip={t("basic_crop_after_upload_hint")}
-            wikiPath={WIKI_DOCS.imageInputAndCrop}
-            checked={enableCrop}
-            onChange={setEnableCrop}
-          />
-
-          <div className="rounded-[22px] border border-slate-200/70 bg-slate-100/50 p-3 dark:border-slate-700/50 dark:bg-slate-900/45">
-            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-              <Dropdown
-                label={t("basic_image_rotation_label")}
-                tooltip={t("basic_image_rotation_hint")}
-                wikiPath={WIKI_DOCS.imageInputAndCrop}
-                value={String(selectedImageRotation)}
-                options={IMAGE_ROTATION_OPTIONS}
-                onChange={(value) => setSelectedImageRotation(Number(value) as ImageRotationDegrees)}
-                disabled={isLoading}
-              />
-              <button
-                type="button"
-                onClick={handleApplyImageRotation}
-                disabled={!imageFile || !imagePreviewUrl || isLoading}
-                className="min-h-11 rounded-[22px] border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] px-4 py-2 text-sm font-medium text-slate-700 shadow-[var(--shadow-control)] transition-all hover:bg-[color:var(--surface-panel-strong)] disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-200"
-              >
-                {t("basic_image_rotation_apply")}
-              </button>
-            </div>
-          </div>
-
-          <CropModal
-            open={cropModalOpen}
-            imageSrc={imagePreviewUrl ?? ""}
-            onConfirm={handleCropConfirm}
-            onUseOriginal={() => setCropModalOpen(false)}
-            onClose={() => setCropModalOpen(false)}
-            isLoading={isCropping}
-          />
-        </>
-      )}
-
-      <div className={cardDividerClass} aria-hidden="true" />
-
-      <div data-tutorial="color-source">
+      <div data-tutorial="color-source" className="flex flex-col gap-4">
+        <BlockRule label={t("basic_group_color_source")} />
         <RadioGroup
           label={t("basic_source_version_label")}
           tooltip={t("basic_source_version_hint")}
@@ -1432,10 +1484,8 @@ export default function BasicSettings() {
       </div>
 
       {source_version === "material" ? (
-        <div className="-mt-1 flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
-          <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
-            {t("basic_material_select_label")}
-          </div>
+        <div className={dependentGroupClass}>
+          <SubGroupHeading label={t("basic_material_select_label")} />
 
           <button
             type="button"
@@ -1606,7 +1656,7 @@ export default function BasicSettings() {
           />
 
           {lut_name && (
-            <div className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+            <div className="px-1 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
               <span>{t("basic_color_mode_label")}:</span>
               <ColorModeDots mode={color_mode} />
               <span>{color_mode}</span>
@@ -1614,10 +1664,7 @@ export default function BasicSettings() {
           )}
 
           {lut_name && selectedLutInfo && supportsDynamicLayers && (
-            <div className="-mt-1 flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {t("basic_source_kind_label")}: {selectedLutInfo.source_kind ?? "legacy_lookup"}
-              </div>
+            <div className={dependentGroupClass}>
               <Slider
                 label={t("basic_color_layers_label")}
                 tooltip={t("basic_color_layers_hint")}
@@ -1637,12 +1684,12 @@ export default function BasicSettings() {
                 onChange={(value) => setLayerHeightMm(Number(value))}
               />
               {supportedModes.length > 0 && (
-                <div className="text-xs text-slate-500 dark:text-slate-400">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
                   {t("basic_supported_modes_label")}:{" "}
                   {supportedModes
                     .map((mode) => `${mode.color_layers}L @ ${mode.layer_height_mm.toFixed(2)}mm`)
                     .join(", ")}
-                </div>
+                </p>
               )}
             </div>
           )}
@@ -1661,19 +1708,14 @@ export default function BasicSettings() {
           />
 
           {selectedNativeBrand ? (
-            <div className="-mt-1 flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {t("basic_native_brand_summary_label")}:
-                <span className="ml-1 text-slate-700 dark:text-slate-200">
-                  {selectedNativeBrand.display_name}
-                </span>
-              </div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {t("basic_native_material_label")}: {selectedNativeBrand.material_type}
-              </div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {t("basic_native_vendor_label")}: {selectedNativeBrand.vendor}
-              </div>
+            <div className={dependentGroupClass}>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {selectedNativeBrand.display_name}
+                {" · "}
+                {selectedNativeBrand.material_type}
+                {" · "}
+                {selectedNativeBrand.vendor}
+              </p>
 
               {/* Database picker — trigger button + dialog */}
               {(() => {
@@ -1716,175 +1758,184 @@ export default function BasicSettings() {
                 disabled={selectedNativeSupportedModes.length === 0}
               />
               {selectedNativeSupportedModes.length > 0 && (
-                <div className="text-xs text-slate-500 dark:text-slate-400">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
                   {t("basic_supported_modes_label")}:{" "}
                   {selectedNativeSupportedModes
                     .map((mode) => `${mode.color_layers}L @ ${mode.layer_height_mm.toFixed(2)}mm`)
                     .join(", ")}
-                </div>
+                </p>
               )}
 
               {selectedNativePredictiveModelAvailable && (
-                <div className="flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-50/70 p-3 dark:border-slate-700/40 dark:bg-slate-950/30">
-                  <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
-                    {t("basic_model_gate_label")}
-                  </div>
-                  <div className="grid gap-2">
-                    <Checkbox
-                      label={t("basic_model_enable")}
-                      tooltip={t("basic_model_enable_hint")}
-                      wikiPath={WIKI_DOCS.modelAssistedMatching}
-                      checked={model_enable}
-                      onChange={setModelEnable}
-                    />
-                    <Checkbox
-                      label={t("basic_model_only")}
-                      tooltip={t("basic_model_only_hint")}
-                      wikiPath={WIKI_DOCS.modelAssistedMatching}
-                      checked={model_only}
-                      onChange={setModelOnly}
-                    />
-                  </div>
+                <div className={cx(cardDividerClass, "flex flex-col gap-2 pt-3")}>
+                  <SubGroupHeading label={t("basic_model_gate_label")} />
+                  <Checkbox
+                    label={t("basic_model_enable")}
+                    tooltip={t("basic_model_enable_hint")}
+                    wikiPath={WIKI_DOCS.modelAssistedMatching}
+                    checked={model_enable}
+                    onChange={setModelEnable}
+                  />
+                  <Checkbox
+                    label={t("basic_model_only")}
+                    tooltip={t("basic_model_only_hint")}
+                    wikiPath={WIKI_DOCS.modelAssistedMatching}
+                    checked={model_only}
+                    onChange={setModelOnly}
+                  />
                 </div>
               )}
             </div>
           ) : (
-            <div className="-mt-1 rounded-lg border border-dashed border-slate-300/70 bg-slate-100/35 p-3 text-xs text-slate-500 dark:border-slate-700/60 dark:bg-slate-900/25 dark:text-slate-400">
+            <p className="rounded-[10px] border border-dashed border-slate-300/70 px-3 py-2.5 text-xs text-slate-500 dark:border-slate-700/60 dark:text-slate-400">
               {t("basic_native_brand_placeholder")}
-            </div>
+            </p>
           )}
         </>
       ) : null}
 
-      <div className={cardDividerClass} aria-hidden="true" />
+      <QuantizeColorsControl />
 
-      <div data-tutorial="output-size" className="flex flex-col gap-4">
-        <Slider
-          label={t("basic_width")}
-          tooltip={t("basic_width_hint")}
-          wikiPath={WIKI_DOCS.outputDimensions}
-          value={target_width_mm}
-          min={10}
-          max={dimMax}
-          inputMax={dimInputMax}
-          step={dimensionSliderStep(target_width_mm)}
-          unit="mm"
-          onChange={setTargetWidthMm}
-        />
+      <Block label={t("basic_block_size_and_base_plate")} className="gap-y-4">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3">
+            <div data-tutorial="output-size" className="flex flex-col gap-3">
+              <Slider
+                className="gap-y-1"
+                label={t("basic_width")}
+                tooltip={t("basic_width_hint")}
+                wikiPath={WIKI_DOCS.outputDimensions}
+                value={target_width_mm}
+                min={10}
+                max={dimensionLimits.width}
+                inputMax={dimInputMax}
+                step={dimensionSliderStep(target_width_mm)}
+                unit="mm"
+                onChange={setTargetWidthMm}
+              />
 
-        <Slider
-          label={t("basic_height")}
-          tooltip={t("basic_height_hint")}
-          wikiPath={WIKI_DOCS.outputDimensions}
-          value={target_height_mm}
-          min={10}
-          max={dimMax}
-          inputMax={dimInputMax}
-          step={dimensionSliderStep(target_height_mm)}
-          unit="mm"
-          onChange={setTargetHeightMm}
-        />
-      </div>
-
-      <Checkbox
-        label={t("basic_large_format")}
-        checked={largeFormatEnabled}
-        onChange={setLargeFormatEnabled}
-        disabled={puzzleEnabled || enable_fridge_magnet}
-        tooltip={t("basic_large_format_hint")}
-        wikiPath={WIKI_DOCS.largeFormat}
-      />
-
-      {puzzleEnabled && !largeFormatEnabled && (
-        <div className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400">
-          {t("puzzle_large_format_disabled_hint")}
-        </div>
-      )}
-
-      {mergedLargeFormatWarnings.length > 0 ? (
-        <StatusBanner tone="warning">
-          <div className="flex flex-col gap-1">
-            {mergedLargeFormatWarnings.map((warning) => (
-              <p key={warning}>{warning}</p>
-            ))}
-          </div>
-        </StatusBanner>
-      ) : null}
-
-      {largeFormatEnabled && (
-        <div className="flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
-          <Slider
-            label={t("basic_tile_width")}
-            tooltip={t("basic_tile_width_hint")}
-            wikiPath={WIKI_DOCS.largeFormat}
-            value={tileWidthMm}
-            min={50}
-            max={LARGE_FORMAT_TILE_SLIDER_MAX_MM}
-            inputMax={Number.POSITIVE_INFINITY}
-            step={10}
-            unit="mm"
-            onChange={setTileWidthMm}
-          />
-          <Slider
-            label={t("basic_tile_height")}
-            tooltip={t("basic_tile_height_hint")}
-            wikiPath={WIKI_DOCS.largeFormat}
-            value={tileHeightMm}
-            min={50}
-            max={LARGE_FORMAT_TILE_SLIDER_MAX_MM}
-            inputMax={Number.POSITIVE_INFINITY}
-            step={10}
-            unit="mm"
-            onChange={setTileHeightMm}
-          />
-          {tileGrid && (
-            <div className="-mt-1 px-1 text-xs text-slate-500 dark:text-slate-400">
-              {tileGrid.cols}×{tileGrid.rows} = {tileGrid.total}
-              {tileGrid.total > 1 && (tileGrid.lastW !== tileWidthMm || tileGrid.lastH !== tileHeightMm)
-                ? ` (${tileGrid.lastW}×${tileGrid.lastH}mm)`
-                : ""}
+              <Slider
+                className="gap-y-1"
+                label={t("basic_height")}
+                tooltip={t("basic_height_hint")}
+                wikiPath={WIKI_DOCS.outputDimensions}
+                value={target_height_mm}
+                min={10}
+                max={dimensionLimits.height}
+                inputMax={dimInputMax}
+                step={dimensionSliderStep(target_height_mm)}
+                unit="mm"
+                onChange={setTargetHeightMm}
+              />
             </div>
-          )}
-          <Checkbox
-            label={t("basic_large_format_show_tiles")}
-            checked={largeFormatTileOverlayVisible}
-            onChange={setLargeFormatTileOverlayVisible}
-            tooltip={t("basic_large_format_show_tiles_hint")}
-          />
+
+            <Slider
+              className="gap-y-1"
+              label={t("basic_thickness")}
+              tooltip={t("basic_thickness_hint")}
+              wikiPath={WIKI_DOCS.backingThickness}
+              value={spacer_thick}
+              min={THICKNESS_SLIDER_MIN_MM}
+              max={THICKNESS_SLIDER_MAX_MM}
+              step={THICKNESS_LAYER_STEP_MM}
+              unit="mm"
+              onChange={setSpacerThick}
+              normalizeTextValue={snapThicknessToLayerGrid}
+            />
+
+            <Slider
+              className="gap-y-1"
+              label={t("basic_backing_infill_density")}
+              tooltip={t("basic_backing_infill_density_hint")}
+              wikiPath={WIKI_DOCS.backingThickness}
+              value={backing_infill_density_percent}
+              min={BACKING_INFILL_DENSITY_MIN_PERCENT}
+              max={BACKING_INFILL_DENSITY_MAX_PERCENT}
+              step={BACKING_INFILL_DENSITY_STEP_PERCENT}
+              unit="%"
+              onChange={setBackingInfillDensityPercent}
+              disabled={modelSurfaceEnabled || enable_relief}
+            />
+            {backingInfillDisabledReason && (
+              <p className="-mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                {backingInfillDisabledReason}
+              </p>
+            )}
+          </div>
+
+          <div className="[&>div]:py-1">
+            <Checkbox
+              label={t("basic_large_format")}
+              checked={largeFormatEnabled}
+              onChange={setLargeFormatEnabled}
+              disabled={puzzleEnabled || enable_fridge_magnet}
+              tooltip={t("basic_large_format_hint")}
+              wikiPath={WIKI_DOCS.largeFormat}
+            />
+          </div>
         </div>
-      )}
 
-      <div className={cardDividerClass} aria-hidden="true" />
+        {puzzleEnabled && !largeFormatEnabled && (
+          <p className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400">
+            {t("puzzle_large_format_disabled_hint")}
+          </p>
+        )}
 
-      <Slider
-        label={t("basic_thickness")}
-        tooltip={t("basic_thickness_hint")}
-        wikiPath={WIKI_DOCS.backingThickness}
-        value={spacer_thick}
-        min={THICKNESS_SLIDER_MIN_MM}
-        max={THICKNESS_SLIDER_MAX_MM}
-        step={THICKNESS_LAYER_STEP_MM}
-        unit="mm"
-        onChange={setSpacerThick}
-        normalizeTextValue={snapThicknessToLayerGrid}
-      />
+        {mergedLargeFormatWarnings.length > 0 ? (
+          <StatusBanner tone="warning">
+            <div className="flex flex-col gap-1">
+              {mergedLargeFormatWarnings.map((warning) => (
+                <p key={warning}>{warning}</p>
+              ))}
+            </div>
+          </StatusBanner>
+        ) : null}
 
-      {!modelSurfaceEnabled && (
-        <Slider
-          label={t("basic_backing_infill_density")}
-          tooltip={t("basic_backing_infill_density_hint")}
-          wikiPath={WIKI_DOCS.backingThickness}
-          value={backing_infill_density_percent}
-          min={BACKING_INFILL_DENSITY_MIN_PERCENT}
-          max={BACKING_INFILL_DENSITY_MAX_PERCENT}
-          step={BACKING_INFILL_DENSITY_STEP_PERCENT}
-          unit="%"
-          onChange={setBackingInfillDensityPercent}
-          disabled={enable_relief}
-        />
-      )}
+        {largeFormatEnabled && (
+          <div className={dependentGroupClass}>
+            <Slider
+              label={t("basic_tile_width")}
+              tooltip={t("basic_tile_width_hint")}
+              wikiPath={WIKI_DOCS.largeFormat}
+              value={tileWidthMm}
+              min={50}
+              max={LARGE_FORMAT_TILE_SLIDER_MAX_MM}
+              inputMax={Number.POSITIVE_INFINITY}
+              step={10}
+              unit="mm"
+              onChange={setTileWidthMm}
+            />
+            <Slider
+              label={t("basic_tile_height")}
+              tooltip={t("basic_tile_height_hint")}
+              wikiPath={WIKI_DOCS.largeFormat}
+              value={tileHeightMm}
+              min={50}
+              max={LARGE_FORMAT_TILE_SLIDER_MAX_MM}
+              inputMax={Number.POSITIVE_INFINITY}
+              step={10}
+              unit="mm"
+              onChange={setTileHeightMm}
+            />
+            {tileGrid && (
+              <p className="px-1 text-xs text-slate-500 dark:text-slate-400">
+                {tileGrid.cols}×{tileGrid.rows} = {tileGrid.total}
+                {tileGrid.total > 1 && (tileGrid.lastW !== tileWidthMm || tileGrid.lastH !== tileHeightMm)
+                  ? ` (${tileGrid.lastW}×${tileGrid.lastH}mm)`
+                  : ""}
+              </p>
+            )}
+            <Checkbox
+              label={t("basic_large_format_show_tiles")}
+              checked={largeFormatTileOverlayVisible}
+              onChange={setLargeFormatTileOverlayVisible}
+              tooltip={t("basic_large_format_show_tiles_hint")}
+            />
+          </div>
+        )}
+      </Block>
 
-      {!modelSurfaceEnabled && (
+      <Block label={t("basic_block_structure")}>
         <RadioGroup
           label={t("basic_structure_mode")}
           tooltip={t("basic_structure_mode_hint")}
@@ -1893,23 +1944,33 @@ export default function BasicSettings() {
           options={structureModeOptions}
           columns={2}
           onChange={(v) => setStructureMode(v as StructureMode)}
-          disabled={enable_relief || enable_fridge_magnet}
+          disabled={structureModeDisabledReason !== null}
           disabledValues={isFiveColorExt ? [StructureMode.DOUBLE_SIDED] : []}
         />
-      )}
+        {structureModeDisabledReason && (
+          <p className="-mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+            {structureModeDisabledReason}
+          </p>
+        )}
+        {isFiveColorExt && (
+          <p className="-mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+            {t("basic_structure_mode_five_color_hint")}
+          </p>
+        )}
+      </Block>
 
-      <RadioGroup
-        label={t("basic_modeling_mode")}
-        tooltip={t("basic_modeling_mode_hint")}
-        wikiPath={WIKI_DOCS.modelingMode}
-        value={modeling_mode}
-        options={modelingModeOptions}
-        columns={2}
-        onChange={(v) => setModelingMode(v as ModelingMode)}
-        disabledValues={disabledModelingModes}
-      />
-
-      <QuantizeColorsControl />
+      <Block label={t("basic_block_modeling")}>
+        <RadioGroup
+          label={t("basic_modeling_mode")}
+          tooltip={t("basic_modeling_mode_hint")}
+          wikiPath={WIKI_DOCS.modelingMode}
+          value={modeling_mode}
+          options={modelingModeOptions}
+          columns={2}
+          onChange={(v) => setModelingMode(v as ModelingMode)}
+          disabledValues={disabledModelingModes}
+        />
+      </Block>
 
       <ImportConfirmDialog
         open={importDialogOpen}
@@ -1943,7 +2004,7 @@ function QuantizeColorsControl() {
   const step = 8;
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-2">
       <Slider
         label={t("adv_quantize_colors")}
         tooltip={t("adv_quantize_colors_hint")}
@@ -1956,7 +2017,7 @@ function QuantizeColorsControl() {
       />
       <Button
         label={autoDetectLoading ? t("conv_auto_color_calculating") : t("conv_auto_color_btn")}
-        variant="ghost"
+        variant="primary"
         size="sm"
         onClick={autoDetectColors}
         disabled={!imageFile || autoDetectLoading}

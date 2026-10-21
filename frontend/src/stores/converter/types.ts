@@ -846,6 +846,7 @@ export interface ConverterActions {
     y: number,
     width: number,
     height: number,
+    rotation?: 0 | ImageRotationDegrees,
   ) => Promise<void>;
 
   // 自动检测颜色

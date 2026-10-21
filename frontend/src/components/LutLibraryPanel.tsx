@@ -204,7 +204,7 @@ export default function LutLibraryPanel() {
         <div className="flex flex-wrap gap-2">
           <Button
             label={t("lut_library_refresh_btn")}
-            variant="secondary"
+            variant="primary"
             onClick={() => void handleRefresh()}
             loading={isRefreshing}
           />
@@ -306,7 +306,7 @@ export default function LutLibraryPanel() {
                       </dl>
                       <Button
                         label={t("lut_library_details_btn")}
-                        variant="secondary"
+                        variant="primary"
                         onClick={() => void openDetails(item)}
                         className="w-full"
                       />

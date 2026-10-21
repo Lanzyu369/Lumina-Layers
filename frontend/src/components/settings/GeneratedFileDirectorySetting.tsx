@@ -63,7 +63,7 @@ export default function GeneratedFileDirectorySetting() {
       <div className="flex flex-wrap gap-2">
         <Button
           label={t("settings.generated_file_directory_choose")}
-          variant="secondary"
+          variant="primary"
           size="sm"
           onClick={() => void handleChoose()}
           disabled={picking}
@@ -71,7 +71,7 @@ export default function GeneratedFileDirectorySetting() {
         />
         <Button
           label={t("settings.generated_file_directory_reset")}
-          variant="secondary"
+          variant="primary"
           size="sm"
           onClick={() => setDirectory("")}
           disabled={picking || !directory}

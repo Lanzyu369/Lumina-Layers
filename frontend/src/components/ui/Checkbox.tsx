@@ -78,7 +78,7 @@ export default function Checkbox({
             onChange={(e) => onChange(e.target.checked)}
             className="peer sr-only"
           />
-          <span className="rounded-full peer-focus-visible:ring-4 peer-focus-visible:ring-[var(--focus-ring)]">
+          <span className="inline-flex rounded-full peer-focus-visible:ring-4 peer-focus-visible:ring-[var(--focus-ring)]">
             <SwitchTrack checked={checked} />
           </span>
         </label>

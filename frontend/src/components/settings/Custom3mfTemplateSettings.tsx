@@ -138,7 +138,7 @@ export default function Custom3mfTemplateSettings() {
       <div className="flex min-w-0 flex-wrap items-center gap-3">
         <Button
           label={t(file ? "settings.template_change_file" : "settings.template_choose_file")}
-          variant="secondary"
+          variant="primary"
           disabled={busy}
           onClick={() => fileInput.current?.click()}
         />
@@ -148,7 +148,7 @@ export default function Custom3mfTemplateSettings() {
         {selected && (
           <Button
             label={t("settings.template_delete")}
-            variant="secondary"
+            variant="primary"
             size="sm"
             disabled={busy}
             onClick={() => void remove()}

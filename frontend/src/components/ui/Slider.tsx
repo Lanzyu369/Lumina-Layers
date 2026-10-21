@@ -4,6 +4,7 @@ import HelpDot from "./HelpDot";
 import type { WikiDocPath } from "../../utils/wikiDocs";
 
 interface SliderProps {
+  className?: string;
   label: string;
   value: number;
   min: number;
@@ -29,6 +30,7 @@ interface SliderProps {
 
 export default function Slider(props: SliderProps) {
   const {
+  className,
   label,
   value,
   min,
@@ -136,14 +138,19 @@ export default function Slider(props: SliderProps) {
   const rangeValue = Math.min(max, Math.max(min, value));
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className={cx("flex flex-col gap-1.5", className)}>
       <div className="flex min-w-0 items-center justify-between gap-3">
         <label className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
           <span className="truncate">{label}</span>
           {tooltip && <HelpDot title={label} description={tooltip} wikiPath={wikiPath} ariaLabel={tooltip} />}
         </label>
         {label && (
-          <div className="flex shrink-0 items-center gap-1">
+          <div
+            className={cx(
+              "flex shrink-0 items-center gap-1 rounded-[8px] border border-transparent bg-[var(--surface-well)] pr-1.5 transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-[var(--focus-ring)]",
+              disabled && "cursor-not-allowed opacity-45",
+            )}
+          >
             <input
               type="text"
               inputMode="decimal"
@@ -154,7 +161,7 @@ export default function Slider(props: SliderProps) {
               onBlur={handleBlur}
               onKeyDown={handleKeyDown}
               style={{ width: inputWidth }}
-              className="rounded-[8px] border border-transparent bg-[var(--surface-well)] px-1.5 py-1 text-center text-sm tabular-nums text-slate-700 outline-none transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus:border-blue-400 focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-100"
+              className="min-w-0 bg-transparent px-1.5 py-1 text-center text-sm tabular-nums text-slate-700 outline-none disabled:cursor-not-allowed dark:text-slate-100"
               aria-label={`${label} value`}
             />
             <span className="min-w-6 shrink-0 text-[11px] font-medium text-slate-400 dark:text-slate-500">
@@ -163,22 +170,24 @@ export default function Slider(props: SliderProps) {
           </div>
         )}
       </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={rangeValue}
-        disabled={disabled}
-        aria-label={label}
-        data-testid={testId}
-        onChange={(e) => onChange(clampAndRound(Number(e.target.value)))}
-        className={cx(
-          "slider-track w-full min-w-0 appearance-none cursor-pointer rounded-full accent-blue-500 transition-all duration-200",
-          "h-1.5 bg-slate-200 dark:bg-slate-700",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
-        )}
-      />
+      <div className="flex items-center py-1.5">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={rangeValue}
+          disabled={disabled}
+          aria-label={label}
+          data-testid={testId}
+          onChange={(e) => onChange(clampAndRound(Number(e.target.value)))}
+          className={cx(
+            "slider-track w-full min-w-0 appearance-none cursor-pointer rounded-full accent-blue-500 transition-all duration-200",
+            "h-1.5 bg-[var(--surface-well)] dark:bg-slate-700",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
+          )}
+        />
+      </div>
     </div>
   );
 }

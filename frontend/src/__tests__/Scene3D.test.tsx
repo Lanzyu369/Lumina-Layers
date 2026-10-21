@@ -482,7 +482,7 @@ beforeEach(() => {
 
       expect(screen.queryByTestId("scene3d-performance-panel")).not.toBeInTheDocument();
 
-      expect(screen.getByTestId("scene3d-performance-toggle").parentElement).toHaveStyle({
+      expect(screen.getByTestId("scene3d-performance-toggle").closest("div")).toHaveStyle({
         top: "12px",
       });
 

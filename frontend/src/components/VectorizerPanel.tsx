@@ -521,7 +521,7 @@ export default function VectorizerPanel() {
               <button
                 type="button"
                 onClick={compareZoom.reset}
-                className="rounded-xl bg-slate-200 px-2.5 py-1 text-xs text-slate-600 transition-colors hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
+                className="action-control rounded-xl bg-slate-200 px-2.5 py-1 text-xs text-slate-600 transition-colors hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
               >
                 {t("zoom_reset")}
               </button>
@@ -604,7 +604,7 @@ export default function VectorizerPanel() {
                 label={t("vec.download_svg")}
                 onClick={handleDownload}
                 loading={isDownloading}
-                variant="secondary"
+                variant="primary"
               />
             </div>
             {resultActionError && (

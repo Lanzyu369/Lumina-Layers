@@ -51,6 +51,20 @@ export const cardDividerClass =
 export const groupHeaderClass =
   "flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400";
 
+/** Block header: label, then a hairline that trails off to the right edge.
+ *  The label matches the option text size (text-sm) with semibold weight. The trailing
+ *  rule — not the fill and not extra size — is what separates the block from
+ *  the one above it. A tinted strip would read as a disabled field here, since
+ *  `--surface-well` is already the input background.
+ * 区块标题：标题在前，一条细线向右延伸。标题与选项字号一致（text-sm 半粗），
+ *  因为分隔由后面那条线承担，不靠填充也不靠放大字号。这界面里浅色填充已经
+ *  等于输入框底色，用灰带会被读成一个禁用的控件。 */
+export const blockHeaderClass =
+  "flex items-center gap-2 text-sm font-semibold text-slate-600 dark:text-slate-50";
+
+export const blockHeaderRuleClass =
+  "h-px min-w-4 flex-1 origin-center scale-y-50 bg-slate-600 dark:bg-slate-200";
+
 export const workstationFieldLabelClass =
   "text-sm font-medium text-slate-700 dark:text-slate-200";
 
@@ -71,17 +85,17 @@ export const workstationPickerTriggerClass =
 export const compactFieldClass =
   "w-full rounded-[10px] border border-transparent bg-[var(--surface-well)] px-3 py-2 text-sm text-slate-800 outline-none transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus:border-blue-400 focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-100";
 
-/** Selectable row (checkbox / radio option): borderless at rest, ghost
- *  boundary on hover. The negative inline margin lets the hover fill and
- *  border extend slightly past the text while the label text stays aligned
- *  with the rows above it. 可选行：静止无边框，悬停显示幽灵边界；负外边距让
+/** Selectable row (checkbox / radio option): borderless at rest and on hover.
+ *  The negative inline margin lets the hover fill extend slightly past the
+ *  text while the label text stays aligned with the rows above it.
+ *  可选行：静止和悬停均无可见边框；负外边距让
  *  悬停底色向外伸出，文字仍与其它控件左对齐。
  *  `rounded-[10px]` is part of the public contract (tests locate rows by it). */
 export const workstationChoiceRowClass =
   "-mx-2 flex rounded-[10px] border border-transparent px-2 py-1.5 transition-colors duration-150";
 
 export const workstationChoiceRowActiveClass =
-  "hover:border-[color:var(--surface-card-outline)] hover:bg-[var(--nav-chip-hover)]";
+  "hover:bg-[var(--nav-chip-hover)]";
 
 export const workstationChoiceRowDisabledClass = "cursor-not-allowed opacity-45";
 

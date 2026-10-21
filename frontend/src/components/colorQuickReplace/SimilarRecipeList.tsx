@@ -135,7 +135,7 @@ export default function SimilarRecipeList({
             </div>
             <Button
               label={t("quick_replace_recipe_apply")}
-              variant="ghost"
+              variant="primary"
               size="sm"
               disabled={!canApply || busy}
               onClick={() => onApply(item)}

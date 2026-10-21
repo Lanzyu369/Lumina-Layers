@@ -207,7 +207,7 @@ export default function MaterialCloudSyncPanel() {
           action={(
             <Button
               label={t("mat_sync_full_catalog_retry_btn")}
-              variant="secondary"
+              variant="primary"
               size="sm"
               onClick={catalog.retryFullCatalog}
             />
@@ -295,7 +295,7 @@ export default function MaterialCloudSyncPanel() {
           </div>
           <Button
             label={t("mat_sync_refresh_btn")}
-            variant="secondary"
+            variant="primary"
             onClick={() => void catalog.refreshCatalog()}
             disabled={catalog.isLoading || catalog.isRefreshing}
             loading={catalog.isRefreshing}

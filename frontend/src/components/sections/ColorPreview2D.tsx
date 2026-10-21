@@ -1809,14 +1809,14 @@ export default function ColorPreview2D({
           <button
             type="button"
             onClick={executeBrushDraft}
-            className="rounded-lg bg-pink-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-pink-600"
+            className="action-control rounded-lg bg-pink-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-pink-600"
           >
             {t('selection_brush_apply')}
           </button>
           <button
             type="button"
             onClick={clearBrushDraft}
-            className="ghost-control rounded-lg px-3 py-1.5 text-xs text-slate-700 dark:text-slate-200"
+            className="action-control rounded-lg px-3 py-1.5 text-xs text-slate-700 dark:text-slate-200"
           >
             {t('selection_brush_clear')}
           </button>

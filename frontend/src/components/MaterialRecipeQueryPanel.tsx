@@ -651,13 +651,13 @@ export default function MaterialRecipeQueryPanel() {
                           disabled={isDownloadingSwatch}
                           loading={isDownloadingSwatch}
                           label={t("material_recipe_download_swatch")}
-                          variant="secondary"
+                          variant="primary"
                         />
                       ) : (
                         <Button
                           onClick={handleClearCollection}
                           label={t("material_recipe_collection_clear")}
-                          variant="secondary"
+                          variant="primary"
                         />
                       )}
                   </div>
@@ -677,7 +677,7 @@ export default function MaterialRecipeQueryPanel() {
                   <Button
                     onClick={handleClearCollection}
                     label={t("material_recipe_collection_clear")}
-                    variant="secondary"
+                    variant="primary"
                   />
                 )}
               </div>
@@ -944,19 +944,19 @@ export default function MaterialRecipeQueryPanel() {
                   onClick={handleUndo}
                   disabled={layers.length === 0}
                   label={t("material_recipe_undo")}
-                  variant="secondary"
+                  variant="primary"
                 />
                 <Button
                   onClick={handleReverse}
                   disabled={layers.length < 2}
                   label={t("material_recipe_reverse")}
-                  variant="secondary"
+                  variant="primary"
                 />
                 <Button
                   onClick={handleClear}
                   disabled={layers.length === 0}
                   label={t("material_recipe_clear")}
-                  variant="secondary"
+                  variant="primary"
                   className="col-span-2"
                 />
               </div>

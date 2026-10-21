@@ -483,21 +483,21 @@ export default function PalettePanel({
               <ToolbarGroup label={t("palette_group_history")} tint="slate">
                 <Button
                   label={t("palette_undo")}
-                  variant="ghost"
+                  variant="primary"
                   size="sm"
                   onClick={undoColorRemap}
                   disabled={!canUndoHistory || replacePreviewLoading}
                 />
                 <Button
                   label={t("palette_redo")}
-                  variant="ghost"
+                  variant="primary"
                   size="sm"
                   onClick={redoColorRemap}
                   disabled={!canRedoHistory || replacePreviewLoading}
                 />
                 <Button
                   label={t("palette_clear_remaps")}
-                  variant="ghost"
+                  variant="primary"
                   size="sm"
                   onClick={clearAllRemaps}
                   disabled={!hasRemaps || replacePreviewLoading}
@@ -512,7 +512,7 @@ export default function PalettePanel({
                 <SelectionToolPicker />
                 <Button
                   label={t("palette_clear_selection")}
-                  variant="ghost"
+                  variant="primary"
                   size="sm"
                   onClick={clearSelection}
                   className="w-full"
@@ -531,7 +531,7 @@ export default function PalettePanel({
               <ToolbarGroup label={t("palette_group_free")} tint="rose">
                 <Button
                   label={t("conv_free_color_btn")}
-                  variant="ghost"
+                  variant="primary"
                   size="sm"
                   onClick={() => {
                     if (selectedColor) toggleFreeColor(selectedColor);
@@ -540,7 +540,7 @@ export default function PalettePanel({
                 />
                 <Button
                   label={t("conv_free_color_clear_btn")}
-                  variant="ghost"
+                  variant="primary"
                   size="sm"
                   onClick={clearFreeColors}
                   disabled={free_color_set.size === 0}
@@ -550,7 +550,7 @@ export default function PalettePanel({
               <ToolbarGroup label={t("palette_group_recipe")} tint="amber">
                 <Button
                   label={t("recipe_custom_button")}
-                  variant="ghost"
+                  variant="primary"
                   size="sm"
                   onClick={() => setRecipeDialogOpen(true)}
                   disabled={!canUseCustomRecipe}

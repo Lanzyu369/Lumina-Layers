@@ -514,7 +514,7 @@ export default function MaterialSolverCacheStatusCard({
           <>
             <Button
               label={t("basic_material_cache_rebuild_button")}
-              variant="secondary"
+              variant="primary"
               disabled={materialDirectoryNames.length === 0}
               loading={isBuilding}
               onClick={handleBuild}
@@ -522,7 +522,7 @@ export default function MaterialSolverCacheStatusCard({
             />
             <Button
               label={t("basic_material_cache_delete_button")}
-              variant="secondary"
+              variant="primary"
               disabled={materialDirectoryNames.length === 0}
               loading={isDeleting}
               onClick={handleDelete}
@@ -621,7 +621,7 @@ export default function MaterialSolverCacheStatusCard({
             <>
               <Button
                 label={t("basic_material_runtime_rebuild_button")}
-                variant="secondary"
+                variant="primary"
                 disabled={materialDirectoryNames.length === 0}
                 loading={isRuntimeBuilding}
                 onClick={handleBuildRuntime}
@@ -629,7 +629,7 @@ export default function MaterialSolverCacheStatusCard({
               />
               <Button
                 label={t("basic_material_runtime_delete_button")}
-                variant="secondary"
+                variant="primary"
                 disabled={materialDirectoryNames.length === 0}
                 loading={isRuntimeDeleting}
                 onClick={handleDeleteRuntime}

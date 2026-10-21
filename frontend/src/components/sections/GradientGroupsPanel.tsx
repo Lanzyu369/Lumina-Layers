@@ -314,7 +314,7 @@ export default function GradientGroupsPanel() {
                 ? t("gradient_groups_batch_requantize_empty")
                 : undefined
             }
-            className="ghost-control rounded-full px-2.5 py-1 text-[10px] font-medium text-slate-700 dark:text-slate-200"
+            className="action-control rounded-full px-2.5 py-1 text-[10px] font-medium text-slate-700 dark:text-slate-200"
             data-testid="gradient-groups-batch-requantize"
           >
             {t("gradient_groups_batch_requantize").replace(
@@ -328,7 +328,7 @@ export default function GradientGroupsPanel() {
               void applyAutoGradientReplace();
             }}
             disabled={replacePreviewLoading}
-            className="rounded-full bg-emerald-600 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+            className="action-control rounded-full bg-emerald-600 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t("gradient_groups_apply_now")}
           </button>
@@ -665,7 +665,7 @@ function RequantizeDialog({
             type="button"
             onClick={onSubmit}
             disabled={submitting}
-            className="rounded-full bg-purple-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-60"
+            className="action-control rounded-full bg-purple-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-60"
             data-testid="requantize-dialog-submit"
           >
             {submitting
@@ -814,10 +814,10 @@ const GradientGroupRow = memo(function GradientGroupRow({
             type="button"
             onClick={handleSelectGroup}
             disabled={disabled}
-            className={cx(
-              "ghost-control rounded-full px-2.5 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200",
+            className={`action-control ${cx(
+              "rounded-full px-2.5 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200",
               allSelected && "bg-blue-600 text-white dark:text-white",
-            )}
+            )}`}
           >
             {t("gradient_groups_select_group")}
           </button>
@@ -825,7 +825,7 @@ const GradientGroupRow = memo(function GradientGroupRow({
             type="button"
             onClick={handleFlattenGroup}
             disabled={disabled}
-            className="ghost-control rounded-full px-2.5 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200"
+            className="action-control rounded-full px-2.5 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200"
           >
             {t("gradient_groups_flatten_group")}
           </button>
@@ -834,7 +834,7 @@ const GradientGroupRow = memo(function GradientGroupRow({
               type="button"
               onClick={handleFlattenSelected}
               disabled={disabled}
-              className="ghost-control rounded-full px-2.5 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200"
+              className="action-control rounded-full px-2.5 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200"
               data-testid={`merge-flatten-${group.group_index}`}
             >
               {t("gradient_groups_merge_flatten").replace(
@@ -1015,10 +1015,10 @@ const GradientRegionRow = memo(function GradientRegionRow({
           type="button"
           onClick={handleSelect}
           disabled={disabled}
-          className={cx(
-            "ghost-control rounded-full px-2 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200",
+          className={`action-control ${cx(
+            "rounded-full px-2 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200",
             regionSelected && "bg-blue-600 text-white dark:text-white",
-          )}
+          )}`}
         >
           {t("gradient_groups_select_region")}
         </button>
@@ -1026,7 +1026,7 @@ const GradientRegionRow = memo(function GradientRegionRow({
           type="button"
           onClick={handleFlatten}
           disabled={disabled}
-          className="ghost-control rounded-full px-2 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200"
+          className="action-control rounded-full px-2 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200"
         >
           {t("gradient_groups_flatten_region")}
         </button>
@@ -1040,7 +1040,7 @@ const GradientRegionRow = memo(function GradientRegionRow({
           type="button"
           onClick={handleOpenRequantize}
           disabled={disabled}
-          className="ghost-control rounded-full px-2 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200"
+          className="action-control rounded-full px-2 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200"
           data-testid={`requantize-region-${groupIndex}-${region.region_index}`}
         >
           {t("gradient_groups_requantize_region")}
@@ -1080,7 +1080,7 @@ function HighlightEyeButton({
       disabled={disabled}
       aria-label={ariaLabel}
       title={ariaLabel}
-      className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-slate-700 transition-colors hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
+      className="action-control flex h-5 w-5 items-center justify-center rounded-full transition-colors"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
