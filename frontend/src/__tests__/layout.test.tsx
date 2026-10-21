@@ -38,24 +38,28 @@ describe("Widget Workspace Layout", () => {
     useSettingsStore.setState({ headerNavAlignment: "center" });
   });
 
-  it('preserves "Lumina Studio 2" header', () => {
+  it('preserves "Lumina Studio 2" header', async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     expect(screen.getByText("Lumina Studio 2")).toBeInTheDocument();
   });
 
-  it("renders widget workspace with Scene3D", () => {
+  it("renders widget workspace with Scene3D", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     expect(screen.getByTestId("scene3d-mock")).toBeInTheDocument();
   });
 
-  it("renders panel controls toggle button in header", () => {
+  it("renders panel controls toggle button in header", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     // Widget toggles are now inside a dropdown menu
     expect(screen.getByTestId("panel-controls-toggle")).toBeInTheDocument();
   });
 
-  it("renders the full main-app top-level navigation", () => {
+  it("renders the full main-app top-level navigation", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     expect(screen.getByTestId("tab-converter")).toBeInTheDocument();
     expect(screen.getByTestId("tab-lut-management")).toBeInTheDocument();
     expect(screen.getByTestId("tab-material-management")).toBeInTheDocument();
@@ -64,8 +68,9 @@ describe("Widget Workspace Layout", () => {
     expect(screen.getByTestId("tab-settings")).toBeInTheDocument();
   });
 
-  it("places Creative Workshop between Vectorizer and Settings", () => {
+  it("places Creative Workshop between Vectorizer and Settings", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
 
     const primaryTabs = screen
       .getAllByRole("button")
@@ -82,8 +87,9 @@ describe("Widget Workspace Layout", () => {
     ]);
   });
 
-  it("keeps the top-level navigation in the centered header column by default", () => {
+  it("keeps the top-level navigation in the centered header column by default", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
 
     const converterTab = screen.getByTestId("tab-converter");
     const nav = converterTab.closest("nav");
@@ -102,9 +108,10 @@ describe("Widget Workspace Layout", () => {
     expect(screen.getByTestId("sub-tab-row")).toHaveClass("justify-center");
   });
 
-  it("left-aligns both navigation rows when the setting asks for it", () => {
+  it("left-aligns both navigation rows when the setting asks for it", async () => {
     useSettingsStore.setState({ headerNavAlignment: "left" });
     render(<App />);
+    await screen.findByTestId("tab-converter");
 
     const nav = screen.getByTestId("tab-converter").closest("nav");
     const header = nav?.closest("header");
@@ -117,8 +124,9 @@ describe("Widget Workspace Layout", () => {
     expect(screen.getByTestId("sub-tab-row")).toHaveClass("justify-start");
   });
 
-  it("keeps the sub tabs while the alignment setting changes", () => {
+  it("keeps the sub tabs while the alignment setting changes", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     const primaryTabs = screen.getByTestId("tab-converter").closest("nav");
     const subTabs = screen.getByTestId("subtab-converter-core").closest("nav");
 
@@ -135,10 +143,11 @@ describe("Widget Workspace Layout", () => {
     expect(screen.getByTestId("subtab-converter-core").closest("nav")).toBe(subTabs);
   });
 
-  it("applies the stored dark theme to the page", () => {
+  it("applies the stored dark theme to the page", async () => {
     useSettingsStore.setState({ theme: "dark" });
     try {
       render(<App />);
+    await screen.findByTestId("tab-converter");
       expect(document.documentElement).toHaveClass("dark");
     } finally {
       useSettingsStore.setState({ theme: "light" });
@@ -146,16 +155,18 @@ describe("Widget Workspace Layout", () => {
     }
   });
 
-  it("shows the brand title next to the logo while the header has room", () => {
+  it("shows the brand title next to the logo while the header has room", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
 
     const title = screen.getByTestId("header-brand-title");
     expect(title).toHaveTextContent("Lumina Studio 2");
     expect(title).not.toHaveClass("max-w-0");
   });
 
-  it("renders local LUT and material secondary tabs in the main app", () => {
+  it("renders local LUT and material secondary tabs in the main app", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
 
     fireEvent.click(screen.getByTestId("tab-lut-management"));
     expect(screen.getByTestId("subtab-lut-library")).toBeInTheDocument();

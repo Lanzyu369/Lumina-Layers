@@ -59,8 +59,9 @@ beforeEach(() => {
 });
 
 describe("App Widget Toggles", () => {
-  it("defers only converter re-entry until the indicator finishes and keeps the page shell visible", () => {
+  it("defers only converter re-entry until the indicator finishes and keeps the page shell visible", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     expect(screen.getByTestId("scene3d-mock")).toHaveAttribute("data-deferred", "false");
     fireEvent.click(screen.getByTestId("tab-vectorizer"));
     expect(screen.queryByTestId("scene3d-mock")).toBeNull();
@@ -73,8 +74,9 @@ describe("App Widget Toggles", () => {
     expect(screen.getByTestId("scene3d-mock")).toHaveAttribute("data-deferred", "false");
   });
 
-  it("ignores completion from a converter entry interrupted by another tab", () => {
+  it("ignores completion from a converter entry interrupted by another tab", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     fireEvent.click(screen.getByTestId("tab-vectorizer"));
     fireEvent.click(screen.getByTestId("tab-converter"));
     const previousCompletion = indicatorCompletions.at(-1)!;
@@ -88,8 +90,9 @@ describe("App Widget Toggles", () => {
     expect(screen.getByTestId("scene3d-mock")).toHaveAttribute("data-deferred", "false");
   });
 
-  it("clears a pending initialization when navigation is changed outside the header", () => {
+  it("clears a pending initialization when navigation is changed outside the header", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     fireEvent.click(screen.getByTestId("tab-vectorizer"));
     fireEvent.click(screen.getByTestId("tab-converter"));
     act(() => useWidgetStore.getState().setActiveTab("vectorizer"));
@@ -102,8 +105,9 @@ describe("App Widget Toggles", () => {
     fireEvent.click(screen.getByTestId("panel-controls-toggle"));
   }
 
-  it("renders widget toggle buttons only for current tab (converter by default)", () => {
+  it("renders widget toggle buttons only for current tab (converter by default)", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     openWidgetMenu();
 
     // Converter page widgets (default active tab) should be visible
@@ -117,8 +121,9 @@ describe("App Widget Toggles", () => {
     expect(screen.queryByTestId("widget-toggle-five-color")).not.toBeInTheDocument();
   });
 
-  it("shows the model texture panel toggle only under the Creative Center sub-tab", () => {
+  it("shows the model texture panel toggle only under the Creative Center sub-tab", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
 
     // Core sub-tab (核心设置) must not offer the model texture panel.
     // 核心设置子页签不得提供模型贴图面板。
@@ -136,8 +141,9 @@ describe("App Widget Toggles", () => {
     expect(modelSurfaceToggle.className).toContain("bg-blue-50");
   });
 
-  it("does not show widget toggles on LUT pages rendered as full panels", () => {
+  it("does not show widget toggles on LUT pages rendered as full panels", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
 
     fireEvent.click(screen.getByTestId("tab-lut-management"));
     openWidgetMenu();
@@ -151,6 +157,7 @@ describe("App Widget Toggles", () => {
 
   it("opens Creative Workshop without exposing converter widget controls", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     await waitFor(() => {
       expect(screen.getByTestId("header-menu-button")).toHaveAttribute(
         "data-backend-status",
@@ -169,8 +176,9 @@ describe("App Widget Toggles", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("converter tab widgets are visible by default", () => {
+  it("converter tab widgets are visible by default", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     openWidgetMenu();
 
     const basicToggle = screen.getByTestId("widget-toggle-basic-settings");
@@ -180,8 +188,9 @@ describe("App Widget Toggles", () => {
     expect(actionBarToggle.className).toContain("bg-blue-50");
   });
 
-  it("toggles widget visibility when toggle button is clicked", () => {
+  it("toggles widget visibility when toggle button is clicked", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     openWidgetMenu();
 
     const basicToggle = screen.getByTestId("widget-toggle-basic-settings");
@@ -195,8 +204,9 @@ describe("App Widget Toggles", () => {
     expect(basicToggle.className).toContain("bg-transparent");
   });
 
-  it("toggles widget back to visible when clicked again", () => {
+  it("toggles widget back to visible when clicked again", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     openWidgetMenu();
 
     const basicToggle = screen.getByTestId("widget-toggle-basic-settings");
@@ -210,8 +220,9 @@ describe("App Widget Toggles", () => {
     expect(basicToggle.className).toContain("bg-blue-50");
   });
 
-  it("renders reset layout button", () => {
+  it("renders reset layout button", async () => {
     render(<App />);
+    await screen.findByTestId("tab-converter");
     openWidgetMenu();
 
     const resetButton = screen.getByTestId("widget-reset-layout");

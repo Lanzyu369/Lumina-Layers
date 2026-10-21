@@ -250,6 +250,23 @@ describe('LutColorGrid 推荐排序', () => {
 describe('PalettePanel 双色显示', () => {
   beforeEach(resetStore);
 
+  it('keeps exact per-color relief height editing and the millimeter unit', async () => {
+    const PalettePanel = await importPalettePanel();
+    useConverterStore.setState({
+      palette: [PALETTE[0]],
+      enable_relief: true,
+      color_height_map: { ee0000: 1.2 },
+      heightmap_max_height: 5,
+    });
+    render(<PalettePanel />);
+    const input = screen.getByRole('textbox', { name: 'value' });
+    expect(input).toHaveValue('1.20');
+    expect(screen.getByText('mm')).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: '4.92' } });
+    fireEvent.blur(input);
+    expect(useConverterStore.getState().color_height_map.ee0000).toBe(4.92);
+  });
+
   it('selectedColor 存在时显示量化色和匹配色色块 (Req 4.1)', async () => {
     const PalettePanel = await importPalettePanel();
 

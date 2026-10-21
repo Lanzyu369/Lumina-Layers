@@ -140,35 +140,35 @@ export default function Slider(props: SliderProps) {
   return (
     <div className={cx("flex flex-col gap-1.5", className)}>
       <div className="flex min-w-0 items-center justify-between gap-3">
-        <label className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
-          <span className="truncate">{label}</span>
-          {tooltip && <HelpDot title={label} description={tooltip} wikiPath={wikiPath} ariaLabel={tooltip} />}
-        </label>
         {label && (
-          <div
-            className={cx(
-              "flex shrink-0 items-center gap-1 rounded-[8px] border border-transparent bg-[var(--surface-well)] pr-1.5 transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-[var(--focus-ring)]",
-              disabled && "cursor-not-allowed opacity-45",
-            )}
-          >
-            <input
-              type="text"
-              inputMode="decimal"
-              value={inputText}
-              disabled={disabled}
-              onChange={(e) => setInputText(e.target.value)}
-              onFocus={() => setIsFocused(true)}
-              onBlur={handleBlur}
-              onKeyDown={handleKeyDown}
-              style={{ width: inputWidth }}
-              className="min-w-0 bg-transparent px-1.5 py-1 text-center text-sm tabular-nums text-slate-700 outline-none disabled:cursor-not-allowed dark:text-slate-100"
-              aria-label={`${label} value`}
-            />
-            <span className="min-w-6 shrink-0 text-[11px] font-medium text-slate-400 dark:text-slate-500">
-              {unit}
-            </span>
-          </div>
+          <label className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
+            <span className="truncate">{label}</span>
+            {tooltip && <HelpDot title={label} description={tooltip} wikiPath={wikiPath} ariaLabel={tooltip} />}
+          </label>
         )}
+        <div
+          className={cx(
+            "flex shrink-0 items-center gap-1 rounded-[8px] border border-transparent bg-[var(--surface-well)] pr-1.5 transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-[var(--focus-ring)]",
+            disabled && "cursor-not-allowed opacity-45",
+          )}
+        >
+          <input
+            type="text"
+            inputMode="decimal"
+            value={inputText}
+            disabled={disabled}
+            onChange={(e) => setInputText(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            style={{ width: inputWidth }}
+            className="min-w-0 bg-transparent px-1.5 py-1 text-center text-sm tabular-nums text-slate-700 outline-none disabled:cursor-not-allowed dark:text-slate-100"
+            aria-label={`${label} value`}
+          />
+          <span className="min-w-6 shrink-0 text-[11px] font-medium text-slate-400 dark:text-slate-500">
+            {unit}
+          </span>
+        </div>
       </div>
       <div className="flex items-center py-1.5">
         <input

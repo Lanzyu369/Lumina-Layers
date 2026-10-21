@@ -6,6 +6,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("../api/converter", async () => ({
   ...await vi.importActual<typeof import("../api/converter")>("../api/converter"),
+  fetchExportMaterialSelection: vi.fn(async () => (await import("./fixtures/exportMaterialSelection")).READY_EXPORT_MATERIAL_SELECTION),
   convertPreview: api.preview,
   convertGenerate: api.generate,
   convertBatch: api.batch,
@@ -118,8 +119,7 @@ describe("source SVG compensation product contract", () => {
     let resolve!: (value: ReturnType<typeof previewResponse>) => void;
     api.preview.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     const pending = useConverterStore.getState().submitPreview();
-    await Promise.resolve();
-    expect(api.preview).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(api.preview).toHaveBeenCalledOnce());
     useConverterStore.getState().setSvgHoleMaxAreaMm2(1);
     resolve(previewResponse());
     await pending;
@@ -133,8 +133,7 @@ describe("source SVG compensation product contract", () => {
     api.generate.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     useConverterStore.setState({ sessionId: "hole-session" });
     const pending = useConverterStore.getState().submitGenerate();
-    await Promise.resolve();
-    expect(api.generate).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(api.generate).toHaveBeenCalledOnce());
     useConverterStore.getState().setSvgHoleCompensationEnabled(false);
     resolve({ status: "ok", message: "Generated", download_url: "/api/files/stale.3mf" });
     await pending;
@@ -146,8 +145,7 @@ describe("source SVG compensation product contract", () => {
     api.batch.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     useConverterStore.setState({ batchMode: true, batchFiles: [svgFile(), svgFile()] });
     const pending = useConverterStore.getState().submitBatch();
-    await Promise.resolve();
-    expect(api.batch).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(api.batch).toHaveBeenCalledOnce());
     useConverterStore.getState().setSvgHoleMaxWidthMm(0.2);
     resolve({ status: "ok", message: "Generated", results: [], preview_items: [], download_url: "/api/files/stale.zip" });
     await pending;
@@ -191,8 +189,7 @@ describe("source SVG compensation product contract", () => {
     let resolve!: (value: ReturnType<typeof previewResponse>) => void;
     api.preview.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     const pending = useConverterStore.getState().submitPreview();
-    await Promise.resolve();
-    expect(api.preview).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(api.preview).toHaveBeenCalledOnce());
     useConverterStore.getState().setTargetWidthMm(220);
     resolve(previewResponse());
     await pending;
@@ -207,8 +204,7 @@ describe("source SVG compensation product contract", () => {
     api.generate.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     useConverterStore.setState({ sessionId: "small-session", aspectRatio: 2 });
     const pending = useConverterStore.getState().submitGenerate();
-    await Promise.resolve();
-    expect(api.generate).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(api.generate).toHaveBeenCalledOnce());
     useConverterStore.getState().setTargetHeightMm(110);
     resolve({ status: "ok", message: "Generated", download_url: "/api/files/stale-size.3mf" });
     await pending;
@@ -231,8 +227,7 @@ describe("source SVG compensation product contract", () => {
     let resolve!: (value: object) => void;
     api.batch.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     const pending = useConverterStore.getState().submitBatch();
-    await Promise.resolve();
-    expect(api.batch).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(api.batch).toHaveBeenCalledOnce());
     useConverterStore.getState().setTargetWidthMm(220);
     resolve({ status: "ok", message: "Generated", results: [], preview_items: [], download_url: "/api/files/stale-size.zip" });
     await pending;
@@ -303,8 +298,7 @@ describe("source SVG compensation product contract", () => {
     let resolve!: (value: object) => void;
     api.batch.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     const pending = useConverterStore.getState().submitBatch();
-    await Promise.resolve();
-    expect(api.batch).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(api.batch).toHaveBeenCalledOnce());
     useConverterStore.getState().setModelingMode(ModelingMode.VECTOR);
     resolve({ status: "ok", message: "Generated", results: [], preview_items: [], download_url: "/api/files/stale.zip" });
     await pending;

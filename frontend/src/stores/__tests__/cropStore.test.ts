@@ -397,6 +397,7 @@ describe('矢量化 SVG 导入', () => {
     expect(useConverterStore.getState().isLoading).toBe(true);
     expect(useConverterStore.getState().hasManualPreview).toBe(true);
 
+    await vi.waitFor(() => expect(resolvePreview).toBeTypeOf('function'));
     useConverterStore.getState().invalidatePreviewForAutoRefresh();
     resolvePreview({
       session_id: 'obsolete-session',

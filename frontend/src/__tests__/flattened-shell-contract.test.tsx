@@ -171,7 +171,8 @@ describe("Slider drops its bordered shell", () => {
 
     const valueBox = screen.getByRole("textbox", { name: /宽度 value/i });
     expect(valueBox).toBeInTheDocument();
-    expect(valueBox.className).toContain("border-transparent");
+    expect(valueBox.parentElement).toHaveClass("border-transparent");
+    expect(valueBox.parentElement?.className).toContain("focus-within:ring-2");
     expect(valueBox.className).not.toMatch(/shadow-/);
 
     // The old shell was the only `rounded-2xl border` wrapper in this control.

@@ -217,7 +217,7 @@ describe("ActionBar — auto batch mode", () => {
     expect(btn).not.toBeDisabled();
   });
 
-  it("disables generate and explains why while large format and model texture are both on", () => {
+  it("disables the output action and explains why while large format and model texture are both on", () => {
     useConverterStore.setState({
       imageFile: makeFile("art.png"),
       lut_name: "test_lut",
@@ -226,7 +226,7 @@ describe("ActionBar — auto batch mode", () => {
       modelSurfaceEnabled: false,
     });
     const { rerender } = render(<ActionBar />);
-    expect(screen.getByText("生成").closest("button")).not.toBeDisabled();
+    expect(capturedSlicerSelectorProps?.canSubmit).toBe(true);
     expect(
       screen.queryByText(translations.large_format_model_surface_conflict.zh),
     ).not.toBeInTheDocument();
@@ -236,7 +236,7 @@ describe("ActionBar — auto batch mode", () => {
     });
     rerender(<ActionBar />);
 
-    expect(screen.getByText("生成").closest("button")).toBeDisabled();
+    expect(capturedSlicerSelectorProps?.canSubmit).toBe(false);
     expect(
       screen.getByText(translations.large_format_model_surface_conflict.zh),
     ).toBeInTheDocument();

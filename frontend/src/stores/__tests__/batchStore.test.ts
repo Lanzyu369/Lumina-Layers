@@ -8,6 +8,7 @@ const notificationMocks = vi.hoisted(() => ({
 
 // Mock the converter API module
 vi.mock("../../api/converter", () => ({
+  fetchExportMaterialSelection: vi.fn(async () => (await import("../../__tests__/fixtures/exportMaterialSelection")).READY_EXPORT_MATERIAL_SELECTION),
   convertBatch: vi.fn(),
   // Provide stubs for other imports used by converterStore
   fetchLutList: vi.fn(),
@@ -157,6 +158,8 @@ describe("submitBatch API 调用和状态管理", () => {
       use_lut_constrained: false,
       auto_dynamic_range: false,
       separate_backing: false,
+      backing_output: "same_project",
+      native_filament_profiles: undefined,
       enable_relief: false,
       enable_coating: false,
       coating_height_mm: 0.08,
@@ -393,6 +396,7 @@ describe("submitBatch API 调用和状态管理", () => {
     useConverterStore.setState({ batchFiles: files });
 
     const staleRequest = useConverterStore.getState().submitBatch();
+    await vi.waitFor(() => expect(mockedConvertBatch).toHaveBeenCalledTimes(1));
     useSettingsStore
       .getState()
       .setBuildPlateForMachine(
@@ -403,6 +407,7 @@ describe("submitBatch API 调用和状态管理", () => {
     const stateAfterPlateChange = useConverterStore.getState();
 
     const freshRequest = useConverterStore.getState().submitBatch();
+    await vi.waitFor(() => expect(mockedConvertBatch).toHaveBeenCalledTimes(2));
     expect(mockedConvertBatch.mock.calls[0][1].build_plate_id).toBe(
       "textured-pei-plate",
     );

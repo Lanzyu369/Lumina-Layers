@@ -19,6 +19,7 @@ import * as lutApi from "../api/lut";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { ColorMode, ModelingMode, StructureMode } from "../api/types";
+import { READY_EXPORT_MATERIAL_SELECTION } from "./fixtures/exportMaterialSelection";
 
 /**
  * Reset the converter store to a deterministic baseline so each property
@@ -83,6 +84,7 @@ function seedVectorPreviewState(outlineWidth: number): void {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  vi.spyOn(converterApi, "fetchExportMaterialSelection").mockResolvedValue(READY_EXPORT_MATERIAL_SELECTION);
 });
 
 describe("submitGenerate vector outline payload anchor (Task 1.2)", () => {

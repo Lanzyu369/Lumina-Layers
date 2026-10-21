@@ -11,6 +11,7 @@ import { parseRecipeFile, restoreConverterRecipe } from "../recipe/importRecipe"
 import { embedRecipeInPng } from "../recipe/pngMetadata";
 import { createLegacyRecipeV1 } from "./fixtures/legacyRecipeV1";
 import type { LuminaRecipe } from "../recipe/types";
+import { RECIPE_SCHEMA_VERSION } from "../recipe/types";
 
 const FORMATS = [
   { name: "heightmap.png", mime: "image/png" },
@@ -70,7 +71,7 @@ describe("share card heightmap import", () => {
 
   for (const version of [1, 3, 4]) {
     for (const container of ["json", "png"]) {
-      it.each(FORMATS)(`preserves $name bytes through v${version} ${container} import and v4 re-export`, async ({ name, mime }) => {
+      it.each(FORMATS)(`preserves $name bytes through v${version} ${container} import and current-schema re-export`, async ({ name, mime }) => {
         const heightmap = fixtureFile(name, mime);
         const expectedBytes = new Uint8Array(await heightmap.arrayBuffer());
         const post = vi.spyOn(apiClient, "post").mockImplementation(async (url, data, options) => {
@@ -87,7 +88,7 @@ describe("share card heightmap import", () => {
         const recipe = await heightmapRecipe(heightmap, version);
         const preview = await prepareImport(await importFile(recipe, container));
         expect(post).toHaveBeenCalledTimes(1);
-        expect(preview.recipe.schema_version).toBe(4);
+        expect(preview.recipe.schema_version).toBe(RECIPE_SCHEMA_VERSION);
         expect(preview.restoreResult.state.autoHeightMode).toBe("use-heightmap");
         expect(preview.restoreResult.state.heightmap_max_height).toBe(7);
         const restored = preview.restoreResult.heightmapFile!;

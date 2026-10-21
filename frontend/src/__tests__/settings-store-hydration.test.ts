@@ -23,6 +23,7 @@ vi.mock("../stores/generatedArtifactInvalidation", () => ({
 }));
 
 vi.mock("../api/converter", () => ({
+  fetchExportMaterialSelection: vi.fn(),
   fetchLutList: vi.fn(),
   convertPreview: vi.fn(),
   convertGenerate: vi.fn(),
@@ -652,6 +653,9 @@ describe("settings store hydration and base-layer modifier wiring", () => {
   it("submitGenerate includes device and high-fidelity SVG settings", async () => {
     const { settingsStoreModule, converterStoreModule, converterApi } =
       await loadStores();
+    vi.mocked(converterApi.fetchExportMaterialSelection).mockResolvedValue(
+      (await import("./fixtures/exportMaterialSelection")).READY_EXPORT_MATERIAL_SELECTION,
+    );
 
     vi.mocked(converterApi.convertGenerate).mockResolvedValue({
       status: "ok",
