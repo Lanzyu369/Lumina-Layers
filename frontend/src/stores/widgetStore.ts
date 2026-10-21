@@ -417,7 +417,7 @@ function _promoteModelSurfaceEntry(
 export const useWidgetStore = create<WidgetStore>()(
   subscribeWithSelector(
     persist(
-      (set) => ({
+      (set, get) => ({
       widgets: { ...DEFAULT_LAYOUT },
       isDragging: false,
       activeWidgetId: null,
@@ -470,31 +470,24 @@ export const useWidgetStore = create<WidgetStore>()(
       setWidgetPositions: (
         positions: Partial<Record<WidgetId, { x: number; y: number }>>,
       ) => {
-        set((state) => {
-          const entries = Object.entries(positions) as [
-            WidgetId,
-            { x: number; y: number },
-          ][];
-          if (entries.length === 0) return state;
-
-          let changed = false;
-          const widgets = { ...state.widgets };
-
-          for (const [id, position] of entries) {
-            const current = widgets[id];
-            if (
-              !current ||
-              (current.position.x === position.x &&
-                current.position.y === position.y)
-            ) {
-              continue;
-            }
-            widgets[id] = { ...current, position };
-            changed = true;
+        const widgets = get().widgets;
+        let nextWidgets: typeof widgets | undefined;
+        for (const [id, position] of Object.entries(positions) as [
+          WidgetId,
+          { x: number; y: number },
+        ][]) {
+          const current = widgets[id];
+          if (
+            !current ||
+            (current.position.x === position.x && current.position.y === position.y)
+          ) {
+            continue;
           }
-
-          return changed ? { widgets } : state;
-        });
+          nextWidgets ??= { ...widgets };
+          nextWidgets[id] = { ...current, position };
+        }
+        // Even set(state => state) serializes the persisted layout.
+        if (nextWidgets) set({ widgets: nextWidgets });
       },
 
       /**
@@ -591,9 +584,8 @@ export const useWidgetStore = create<WidgetStore>()(
        * 更新 Widget 预测量的展开高度。
        */
       setExpandedHeight: (id: WidgetId, height: number) => {
+        if (get().widgets[id].expandedHeight === height) return;
         set((state) => {
-          // Only update if height actually changed to avoid unnecessary re-renders
-          if (state.widgets[id].expandedHeight === height) return state;
           return {
             widgets: {
               ...state.widgets,
