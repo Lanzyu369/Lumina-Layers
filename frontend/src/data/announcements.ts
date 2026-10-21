@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-21",
+    title: {
+      zh: "Lumina Layers — 10 月更新速览",
+      en: "Lumina Layers — October updates",
+    },
+    sections: [{
+      category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+      items: [{
+        zh: "修正了高层数耗材配色计算遗漏大量配方的问题；之前计算过的旧数据会在下次使用时自动重新计算，原有项目和耗材档案不受影响。",
+        en: "Fixed missing recipe choices in higher-layer material colour calculations. Older calculated data is rebuilt automatically when next needed, without changing your projects or material profiles.",
+      }],
+    }],
+  },
+  {
     version: "2026-10-15",
     title: {
       zh: "Lumina Layers — 10 月更新速览",

@@ -72,6 +72,17 @@ class NativeSvgSelfTestError(RuntimeError):
         self.reason_code = reason_code
 
 
+class MaterialSamplingSelfTestError(RuntimeError):
+    """Stable failure when packaged material sampling cannot run correctly.
+
+    打包后的耗材采样无法正确执行时使用的稳定失败类型。
+    """
+
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
 def _geometry_wkb(geometry: Any) -> bytes:
     import shapely
 
@@ -248,6 +259,57 @@ def _svg_hole_compensation_self_test_payload() -> dict[str, Any]:
     }
 
 
+def _material_sampling_self_test_payload() -> dict[str, Any]:
+    """Check installed SciPy data and real high-layer recipes without a server.
+    无需启动服务，检查已安装的 SciPy 数据与真实高层配方生成。
+    """
+    from importlib import resources
+
+    import numpy as np
+
+    from core.material_candidate_sampling import (
+        _sobol_points, _validate_sample_points, generate_candidate_recipes,
+    )
+
+    resource_present = resources.files("scipy.stats").joinpath(
+        "_sobol_direction_numbers.npz"
+    ).is_file()
+    if not resource_present:
+        raise MaterialSamplingSelfTestError("sobol_resource_missing")
+
+    dimensions = 10
+    sample_count = 1024
+    points = _sobol_points(sample_count, dimensions, 7)
+    try:
+        points = _validate_sample_points(points, sample_count, dimensions)
+    except ValueError as exc:
+        raise MaterialSamplingSelfTestError("sobol_samples_invalid") from exc
+    sobol_unique_points = int(np.unique(points, axis=0).shape[0])
+    if sobol_unique_points != sample_count:
+        raise MaterialSamplingSelfTestError("sobol_samples_invalid")
+
+    candidate_budget = 4096
+    recipes = generate_candidate_recipes(
+        material_count=4, layer_count=dimensions,
+        candidate_budget=candidate_budget, seed=7,
+    ).recipes
+    if (
+        recipes.shape != (candidate_budget, dimensions)
+        or recipes.dtype.kind not in "iu"
+        or np.any(recipes < 0)
+        or np.any(recipes >= 4)
+        or np.unique(recipes, axis=0).shape[0] != candidate_budget
+    ):
+        raise MaterialSamplingSelfTestError("candidate_samples_invalid")
+    return {
+        "status": "ok", "resource_present": resource_present,
+        "dimensions": dimensions, "sample_count": sample_count,
+        "sobol_unique_points": sobol_unique_points,
+        "candidate_budget": candidate_budget,
+        "candidate_count": int(recipes.shape[0]),
+    }
+
+
 def _print_json(payload: dict[str, Any]) -> None:
     print(
         json.dumps(
@@ -261,9 +323,9 @@ def _print_json(payload: dict[str, Any]) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run a native SVG probe or start the API server.
+    """Run a packaged-runtime diagnostic or start the API server.
 
-    执行原生 SVG 自检，或启动 API 服务。
+    执行打包运行时自检，或启动 API 服务。
 
     Args:
         argv: Optional command-line arguments without the executable name.
@@ -283,18 +345,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--svg-hole-compensation-self-test", action="store_true",
         help="Exercise native SVG hole compensation without starting a server.",
     )
+    parser.add_argument(
+        "--material-sampling-self-test", action="store_true",
+        help="Check SciPy data and material sampling without starting a server.",
+    )
     args = parser.parse_args(argv)
-    if args.native_svg_self_test or args.svg_hole_compensation_self_test:
+    if (
+        args.native_svg_self_test or args.svg_hole_compensation_self_test
+        or args.material_sampling_self_test
+    ):
         from api.structured_logging import configure_structured_logging
 
         configure_structured_logging()
         try:
-            payload = (
-                _svg_hole_compensation_self_test_payload()
-                if args.svg_hole_compensation_self_test
-                else _native_svg_self_test_payload(args.native_svg_self_test)
-            )
-        except NativeSvgSelfTestError as exc:
+            if args.material_sampling_self_test:
+                payload = _material_sampling_self_test_payload()
+            elif args.svg_hole_compensation_self_test:
+                payload = _svg_hole_compensation_self_test_payload()
+            else:
+                payload = _native_svg_self_test_payload(args.native_svg_self_test)
+        except (NativeSvgSelfTestError, MaterialSamplingSelfTestError) as exc:
             _print_json(
                 {
                     "status": "error",
@@ -303,13 +373,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 }
             )
             return 1
-        except Exception as exc:  # Boundary guard for the native probe.
+        except Exception as exc:  # Boundary guard for diagnostic commands.
             _print_json(
                 {
                     "status": "error",
                     "error_type": type(exc).__name__,
-                    "reason_code": str(
-                        getattr(exc, "reason_code", "native_self_test_failed")
+                    "reason_code": (
+                        "material_sampling_self_test_failed"
+                        if args.material_sampling_self_test
+                        else str(getattr(
+                            exc, "reason_code", "native_self_test_failed",
+                        ))
                     ),
                 }
             )
