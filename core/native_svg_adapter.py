@@ -9,6 +9,7 @@ from functools import lru_cache
 import os
 from pathlib import Path
 import time
+import xml.etree.ElementTree as ET
 from types import ModuleType
 from typing import Any
 
@@ -910,6 +911,36 @@ def analyze_native_svg(
             native_version="unavailable",
         )
     native_version = str(getattr(module, "__version__", "unknown"))
+    if expand_stroke_to_fill and native_version == "0.3.3":
+        if not (
+            np.isfinite(target_width_mm) and target_width_mm > 0.0
+            and np.isfinite(tolerance_mm) and tolerance_mm > 0.0
+        ):
+            _invalid_result("invalid_physical_parameters")
+        # 0.3.3 can spend unbounded time expanding a curve in a clip context.
+        # Do not approximate inherited/CSS/use paint ownership here: the whole
+        # document follows the existing legacy path until the runtime is fixed.
+        try:
+            root = ET.parse(svg_path).getroot()
+            has_clip = any(
+                element.tag.rsplit("}", 1)[-1] == "clipPath"
+                or any(key.rsplit("}", 1)[-1] == "clip-path" for key in element.attrib)
+                or "clip-path" in element.get("style", "").lower()
+                or (element.tag.rsplit("}", 1)[-1] == "style"
+                    and "clip-path" in "".join(element.itertext()).lower())
+                for element in root.iter()
+            )
+        except ET.ParseError:
+            # Unknown XML semantics must not enter the known unsafe runtime.
+            has_clip = True
+        except OSError:
+            # Missing/unreadable paths cannot reach stroke expansion.
+            has_clip = False
+        if has_clip:
+            return NativeSvgFallback(
+                reason_code="native_clipped_stroke_compatibility",
+                native_version=native_version,
+            )
     call_started = time.perf_counter()
     result = module.analyze_svg(
         svg_path,

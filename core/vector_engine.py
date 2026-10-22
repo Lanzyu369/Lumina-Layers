@@ -23,6 +23,9 @@ import io
 import pickle
 import warnings
 import math
+import tempfile
+from contextlib import contextmanager
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
@@ -9281,12 +9284,40 @@ class VectorProcessor:
         transform_layered_mesh(mesh, transform)
 
 
+@contextmanager
+def _surface_svg_source(svg_path: str | os.PathLike) -> Iterator[str]:
+    """Omit generated display-only gap lines without discarding author strokes."""
+    try:
+        root = ET.parse(svg_path).getroot()
+    except ET.ParseError as exc:
+        raise ValueError("Invalid surface artwork SVG.") from exc
+    removed = False
+    for parent in root.iter():
+        for child in list(parent):
+            if (
+                _tag_local_name(child) == "path"
+                and "qq3d-gap-filler" in child.get("class", "").split()
+                and child.get("fill", "").strip().lower() == "none"
+                and child.get("id") is None
+            ):
+                parent.remove(child)
+                removed = True
+    if not removed:
+        yield str(svg_path)
+        return
+
+    with tempfile.TemporaryDirectory(prefix="lumina-surface-svg-") as directory:
+        filtered_path = os.path.join(directory, "artwork.svg")
+        ET.ElementTree(root).write(filtered_path, encoding="utf-8", xml_declaration=True)
+        yield filtered_path
+
+
 def parse_svg_geometry(
     svg_path: str | os.PathLike,
     *,
     target_width_mm: float,
 ) -> tuple[list[dict[str, Any]], float, tuple[float, float, float, float]]:
-    """Parse native SVG shapes without constructing a LUT-backed processor.
+    """Parse visible SVG paint without constructing a LUT-backed processor.
 
     在不构造 LUT 匹配器的情况下解析原生 SVG 几何。
 
@@ -9301,10 +9332,24 @@ def parse_svg_geometry(
         图形数据、解析比例和源边界。
     """
 
-    if float(target_width_mm) <= 0.0:
-        raise ValueError("target_width_mm must be positive.")
+    if not math.isfinite(float(target_width_mm)) or float(target_width_mm) <= 0.0:
+        raise ValueError("target_width_mm must be positive and finite.")
     processor = VectorProcessor.__new__(VectorProcessor)
     processor._init_runtime_defaults()
-    processor.expand_stroke_to_fill = False
-    processor._parse_expand_stroke_to_fill = False
-    return processor._parse_svg(str(svg_path), float(target_width_mm))
+    with _surface_svg_source(svg_path) as source:
+        outcome = native_svg_adapter.analyze_native_svg(
+            source,
+            float(target_width_mm),
+            processor.sampling_precision,
+            expand_stroke_to_fill=True,
+        )
+        if isinstance(outcome, native_svg_adapter.NativeSvgGeometry):
+            return (
+                [{"poly": item["geometry"], "color": item["color"]}
+                 for item in outcome.clipped_shapes],
+                outcome.scale_factor,
+                outcome.bbox,
+            )
+        # Only explicit whole-document fallback may select the legacy parser.
+        processor._parse_expand_stroke_to_fill = True
+        return processor._parse_svg(source, float(target_width_mm))

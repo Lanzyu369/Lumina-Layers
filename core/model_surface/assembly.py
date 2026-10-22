@@ -633,7 +633,9 @@ def _available_surface_depth_mm(
         raise ModelSurfaceError(MODEL_SURFACE_THICKNESS_UNKNOWN)
 
     min_x, min_y, max_x, max_y = polygon.bounds
-    sample_points = [polygon.representative_point(), polygon.centroid]
+    sample_points = [polygon.representative_point()]
+    if polygon.contains(polygon.centroid):
+        sample_points.append(polygon.centroid)
     for x_value in np.linspace(min_x, max_x, num=6)[1:-1]:
         for y_value in np.linspace(min_y, max_y, num=6)[1:-1]:
             point = sg.Point(float(x_value), float(y_value))
@@ -641,8 +643,17 @@ def _available_surface_depth_mm(
                 sample_points.append(point)
 
     triangles = np.asarray(base_mesh.triangles, dtype=np.float64)
+    surface_face_mask = None
+    if footprint.face_indices:
+        if any(
+            not isinstance(index, int) or isinstance(index, bool)
+            or index < 0 or index >= len(triangles)
+            for index in footprint.face_indices
+        ):
+            raise ModelSurfaceError(MODEL_SURFACE_THICKNESS_UNKNOWN)
+        surface_face_mask = np.zeros(len(triangles), dtype=bool)
+        surface_face_mask[list(footprint.face_indices)] = True
     inward_direction = -normal
-    surface_epsilon = 1e-5
     local_depths: list[float] = []
     for point in sample_points:
         surface_point = (
@@ -650,14 +661,15 @@ def _available_surface_depth_mm(
             + u_axis * float(point.x)
             + v_axis * float(point.y)
         )
-        ray_origin = surface_point + inward_direction * surface_epsilon
-        hit_distance = _first_triangle_hit_distance(
+        depth = _surface_ray_depth_mm(
             triangles,
-            ray_origin,
+            surface_point,
             inward_direction,
+            surface_face_mask,
         )
-        if hit_distance is not None:
-            local_depths.append(hit_distance + surface_epsilon)
+        if depth is None:
+            raise ModelSurfaceError(MODEL_SURFACE_THICKNESS_UNKNOWN)
+        local_depths.append(depth)
 
     if not local_depths:
         raise ModelSurfaceError(MODEL_SURFACE_THICKNESS_UNKNOWN)
@@ -711,11 +723,18 @@ def _pattern_xy_bounds_mm(
     return logical_bounds
 
 
-def _first_triangle_hit_distance(
+def _surface_ray_depth_mm(
     triangles: np.ndarray,
     ray_origin: np.ndarray,
     ray_direction: np.ndarray,
+    surface_face_mask: np.ndarray | None = None,
 ) -> float | None:
+    """Pair the selected surface entry with its first exit.
+
+    Signed distances allow the actual surface to lie on either side of the
+    fitted plane. Triangle winding distinguishes entering solid from leaving
+    it, including exits into cavities; an entry is never a back wall.
+    """
     edge_a = triangles[:, 1] - triangles[:, 0]
     edge_b = triangles[:, 2] - triangles[:, 0]
     direction = np.broadcast_to(ray_direction, edge_b.shape)
@@ -745,10 +764,24 @@ def _first_triangle_hit_distance(
     valid &= barycentric_u >= -1e-9
     valid &= barycentric_v >= -1e-9
     valid &= barycentric_u + barycentric_v <= 1.0 + 1e-9
-    valid &= distance > 1e-6
-    if not np.any(valid):
+    valid &= np.isfinite(distance)
+    entry_mask = valid & (determinant > 0.0)
+    if surface_face_mask is not None:
+        entry_mask &= surface_face_mask
+    entries = distance[entry_mask]
+    if entries.size == 0:
         return None
-    return float(np.min(distance[valid]))
+    # A legacy hand-built footprint without provenance uses the first exterior
+    # entry conservatively; a later solid must never substitute for this wall.
+    entry = float(np.min(entries))
+    exits = distance[valid & (determinant < 0.0) & (distance >= entry - 1e-9)]
+    if exits.size == 0:
+        return None
+    exit_distance = float(np.min(exits))
+    # Exclude empty space above the true surface and material above an inset
+    # fitted plane. The overlay is embedded starting at that fitted plane.
+    depth = exit_distance - max(entry, 0.0)
+    return max(0.0, depth) if exit_distance - entry > 1e-6 else 0.0
 
 
 def _pattern_z_bounds_mm(pattern_scene: trimesh.Scene) -> tuple[float, float]:
