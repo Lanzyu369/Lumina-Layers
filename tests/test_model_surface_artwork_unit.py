@@ -1,12 +1,145 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from PIL import Image
 import pytest
 from shapely.ops import unary_union
 
+from core import native_svg_adapter
 from core.model_surface.artwork import SurfacePlacement, render_surface_artwork
 from core.model_surface.types import EdgeMode, PlaneFrame, SurfaceFootprint
 from core.vector_engine import VectorProcessor
+
+
+@pytest.mark.parametrize("native_available", [True, False])
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16"])
+def test_surface_svg_preserves_authored_strokes_and_filters_only_generated_gap_lines(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, native_available: bool, encoding: str,
+):
+    if not native_available:
+        def unavailable():
+            raise ImportError("native SVG unavailable")
+
+        monkeypatch.setattr(native_svg_adapter, "_load_native_module", unavailable)
+    source = tmp_path / "authored-strokes.svg"
+    source.write_text(
+        """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+          <rect width="20" height="20" fill="#0080ff"/>
+          <g transform="translate(0 2)" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round">
+            <path d="M2 4H18"/>
+            <circle cx="10" cy="10" r="3"/>
+          </g>
+          <path class="qq3d-gap-filler" fill="none" stroke="#ff0000"
+                stroke-width="2" vector-effect="non-scaling-stroke" d="M2 18H18"/>
+        </svg>""",
+        encoding=encoding,
+    )
+
+    result = render_surface_artwork(
+        source_path=source,
+        footprint=_square_footprint(),
+        placement=SurfacePlacement(mode=EdgeMode.EDGE_TO_EDGE),
+        pixels_per_mm=2,
+        output_dir=tmp_path,
+    )
+
+    processor = VectorProcessor.__new__(VectorProcessor)
+    processor._init_runtime_defaults()
+    processor._parse_expand_stroke_to_fill = False
+    shapes, scale, _bounds = processor._parse_svg(str(result.output_path), 20.0)
+    clipped = processor._clip_occlusion(shapes)
+    by_color = {
+        color: unary_union([item["geometry"] for item in clipped if item["color"] == color])
+        for color in {item["color"] for item in clipped}
+    }
+    assert set(by_color) == {(0, 128, 255), (255, 255, 255)}
+    white = by_color[(255, 255, 255)]
+    assert white.area * scale**2 == pytest.approx(32.0 + 13.0 * 3.14159265, abs=0.5)
+    assert by_color[(0, 128, 255)].intersection(white).area * scale**2 < 0.01
+
+
+@pytest.mark.parametrize("native_available", [True, False])
+def test_surface_svg_clips_authored_stroke_after_group_transform(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, native_available: bool,
+):
+    if not native_available:
+        def unavailable():
+            raise ImportError("native SVG unavailable")
+
+        monkeypatch.setattr(native_svg_adapter, "_load_native_module", unavailable)
+    source = tmp_path / "clipped-stroke.svg"
+    source.write_text(
+        """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+          <defs><clipPath id="clip"><rect x="2" y="2" width="16" height="16"/></clipPath></defs>
+          <rect width="20" height="20" fill="#0080ff"/>
+          <g transform="translate(0 2)" clip-path="url(#clip)"
+             fill="none" stroke="#ffffff" stroke-width="2"><path d="M0 4H20"/></g>
+        </svg>""", encoding="utf-8",
+    )
+    result = render_surface_artwork(
+        source_path=source, footprint=_square_footprint(),
+        placement=SurfacePlacement(mode=EdgeMode.EDGE_TO_EDGE), output_dir=tmp_path,
+    )
+    processor = VectorProcessor.__new__(VectorProcessor)
+    processor._init_runtime_defaults()
+    processor._parse_expand_stroke_to_fill = False
+    shapes, scale, _bounds = processor._parse_svg(str(result.output_path), 20.0)
+    white = unary_union([item["poly"] for item in shapes if item["color"] == (255, 255, 255)])
+    assert white.area * scale**2 == pytest.approx(32.0, abs=0.1)
+    assert tuple(value * scale for value in white.bounds) == pytest.approx((2, 5, 18, 7), abs=0.02)
+
+
+def test_surface_svg_uses_visible_native_paint_for_translucent_stroke(tmp_path):
+    source = tmp_path / "translucent-stroke.svg"
+    source.write_text(
+        """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+          <rect width="20" height="20" fill="#0080ff"/>
+          <path d="M2 6H18" fill="none" stroke="#ffffff" stroke-width="2" stroke-opacity="0.5"/>
+        </svg>""", encoding="utf-8",
+    )
+    result = render_surface_artwork(
+        source_path=source, footprint=_square_footprint(),
+        placement=SurfacePlacement(mode=EdgeMode.EDGE_TO_EDGE), output_dir=tmp_path,
+    )
+    processor = VectorProcessor.__new__(VectorProcessor)
+    processor._init_runtime_defaults()
+    processor._parse_expand_stroke_to_fill = False
+    shapes, _scale, _bounds = processor._parse_svg(str(result.output_path), 20.0)
+
+    assert {item["color"] for item in shapes} == {(0, 128, 255), (128, 192, 255)}
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16"])
+def test_surface_svg_falls_back_before_unsafe_native_clipped_curve(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, encoding: str,
+):
+    def unsafe_native(*_args):
+        pytest.fail("known unsafe clipped-stroke native call")
+
+    monkeypatch.setattr(native_svg_adapter, "_load_native_module", lambda: SimpleNamespace(
+        __version__="0.3.3", analyze_svg=unsafe_native,
+    ))
+    source = tmp_path / "clipped-circle.svg"
+    source.write_text(
+        f'''<?xml version="1.0" encoding="{encoding}"?>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+          <defs><clipPath id="clip"><rect x="2" y="2" width="16" height="16"/></clipPath></defs>
+          <rect width="20" height="20" fill="#0080ff"/>
+          <g transform="translate(0 2)" clip-path="url(#clip)" fill="none" stroke="#ffffff" stroke-width="2">
+            <circle cx="10" cy="10" r="3"/>
+          </g>
+        </svg>''', encoding=encoding,
+    )
+    result = render_surface_artwork(
+        source_path=source, footprint=_square_footprint(),
+        placement=SurfacePlacement(mode=EdgeMode.EDGE_TO_EDGE), output_dir=tmp_path,
+    )
+    processor = VectorProcessor.__new__(VectorProcessor)
+    processor._init_runtime_defaults()
+    processor._parse_expand_stroke_to_fill = False
+    shapes, scale, _bounds = processor._parse_svg(str(result.output_path), 20.0)
+    white_area = sum(item["poly"].area for item in shapes if item["color"] == (255, 255, 255)) * scale**2
+    assert white_area == pytest.approx(12.0 * 3.14159265, abs=0.5)
 
 
 def test_render_surface_artwork_masks_to_surface_bounds(tmp_path):
