@@ -1472,7 +1472,8 @@ class TestS06VoxelBuilding:
         result = run(ctx)
         backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
 
-        assert result["full_matrix"][backing_start: backing_end + 1, 0, 0].tolist() == [6] * (
+        logical_column = np.repeat(result["full_matrix"][:, 0, 0], np.diff(result["voxel_z_edges"]))
+        assert logical_column[backing_start: backing_end + 1].tolist() == [6] * (
             backing_end - backing_start + 1
         )
 
@@ -1496,7 +1497,8 @@ class TestS06VoxelBuilding:
         result = run(ctx)
         backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
 
-        assert result["full_matrix"][backing_start: backing_end + 1, 0, 0].tolist() == [3] * (
+        logical_column = np.repeat(result["full_matrix"][:, 0, 0], np.diff(result["voxel_z_edges"]))
+        assert logical_column[backing_start: backing_end + 1].tolist() == [3] * (
             backing_end - backing_start + 1
         )
 
@@ -1526,11 +1528,12 @@ class TestS06VoxelBuilding:
         result = run(ctx)
         backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
 
-        backing = result["full_matrix"][backing_start: backing_end + 1]
+        logical_volume = np.repeat(result["full_matrix"], np.diff(result["voxel_z_edges"]), axis=0)
+        backing = logical_volume[backing_start: backing_end + 1]
         assert np.all(backing[:, mask_solid] == 3)
-        assert np.all(result["full_matrix"][:, ~mask_solid] == -1)
-        assert np.all(result["full_matrix"][:backing_start, 0, 0] == -1)
-        assert np.all(result["full_matrix"][:backing_start, 2, 1] == 2)
+        assert np.all(logical_volume[:, ~mask_solid] == -1)
+        assert np.all(logical_volume[:backing_start, 0, 0] == -1)
+        assert np.all(logical_volume[:backing_start, 2, 1] == 2)
 
     def test_high_fidelity_backing_stays_on_solid_mask(self):
         """Non-pixel modes keep transparent margins outside the backing footprint."""
@@ -1554,8 +1557,9 @@ class TestS06VoxelBuilding:
         result = run(ctx)
         backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
 
-        assert np.all(result["full_matrix"][backing_start: backing_end + 1, 0, 0] == -1)
-        assert np.all(result["full_matrix"][backing_start: backing_end + 1, 2, 1] == 3)
+        logical_volume = np.repeat(result["full_matrix"], np.diff(result["voxel_z_edges"]), axis=0)
+        assert np.all(logical_volume[backing_start: backing_end + 1, 0, 0] == -1)
+        assert np.all(logical_volume[backing_start: backing_end + 1, 2, 1] == 3)
 
     def test_cloisonne_builds_wireframe_without_processor(self):
         """Cloisonne mode must not require ctx["processor"] in material-archive flows."""

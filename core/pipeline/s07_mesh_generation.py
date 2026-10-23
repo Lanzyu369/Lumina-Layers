@@ -29,11 +29,12 @@ _log = get_logger(__name__)
 _MIN_PARALLEL_MESH_WORK_UNITS = 100_000
 
 
-def _timed_generate_mesh(mesher, full_matrix, mat_id, target_h):
+def _timed_generate_mesh(mesher, full_matrix, mat_id, target_h, z_edges: np.ndarray | None = None):
     """Wrapper that returns (mesh, elapsed_s) measured inside the worker thread."""
     with task_parallelism_worker_scope():
         _t = time.perf_counter()
-        result = mesher.generate_mesh(full_matrix, mat_id, target_h)
+        kwargs = {"z_edges": z_edges} if z_edges is not None else {}
+        result = mesher.generate_mesh(full_matrix, mat_id, target_h, **kwargs)
         return result, time.perf_counter() - _t
 
 
@@ -65,7 +66,9 @@ def run(ctx: dict) -> dict:
     生成多材质 3D 网格，支持可选的并行执行。
 
     PipelineContext 输入键 / Input keys:
-        - full_matrix (np.ndarray): (Z, H, W) int 体素矩阵
+        - full_matrix (np.ndarray): (Z, H, W) signed material label planes.
+        - voxel_z_edges (np.ndarray | None): Z+1 logical layer boundaries for
+          representative planes; None means each plane spans one layer.
         - slot_names (list[str]): 材料槽位名称列表
         - preview_colors (dict): 材料预览颜色
         - modeling_mode (ModelingMode): 建模模式
@@ -169,6 +172,7 @@ def run(ctx: dict) -> dict:
                     full_matrix,
                     mat_id,
                     target_h,
+                    ctx.get("voxel_z_edges"),
                 ): mat_id
                 for mat_id in range(num_materials)
             }
@@ -187,6 +191,7 @@ def run(ctx: dict) -> dict:
                     full_matrix,
                     mat_id,
                     target_h,
+                    ctx.get("voxel_z_edges"),
                 )
                 mesh_compute_elapsed += mat_timings[mat_id]
             except (ValueError, TypeError, RuntimeError, OSError) as e:
