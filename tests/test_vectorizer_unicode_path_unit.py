@@ -172,8 +172,9 @@ class _InProcessPool:
 
 
 class TestVectorizeRouteNonAsciiTempDir:
+    @pytest.mark.parametrize("fmt", ["JPEG", "WEBP", "TIFF"])
     def test_upload_under_cjk_temp_dir_returns_svg(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, native_inputs: list[type], fmt: str
     ) -> None:
         temp_dir = tmp_path / _CJK_DIR_NAME / "output" / "temp"
         temp_dir.mkdir(parents=True)
@@ -183,10 +184,14 @@ class TestVectorizeRouteNonAsciiTempDir:
         app.dependency_overrides[get_file_registry] = lambda: registry
         app.dependency_overrides[get_worker_pool] = lambda: _InProcessPool()
         client = TestClient(app)
+        data = io.BytesIO()
+        options = {"lossless": True} if fmt == "WEBP" else {}
+        _two_color_image().save(data, format=fmt, **options)
+        encoded = _exif_rotated_jpeg_bytes() if fmt == "JPEG" else data.getvalue()
         try:
             response = client.post(
                 "/api/vectorize",
-                files={"image": ("input.jpg", _exif_rotated_jpeg_bytes(), "image/jpeg")},
+                files={"image": ("input." + fmt.lower(), encoded, "image/" + fmt.lower())},
                 data={"params": '{"num_colors": 4}'},
             )
             assert response.status_code == 200, response.text
@@ -199,3 +204,4 @@ class TestVectorizeRouteNonAsciiTempDir:
             app.dependency_overrides.clear()
 
         assert [p.suffix for p in temp_dir.iterdir()] == [".svg"]
+        assert native_inputs == [bytes]

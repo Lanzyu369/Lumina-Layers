@@ -85,10 +85,12 @@ def _hex_near(palette: list[str], rgb: tuple[int, int, int], tol: int = 16) -> b
 # Six vertical bands that span the full 16-bit range, and the review's values.
 _BANDS16 = [0, 8192, 16384, 32768, 49152, 65535]
 _REVIEW16 = [0, 255, 256, 1000, 65535]
+_SIGNED_BANDS16 = [0, 4096, 8192, 16384, 24576, 32767]
+_SIGNED_NEGATIVE16 = [-32768, -8192, -1, 0, 4096, 16384, 32767]
 
 
 def _gray16_bands(levels: list[int], width: int = 160, height: int = 64) -> np.ndarray:
-    arr = np.zeros((height, width), dtype=np.uint16)
+    arr = np.zeros((height, width), dtype=np.int32)
     step = width // len(levels)
     for i, value in enumerate(levels):
         end = (i + 1) * step if i < len(levels) - 1 else width
@@ -96,14 +98,17 @@ def _gray16_bands(levels: list[int], width: int = 160, height: int = 64) -> np.n
     return arr
 
 
-def _write_gray16_tiff(arr: np.ndarray, path, byte_order: str) -> str:
+def _write_gray16_tiff(
+    arr: np.ndarray, path, byte_order: str, *, sample_format: int = 1
+) -> str:
     """Write an uncompressed baseline 16-bit grey TIFF by hand (II or MM)."""
     e = "<" if byte_order == "II" else ">"
     height, width = arr.shape
-    pixels = arr.astype(f"{e}u2").tobytes()
+    pixels = arr.astype(f"{e}{'i' if sample_format == 2 else 'u'}2").tobytes()
     tags = [  # tag, type (3=SHORT, 4=LONG), value
         (256, 3, width), (257, 3, height), (258, 3, 16), (259, 3, 1), (262, 3, 1),
-        (273, 4, 8 + 2 + 9 * 12 + 4), (277, 3, 1), (278, 3, height), (279, 4, len(pixels)),
+        (273, 4, 8 + 2 + 10 * 12 + 4), (277, 3, 1), (278, 3, height), (279, 4, len(pixels)),
+        (339, 3, sample_format),
     ]
     ifd = struct.pack(f"{e}H", len(tags))
     for tag, typ, value in tags:
@@ -488,7 +493,18 @@ def test_16bit_grey_tiff_vectorizes_like_16bit_png(tmp_path, temp_dir, levels, b
 
 
 @pytest.mark.parametrize("byte_order", ["MM", "II"])
-def test_api_16bit_grey_tiff_returns_png_equivalent_svg(tmp_path, temp_dir, byte_order):
+@pytest.mark.parametrize(
+    ("sample_format", "levels", "display_levels"),
+    [
+        (1, _BANDS16, None),
+        (2, _SIGNED_BANDS16, [0, 16, 32, 64, 96, 128]),
+        (2, _SIGNED_NEGATIVE16, [0, 0, 0, 0, 16, 64, 128]),
+    ],
+    ids=["unsigned", "signed_positive", "signed_negative"],
+)
+def test_api_16bit_grey_tiff_returns_png_equivalent_svg(
+    tmp_path, temp_dir, byte_order, sample_format, levels, display_levels
+):
     from fastapi.testclient import TestClient
 
     from api.app import create_app
@@ -498,10 +514,21 @@ def test_api_16bit_grey_tiff_returns_png_equivalent_svg(tmp_path, temp_dir, byte
     async def _run_inline(fn, *args):
         return fn(*args)
 
-    arr = _gray16_bands(_BANDS16)
+    arr = _gray16_bands(levels)
+    png_path = tmp_path / "bands.png"
+    if display_levels is None:
+        _write_gray16(arr, png_path, "png")
+    else:
+        # Independent display values: signed native samples scale by 1/256,
+        # round to the nearest 8-bit value and saturate negatives to black.
+        Image.fromarray(_gray16_bands(display_levels).astype(np.uint8)).save(png_path)
     uploads = {
-        "png": ("bands16.png", _write_gray16(arr, tmp_path / "bands16.png", "png"), "image/png"),
-        "tiff": ("bands16.tiff", _write_gray16_tiff(arr, tmp_path / "bands16.tiff", byte_order), "image/tiff"),
+        "png": ("bands.png", str(png_path), "image/png"),
+        "tiff": (
+            "bands16.tiff",
+            _write_gray16_tiff(arr, tmp_path / "bands16.tiff", byte_order, sample_format=sample_format),
+            "image/tiff",
+        ),
     }
     app = create_app()
     registry = FileRegistry()
@@ -529,6 +556,75 @@ def test_api_16bit_grey_tiff_returns_png_equivalent_svg(tmp_path, temp_dir, byte
 
     for field in ("width", "height", "num_shapes", "num_colors", "palette"):
         assert bodies["tiff"][field] == bodies["png"][field]
-    assert bodies["tiff"]["num_colors"] == len(_BANDS16)
+    expected_colors = len(set(display_levels if display_levels is not None else levels))
+    assert bodies["tiff"]["num_colors"] == expected_colors
     assert svgs["tiff"] == svgs["png"]
     assert {p.suffix for p in temp_dir.iterdir()} <= {".svg"}
+
+
+@pytest.mark.parametrize("byte_order", ["II", "MM"])
+@pytest.mark.parametrize("levels", [_SIGNED_BANDS16, _SIGNED_NEGATIVE16], ids=["positive", "negative"])
+def test_signed16_tiff_handoff_preserves_native_sample_range(
+    tmp_path, temp_dir, byte_order, levels
+):
+    from api.workers.vectorizer_workers import _transcode_for_native_loader
+
+    samples = _gray16_bands(levels)
+    source = _write_gray16_tiff(samples, tmp_path / "signed.tiff", byte_order, sample_format=2)
+    with Image.open(source) as image:
+        assert image.mode == "I"
+        assert image.tag_v2[258] == (16,)
+        assert image.tag_v2[339] == (2,)
+
+    handoff = _transcode_for_native_loader(source, str(temp_dir))
+    try:
+        with Image.open(handoff) as image:
+            assert image.mode == "I;16"
+            np.testing.assert_array_equal(np.asarray(image), np.maximum(samples, 0))
+    finally:
+        os.unlink(handoff)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "mode", "sample_format"),
+    [(np.int32, "I", 2), (np.float32, "F", 3)],
+    ids=["integer", "float"],
+)
+def test_32bit_tiff_keeps_native_unscaled_greys(tmp_path, temp_dir, dtype, mode, sample_format):
+    """32-bit integer/float samples must not be reinterpreted as 16-bit."""
+    samples = _gray16_bands([0, 64, 128, 255, 1000, 65536]).astype(dtype)
+    source = _write(Image.fromarray(samples), tmp_path / "integer32.tiff", "TIFF")
+    oracle = _write(
+        Image.fromarray(_gray16_bands([0, 64, 128, 255, 255, 255]).astype(np.uint8)),
+        tmp_path / "display.png",
+        "PNG",
+    )
+    with Image.open(source) as image:
+        assert image.mode == mode
+        assert image.tag_v2[258] == (32,)
+        assert image.tag_v2[339] == (sample_format,)
+
+    result, svg = _vectorize(source, temp_dir)
+    expected, expected_svg = _vectorize(oracle, temp_dir)
+
+    assert _summary(result) == _summary(expected)
+    assert svg == expected_svg
+
+
+@pytest.mark.parametrize("fmt", ["WEBP", "TIFF"])
+def test_raster_handoff_preserves_embedded_icc_profile(tmp_path, temp_dir, fmt):
+    from PIL import ImageCms
+
+    from api.workers.vectorizer_workers import _transcode_for_native_loader
+
+    profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    image = _banded_rgb()
+    options = {"lossless": True} if fmt == "WEBP" else {}
+    source = _write(image, tmp_path / ("profile." + fmt.lower()), fmt, icc_profile=profile, **options)
+    handoff = _transcode_for_native_loader(source, str(temp_dir))
+    try:
+        with Image.open(handoff) as decoded:
+            assert decoded.info["icc_profile"] == profile
+            assert decoded.tobytes() == image.tobytes()
+    finally:
+        os.unlink(handoff)

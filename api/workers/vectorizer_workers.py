@@ -38,12 +38,15 @@ def _transcode_for_native_loader(image_path: str, temp_dir: str) -> str | None:
     the native loader reads (PNG/JPEG/BMP/...) keep their original handling.
     The PNG carries Pillow's decoded pixels and alpha: Pillow applies the TIFF
     Orientation tag while decoding, but not WebP EXIF orientation (which the
-    native loader also ignores for PNG/JPEG). 16-bit grey keeps its full
-    0..65535 range in a 16-bit PNG for every byte order. If Pillow cannot open,
-    decode or size-check the file, the native loader gets the original path.
+    native loader also ignores for PNG/JPEG). Unsigned 16-bit grey keeps its
+    full 0..65535 range in every byte order. Signed 16-bit grey keeps positive
+    samples and saturates negatives to black, matching the native loader.
+    If Pillow cannot open, decode or size-check the file, the native loader
+    gets the original path.
     仅对 WebP/TIFF 签名的文件使用 Pillow，原生可读格式保持原有处理。PNG 保存
     Pillow 解码后的像素与透明度（TIFF 方向标签由 Pillow 解码时应用，WebP EXIF
-    方向不应用）；任意字节序的 16 位灰度以 16 位 PNG 保留 0..65535 完整范围。
+    方向不应用）；任意字节序的无符号 16 位灰度保留 0..65535 完整范围，
+    有符号 16 位灰度保留正值并将负值饱和为黑色，与原生加载器一致。
     Pillow 无法打开、解码或超出像素限制时，原样交给原生加载器。
 
     Args:
@@ -59,10 +62,9 @@ def _transcode_for_native_loader(image_path: str, temp_dir: str) -> str | None:
 
     from PIL import Image, UnidentifiedImageError
 
-    if not _is_native_unreadable(image_path):
-        return None
-
     try:
+        if not _is_native_unreadable(image_path):
+            return None
         img = Image.open(image_path)
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError):
         return None
@@ -74,7 +76,17 @@ def _transcode_for_native_loader(image_path: str, temp_dir: str) -> str | None:
             img.load()
         except (Image.DecompressionBombError, OSError):
             return None
-        if img.mode.startswith("I;16") and img.mode != "I;16":
+        if (
+            img.format == "TIFF"
+            and img.mode == "I"
+            and img.tag_v2.get(258) == (16,)  # BitsPerSample
+            and img.tag_v2.get(339) == (2,)  # SampleFormat: signed integer
+        ):
+            # Pillow decodes signed 16-bit grey as I. PNG cannot store signed
+            # samples; clamp negatives to zero and retain positive values so
+            # the native loader applies its existing 1/256 scaling once.
+            img = img.convert("I;16")
+        elif img.mode.startswith("I;16") and img.mode != "I;16":
             # Other 16-bit grey byte orders (e.g. big-endian I;16B) clip at 255
             # when converted directly; go through 32-bit I to keep 0..65535.
             # 其他字节序的 16 位灰度直接转换会截断到 255，经 I 中转以保留完整范围。
