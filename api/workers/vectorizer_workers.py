@@ -13,6 +13,95 @@ Design rules:
 - All imports of neroued_vectorizer are lazy (inside function body).
 """
 
+# Accepted upload formats the native loader cannot decode, detected by content.
+# 已接受但原生加载器无法解码的格式（按文件内容识别）。
+_NATIVE_UNREADABLE_FORMATS = frozenset({"WEBP", "TIFF"})
+_TIFF_SIGNATURES = (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")
+_PNG_NATIVE_MODES = frozenset({"1", "L", "LA", "P", "RGB", "RGBA", "I;16"})
+
+
+def _is_native_unreadable(image_path: str) -> bool:
+    """Return True when the file starts with a WebP or TIFF signature.
+    文件头为 WebP 或 TIFF 签名时返回 True。
+    """
+    with open(image_path, "rb") as f:
+        head = f.read(12)
+    is_webp = head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+    return is_webp or head[:4] in _TIFF_SIGNATURES
+
+
+def _transcode_for_native_loader(image_path: str, temp_dir: str) -> str | None:
+    """Re-encode WebP/TIFF content as a lossless PNG temp file.
+    将 WebP/TIFF 内容无损重编码为临时 PNG 文件。
+
+    Only files with a WebP/TIFF signature are opened with Pillow, so formats
+    the native loader reads (PNG/JPEG/BMP/...) keep their original handling.
+    The PNG carries Pillow's decoded pixels and alpha: Pillow applies the TIFF
+    Orientation tag while decoding, but not WebP EXIF orientation (which the
+    native loader also ignores for PNG/JPEG). Unsigned 16-bit grey keeps its
+    full 0..65535 range in every byte order. Signed 16-bit grey keeps positive
+    samples and saturates negatives to black, matching the native loader.
+    If Pillow cannot open, decode or size-check the file, the native loader
+    gets the original path.
+    仅对 WebP/TIFF 签名的文件使用 Pillow，原生可读格式保持原有处理。PNG 保存
+    Pillow 解码后的像素与透明度（TIFF 方向标签由 Pillow 解码时应用，WebP EXIF
+    方向不应用）；任意字节序的无符号 16 位灰度保留 0..65535 完整范围，
+    有符号 16 位灰度保留正值并将负值饱和为黑色，与原生加载器一致。
+    Pillow 无法打开、解码或超出像素限制时，原样交给原生加载器。
+
+    Args:
+        image_path (str): Uploaded image temp path. (上传图像临时路径)
+        temp_dir (str): Directory for the PNG temp file. (PNG 临时文件目录)
+
+    Returns:
+        str | None: PNG temp path the caller must delete, or None when the
+            original path should be used. (调用方需删除的 PNG 路径，或 None)
+    """
+    import os
+    import tempfile
+
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        if not _is_native_unreadable(image_path):
+            return None
+        img = Image.open(image_path)
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError):
+        return None
+
+    with img:
+        if img.format not in _NATIVE_UNREADABLE_FORMATS:
+            return None
+        try:
+            img.load()
+        except (Image.DecompressionBombError, OSError):
+            return None
+        if (
+            img.format == "TIFF"
+            and img.mode == "I"
+            and img.tag_v2.get(258) == (16,)  # BitsPerSample
+            and img.tag_v2.get(339) == (2,)  # SampleFormat: signed integer
+        ):
+            # Pillow decodes signed 16-bit grey as I. PNG cannot store signed
+            # samples; clamp negatives to zero and retain positive values so
+            # the native loader applies its existing 1/256 scaling once.
+            img = img.convert("I;16")
+        elif img.mode.startswith("I;16") and img.mode != "I;16":
+            # Other 16-bit grey byte orders (e.g. big-endian I;16B) clip at 255
+            # when converted directly; go through 32-bit I to keep 0..65535.
+            # 其他字节序的 16 位灰度直接转换会截断到 255，经 I 中转以保留完整范围。
+            img = img.convert("I").convert("I;16")
+        elif img.mode not in _PNG_NATIVE_MODES:
+            img = img.convert("RGBA" if "A" in img.getbands() else "RGB")
+        fd, png_path = tempfile.mkstemp(suffix=".png", dir=temp_dir)
+        os.close(fd)
+        try:
+            img.save(png_path, "PNG")
+        except Exception:
+            os.unlink(png_path)
+            raise
+    return png_path
+
 
 def _native_image_input(image_path: str) -> str | bytes:
     """Return the input to hand to the native loader for ``image_path``.
@@ -77,7 +166,10 @@ def worker_vectorize(image_path: str, params: dict) -> dict:
 
     log = get_logger(__name__)
 
+    native_input_path: str | None = None
     try:
+        from config import TEMP_DIR
+
         config = nv.VectorizerConfig()
         for key, value in params.items():
             if hasattr(config, key):
@@ -92,9 +184,8 @@ def worker_vectorize(image_path: str, params: dict) -> dict:
             },
         )
 
-        result = nv.vectorize(_native_image_input(image_path), config)
-
-        from config import TEMP_DIR
+        native_input_path = _transcode_for_native_loader(image_path, TEMP_DIR)
+        result = nv.vectorize(_native_image_input(native_input_path or image_path), config)
 
         svg_content = result.svg_content
         if "data-lumina-origin=" not in svg_content:
@@ -125,5 +216,6 @@ def worker_vectorize(image_path: str, params: dict) -> dict:
             "palette": palette_hex,
         }
     finally:
-        if os.path.exists(image_path):
-            os.unlink(image_path)
+        for path in (image_path, native_input_path):
+            if path and os.path.exists(path):
+                os.unlink(path)
