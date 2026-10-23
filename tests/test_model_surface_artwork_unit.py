@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 from PIL import Image
 import pytest
 from shapely.ops import unary_union
@@ -110,15 +109,18 @@ def test_surface_svg_uses_visible_native_paint_for_translucent_stroke(tmp_path):
 
 
 @pytest.mark.parametrize("encoding", ["utf-8", "utf-16"])
-def test_surface_svg_falls_back_before_unsafe_native_clipped_curve(
+def test_surface_svg_preserves_clipped_curve_across_encodings(
     tmp_path, monkeypatch: pytest.MonkeyPatch, encoding: str,
 ):
-    def unsafe_native(*_args):
-        pytest.fail("known unsafe clipped-stroke native call")
+    real_analyze = native_svg_adapter.analyze_native_svg
+    native_outcomes = []
 
-    monkeypatch.setattr(native_svg_adapter, "_load_native_module", lambda: SimpleNamespace(
-        __version__="0.3.3", analyze_svg=unsafe_native,
-    ))
+    def record_native(*args, **kwargs):
+        outcome = real_analyze(*args, **kwargs)
+        native_outcomes.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(native_svg_adapter, "analyze_native_svg", record_native)
     source = tmp_path / "clipped-circle.svg"
     source.write_text(
         f'''<?xml version="1.0" encoding="{encoding}"?>
@@ -134,6 +136,13 @@ def test_surface_svg_falls_back_before_unsafe_native_clipped_curve(
         source_path=source, footprint=_square_footprint(),
         placement=SurfacePlacement(mode=EdgeMode.EDGE_TO_EDGE), output_dir=tmp_path,
     )
+    assert len(native_outcomes) == 1
+    if encoding == "utf-8":
+        assert isinstance(native_outcomes[0], native_svg_adapter.NativeSvgGeometry)
+    else:
+        assert native_outcomes[0] == native_svg_adapter.NativeSvgFallback(
+            reason_code="unsupported_xml_encoding", native_version="0.3.4",
+        )
     processor = VectorProcessor.__new__(VectorProcessor)
     processor._init_runtime_defaults()
     processor._parse_expand_stroke_to_fill = False
