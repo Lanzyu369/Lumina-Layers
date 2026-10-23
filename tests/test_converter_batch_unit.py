@@ -845,7 +845,6 @@ class TestBatchWorkerPoolSubmit:
                     "high_precision_3d_preview": "true",
                     "enable_coating": str(coating_enabled).lower(),
                     "coating_height_mm": "0.12",
-                    "coating_material": json.dumps({"source": "palette", "key": "White"}),
                     "svg_hole_compensation_enabled": str(compensation_enabled).lower(),
                     "svg_hole_max_area_mm2": "0.75",
                     "svg_hole_max_width_mm": "0.21",
@@ -906,7 +905,7 @@ class TestBatchWorkerPoolSubmit:
         expected_options = {
             "enable_coating": coating_enabled,
             "coating_height_mm": 0.12,
-            "coating_material": {"source": "palette", "key": "White"},
+            "coating_material": None,
             "svg_hole_compensation_enabled": compensation_enabled,
             "svg_hole_max_area_mm2": 0.75,
             "svg_hole_max_width_mm": 0.21,

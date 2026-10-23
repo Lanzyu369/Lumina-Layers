@@ -220,6 +220,20 @@ function makeRecipe(
   };
 }
 
+function makeNativeRecipe(): LuminaRecipe {
+  const recipe = makeRecipe();
+  recipe.recipe.converter!.source = {
+    source_version: "native",
+    selected_native_brand_key: "bambulab_pla",
+    selected_native_db_names: ["RYBW_008_5L.json"],
+    color_layers: 5, layer_height_mm: 0.08,
+    model_enable: true, model_only: false, model_threshold: null, model_margin: null,
+    selected_material_dir_names: [], material_layer_count: 5,
+    material_layer_height_mm: 0.08, material_backing_material_dir_name: null,
+  };
+  return recipe;
+}
+
 describe("recipe/importFlow", () => {
   beforeEach(() => {
     useConverterStore.setState({ ...DEFAULT_STATE });
@@ -235,6 +249,34 @@ describe("recipe/importFlow", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it("rejects predictive share cards before decoding assets or changing the current project", async () => {
+    const imageFile = new File(["current"], "current.png", { type: "image/png" });
+    useConverterStore.setState({ imageFile, lut_name: "current-lut" });
+
+    await expect(prepareImport(new File([JSON.stringify(makeNativeRecipe())], "native.lumina.json")))
+      .rejects.toThrow(/反推 LUT|inferred LUT/i);
+
+    expect(useConverterStore.getState()).toMatchObject({ imageFile, lut_name: "current-lut" });
+    expect(useWidgetStore.getState().activeTab).toBe("settings");
+  });
+
+  it("refuses a prepared native import before changing image or device settings", () => {
+    const imageFile = new File(["current"], "current.png", { type: "image/png" });
+    useConverterStore.setState({ imageFile, lut_name: "current-lut" });
+    const beforeSettings = useSettingsStore.getState();
+    const restored: RestoreResult = {
+      recipe: makeNativeRecipe(), state: { source_version: "native" },
+      assetFile: new File(["incoming"], "incoming.png", { type: "image/png" }),
+      heightmapFile: null, warnings: [],
+    };
+
+    expect(() => applyImport(restored, PRINTERS)).toThrow(/反推 LUT|inferred LUT/i);
+
+    expect(useConverterStore.getState()).toMatchObject({ imageFile, lut_name: "current-lut" });
+    expect(useSettingsStore.getState()).toBe(beforeSettings);
+    expect(useWidgetStore.getState().activeTab).toBe("settings");
   });
 
   it.each(["primary", "heightmap"])("rejects an undecodable %s before applying imported settings", async (assetKey) => {

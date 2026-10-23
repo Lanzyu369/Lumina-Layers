@@ -300,8 +300,6 @@ export function collectBugReportContext(): BugReportContextPayload {
     ].filter((value) => value.length > 0))],
     source_material_dir_names: [...new Set([
       ...converter.selectedMaterialDirNames, converter.materialBackingMaterialDirName,
-      ...(converter.enable_coating && converter.coatingMaterial?.source === "material_archive"
-        ? [converter.coatingMaterial.key] : []),
     ].filter((value): value is string => typeof value === "string" && value.length > 0))],
     workflow_state: {
       converter: captureWorkflowState(converter), single_stage: captureWorkflowState(singleStage),

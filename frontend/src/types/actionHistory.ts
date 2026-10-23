@@ -199,7 +199,6 @@ export interface AdvancedParamsCloisonne {
 export interface AdvancedParamsCoating {
   enable_coating: boolean;
   coating_height_mm: number | null;
-  coating_material: import("../api/types").CoatingMaterialReference | null;
 }
 
 /**

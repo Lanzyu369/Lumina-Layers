@@ -1,85 +1,87 @@
-"""Explicit auxiliary material identity follows the source palette and archives."""
-
-from types import SimpleNamespace
+"""Coating follows the selected materials without a separate material choice."""
 
 import pytest
 
 from core import export_materials
 
 
-def resolve(reference):
-    return export_materials.resolve_coating_material(
-        reference,
-        slot_names=["七色白", "七色蓝"],
-        preview_colors={0: [250, 250, 250, 255], 1: [20, 40, 230, 255]},
-        material_types={"七色白": "PETG", "七色蓝": "PETG"},
-    )
-
-
-def test_selected_palette_material_preserves_name_type_and_rgb():
-    material = resolve({"source": "palette", "key": "七色白"})
-    assert material.name == "七色白"
-    assert material.material_type == "PETG"
-    assert material.rgb == (250, 250, 250)
-
-
-def test_independent_archive_preserves_intentional_mixed_type(monkeypatch):
-    loaded = []
-
-    def load(names):
-        loaded.extend(names)
-        return [SimpleNamespace(name="透明", material_type="PLA", estimated_rgb=[240, 241, 242])]
-
-    monkeypatch.setattr(export_materials, "load_materials", load)
-    material = resolve({"source": "material_archive", "key": "clear-archive"})
-    assert loaded == ["clear-archive"]
-    assert material.material_type == "PLA"
-    assert material.rgb == (240, 241, 242)
-    assert material.name == "Coating: 透明"
-
-
-def test_legacy_palette_type_remains_unknown_for_native_preset_resolution():
+@pytest.mark.parametrize(("types", "expected"), [
+    (["PLA", "PLA"], "PLA"),
+    (["PLA Basic", "PLA+"], "PLA"),
+    (["PETG", "PETG"], "PETG"),
+    (["petg", "PETG HF"], "PETG"),
+    (["PETG", "PETG", "PLA"], "PLA"),
+    (["PLA", "PETG"], "PLA"),
+    (["ABS", "ABS"], "ABS"),
+    ([None, None], "PLA"),
+    ([], "PLA"),
+])
+def test_coating_automatically_follows_a_uniform_material_type(types, expected):
+    names = [f"材料 {index}" for index in range(len(types))]
     material = export_materials.resolve_coating_material(
-        {"source": "palette", "key": "White PETG"}, slot_names=["White PETG"],
-        preview_colors={0: [250, 250, 250, 255]}, material_types={"White PETG": None},
+        None, slot_names=names, preview_colors={},
+        material_types={**dict(zip(names, types)), "unselected": "TPU"},
     )
-    assert material.name == "White PETG"
-    assert material.material_type is None
+    assert material.name == "Coating"
+    assert material.material_type == expected
 
 
-@pytest.mark.parametrize("reference", [None, {}, {"source": "palette", "key": "removed"}, {"source": "guess", "key": "PLA"}])
-def test_missing_or_stale_selection_never_guesses_pla(reference):
-    with pytest.raises(ValueError, match="[Cc]oating"):
-        resolve(reference)
+@pytest.mark.parametrize("reference", [
+    None, {}, {"source": "palette", "key": "removed"},
+    {"source": "material_archive", "key": "missing-clear-pla"},
+])
+def test_legacy_coating_choices_cannot_block_or_override_automatic_material(reference):
+    material = export_materials.resolve_coating_material(
+        reference, slot_names=["白", "蓝"], preview_colors={},
+        material_types={"白": "PETG", "蓝": "PETG"},
+    )
+    assert material.name == "Coating"
+    assert material.material_type == "PETG"
 
 
-def test_configure_coating_binds_export_facts_without_changing_optical_palette():
+def test_legacy_material_names_can_supply_missing_polymer_metadata():
+    material = export_materials.resolve_coating_material(
+        None, slot_names=["白 PETG", "PETG 蓝"], preview_colors={},
+        material_types={"白 PETG": None, "PETG 蓝": None},
+    )
+    assert material.material_type == "PETG"
+
+
+def test_configure_coating_preserves_source_materials_and_optical_palette():
     ctx = {
         "enable_coating": True,
-        "coating_material": {"source": "palette", "key": "七色白"},
         "slot_names": ["七色白", "七色蓝"],
         "preview_colors": {0: [250, 250, 250, 255], 1: [20, 40, 230, 255]},
         "material_types": {"七色白": "PETG", "七色蓝": "PETG"},
     }
-    export_materials.configure_coating_material(ctx)
-    assert ctx["resolved_coating_material"].name == "七色白"
+    material = export_materials.configure_coating_material(ctx)
+    assert ctx["resolved_coating_material"] == material
     assert ctx["slot_names"] == ["七色白", "七色蓝"]
-    assert ctx["material_types"]["七色白"] == "PETG"
+    assert ctx["material_types"] == {"七色白": "PETG", "七色蓝": "PETG", "Coating": "PETG"}
+    assert ctx["preview_colors"][0] == [250, 250, 250, 255]
+    assert ctx["preview_colors"]["Coating"] == [*material.rgb, 255]
 
 
-def test_native_preflight_includes_exact_coating_facts(monkeypatch):
+def test_disabled_coating_does_not_add_a_material():
+    ctx = {"enable_coating": False}
+    assert export_materials.configure_coating_material(ctx) is None
+    assert ctx == {"enable_coating": False}
+
+
+@pytest.mark.parametrize(("types", "expected"), [
+    (["PETG", "PETG"], "PETG"), (["PETG", "PLA"], "PLA"),
+])
+def test_native_preflight_uses_the_same_automatic_material(types, expected):
     from config import LUTMetadata, PaletteEntry
     from core.export_material_selection import _source_materials
 
-    monkeypatch.setattr(export_materials, "load_materials", lambda names: [
-        SimpleNamespace(name="透明", material_type="PLA", estimated_rgb=[240, 241, 242]),
-    ])
     records = _source_materials(
-        {"enable_coating": True, "coating_material": {"source": "material_archive", "key": "clear"},
-         "native_filament_profiles": {"Coating: 透明": "Bambu PLA Basic @BBL H2D"}},
-        {"lut_metadata": LUTMetadata(palette=[PaletteEntry(color="白", material="PETG")])},
+        {"enable_coating": True},
+        {"lut_metadata": LUTMetadata(palette=[
+            PaletteEntry(color=name, material=kind)
+            for name, kind in zip(["白", "蓝"], types)
+        ])},
     )
     assert records[-1] == {
-        "name": "Coating: 透明", "colour": "#F0F1F2", "material_type": "PLA",
-        "native_filament_profile_name": "Bambu PLA Basic @BBL H2D",
+        "name": "Coating", "colour": "#C8C8C8", "material_type": expected,
     }

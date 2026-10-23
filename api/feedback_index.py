@@ -384,11 +384,10 @@ def _format_advanced_params_section(context: dict[str, Any]) -> str:
 
     coating = ap.get("coating")
     if isinstance(coating, dict) and coating.get("enable_coating"):
+        lines.append("- coating_material: automatic (source material type; mixed defaults to PLA)")
         reference = coating.get("coating_material")
         if isinstance(reference, dict):
-            lines.append(f"- coating_material: {_safe_str(reference.get('source'))} / {_safe_str(reference.get('key'))}")
-        else:
-            lines.append("- coating_material: missing explicit selection")
+            lines.append(f"- legacy_coating_material: {_safe_str(reference.get('source'))} / {_safe_str(reference.get('key'))}")
 
     color_replacement = ap.get("color_replacement")
     spatial_edit_count = (

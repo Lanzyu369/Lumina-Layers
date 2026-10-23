@@ -25,6 +25,24 @@ from core.native_svg_adapter import (
 )
 
 
+@pytest.mark.parametrize("width,tolerance", [(0.0, 0.02), (float("nan"), 0.02), (20.0, 0.0), (20.0, float("nan"))])
+def test_clipped_stroke_compatibility_keeps_physical_validation(
+    tmp_path, width: float, tolerance: float,
+) -> None:
+    source = tmp_path / "clipped.svg"
+    source.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+        '<defs><clipPath id="clip"><rect width="10" height="10"/></clipPath></defs>'
+        '<rect width="20" height="20" fill="red" clip-path="url(#clip)"/></svg>',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CoreValidationError) as error:
+        analyze_native_svg(str(source), width, tolerance, expand_stroke_to_fill=True)
+
+    assert error.value.reason_code == "invalid_physical_parameters"
+
+
 @pytest.mark.parametrize("coordinates", [
     [(675884046053, 323293585526), (676603618425, 324732730271),
      (676603618421, 324732730263), (675472861842, 322471217105)],

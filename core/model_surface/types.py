@@ -123,3 +123,6 @@ class SurfaceFootprint:
     bounds_height_mm: float
     area_mm2: float
     hole_count: int
+    # Mesh provenance anchors thickness rays to the selected surface, even
+    # when its fitted plane crosses a shallow cavity.
+    face_indices: tuple[int, ...] = ()

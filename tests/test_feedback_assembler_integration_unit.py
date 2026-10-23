@@ -120,7 +120,11 @@ def test_full_submit_populates_ticket_directory(
     populated_client: tuple[TestClient, Path],
 ) -> None:
     client, feedback_root = populated_client
-    response = client.post("/api/feedback/bug-report", json=_payload())
+    request_payload = _payload()
+    request_payload["context"]["advanced_params"] = {
+        "coating": {"enable_coating": True, "coating_height_mm": 0.12},
+    }
+    response = client.post("/api/feedback/bug-report", json=request_payload)
 
     assert response.status_code == 200
     data = response.json()
@@ -146,6 +150,9 @@ def test_full_submit_populates_ticket_directory(
 
     payload = json.loads((ticket_dir / "ticket.json").read_text(encoding="utf-8"))
     assert payload["attachments"]["original_image"]["status"] == "attached"
+    assert payload["context"]["advanced_params"]["coating"] == {
+        "enable_coating": True, "coating_height_mm": 0.12,
+    }
     assert payload["attachments"]["final_artifact"]["status"] == "attached"
     assert payload["assembly_status"] in ("done", "partial_failed")
 
@@ -153,6 +160,8 @@ def test_full_submit_populates_ticket_directory(
     assert ticket_id in index_md
     assert "original.png" in index_md
     assert "final.3mf" in index_md
+    assert "coating_material: automatic" in index_md
+    assert "missing explicit selection" not in index_md
     # Reproduction suggestion references the last API error.
     assert "/api/converter/generate" in index_md
 

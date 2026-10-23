@@ -36,6 +36,7 @@ from core.model_surface.types import (
     ModelSurfaceError,
     SurfaceFootprint,
 )
+from core.model_surface.validation import prepare_surface_base_for_export
 from core.pipeline.preview_color_utils import resolve_material_preview
 
 
@@ -126,11 +127,15 @@ def build_surface_overlay_scene(
         model_transform,
         _copy_scene=False,
     )
-    return orient_overlay_scene_for_print(
+    print_overlay = orient_overlay_scene_for_print(
         transformed_overlay,
         face_orientation,
         _copy_scene=False,
     )
+    print_overlay.scene.geometry["surface_base"] = prepare_surface_base_for_export(
+        print_overlay.scene.geometry["surface_base"],
+    )
+    return print_overlay
 
 
 def _build_pattern_scene(

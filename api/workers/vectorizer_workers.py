@@ -14,6 +14,37 @@ Design rules:
 """
 
 
+def _native_image_input(image_path: str) -> str | bytes:
+    """Return the input to hand to the native loader for ``image_path``.
+    返回交给原生加载器的输入。
+
+    The native path loader opens files with a narrow (non-Unicode) API on
+    Windows, so a path with non-ASCII characters (e.g. a Chinese user name in
+    TEMP_DIR) fails with "Failed to load image". For such paths the file is
+    read in Python and passed as encoded bytes, which the native library
+    decodes with the same flags as its path loader. ASCII paths, and files
+    Python cannot read, keep the original path handoff and native errors.
+    原生路径加载器在 Windows 上使用非 Unicode 接口打开文件，含非 ASCII 字符的
+    路径（如 TEMP_DIR 中的中文用户名）会报 "Failed to load image"。此类路径在
+    Python 中读取后以编码字节传入，原生库按与路径加载相同的标志解码。ASCII
+    路径以及 Python 无法读取的文件保持原路径传入和原生错误。
+
+    Args:
+        image_path (str): Uploaded image temp path. (上传图像临时路径)
+
+    Returns:
+        str | bytes: The original path, or the file's encoded bytes.
+            (原路径，或文件的编码字节)
+    """
+    if image_path.isascii():
+        return image_path
+    try:
+        with open(image_path, "rb") as f:
+            return f.read()
+    except OSError:
+        return image_path
+
+
 def worker_vectorize(image_path: str, params: dict) -> dict:
     """Execute image vectorization in a worker process.
     在工作进程中执行图像矢量化。
@@ -61,7 +92,7 @@ def worker_vectorize(image_path: str, params: dict) -> dict:
             },
         )
 
-        result = nv.vectorize(image_path, config)
+        result = nv.vectorize(_native_image_input(image_path), config)
 
         from config import TEMP_DIR
 

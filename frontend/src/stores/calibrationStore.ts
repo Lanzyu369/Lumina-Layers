@@ -94,6 +94,7 @@ export interface CalibrationState {
   layerImageUrls: string[] | null;
   modelUrl: string | null;
   statusMessage: string | null;
+  warnings: string[];
   manifestUrl: string | null;
   singleStageJobs: Array<{
     color: string;
@@ -143,6 +144,7 @@ const DEFAULT_STATE: CalibrationState = {
   layerImageUrls: null,
   modelUrl: null,
   statusMessage: null,
+  warnings: [],
   manifestUrl: null,
   singleStageJobs: [],
 };
@@ -162,6 +164,7 @@ export const useCalibrationStore = create<
       manifestUrl: null,
       singleStageJobs: [],
       statusMessage: null,
+      warnings: [],
       error: null,
     }),
 
@@ -218,6 +221,7 @@ export const useCalibrationStore = create<
         )
       );
     };
+    // Warnings stay with the downloadable artifact until a result replaces it.
     set({ isLoading: true, error: null, lastSubmittedWorkflow: "legacy" });
     try {
       const response = await calibrationGenerate({
@@ -243,6 +247,7 @@ export const useCalibrationStore = create<
         manifestUrl: null,
         singleStageJobs: [],
         statusMessage: response.message,
+        warnings: response.warnings ?? [],
         isLoading: false,
       });
       notifyCompletion("calibration");
@@ -302,6 +307,7 @@ export const useCalibrationStore = create<
         manifestUrl: response.manifest_url,
         singleStageJobs: response.jobs ?? [],
         statusMessage: response.message,
+        warnings: [],
         isLoading: false,
       });
       notifyCompletion("calibration");
@@ -335,6 +341,7 @@ registerGeneratedArtifactInvalidator(({ preservePreviews }) => {
     downloadUrl: null,
     threemfDiskPath: null,
     statusMessage: null,
+    warnings: [],
     manifestUrl: null,
     singleStageJobs: [],
     ...(preservePreviews
