@@ -570,8 +570,10 @@ def _rollback_preview_session_after_failure(
     """Best-effort rollback for preview sessions that never reach the client."""
 
     for cleanup_target, cleanup in (
-        ("file_registry", lambda: registry.cleanup_session(session_id)),
+        # Invalidate GLB ownership before cleanup; a late background result
+        # must fail its session/revision checks instead of registering anew.
         ("session_store", lambda: store.close(session_id)),
+        ("file_registry", lambda: registry.cleanup_session(session_id)),
     ):
         try:
             cleanup()
@@ -981,25 +983,16 @@ async def convert_preview(
     """Generate a 2D color-matched preview via process pool.
     通过进程池生成 2D 颜色匹配预览图。
 
-    File upload and session/registry operations run on the main thread.
-    CPU-intensive preview generation is offloaded to the worker pool.
-    文件上传和 session/registry 操作在主线程完成。
-    CPU 密集型预览生成卸载到工作进程池。
+    CPU-intensive conversion runs in the process pool. Synchronous result
+    publication runs in a thread so health and other API requests can proceed.
+    CPU 密集型转换在工作进程池执行；同步结果发布在线程中完成，
+    保持健康检查和其他 API 请求可响应。
     """
     _api_t0 = time.perf_counter()
     temp_path: str | None = None
     surface_original_image_path: str | None = None
     surface_config: dict | None = None
     temp_native_bundle_path: str | None = None
-    worker_preview_png_path: str | None = None
-    worker_raw_preview_png_path: str | None = None
-    worker_cache_data_path: str | None = None
-    worker_cache_artifact_ref: dict | None = None
-    worker_vector_parse_clip_cache_path: str | None = None
-    worker_response_palette: list[dict] | None = None
-    worker_gradient_groups: list[dict] | None = None
-    worker_gradient_region_id_map_path: str | None = None
-    worker_gradient_region_id_map: np.ndarray | None = None
     svg_large_format_policy = None
     material_source = _validate_material_source(material_source)
     (
@@ -1301,617 +1294,634 @@ async def convert_preview(
                 temp_native_bundle_path,
             )
 
-    # 3. Result processing (I/O + Session, main thread)
-    result_loaded = False
-    try:
-        worker_preview_png_path = result["preview_png_path"]
-        candidate_raw_preview_path = result.get("raw_preview_png_path")
-        if isinstance(candidate_raw_preview_path, str):
-            worker_raw_preview_png_path = candidate_raw_preview_path
-        worker_cache_data_path = result.get("cache_data_path")
-        candidate_cache_artifact_ref = result.get("cache_artifact_ref")
-        if is_preview_cache_artifact_ref(candidate_cache_artifact_ref):
-            worker_cache_artifact_ref = candidate_cache_artifact_ref
-        candidate_vector_cache_path = result.get("vector_parse_clip_cache_path")
-        if isinstance(candidate_vector_cache_path, str):
-            worker_vector_parse_clip_cache_path = candidate_vector_cache_path
-        candidate_response_palette = result.get("response_palette")
-        if isinstance(candidate_response_palette, list):
-            worker_response_palette = candidate_response_palette
-        candidate_gradient_groups = result.get("gradient_groups")
-        candidate_region_map_path = result.get("gradient_region_id_map_path")
-        if (
-            isinstance(candidate_gradient_groups, list)
-            and isinstance(candidate_region_map_path, str)
-            and os.path.exists(candidate_region_map_path)
-        ):
-            try:
-                worker_gradient_region_id_map = np.ascontiguousarray(
-                    np.load(candidate_region_map_path, allow_pickle=False),
-                    dtype=np.uint32,
-                )
-                worker_gradient_groups = candidate_gradient_groups
-                worker_gradient_region_id_map_path = candidate_region_map_path
-            except (OSError, ValueError, TypeError) as exc:
-                log.warning(
-                    "Worker gradient-group artifact load failed",
-                    extra={
-                        "event": "worker_gradient_groups_adopt_failed",
-                        "error_type": type(exc).__name__,
-                        "error_message": str(exc),
-                        "path": candidate_region_map_path,
-                    },
-                )
-        if worker_preview_png_path is None:
-            raise HTTPException(status_code=500, detail=_PREVIEW_GENERATION_FAILED_DETAIL)
+    source_filename = image.filename
 
-        _t = time.perf_counter()
-        if worker_cache_artifact_ref is not None:
-            response_cache_fields = set(PREVIEW_RESPONSE_CACHE_FIELDS)
-            if worker_raw_preview_png_path and os.path.exists(worker_raw_preview_png_path):
-                response_cache_fields.discard("preview_rgba")
+    def publish_preview_result() -> PreviewResponse:
+        """Adopt worker artifacts and assemble the response off the event loop."""
+        session_id: str | None = None
+        publication_succeeded = False
+        worker_preview_png_path: str | None = None
+        worker_raw_preview_png_path: str | None = None
+        worker_cache_data_path: str | None = None
+        worker_cache_artifact_ref: dict | None = None
+        worker_vector_parse_clip_cache_path: str | None = None
+        worker_response_palette: list[dict] | None = None
+        worker_gradient_groups: list[dict] | None = None
+        worker_gradient_region_id_map_path: str | None = None
+        worker_gradient_region_id_map: np.ndarray | None = None
+        worker_result_paths: tuple[str, ...] = ()
+        worker_artifact_paths: list[str] = []
+        try:
+            # Collect returned paths before hydration so even malformed
+            # artifacts and pre-session failures have the same cleanup owner.
+            worker_result_paths = tuple(
+                path
+                for key in (
+                    "preview_png_path", "raw_preview_png_path", "cache_data_path",
+                    "vector_parse_clip_cache_path", "gradient_region_id_map_path",
+                )
+                if isinstance(path := result.get(key), str)
+            )
+            worker_artifact_paths = _preview_cache_artifact_paths(
+                result.get("cache_artifact_ref"),
+            )
+            worker_preview_png_path = result["preview_png_path"]
+            candidate_raw_preview_path = result.get("raw_preview_png_path")
+            if isinstance(candidate_raw_preview_path, str):
+                worker_raw_preview_png_path = candidate_raw_preview_path
+            worker_cache_data_path = result.get("cache_data_path")
+            candidate_cache_artifact_ref = result.get("cache_artifact_ref")
+            if is_preview_cache_artifact_ref(candidate_cache_artifact_ref):
+                worker_cache_artifact_ref = candidate_cache_artifact_ref
+            candidate_vector_cache_path = result.get("vector_parse_clip_cache_path")
+            if isinstance(candidate_vector_cache_path, str):
+                worker_vector_parse_clip_cache_path = candidate_vector_cache_path
+            candidate_response_palette = result.get("response_palette")
+            if isinstance(candidate_response_palette, list):
+                worker_response_palette = candidate_response_palette
+            candidate_gradient_groups = result.get("gradient_groups")
+            candidate_region_map_path = result.get("gradient_region_id_map_path")
             if (
-                worker_response_palette is not None
-                and worker_gradient_region_id_map is not None
+                isinstance(candidate_gradient_groups, list)
+                and isinstance(candidate_region_map_path, str)
+                and os.path.exists(candidate_region_map_path)
             ):
-                response_cache_fields.difference_update(
-                    {"matched_rgb", "mask_solid", "quantized_image"}
+                try:
+                    worker_gradient_region_id_map = np.ascontiguousarray(
+                        np.load(candidate_region_map_path, allow_pickle=False),
+                        dtype=np.uint32,
+                    )
+                    worker_gradient_groups = candidate_gradient_groups
+                    worker_gradient_region_id_map_path = candidate_region_map_path
+                except (OSError, ValueError, TypeError) as exc:
+                    log.warning(
+                        "Worker gradient-group artifact load failed",
+                        extra={
+                            "event": "worker_gradient_groups_adopt_failed",
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                            "path": candidate_region_map_path,
+                        },
+                    )
+            if worker_preview_png_path is None:
+                raise HTTPException(status_code=500, detail=_PREVIEW_GENERATION_FAILED_DETAIL)
+
+            _t = time.perf_counter()
+            if worker_cache_artifact_ref is not None:
+                response_cache_fields = set(PREVIEW_RESPONSE_CACHE_FIELDS)
+                if worker_raw_preview_png_path and os.path.exists(worker_raw_preview_png_path):
+                    response_cache_fields.discard("preview_rgba")
+                if (
+                    worker_response_palette is not None
+                    and worker_gradient_region_id_map is not None
+                ):
+                    response_cache_fields.difference_update(
+                        {"matched_rgb", "mask_solid", "quantized_image"}
+                    )
+                cache_data = hydrate_preview_cache(
+                    worker_cache_artifact_ref,
+                    fields=response_cache_fields,
+                    mmap_mode="r",
                 )
-            cache_data = hydrate_preview_cache(
-                worker_cache_artifact_ref,
-                fields=response_cache_fields,
-                mmap_mode="r",
-            )
-        else:
-            if worker_cache_data_path is None:
-                raise HTTPException(status_code=500, detail="Preview worker returned no cache data")
-            # Load cache_data from disk (worker serialized to .pkl)
-            with open(worker_cache_data_path, "rb") as f:
-                cache_data = pickle.load(f)
-        _t_pickle_load = time.perf_counter() - _t
-
-        # Load preview image from disk (worker saved as .png). Copy it so the
-        # file handle is closed before rollback cleanup can run on Windows.
-        with Image.open(worker_preview_png_path) as worker_preview_img:
-            preview_img = worker_preview_img.copy()
-        result_loaded = True
-    finally:
-        if not result_loaded:
-            _cleanup_pre_session_temp_paths(
-                temp_path,
-                surface_original_image_path,
-                temp_native_bundle_path,
-                worker_preview_png_path,
-                worker_raw_preview_png_path,
-                worker_cache_data_path,
-                worker_vector_parse_clip_cache_path,
-                worker_gradient_region_id_map_path,
-                *_preview_cache_artifact_paths(worker_cache_artifact_ref),
-            )
-
-    status_msg: str = result["status_msg"]
-
-    # ---- Color-card mode: wholesale cache replacement (main process) ----
-    # 色卡模式：用色卡渲染图整体替换 cache 中的图像/矩阵数据，使
-    # GLB、分层图、调色板等所有下游自然展示色卡而非原图。
-    if modeling_mode == "color-card" and cache_data is not None:
-        _cc_palette = cache_data.get("color_palette") or []
-        _cc_hex_list = [e["hex"] for e in _cc_palette if "hex" in e]
-        if _cc_hex_list:
-            from core.color_card import render_color_card_image
-
-            _old_matched = cache_data.get("matched_rgb")
-            _old_mm = cache_data.get("material_matrix")
-
-            _card_rgba = render_color_card_image(_cc_hex_list)
-            _card_rgb = _card_rgba[:, :, :3].copy()
-            _card_h, _card_w = _card_rgba.shape[:2]
-
-            cache_data["matched_rgb"] = _card_rgb
-            cache_data["mask_solid"] = np.ones((_card_h, _card_w), dtype=bool)
-            cache_data["preview_rgba"] = _card_rgba
-            if "quantized_image" in cache_data:
-                cache_data["quantized_image"] = _card_rgb
-            cache_data["target_w"] = _card_w
-            cache_data["target_h"] = _card_h
-            cache_data["target_width_mm"] = target_width_mm
-
-            # Rebuild material_matrix: sample each colour's per-layer
-            # material assignment from the original image, then map onto
-            # the card pixels of that colour.
-            if _old_mm is not None and _old_matched is not None:
-                _n_layers = _old_mm.shape[2]
-                _new_mm = np.zeros(
-                    (_card_h, _card_w, _n_layers), dtype=_old_mm.dtype,
-                )
-                for _hx in _cc_hex_list:
-                    _h = _hx.lstrip("#")
-                    _r, _g, _b = int(_h[0:2], 16), int(_h[2:4], 16), int(_h[4:6], 16)
-                    _om = (
-                        (_old_matched[:, :, 0] == _r)
-                        & (_old_matched[:, :, 1] == _g)
-                        & (_old_matched[:, :, 2] == _b)
-                    )
-                    if not _om.any():
-                        continue
-                    _yx = np.argwhere(_om)[0]
-                    _ma = _old_mm[_yx[0], _yx[1], :]
-                    _cm = (
-                        (_card_rgb[:, :, 0] == _r)
-                        & (_card_rgb[:, :, 1] == _g)
-                        & (_card_rgb[:, :, 2] == _b)
-                    )
-                    _new_mm[_cm] = _ma
-                cache_data["material_matrix"] = _new_mm
-
-            cache_data["color_card_source_palette"] = [dict(e) for e in _cc_palette]
-            cache_data["color_palette"] = [dict(e) for e in _cc_palette]
-
-            log.info(
-                "Color card cache replaced in main process",
-                extra={
-                    "event": "color_card_cache_replaced",
-                    "color_count": len(_cc_hex_list),
-                    "card_size": [_card_w, _card_h],
-                },
-            )
-
-    vector_parse_clip_cache_blob = None
-    if isinstance(cache_data, dict):
-        vector_parse_clip_cache_blob = cache_data.pop(
-            "vector_parse_clip_cache_blob",
-            None,
-        )
-
-    # Reuse the session_id minted before worker submit so worker logs and the
-    # returned session use the same id; SessionStore.create() will fall back to
-    # a fresh UUID if the pre-minted id ever collides.
-    # 复用 worker submit 前生成的 session_id，确保 worker 日志与返回会话同 id；
-    # 若 id 与现有会话冲突，SessionStore.create() 会自动改用新 UUID。
-    session_id = store.create(session_id=preview_session_id)
-    cache_session_value: dict | None = None
-    if worker_cache_artifact_ref is not None:
-        cache_session_value = _with_original_preview_cache_refs(
-            worker_cache_artifact_ref,
-        )
-        for artifact_path in _preview_cache_artifact_paths(cache_session_value):
-            store.register_temp_file(session_id, artifact_path)
-
-    vector_cache_max_bytes = _get_vector_parse_clip_cache_max_bytes()
-    if worker_vector_parse_clip_cache_path and os.path.exists(
-        worker_vector_parse_clip_cache_path,
-    ):
-        try:
-            vector_cache_bytes = os.path.getsize(worker_vector_parse_clip_cache_path)
-            if vector_cache_bytes <= vector_cache_max_bytes:
-                store.register_temp_file(session_id, worker_vector_parse_clip_cache_path)
-                if cache_session_value is not None:
-                    cache_session_value["metadata"]["vector_parse_clip_cache_path"] = (
-                        worker_vector_parse_clip_cache_path
-                    )
-                cache_data["vector_parse_clip_cache_path"] = worker_vector_parse_clip_cache_path
             else:
-                _cleanup_pre_session_temp_paths(worker_vector_parse_clip_cache_path)
-                log.debug(
-                    "Vector parse/clip cache artifact persist skipped",
-                    extra={
-                        "event": "vector_parse_clip_cache_persist_skipped",
-                        "reason": "cache_artifact_too_large",
-                        "cache_bytes": int(vector_cache_bytes),
-                        "max_bytes": int(vector_cache_max_bytes),
-                    },
-                )
-                worker_vector_parse_clip_cache_path = None
-        except ROUTER_HANDLED_ERRORS as exc:
-            log.debug(
-                "Vector parse/clip cache artifact persist skipped",
-                extra={
-                    "event": "vector_parse_clip_cache_persist_skipped",
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc),
-                    "max_bytes": int(vector_cache_max_bytes),
-                },
-            )
-            _cleanup_pre_session_temp_paths(worker_vector_parse_clip_cache_path)
-            worker_vector_parse_clip_cache_path = None
-    elif isinstance(vector_parse_clip_cache_blob, (bytes, bytearray)):
-        vector_cache_bytes = len(vector_parse_clip_cache_blob)
-        if vector_cache_bytes <= vector_cache_max_bytes:
-            vector_cache_path = None
-            try:
-                fd, vector_cache_path = tempfile.mkstemp(
-                    prefix="vector_parse_clip_cache_",
-                    suffix=".pkl",
-                    dir=TEMP_DIR,
-                )
-                with os.fdopen(fd, "wb") as handle:
-                    handle.write(vector_parse_clip_cache_blob)
-                store.register_temp_file(session_id, vector_cache_path)
-                if cache_session_value is not None:
-                    cache_session_value["metadata"]["vector_parse_clip_cache_path"] = (
-                        vector_cache_path
+                if worker_cache_data_path is None:
+                    raise HTTPException(status_code=500, detail="Preview worker returned no cache data")
+                # Load cache_data from disk (worker serialized to .pkl)
+                with open(worker_cache_data_path, "rb") as f:
+                    cache_data = pickle.load(f)
+            _t_pickle_load = time.perf_counter() - _t
+
+            # Load preview image from disk (worker saved as .png). Copy it so the
+            # file handle is closed before rollback cleanup can run on Windows.
+            with Image.open(worker_preview_png_path) as worker_preview_img:
+                preview_img = worker_preview_img.copy()
+
+            status_msg: str = result["status_msg"]
+
+            # ---- Color-card mode: wholesale cache replacement (main process) ----
+            # 色卡模式：用色卡渲染图整体替换 cache 中的图像/矩阵数据，使
+            # GLB、分层图、调色板等所有下游自然展示色卡而非原图。
+            if modeling_mode == "color-card" and cache_data is not None:
+                _cc_palette = cache_data.get("color_palette") or []
+                _cc_hex_list = [e["hex"] for e in _cc_palette if "hex" in e]
+                if _cc_hex_list:
+                    from core.color_card import render_color_card_image
+
+                    _old_matched = cache_data.get("matched_rgb")
+                    _old_mm = cache_data.get("material_matrix")
+
+                    _card_rgba = render_color_card_image(_cc_hex_list)
+                    _card_rgb = _card_rgba[:, :, :3].copy()
+                    _card_h, _card_w = _card_rgba.shape[:2]
+
+                    cache_data["matched_rgb"] = _card_rgb
+                    cache_data["mask_solid"] = np.ones((_card_h, _card_w), dtype=bool)
+                    cache_data["preview_rgba"] = _card_rgba
+                    if "quantized_image" in cache_data:
+                        cache_data["quantized_image"] = _card_rgb
+                    cache_data["target_w"] = _card_w
+                    cache_data["target_h"] = _card_h
+                    cache_data["target_width_mm"] = target_width_mm
+
+                    # Rebuild material_matrix: sample each colour's per-layer
+                    # material assignment from the original image, then map onto
+                    # the card pixels of that colour.
+                    if _old_mm is not None and _old_matched is not None:
+                        _n_layers = _old_mm.shape[2]
+                        _new_mm = np.zeros(
+                            (_card_h, _card_w, _n_layers), dtype=_old_mm.dtype,
+                        )
+                        for _hx in _cc_hex_list:
+                            _h = _hx.lstrip("#")
+                            _r, _g, _b = int(_h[0:2], 16), int(_h[2:4], 16), int(_h[4:6], 16)
+                            _om = (
+                                (_old_matched[:, :, 0] == _r)
+                                & (_old_matched[:, :, 1] == _g)
+                                & (_old_matched[:, :, 2] == _b)
+                            )
+                            if not _om.any():
+                                continue
+                            _yx = np.argwhere(_om)[0]
+                            _ma = _old_mm[_yx[0], _yx[1], :]
+                            _cm = (
+                                (_card_rgb[:, :, 0] == _r)
+                                & (_card_rgb[:, :, 1] == _g)
+                                & (_card_rgb[:, :, 2] == _b)
+                            )
+                            _new_mm[_cm] = _ma
+                        cache_data["material_matrix"] = _new_mm
+
+                    cache_data["color_card_source_palette"] = [dict(e) for e in _cc_palette]
+                    cache_data["color_palette"] = [dict(e) for e in _cc_palette]
+
+                    log.info(
+                        "Color card cache replaced in main process",
+                        extra={
+                            "event": "color_card_cache_replaced",
+                            "color_count": len(_cc_hex_list),
+                            "card_size": [_card_w, _card_h],
+                        },
                     )
-                cache_data["vector_parse_clip_cache_path"] = vector_cache_path
-            except ROUTER_HANDLED_ERRORS as exc:
-                log.debug(
-                    "Vector parse/clip cache artifact persist skipped",
-                    extra={
-                        "event": "vector_parse_clip_cache_persist_skipped",
-                        "error_type": type(exc).__name__,
-                        "error_message": str(exc),
-                        "cache_bytes": int(vector_cache_bytes),
-                        "max_bytes": int(vector_cache_max_bytes),
-                    },
+
+            vector_parse_clip_cache_blob = None
+            if isinstance(cache_data, dict):
+                vector_parse_clip_cache_blob = cache_data.pop(
+                    "vector_parse_clip_cache_blob",
+                    None,
                 )
-                _cleanup_pre_session_temp_paths(vector_cache_path)
-        else:
-            log.debug(
-                "Vector parse/clip cache artifact persist skipped",
-                extra={
-                    "event": "vector_parse_clip_cache_persist_skipped",
-                    "reason": "cache_artifact_too_large",
-                    "cache_bytes": int(vector_cache_bytes),
-                    "max_bytes": int(vector_cache_max_bytes),
-                },
+
+            # Reuse the session_id minted before worker submit so worker logs and the
+            # returned session use the same id; SessionStore.create() will fall back to
+            # a fresh UUID if the pre-minted id ever collides.
+            # 复用 worker submit 前生成的 session_id，确保 worker 日志与返回会话同 id；
+            # 若 id 与现有会话冲突，SessionStore.create() 会自动改用新 UUID。
+            session_id = store.create(session_id=preview_session_id)
+            cache_session_value: dict | None = None
+            if worker_cache_artifact_ref is not None:
+                cache_session_value = _with_original_preview_cache_refs(
+                    worker_cache_artifact_ref,
+                )
+                for artifact_path in _preview_cache_artifact_paths(cache_session_value):
+                    store.register_temp_file(session_id, artifact_path)
+
+            vector_cache_max_bytes = _get_vector_parse_clip_cache_max_bytes()
+            if worker_vector_parse_clip_cache_path and os.path.exists(
+                worker_vector_parse_clip_cache_path,
+            ):
+                try:
+                    vector_cache_bytes = os.path.getsize(worker_vector_parse_clip_cache_path)
+                    if vector_cache_bytes <= vector_cache_max_bytes:
+                        store.register_temp_file(session_id, worker_vector_parse_clip_cache_path)
+                        if cache_session_value is not None:
+                            cache_session_value["metadata"]["vector_parse_clip_cache_path"] = (
+                                worker_vector_parse_clip_cache_path
+                            )
+                        cache_data["vector_parse_clip_cache_path"] = worker_vector_parse_clip_cache_path
+                    else:
+                        _cleanup_pre_session_temp_paths(worker_vector_parse_clip_cache_path)
+                        log.debug(
+                            "Vector parse/clip cache artifact persist skipped",
+                            extra={
+                                "event": "vector_parse_clip_cache_persist_skipped",
+                                "reason": "cache_artifact_too_large",
+                                "cache_bytes": int(vector_cache_bytes),
+                                "max_bytes": int(vector_cache_max_bytes),
+                            },
+                        )
+                        worker_vector_parse_clip_cache_path = None
+                except ROUTER_HANDLED_ERRORS as exc:
+                    log.debug(
+                        "Vector parse/clip cache artifact persist skipped",
+                        extra={
+                            "event": "vector_parse_clip_cache_persist_skipped",
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                            "max_bytes": int(vector_cache_max_bytes),
+                        },
+                    )
+                    _cleanup_pre_session_temp_paths(worker_vector_parse_clip_cache_path)
+                    worker_vector_parse_clip_cache_path = None
+            elif isinstance(vector_parse_clip_cache_blob, (bytes, bytearray)):
+                vector_cache_bytes = len(vector_parse_clip_cache_blob)
+                if vector_cache_bytes <= vector_cache_max_bytes:
+                    vector_cache_path = None
+                    try:
+                        fd, vector_cache_path = tempfile.mkstemp(
+                            prefix="vector_parse_clip_cache_",
+                            suffix=".pkl",
+                            dir=TEMP_DIR,
+                        )
+                        with os.fdopen(fd, "wb") as handle:
+                            handle.write(vector_parse_clip_cache_blob)
+                        store.register_temp_file(session_id, vector_cache_path)
+                        if cache_session_value is not None:
+                            cache_session_value["metadata"]["vector_parse_clip_cache_path"] = (
+                                vector_cache_path
+                            )
+                        cache_data["vector_parse_clip_cache_path"] = vector_cache_path
+                    except ROUTER_HANDLED_ERRORS as exc:
+                        log.debug(
+                            "Vector parse/clip cache artifact persist skipped",
+                            extra={
+                                "event": "vector_parse_clip_cache_persist_skipped",
+                                "error_type": type(exc).__name__,
+                                "error_message": str(exc),
+                                "cache_bytes": int(vector_cache_bytes),
+                                "max_bytes": int(vector_cache_max_bytes),
+                            },
+                        )
+                        _cleanup_pre_session_temp_paths(vector_cache_path)
+                else:
+                    log.debug(
+                        "Vector parse/clip cache artifact persist skipped",
+                        extra={
+                            "event": "vector_parse_clip_cache_persist_skipped",
+                            "reason": "cache_artifact_too_large",
+                            "cache_bytes": int(vector_cache_bytes),
+                            "max_bytes": int(vector_cache_max_bytes),
+                        },
+                    )
+            memory_profile = build_preview_cache_memory_profile(
+                cache_data,
+                session_id=session_id,
+                modeling_mode=modeling_mode,
+                cache_data_bytes=(
+                    os.path.getsize(worker_cache_data_path)
+                    if worker_cache_data_path and os.path.exists(worker_cache_data_path)
+                    else None
+                ),
+                process_rss_bytes=get_process_rss_bytes(),
             )
-    memory_profile = build_preview_cache_memory_profile(
-        cache_data,
-        session_id=session_id,
-        modeling_mode=modeling_mode,
-        cache_data_bytes=(
-            os.path.getsize(worker_cache_data_path)
-            if worker_cache_data_path and os.path.exists(worker_cache_data_path)
-            else None
-        ),
-        process_rss_bytes=get_process_rss_bytes(),
-    )
-    if should_log_preview_cache_memory_profile_at_info():
-        log.info("Preview cache memory profile", extra=memory_profile)
-    else:
-        log.debug("Preview cache memory profile", extra=memory_profile)
-    if cache_session_value is None and cache_data is not None:
-        cache_with_originals = dict(cache_data)
-        if "matched_rgb" in cache_data:
-            cache_with_originals.setdefault(
-                "original_matched_rgb",
-                cache_data["matched_rgb"],
-            )
-            cache_with_originals.setdefault(
-                "height_identity_rgb",
-                cache_with_originals["original_matched_rgb"],
-            )
-        if "material_matrix" in cache_data:
-            cache_with_originals.setdefault(
-                "original_material_matrix",
-                cache_data["material_matrix"],
-            )
-        if "quantized_image" in cache_data:
-            cache_with_originals.setdefault(
-                "original_quantized_image",
-                cache_data["quantized_image"],
-            )
-        if "material_dynamic_layer_info" in cache_data:
-            cache_with_originals.setdefault(
-                "original_material_dynamic_layer_info",
-                copy.deepcopy(cache_data["material_dynamic_layer_info"]),
-            )
-        if "material_solver_info" in cache_data:
-            cache_with_originals.setdefault(
-                "original_material_solver_info",
-                copy.deepcopy(cache_data["material_solver_info"]),
-            )
-        cache_with_originals = _compact_preview_cache_material_matrices(
-            cache_with_originals,
-        )
-        try:
-            cache_session_value = _with_original_preview_cache_refs(
-                externalize_preview_cache(
-                    session_id,
-                    store,
+            if should_log_preview_cache_memory_profile_at_info():
+                log.info("Preview cache memory profile", extra=memory_profile)
+            else:
+                log.debug("Preview cache memory profile", extra=memory_profile)
+            if cache_session_value is None and cache_data is not None:
+                cache_with_originals = dict(cache_data)
+                if "matched_rgb" in cache_data:
+                    cache_with_originals.setdefault(
+                        "original_matched_rgb",
+                        cache_data["matched_rgb"],
+                    )
+                    cache_with_originals.setdefault(
+                        "height_identity_rgb",
+                        cache_with_originals["original_matched_rgb"],
+                    )
+                if "material_matrix" in cache_data:
+                    cache_with_originals.setdefault(
+                        "original_material_matrix",
+                        cache_data["material_matrix"],
+                    )
+                if "quantized_image" in cache_data:
+                    cache_with_originals.setdefault(
+                        "original_quantized_image",
+                        cache_data["quantized_image"],
+                    )
+                if "material_dynamic_layer_info" in cache_data:
+                    cache_with_originals.setdefault(
+                        "original_material_dynamic_layer_info",
+                        copy.deepcopy(cache_data["material_dynamic_layer_info"]),
+                    )
+                if "material_solver_info" in cache_data:
+                    cache_with_originals.setdefault(
+                        "original_material_solver_info",
+                        copy.deepcopy(cache_data["material_solver_info"]),
+                    )
+                cache_with_originals = _compact_preview_cache_material_matrices(
                     cache_with_originals,
                 )
+                cache_session_value = _with_original_preview_cache_refs(
+                    externalize_preview_cache(
+                        session_id,
+                        store,
+                        cache_with_originals,
+                    )
+                )
+            if cache_session_value is not None:
+                renderer_metadata = (
+                    cache_session_value.get("metadata")
+                    if is_preview_cache_artifact_ref(cache_session_value)
+                    else cache_session_value
+                )
+                if isinstance(renderer_metadata, dict):
+                    renderer_metadata["enable_smooth_vector_preview"] = bool(
+                        enable_smooth_vector_preview
+                    )
+            store.put(session_id, "preview_cache", cache_session_value)
+            schedule_visible_region_cache_prewarm(
+                session_id,
+                store,
+                cache_data,
+                generation=0,
             )
-        except ROUTER_HANDLED_ERRORS:
-            _rollback_preview_session_after_failure(
+            if worker_gradient_groups is not None and worker_gradient_region_id_map is not None:
+                store.put(session_id, "gradient_groups", worker_gradient_groups)
+                store.put(
+                    session_id,
+                    "gradient_region_id_map",
+                    worker_gradient_region_id_map,
+                )
+                log.debug(
+                    "Gradient groups adopted from worker",
+                    extra={
+                        "event": "gradient_groups_adopted_from_worker",
+                        "group_count": len(worker_gradient_groups),
+                        "region_id_map_shape": list(worker_gradient_region_id_map.shape),
+                    },
+                )
+            else:
+                # Synchronously compute gradient-banding groups so the Color Workstation
+                # can surface them (group-level multi-select + optional auto-replace)
+                # without a second round-trip. Best-effort: failures are logged and do
+                # not block the preview response.
+                # 同步计算渐变海带纹分组，便于颜色工作站的分组多选与自动换色。
+                recompute_gradient_groups_into_session(cache_data, session_id, store)
+            store.put(session_id, "image_path", temp_path)
+            source_basename = _resolve_upload_source_basename(source_filename, temp_path)
+            store.put(session_id, "source_basename", source_basename)
+            if surface_config is not None:
+                store.put(session_id, "surface_overlay_enabled", True)
+                store.put(session_id, "surface_model_file_id", surface_config["surface_model_file_id"])
+                store.put(session_id, "surface_model_path", surface_config["surface_model_path"])
+                store.put(session_id, "surface_selection", surface_config["surface_selection"])
+                store.put(session_id, "surface_footprint", surface_config["surface_footprint"])
+                store.put(session_id, "surface_placement", surface_config["surface_placement"])
+                store.put(session_id, "surface_model_transform", surface_config["surface_model_transform"])
+                store.put(session_id, "surface_artwork_path", surface_config["surface_artwork_path"])
+                store.put(session_id, "surface_target_width_mm", surface_config["target_width_mm"])
+                store.put(session_id, "surface_target_height_mm", surface_config["target_height_mm"])
+                if surface_original_image_path is not None:
+                    store.put(session_id, "surface_source_image_path", surface_original_image_path)
+            store.put(session_id, "lut_path", lut_path)
+            store.put(session_id, "lut_name", resolved_lut_name)
+            store.put(session_id, "lut_source_kind", request.source_kind)
+            store.put(session_id, "lut_names", list(request.lut_names))
+            store.put(session_id, "lut_material_type", request.material_type)
+            store.put(session_id, "lut_vendor", request.vendor)
+            store.put(session_id, "lut_db_names", list(request.db_names))
+            store.put(session_id, "color_mode", color_mode)
+            store.put(session_id, "modeling_mode", modeling_mode)
+            store.put(session_id, "color_layers", color_layers)
+            store.put(session_id, "layer_height_mm", layer_height_mm)
+            store.put(session_id, "model_enable", model_enable)
+            store.put(session_id, "model_only", model_only)
+            store.put(session_id, "model_threshold", model_threshold)
+            store.put(session_id, "model_margin", model_margin)
+            store.put(session_id, "material_source", material_source)
+            store.put(
+                session_id,
+                "material_dynamic_layer_count_enabled",
+                material_dynamic_layer_count_enabled,
+            )
+            store.put(session_id, "material_min_layer_count", material_min_layer_count)
+            store.put(session_id, "material_max_layer_count", material_max_layer_count)
+            store.put(
+                session_id,
+                "material_delta_e00_tolerance",
+                material_delta_e00_tolerance,
+            )
+            if material_source == "material_archive":
+                store.put(session_id, "selected_materials", _selected_mats or [])
+                store.put(session_id, "material_layer_count", material_layer_count)
+                store.put(session_id, "material_layer_height_mm", material_layer_height_mm)
+                store.put(
+                    session_id,
+                    "material_grid_resolution",
+                    material_grid_resolution,
+                )
+                store.put(
+                    session_id,
+                    "material_backing_material_index",
+                    _material_backing_index,
+                )
+            store.put(session_id, "replacement_regions", parsed_replacement_regions or [])
+            clear_replacement_history(session_id, store)
+            store.put(session_id, "free_color_set", set())
+            if svg_large_format_policy is not None:
+                store.put(session_id, "svg_large_format_policy", svg_large_format_policy)
+            store.register_temp_file(session_id, temp_path)
+            if surface_original_image_path is not None:
+                store.register_temp_file(session_id, surface_original_image_path)
+            if temp_native_bundle_path is not None:
+                store.register_temp_file(session_id, temp_native_bundle_path)
+            # Register worker temp files for cleanup
+            store.register_temp_file(session_id, worker_preview_png_path)
+            if worker_raw_preview_png_path is not None:
+                store.register_temp_file(session_id, worker_raw_preview_png_path)
+            if worker_cache_data_path is not None:
+                store.register_temp_file(session_id, worker_cache_data_path)
+            if worker_gradient_region_id_map_path is not None:
+                store.register_temp_file(session_id, worker_gradient_region_id_map_path)
+
+            # Register preview image (bed-rendered, for general display)
+            preview_bytes = _image_to_png_bytes(preview_img)
+            preview_id = registry.register_bytes(session_id, preview_bytes, "preview.png")
+
+            # Register raw RGBA preview (no bed, pixel-aligned with previewPixelWidth/Height)
+            # Used by ColorPreview2D so SVG contour overlays and click coords align.
+            preview_raw_url: str | None = None
+            if worker_raw_preview_png_path and os.path.exists(worker_raw_preview_png_path):
+                raw_id = registry.register_path(
+                    session_id,
+                    worker_raw_preview_png_path,
+                    filename="preview_raw.png",
+                )
+                preview_raw_url = f"/api/files/{raw_id}"
+            elif cache_data and "preview_rgba" in cache_data:
+                raw_rgba = cache_data["preview_rgba"]
+                raw_bytes = ndarray_to_png_bytes(raw_rgba)
+                raw_id = registry.register_bytes(session_id, raw_bytes, "preview_raw.png")
+                preview_raw_url = f"/api/files/{raw_id}"
+
+            # Schedule segmented GLB (one Mesh per color) without blocking preview.
+            _t = time.perf_counter()
+            preview_glb_url: str | None = None
+            try:
+                preview_glb_url = _schedule_or_run_preview_glb_build(
+                    session_id,
+                    store,
+                    registry,
+                    cache_session_value if cache_session_value is not None else cache_data,
+                )
+            except NON_FATAL_GLB_ERRORS as e:
+                # Non-fatal: log and continue without GLB
+                log.warning(
+                    "Segmented GLB scheduling failed",
+                    extra={
+                        "event": "converter_segmented_glb_failed",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                    },
+                )
+            _t_glb = time.perf_counter() - _t
+
+            _t = time.perf_counter()
+            palette = (
+                worker_response_palette
+                if worker_response_palette is not None
+                else build_preview_response_palette(cache_data)
+            )
+
+            dimensions: dict = {}
+            if cache_data:
+                dimensions = {
+                    "width": cache_data.get("target_w", 0),
+                    "height": cache_data.get("target_h", 0),
+                }
+            if preview_raw_url:
+                dimensions["preview_raw_url"] = preview_raw_url
+
+            _t_palette = time.perf_counter() - _t
+
+            # Extract color contours from cache (generated by generate_segmented_glb)
+            contours_data: dict[str, list[list[list[float]]]] | None = None
+            if cache_data and "color_contours" in cache_data:
+                contours_data = cache_data["color_contours"]
+            dynamic_result = dynamic_material_result_from_cache(cache_data)
+
+            _t_api_total = time.perf_counter() - _api_t0
+            endpoint_to_enqueue_ms = round((_worker_t0 - _api_t0) * 1000, 3)
+            performance_timing = {
+                "total_ms": round(_t_api_total * 1000, 3),
+                "upload_ms": round(_t_upload * 1000, 3),
+                "worker_ms": round(_t_worker * 1000, 3),
+                "endpoint_to_enqueue_ms": endpoint_to_enqueue_ms,
+                "queue_wait_ms": round(
+                    float(worker_pool_timing.get("queue_wait_s", 0.0)) * 1000,
+                    3,
+                ),
+                "worker_execution_ms": round(
+                    float(worker_pool_timing.get("worker_execution_s", 0.0)) * 1000,
+                    3,
+                ),
+                "result_delivery_ms": round(
+                    float(worker_pool_timing.get("result_delivery_s", 0.0)) * 1000,
+                    3,
+                ),
+                "endpoint_post_worker_ms": round(
+                    max(
+                        0.0,
+                        _t_api_total - (_worker_t0 - _api_t0) - _t_worker,
+                    )
+                    * 1000,
+                    3,
+                ),
+                "pickle_load_ms": round(_t_pickle_load * 1000, 3),
+                "segmented_glb_ms": round(_t_glb * 1000, 3),
+                "palette_ms": round(_t_palette * 1000, 3),
+            }
+            log.info(
+                "Preview endpoint timing",
+                extra={
+                    "event": "converter_preview_timing",
+                    "duration_ms": performance_timing["total_ms"],
+                    "upload_ms": performance_timing["upload_ms"],
+                    "worker_ms": performance_timing["worker_ms"],
+                    "endpoint_to_enqueue_ms": performance_timing[
+                        "endpoint_to_enqueue_ms"
+                    ],
+                    "queue_wait_ms": performance_timing["queue_wait_ms"],
+                    "worker_execution_ms": performance_timing[
+                        "worker_execution_ms"
+                    ],
+                    "result_delivery_ms": performance_timing[
+                        "result_delivery_ms"
+                    ],
+                    "endpoint_post_worker_ms": performance_timing[
+                        "endpoint_post_worker_ms"
+                    ],
+                    "pickle_load_ms": performance_timing["pickle_load_ms"],
+                    "segmented_glb_ms": performance_timing["segmented_glb_ms"],
+                    "palette_ms": performance_timing["palette_ms"],
+                },
+            )
+
+            response = PreviewResponse(
                 session_id=session_id,
-                store=store,
-                registry=registry,
-                extra_temp_paths=(
+                status="ok",
+                message=status_msg or "Preview generated",
+                preview_url=f"/api/files/{preview_id}",
+                preview_glb_url=preview_glb_url,
+                lut_match_mode=(cache_data.get("lut_match_info", {}) or {}).get("match_mode"),
+                lut_match_info=cache_data.get("lut_match_info"),
+                palette=palette,
+                dimensions=dimensions,
+                contours=contours_data,
+                warnings=list((svg_large_format_policy or {}).get("warnings", [])),
+                performance_timing=performance_timing,
+                **dynamic_result.model_dump(),
+            )
+            publication_succeeded = True
+            return response
+        finally:
+            if not publication_succeeded:
+                extra_temp_paths = (
                     temp_path,
                     surface_original_image_path,
                     temp_native_bundle_path,
-                    worker_preview_png_path,
-                    worker_cache_data_path,
-                ),
-            )
-            raise
-    if cache_session_value is not None:
-        renderer_metadata = (
-            cache_session_value.get("metadata")
-            if is_preview_cache_artifact_ref(cache_session_value)
-            else cache_session_value
-        )
-        if isinstance(renderer_metadata, dict):
-            renderer_metadata["enable_smooth_vector_preview"] = bool(
-                enable_smooth_vector_preview
-            )
-    store.put(session_id, "preview_cache", cache_session_value)
-    schedule_visible_region_cache_prewarm(
-        session_id,
-        store,
-        cache_data,
-        generation=0,
-    )
-    if worker_gradient_groups is not None and worker_gradient_region_id_map is not None:
-        store.put(session_id, "gradient_groups", worker_gradient_groups)
-        store.put(
-            session_id,
-            "gradient_region_id_map",
-            worker_gradient_region_id_map,
-        )
-        log.debug(
-            "Gradient groups adopted from worker",
-            extra={
-                "event": "gradient_groups_adopted_from_worker",
-                "group_count": len(worker_gradient_groups),
-                "region_id_map_shape": list(worker_gradient_region_id_map.shape),
-            },
-        )
-    else:
-        # Synchronously compute gradient-banding groups so the Color Workstation
-        # can surface them (group-level multi-select + optional auto-replace)
-        # without a second round-trip. Best-effort: failures are logged and do
-        # not block the preview response.
-        # 同步计算渐变海带纹分组，便于颜色工作站的分组多选与自动换色。
-        recompute_gradient_groups_into_session(cache_data, session_id, store)
-    store.put(session_id, "image_path", temp_path)
-    source_basename = _resolve_upload_source_basename(image.filename, temp_path)
-    store.put(session_id, "source_basename", source_basename)
-    if surface_config is not None:
-        store.put(session_id, "surface_overlay_enabled", True)
-        store.put(session_id, "surface_model_file_id", surface_config["surface_model_file_id"])
-        store.put(session_id, "surface_model_path", surface_config["surface_model_path"])
-        store.put(session_id, "surface_selection", surface_config["surface_selection"])
-        store.put(session_id, "surface_footprint", surface_config["surface_footprint"])
-        store.put(session_id, "surface_placement", surface_config["surface_placement"])
-        store.put(session_id, "surface_model_transform", surface_config["surface_model_transform"])
-        store.put(session_id, "surface_artwork_path", surface_config["surface_artwork_path"])
-        store.put(session_id, "surface_target_width_mm", surface_config["target_width_mm"])
-        store.put(session_id, "surface_target_height_mm", surface_config["target_height_mm"])
-        if surface_original_image_path is not None:
-            store.put(session_id, "surface_source_image_path", surface_original_image_path)
-    store.put(session_id, "lut_path", lut_path)
-    store.put(session_id, "lut_name", resolved_lut_name)
-    store.put(session_id, "lut_source_kind", request.source_kind)
-    store.put(session_id, "lut_names", list(request.lut_names))
-    store.put(session_id, "lut_material_type", request.material_type)
-    store.put(session_id, "lut_vendor", request.vendor)
-    store.put(session_id, "lut_db_names", list(request.db_names))
-    store.put(session_id, "color_mode", color_mode)
-    store.put(session_id, "modeling_mode", modeling_mode)
-    store.put(session_id, "color_layers", color_layers)
-    store.put(session_id, "layer_height_mm", layer_height_mm)
-    store.put(session_id, "model_enable", model_enable)
-    store.put(session_id, "model_only", model_only)
-    store.put(session_id, "model_threshold", model_threshold)
-    store.put(session_id, "model_margin", model_margin)
-    store.put(session_id, "material_source", material_source)
-    store.put(
-        session_id,
-        "material_dynamic_layer_count_enabled",
-        material_dynamic_layer_count_enabled,
-    )
-    store.put(session_id, "material_min_layer_count", material_min_layer_count)
-    store.put(session_id, "material_max_layer_count", material_max_layer_count)
-    store.put(
-        session_id,
-        "material_delta_e00_tolerance",
-        material_delta_e00_tolerance,
-    )
-    if material_source == "material_archive":
-        store.put(session_id, "selected_materials", _selected_mats or [])
-        store.put(session_id, "material_layer_count", material_layer_count)
-        store.put(session_id, "material_layer_height_mm", material_layer_height_mm)
-        store.put(
-            session_id,
-            "material_grid_resolution",
-            material_grid_resolution,
-        )
-        store.put(
-            session_id,
-            "material_backing_material_index",
-            _material_backing_index,
-        )
-    store.put(session_id, "replacement_regions", parsed_replacement_regions or [])
-    clear_replacement_history(session_id, store)
-    store.put(session_id, "free_color_set", set())
-    if svg_large_format_policy is not None:
-        store.put(session_id, "svg_large_format_policy", svg_large_format_policy)
-    store.register_temp_file(session_id, temp_path)
-    if surface_original_image_path is not None:
-        store.register_temp_file(session_id, surface_original_image_path)
-    if temp_native_bundle_path is not None:
-        store.register_temp_file(session_id, temp_native_bundle_path)
-    # Register worker temp files for cleanup
-    store.register_temp_file(session_id, worker_preview_png_path)
-    if worker_raw_preview_png_path is not None:
-        store.register_temp_file(session_id, worker_raw_preview_png_path)
-    if worker_cache_data_path is not None:
-        store.register_temp_file(session_id, worker_cache_data_path)
-    if worker_gradient_region_id_map_path is not None:
-        store.register_temp_file(session_id, worker_gradient_region_id_map_path)
+                    *worker_result_paths,
+                    *worker_artifact_paths,
+                )
+                if session_id is None:
+                    _cleanup_pre_session_temp_paths(*extra_temp_paths)
+                else:
+                    _rollback_preview_session_after_failure(
+                        session_id=session_id,
+                        store=store,
+                        registry=registry,
+                        extra_temp_paths=extra_temp_paths,
+                    )
 
+    # to_thread preserves the request/session logging context. Shielding keeps
+    # cancellation from abandoning an active publisher that still owns files.
+    publication = asyncio.create_task(asyncio.to_thread(publish_preview_result))
     try:
-        # Register preview image (bed-rendered, for general display)
-        preview_bytes = _image_to_png_bytes(preview_img)
-        preview_id = registry.register_bytes(session_id, preview_bytes, "preview.png")
-
-        # Register raw RGBA preview (no bed, pixel-aligned with previewPixelWidth/Height)
-        # Used by ColorPreview2D so SVG contour overlays and click coords align.
-        preview_raw_url: str | None = None
-        if worker_raw_preview_png_path and os.path.exists(worker_raw_preview_png_path):
-            raw_id = registry.register_path(
-                session_id,
-                worker_raw_preview_png_path,
-                filename="preview_raw.png",
-            )
-            preview_raw_url = f"/api/files/{raw_id}"
-        elif cache_data and "preview_rgba" in cache_data:
-            raw_rgba = cache_data["preview_rgba"]
-            raw_bytes = ndarray_to_png_bytes(raw_rgba)
-            raw_id = registry.register_bytes(session_id, raw_bytes, "preview_raw.png")
-            preview_raw_url = f"/api/files/{raw_id}"
-    except ROUTER_HANDLED_ERRORS:
-        _rollback_preview_session_after_failure(
-            session_id=session_id,
-            store=store,
-            registry=registry,
-            extra_temp_paths=(
-                temp_path,
-                surface_original_image_path,
-                temp_native_bundle_path,
-                worker_preview_png_path,
-                worker_cache_data_path,
-                worker_raw_preview_png_path,
-                worker_gradient_region_id_map_path,
-            ),
-        )
+        return await asyncio.shield(publication)
+    except asyncio.CancelledError:
+        # A running thread cannot be cancelled. Drain it through repeated
+        # request cancellations before reclaiming any input or output paths.
+        while not publication.done():
+            try:
+                await asyncio.shield(publication)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break  # The publisher's finally has already rolled back.
+        if not publication.cancelled() and publication.exception() is None:
+            unpublished_response = publication.result()
+            rollback = asyncio.create_task(asyncio.to_thread(
+                _rollback_preview_session_after_failure,
+                session_id=unpublished_response.session_id,
+                store=store,
+                registry=registry,
+            ))
+            while not rollback.done():
+                try:
+                    await asyncio.shield(rollback)
+                except asyncio.CancelledError:
+                    continue
+            rollback.result()
         raise
-
-    # Schedule segmented GLB (one Mesh per color) without blocking preview.
-    _t = time.perf_counter()
-    preview_glb_url: str | None = None
-    try:
-        preview_glb_url = _schedule_or_run_preview_glb_build(
-            session_id,
-            store,
-            registry,
-            cache_session_value if cache_session_value is not None else cache_data,
-        )
-    except NON_FATAL_GLB_ERRORS as e:
-        # Non-fatal: log and continue without GLB
-        log.warning(
-            "Segmented GLB scheduling failed",
-            extra={
-                "event": "converter_segmented_glb_failed",
-                "error_type": type(e).__name__,
-                "error_message": str(e),
-            },
-        )
-    _t_glb = time.perf_counter() - _t
-
-    _t = time.perf_counter()
-    palette = (
-        worker_response_palette
-        if worker_response_palette is not None
-        else build_preview_response_palette(cache_data)
-    )
-
-    dimensions: dict = {}
-    if cache_data:
-        dimensions = {
-            "width": cache_data.get("target_w", 0),
-            "height": cache_data.get("target_h", 0),
-        }
-    if preview_raw_url:
-        dimensions["preview_raw_url"] = preview_raw_url
-
-    _t_palette = time.perf_counter() - _t
-
-    # Extract color contours from cache (generated by generate_segmented_glb)
-    contours_data: dict[str, list[list[list[float]]]] | None = None
-    if cache_data and "color_contours" in cache_data:
-        contours_data = cache_data["color_contours"]
-    dynamic_result = dynamic_material_result_from_cache(cache_data)
-
-    _t_api_total = time.perf_counter() - _api_t0
-    endpoint_to_enqueue_ms = round((_worker_t0 - _api_t0) * 1000, 3)
-    performance_timing = {
-        "total_ms": round(_t_api_total * 1000, 3),
-        "upload_ms": round(_t_upload * 1000, 3),
-        "worker_ms": round(_t_worker * 1000, 3),
-        "endpoint_to_enqueue_ms": endpoint_to_enqueue_ms,
-        "queue_wait_ms": round(
-            float(worker_pool_timing.get("queue_wait_s", 0.0)) * 1000,
-            3,
-        ),
-        "worker_execution_ms": round(
-            float(worker_pool_timing.get("worker_execution_s", 0.0)) * 1000,
-            3,
-        ),
-        "result_delivery_ms": round(
-            float(worker_pool_timing.get("result_delivery_s", 0.0)) * 1000,
-            3,
-        ),
-        "endpoint_post_worker_ms": round(
-            max(
-                0.0,
-                _t_api_total - (_worker_t0 - _api_t0) - _t_worker,
-            )
-            * 1000,
-            3,
-        ),
-        "pickle_load_ms": round(_t_pickle_load * 1000, 3),
-        "segmented_glb_ms": round(_t_glb * 1000, 3),
-        "palette_ms": round(_t_palette * 1000, 3),
-    }
-    log.info(
-        "Preview endpoint timing",
-        extra={
-            "event": "converter_preview_timing",
-            "duration_ms": performance_timing["total_ms"],
-            "upload_ms": performance_timing["upload_ms"],
-            "worker_ms": performance_timing["worker_ms"],
-            "endpoint_to_enqueue_ms": performance_timing[
-                "endpoint_to_enqueue_ms"
-            ],
-            "queue_wait_ms": performance_timing["queue_wait_ms"],
-            "worker_execution_ms": performance_timing[
-                "worker_execution_ms"
-            ],
-            "result_delivery_ms": performance_timing[
-                "result_delivery_ms"
-            ],
-            "endpoint_post_worker_ms": performance_timing[
-                "endpoint_post_worker_ms"
-            ],
-            "pickle_load_ms": performance_timing["pickle_load_ms"],
-            "segmented_glb_ms": performance_timing["segmented_glb_ms"],
-            "palette_ms": performance_timing["palette_ms"],
-        },
-    )
-
-    try:
-        return PreviewResponse(
-            session_id=session_id,
-            status="ok",
-            message=status_msg or "Preview generated",
-            preview_url=f"/api/files/{preview_id}",
-            preview_glb_url=preview_glb_url,
-            lut_match_mode=(cache_data.get("lut_match_info", {}) or {}).get("match_mode"),
-            lut_match_info=cache_data.get("lut_match_info"),
-            palette=palette,
-            dimensions=dimensions,
-            contours=contours_data,
-            warnings=list((svg_large_format_policy or {}).get("warnings", [])),
-            performance_timing=performance_timing,
-            **dynamic_result.model_dump(),
-        )
-    except (*ROUTER_HANDLED_ERRORS, ValidationError):
-        _rollback_preview_session_after_failure(
-            session_id=session_id,
-            store=store,
-            registry=registry,
-            extra_temp_paths=(
-                temp_path,
-                surface_original_image_path,
-                temp_native_bundle_path,
-                worker_preview_png_path,
-                worker_cache_data_path,
-            ),
-        )
-        raise
-
 
 
 
