@@ -48,10 +48,55 @@ def _assert_closed_volume(
 def test_writer_grid_is_at_least_four_float32_ulps() -> None:
     grid = resolve_vector_writer_grid_mm(200.0)
 
-    assert grid == pytest.approx(0.0001)
+    assert 0.0001 <= grid < 0.0002
     assert grid >= abs(float(np.spacing(np.float32(200.0)))) * 4.0
     snapped = snap_vector_writer_coordinate_mm(1.23456, grid_mm=grid)
     assert snapped / grid == pytest.approx(round(snapped / grid), abs=1e-9)
+
+
+@pytest.mark.parametrize("extent_mm", [1.0, 200.0, 230.0, 1024.0, 10000.0])
+def test_print_grid_coordinates_survive_writer_without_rounding(
+    extent_mm: float,
+) -> None:
+    grid = resolve_vector_writer_grid_mm(extent_mm)
+    limit = int(extent_mm / grid)
+    units = np.asarray([0, 1, -1, limit // 3, limit - 1, limit, -limit])
+    coordinates = units * grid
+
+    assert np.array_equal(coordinates, coordinates.astype(np.float32).astype(np.float64))
+
+
+def test_thin_positive_cap_at_large_xy_survives_export_grid() -> None:
+    # Minimal three-point ear from a failing 230 mm SVG, without the artwork.
+    source = np.asarray(
+        [(1480096, 2269274), (1479777, 2268888), (1479664, 2268751)],
+        dtype=np.float64,
+    ) * 0.0001
+    grid = resolve_vector_writer_grid_mm(230.0)
+    projected = np.floor(source / grid + 0.5) * grid
+    faces = vector_layer_geometry._expand_writer_degenerate_cap_faces(
+        projected, np.asarray([(0, 1, 2)]), grid_mm=grid,
+    )
+
+    written = projected.astype(np.float32).astype(np.float64)
+    assert np.array_equal(written, projected)
+    assert Polygon(written[faces[0]]).area > 0
+
+
+def test_exact_writer_triangle_is_not_rejected_by_float32_area_arithmetic() -> None:
+    grid = 2.0 ** -13
+    vertices = np.asarray(
+        [(0, 0), (2000000, 1999999), (1999999, 1999998)], dtype=np.float64,
+    ) * grid
+    faces = np.asarray([(0, 1, 2)], dtype=np.int64)
+    assert np.array_equal(vertices, vertices.astype(np.float32).astype(np.float64))
+    assert Polygon(vertices).area > 0
+
+    result = vector_layer_geometry._expand_writer_degenerate_cap_faces(
+        vertices, faces, grid_mm=grid,
+    )
+
+    assert np.array_equal(result, faces)
 
 
 def test_single_polygon_with_hole_is_one_closed_prism() -> None:
@@ -451,7 +496,7 @@ def test_chained_zero_area_ears_are_expanded_from_the_supported_end() -> None:
     assert [1, 2] in boundary.tolist()
 
 
-def test_positive_integer_ear_is_flipped_when_float32_makes_it_collinear() -> None:
+def test_decimal_cap_preserves_area_without_float32_determinant_cancellation() -> None:
     units = np.asarray(
         [
             (816468, 368506),
@@ -484,7 +529,7 @@ def test_positive_integer_ear_is_flipped_when_float32_makes_it_collinear() -> No
     )
 
     writer_areas = vector_layer_geometry._triangle_signed_twice_area(
-        vertices.astype(np.float32)[expanded]
+        vertices.astype(np.float32).astype(np.float64)[expanded]
     )
     output_area = np.sum(
         np.abs(

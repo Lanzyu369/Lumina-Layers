@@ -148,7 +148,6 @@ describe("generate editor content revision", () => {
   it.each([
     ["coating enabled", () => useConverterStore.getState().setEnableCoating(true)],
     ["coating height", () => useConverterStore.getState().setCoatingHeightMm(0.12)],
-    ["coating material", () => useConverterStore.getState().setCoatingMaterial({ source: "palette", key: "White" })],
     ["backing plates", () => useConverterStore.getState().setBackingOutput("separate_project")],
   ] as const)("discards a late download after changing %s", async (_name, change) => {
     seedEditorState();

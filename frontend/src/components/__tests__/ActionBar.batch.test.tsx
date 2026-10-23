@@ -227,6 +227,31 @@ describe("ActionBar — auto batch mode", () => {
     expect(btn).not.toBeDisabled();
   });
 
+  it("disables generate and explains why while large format and model texture are both on", () => {
+    useConverterStore.setState({
+      imageFile: makeFile("art.png"),
+      lut_name: "test_lut",
+      sessionId: "conflict-session",
+      largeFormatEnabled: true,
+      modelSurfaceEnabled: false,
+    });
+    const { rerender } = render(<ActionBar />);
+    expect(screen.getByText("生成").closest("button")).not.toBeDisabled();
+    expect(
+      screen.queryByText(translations.large_format_model_surface_conflict.zh),
+    ).not.toBeInTheDocument();
+
+    act(() => {
+      useConverterStore.setState({ modelSurfaceEnabled: true });
+    });
+    rerender(<ActionBar />);
+
+    expect(screen.getByText("生成").closest("button")).toBeDisabled();
+    expect(
+      screen.getByText(translations.large_format_model_surface_conflict.zh),
+    ).toBeInTheDocument();
+  });
+
   it("enables batch generate button for material archive source without a legacy LUT", () => {
     useConverterStore.setState({
       batchMode: true,

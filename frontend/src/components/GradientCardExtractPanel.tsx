@@ -625,6 +625,10 @@ export default function GradientCardExtractPanel() {
   const whiteImageInputRef = useRef<HTMLInputElement>(null);
   const blackImageInputRef = useRef<HTMLInputElement>(null);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
+  // Which save action the user last clicked; save feedback renders next to
+  // it so the result is visible without scrolling.
+  // 记录最近触发保存的按钮位置，保存反馈显示在该按钮旁，无需滚动即可看到。
+  const [saveFeedbackAnchor, setSaveFeedbackAnchor] = useState<"top" | "result">("top");
   const [brandOptions, setBrandOptions] = useState<string[]>([]);
   const [brandOptionsLoading, setBrandOptionsLoading] = useState(false);
   const {
@@ -754,12 +758,39 @@ export default function GradientCardExtractPanel() {
     ? t("mat_gradient_save_verification_btn")
     : t("mat_gradient_save_material_btn");
   const hasDetailInfo = !!stageAParamsUrl || !!materialSummary || !!fitSummary || !!savedMaterialSummary;
-  const renderVerificationActions = (testId: string) => (
+  const handleSave = (anchor: "top" | "result", saveMode?: "merge" | "override") => {
+    setSaveFeedbackAnchor(anchor);
+    void submitSave(saveMode);
+  };
+  const renderSaveFeedback = (anchor: "top" | "result") =>
+    anchor === saveFeedbackAnchor ? (
+      <AnimatePresence mode="popLayout">
+        {saveError && (
+          <InlineStatusMessage
+            key="saveError"
+            testId="save-error"
+            tone="error"
+            message={saveError}
+            onDismiss={clearSaveMessages}
+          />
+        )}
+        {saveSuccess && (
+          <InlineStatusMessage
+            key="saveSuccess"
+            testId="save-success"
+            tone="success"
+            message={saveSuccess}
+            onDismiss={clearSaveMessages}
+          />
+        )}
+      </AnimatePresence>
+    ) : null;
+  const renderVerificationActions = (testId: string, anchor: "top" | "result") => (
     <div data-testid={testId} className="grid gap-3 sm:grid-cols-3">
       <Button
         label={t("mat_gradient_save_merge_btn")}
         variant="primary"
-        onClick={() => void submitSave("merge")}
+        onClick={() => handleSave(anchor, "merge")}
         disabled={!sessionId || !materialName.trim() || isSaving}
         loading={isSaving}
         className="w-full"
@@ -767,7 +798,7 @@ export default function GradientCardExtractPanel() {
       <Button
         label={t("mat_gradient_save_override_btn")}
         variant="secondary"
-        onClick={() => void submitSave("override")}
+        onClick={() => handleSave(anchor, "override")}
         disabled={!sessionId || !materialName.trim() || isSaving}
         loading={isSaving}
         className="w-full"
@@ -994,19 +1025,20 @@ export default function GradientCardExtractPanel() {
                 />
               )}
             </div>
-            <div className="mt-auto pt-2">
+            <div className="mt-auto pt-2 flex flex-col gap-3">
               {isVerificationMode ? (
-                renderVerificationActions("gradient-card-verification-top-actions")
+                renderVerificationActions("gradient-card-verification-top-actions", "top")
               ) : (
                 <Button
                   label={saveButtonLabel}
                   variant="primary"
-                  onClick={() => void submitSave()}
+                  onClick={() => handleSave("top")}
                   disabled={!sessionId || !materialName.trim() || isSaving}
                   loading={isSaving}
                   className="w-full"
                 />
               )}
+              {renderSaveFeedback("top")}
             </div>
           </section>
 </div>
@@ -1294,24 +1326,6 @@ export default function GradientCardExtractPanel() {
                 onDismiss={clearExtractError}
               />
             )}
-            {saveError && (
-              <InlineStatusMessage
-                key="saveError"
-                testId="save-error"
-                tone="error"
-                message={saveError}
-                onDismiss={clearSaveMessages}
-              />
-            )}
-            {saveSuccess && (
-              <InlineStatusMessage
-                key="saveSuccess"
-                testId="save-success"
-                tone="success"
-                message={saveSuccess}
-                onDismiss={clearSaveMessages}
-              />
-            )}
           </AnimatePresence>
           {savedMaterialSummary?.aggregation_selection ? (
             <MergeDiagnosticsSection
@@ -1527,7 +1541,8 @@ export default function GradientCardExtractPanel() {
                   <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
                     {saveButtonLabel}
                   </h4>
-                  {renderVerificationActions("gradient-card-verification-result-actions")}
+                  {renderVerificationActions("gradient-card-verification-result-actions", "result")}
+                  {renderSaveFeedback("result")}
                 </div>
               ) : null}
             </section>

@@ -54,6 +54,7 @@ export function notifyCompletion(kind: CompletionNotificationKind): void {
 
 export const CONVERTER_ERROR_KEYS = {
   heightmapUploadRequired: "relief_heightmap_generate_requires_upload",
+  largeFormatModelSurfaceConflict: "large_format_model_surface_conflict",
 } as const;
 
 let _generateStartTime: number | null = null;
@@ -466,6 +467,12 @@ export function createGenerationActions(
         }
       }
       state = _get();
+      // Large-format tiles are cut from flat artwork, so the uploaded model
+      // would be dropped. Refuse before material preflight or any export call.
+      if (state.largeFormatEnabled && state.modelSurfaceEnabled) {
+        set({ error: CONVERTER_ERROR_KEYS.largeFormatModelSurfaceConflict });
+        return null;
+      }
       const sourceSelection = resolveConverterSourceSelection(state);
       if (!sourceSelection.isReady) {
         set({

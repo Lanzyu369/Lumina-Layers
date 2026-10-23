@@ -50,6 +50,12 @@ SIMILAR_RECIPES_LUT_UNAVAILABLE_DETAIL = (
 # 所有配方统一转换为同一响应层序（观察面在前），前端无需逐条处理层序。
 _RESPONSE_LAYER_ORDER = "Top2Bottom"
 
+# Preview-cache arrays each consumer reads; other artifacts (preview RGBA,
+# backing mask, quantized image) are not needed to rank or flag colours.
+# 各调用方读取的预览缓存数组；排序与标记颜色无需预览 RGBA、底板掩码等其他 artifact。
+_IMAGE_COLOR_FIELDS = frozenset({"matched_rgb", "mask_solid"})
+_IMAGE_SUGGESTION_FIELDS = _IMAGE_COLOR_FIELDS | {"material_matrix"}
+
 
 def _session_layer_params(session_data: dict) -> tuple[int, float]:
     """Resolve the colour layer count/height the session previews with.
@@ -83,7 +89,7 @@ def _image_color_hexes(session_data: dict) -> set[str]:
     component_cache = get_valid_visible_region_cache(session_data)
     if component_cache is not None:
         return {str(item["color_hex"]).lower() for item in component_cache["components"].values()}
-    preview_cache = _require_preview_cache(session_data)
+    preview_cache = _require_preview_cache(session_data, _IMAGE_COLOR_FIELDS)
     matched_rgb = preview_cache.get("matched_rgb")
     if matched_rgb is None:
         return set()
@@ -197,7 +203,7 @@ def _image_suggestions(
     """Rank colours already printed in the image (material-archive sources).
     排序图中已有的颜色（耗材档案来源）。
     """
-    preview_cache = _require_preview_cache(session_data)
+    preview_cache = _require_preview_cache(session_data, _IMAGE_SUGGESTION_FIELDS)
     matched_rgb = preview_cache.get("matched_rgb")
     if matched_rgb is None:
         raise HTTPException(status_code=409, detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL)
@@ -236,7 +242,8 @@ def similar_recipes(
 
     Raises:
         HTTPException(404): Session not found. (会话不存在)
-        HTTPException(409): No preview yet, or LUT unavailable. (尚未预览或 LUT 不可用)
+        HTTPException(409): No preview yet, preview data unreadable, or LUT
+            unavailable. (尚未预览、预览数据不可读或 LUT 不可用)
     """
     started_at = time.perf_counter()
     session_data = _require_session(store, request.session_id)

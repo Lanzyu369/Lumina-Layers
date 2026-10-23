@@ -163,6 +163,7 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   wire_height_mm: number;
   enable_coating: boolean;
   coating_height_mm: number;
+  /** Deprecated selection accepted for compatibility; generation chooses the type automatically. */
   coating_material?: CoatingMaterialReference | null;
   replacement_regions?: ColorReplacementItem[];
   recipe_overrides?: RecipeOverrideItem[];
@@ -770,6 +771,7 @@ export interface CalibrationResponse {
   preview_url: string | null;
   layer_urls: string[] | null;
   threemf_disk_path?: string | null;
+  warnings?: string[];
 }
 
 export interface SingleStageJobSummary {
@@ -1884,6 +1886,7 @@ export interface BatchConvertParams {
   svg_hole_max_width_mm?: number;
   enable_coating?: boolean;
   coating_height_mm?: number;
+  /** Deprecated selection accepted for compatibility; generation chooses the type automatically. */
   coating_material?: CoatingMaterialReference | null;
   source_kind?: "legacy_single" | "legacy_multi" | "native_bundle";
   lut_name?: string;

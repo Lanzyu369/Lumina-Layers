@@ -1300,3 +1300,139 @@ describe("GradientCardExtractPanel", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+// Save feedback must render next to the save action the user clicked; the
+// result area sits several screens below the top save card, so a banner
+// rendered only there is invisible from the save button's viewport.
+describe("GradientCardExtractPanel save feedback placement", () => {
+  const extractedMaterialSummary = {
+    sample_count: 36,
+    per_substrate_sample_count: 18,
+    grid_rows: 3,
+    grid_cols: 6,
+    layer_height_mm: 0.04,
+    warp_width_px: 1240,
+    warp_height_px: 620,
+    thickness_layers: [],
+    sample_boxes: [],
+    white_zero_rgb: [255, 255, 255],
+    black_zero_rgb: [24, 24, 24],
+    estimated_rgb: [100, 120, 140],
+    estimated_k: [1.2, 1.3, 1.4],
+  };
+  const saveResponse = (verificationCount: number) => ({
+    status: "ok",
+    message: "",
+    material_file_url: "/api/files/material.json",
+    stage_a_params_url: "/api/files/stage-a.json",
+    material_summary: {
+      material_name: "PLA Basic",
+      directory_name: "pla-basic",
+      verification_count: verificationCount,
+    },
+  });
+  const forbiddenError = () => {
+    const error = new Error("Request failed with status code 403") as Error & {
+      response?: { status: number; data: { detail: string } };
+    };
+    error.response = {
+      status: 403,
+      data: {
+        detail: "Material library management is only available from the Lumina Studio local app.",
+      },
+    };
+    return error;
+  };
+  const saveButton = () =>
+    screen.getByRole("button", { name: /保存耗材档案|save material archive/i });
+  const topSaveSection = () => saveButton().closest("section") as HTMLElement;
+
+  it("shows save success inside the top save card after clicking save", async () => {
+    vi.mocked(saveGradientCardMaterial).mockResolvedValueOnce(saveResponse(1));
+    useSingleStageStore.setState({ sessionId: "sess-1", materialName: "PLA Basic" });
+
+    render(<GradientCardExtractPanel />);
+    await act(async () => {
+      fireEvent.click(saveButton());
+    });
+
+    expect(within(topSaveSection()).getByTestId("save-success")).toHaveTextContent(
+      /耗材保存成功|material saved successfully/i,
+    );
+    expect(screen.getAllByTestId("save-success")).toHaveLength(1);
+  });
+
+  it("shows save errors inside the top save card after clicking save", async () => {
+    vi.mocked(saveGradientCardMaterial).mockRejectedValueOnce(forbiddenError());
+    useSingleStageStore.setState({ sessionId: "sess-1", materialName: "PLA Basic" });
+
+    render(<GradientCardExtractPanel />);
+    await act(async () => {
+      fireEvent.click(saveButton());
+    });
+
+    expect(within(topSaveSection()).getByTestId("save-error")).toBeInTheDocument();
+    expect(screen.getAllByTestId("save-error")).toHaveLength(1);
+  });
+
+  it("shows feedback again next to the save card on a repeated save", async () => {
+    vi.mocked(saveGradientCardMaterial)
+      .mockResolvedValueOnce(saveResponse(1))
+      .mockResolvedValueOnce(saveResponse(1));
+    useSingleStageStore.setState({ sessionId: "sess-1", materialName: "PLA Basic" });
+
+    render(<GradientCardExtractPanel />);
+    await act(async () => {
+      fireEvent.click(saveButton());
+    });
+    await act(async () => {
+      fireEvent.click(saveButton());
+    });
+
+    expect(saveGradientCardMaterial).toHaveBeenCalledTimes(2);
+    expect(within(topSaveSection()).getByTestId("save-success")).toBeInTheDocument();
+    expect(screen.getAllByTestId("save-success")).toHaveLength(1);
+  });
+
+  it("shows verification feedback next to the result-area actions that triggered the save", async () => {
+    vi.mocked(saveGradientCardMaterial).mockResolvedValueOnce(saveResponse(4));
+    useSingleStageStore.setState({
+      materialName: "PLA Basic",
+      verificationTargetDirectoryName: "pla-basic",
+      verificationTargetCount: 3,
+      sessionId: "sess-verify",
+      materialSummary: extractedMaterialSummary,
+    });
+
+    render(<GradientCardExtractPanel />);
+    const resultCard = screen.getByTestId("gradient-card-verification-result-actions-card");
+    await act(async () => {
+      fireEvent.click(within(resultCard).getByRole("button", { name: /合并结果|merge result/i }));
+    });
+
+    expect(within(resultCard).getByTestId("save-success")).toBeInTheDocument();
+    expect(screen.getAllByTestId("save-success")).toHaveLength(1);
+  });
+
+  it("shows verification feedback in the top card when the top actions triggered the save", async () => {
+    vi.mocked(saveGradientCardMaterial).mockResolvedValueOnce(saveResponse(4));
+    useSingleStageStore.setState({
+      materialName: "PLA Basic",
+      verificationTargetDirectoryName: "pla-basic",
+      verificationTargetCount: 3,
+      sessionId: "sess-verify",
+      materialSummary: extractedMaterialSummary,
+    });
+
+    render(<GradientCardExtractPanel />);
+    const topActions = screen.getByTestId("gradient-card-verification-top-actions");
+    await act(async () => {
+      fireEvent.click(within(topActions).getByRole("button", { name: /合并结果|merge result/i }));
+    });
+
+    expect(
+      within(topActions.closest("section") as HTMLElement).getByTestId("save-success"),
+    ).toBeInTheDocument();
+    expect(screen.getAllByTestId("save-success")).toHaveLength(1);
+  });
+});

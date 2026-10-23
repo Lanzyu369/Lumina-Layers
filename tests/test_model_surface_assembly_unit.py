@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+from dataclasses import asdict, replace
 import json
 import sys
 from types import SimpleNamespace
@@ -15,11 +16,13 @@ import trimesh
 
 from core.layered_coordinate_domain import (
     LAYERED_COORDINATE_DOMAIN_CERTIFIED_KEY,
+    LayeredCoordinateDomain,
     read_layered_coordinate_domain,
 )
 from core.vector_layer_geometry import (
     VectorLayerGeometryPolicy,
     build_vector_layered_volume,
+    resolve_vector_writer_grid_mm,
 )
 from core.vector_engine import VectorAnalysis, VectorProcessor
 from core.model_surface.assembly import (
@@ -28,6 +31,7 @@ from core.model_surface.assembly import (
     MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY,
     OverlaySceneResult,
     PreparedSurfacePattern,
+    _available_surface_depth_mm,
     _pattern_layer_heights_mm,
     _pattern_xy_bounds_mm,
     _pattern_z_bounds_mm,
@@ -36,6 +40,8 @@ from core.model_surface.assembly import (
     cut_surface_pocket,
     orient_overlay_scene_for_print,
 )
+from core.model_surface.footprint import build_surface_footprint
+from core.model_surface.serialization import surface_footprint_from_payload
 from core.model_surface.pipeline import (
     _build_pattern_scene,
     _build_scene_printable_footprint,
@@ -779,13 +785,26 @@ def test_pattern_logical_xy_bounds_reject_geometry_outside_canvas():
         _pattern_xy_bounds_mm(pattern)
 
 
-def test_pattern_logical_xy_bounds_accept_float32_writer_rounding():
+@pytest.mark.parametrize("legacy_domain", [False, True])
+def test_pattern_logical_xy_bounds_accept_float32_writer_rounding(
+    legacy_domain: bool,
+) -> None:
     canvas_width = 814.0
     canvas_height = 947.0
     target_width_mm = 115.59999084472656
     scale_factor = target_width_mm / canvas_width
-    logical_width_mm = 115.6
-    logical_height_mm = 134.488
+    domain = LayeredCoordinateDomain.from_canvas_and_layers(
+        width_mm=target_width_mm,
+        height_mm=canvas_height * scale_factor,
+        xy_grid_mm=(
+            0.0001 if legacy_domain else resolve_vector_writer_grid_mm(
+                canvas_height * scale_factor,
+            )
+        ),
+        layer_heights_mm=(0.08,),
+    )
+    logical_width_mm = domain.canvas_max_units[0] * domain.xy_grid_mm
+    logical_height_mm = domain.canvas_max_units[1] * domain.xy_grid_mm
     writer_width_mm = max(
         logical_width_mm,
         float(np.float32(logical_width_mm)),
@@ -806,6 +825,7 @@ def test_pattern_logical_xy_bounds_accept_float32_writer_rounding():
                 bbox=(0.0, 0.0, canvas_width, canvas_height),
                 scale_factor=scale_factor,
                 num_layers=1,
+                coordinate_domain=domain if legacy_domain else None,
             ),
             "layer_height_mm": 0.08,
             "bambu_face_orientation": "down",
@@ -1030,6 +1050,121 @@ def test_build_embedded_overlay_scene_embeds_full_pattern_depth():
 
     assert result.scene.bounds[0][2] == pytest.approx(base.bounds[0][2])
     assert result.scene.bounds[1][2] == pytest.approx(base.bounds[1][2])
+
+
+@pytest.mark.parametrize("plane_offset_mm", [-0.002, 0.002])
+@pytest.mark.parametrize("hollow", [False, True])
+def test_surface_depth_pairs_real_entry_and_exit_despite_fitted_plane_error(
+    plane_offset_mm: float, hollow: bool,
+):
+    base = trimesh.creation.box(extents=(20.0, 10.0, 4.0))
+    if hollow:
+        cavity = trimesh.creation.box(extents=(18.0, 8.0, 3.6))
+        cavity.invert()
+        base = trimesh.util.concatenate([base, cavity])
+    top = np.flatnonzero(base.face_normals[:, 2] > 0.99)
+    # Select only the exterior top, not the cavity's upward-facing bottom.
+    top = top[np.asarray(base.triangles_center)[top, 2] > 1.99]
+    footprint = build_surface_footprint(base, tuple(top))
+    footprint = replace(footprint, frame=replace(
+        footprint.frame, origin=(0.0, 0.0, 2.0 + plane_offset_mm),
+    ))
+
+    depth = _available_surface_depth_mm(base, footprint)
+
+    wall_mm = 0.2 if hollow else 4.0
+    # Empty space above the solid must not be counted as printable thickness;
+    # an inset fitted plane must not count material behind that plane either.
+    assert depth == pytest.approx(wall_mm + min(plane_offset_mm, 0.0), abs=1e-7)
+
+
+def test_surface_depth_handles_tilted_fitted_plane():
+    base = trimesh.creation.box(extents=(20.0, 10.0, 4.0))
+    top = tuple(np.flatnonzero(base.face_normals[:, 2] > 0.99))
+    footprint = build_surface_footprint(base, top)
+    angle = np.deg2rad(0.03)
+    footprint = replace(footprint, frame=replace(
+        footprint.frame,
+        normal=(0.0, float(np.sin(angle)), float(np.cos(angle))),
+        v_axis=(0.0, float(np.cos(angle)), -float(np.sin(angle))),
+    ))
+
+    assert 3.99 < _available_surface_depth_mm(base, footprint) <= 4.000001
+
+
+def test_surface_depth_cannot_borrow_cavity_floor_below_selected_thin_roof():
+    from core.model_surface.selection import select_planar_component
+
+    section = sg.Polygon([(-10, -2), (10, -2), (10, 1.951), (7, 2), (-7, 2), (-10, 1.951)])
+    outer = trimesh.creation.extrude_polygon(section, 10.0)
+    outer.apply_transform(np.array([
+        [1., 0., 0., 0.], [0., 0., 1., -5.],
+        [0., 1., 0., 0.], [0., 0., 0., 1.],
+    ]))
+    cavity = trimesh.creation.box(extents=(13.0, 8.0, 0.016))
+    cavity.apply_translation((0.0, 0.0, 1.988))
+    cavity.invert()
+    base = trimesh.util.concatenate([outer, cavity])
+    selection = select_planar_component(base, int(np.argmax(base.face_normals[:, 2])))
+    footprint = build_surface_footprint(base, selection.face_indices)
+    footprint = surface_footprint_from_payload(json.loads(json.dumps(asdict(footprint))))
+    pattern = trimesh.Scene({"color_ff0000": trimesh.creation.box(extents=(20.0, 10.0, 0.3))})
+
+    with pytest.raises(ModelSurfaceError, match="model_surface_insufficient_thickness"):
+        build_embedded_overlay_scene(
+            base_mesh=base, pattern_scene=pattern, footprint=footprint,
+            pocket_depth_mm=0.3, base_slot_name="surface_base", base_color=(245, 245, 245),
+        )
+
+
+def test_surface_depth_provenance_round_trips_numpy_selected_indices():
+    base = trimesh.creation.box(extents=(20.0, 10.0, 4.0))
+    top = tuple(np.flatnonzero(base.face_normals[:, 2] > 0.99))
+    footprint = build_surface_footprint(base, top)
+    restored = surface_footprint_from_payload(json.loads(json.dumps(asdict(footprint))))
+
+    assert restored.face_indices == top
+    assert _available_surface_depth_mm(base, restored) == pytest.approx(4.0)
+
+
+@pytest.mark.parametrize("indices", [(-1,), (True,), (1000,), ("0",), (0,)])
+def test_surface_depth_fails_closed_on_invalid_or_missed_selected_faces(indices):
+    base = trimesh.creation.box(extents=(20.0, 10.0, 4.0))
+    top = tuple(np.flatnonzero(base.face_normals[:, 2] > 0.99))
+    footprint = replace(build_surface_footprint(base, top), face_indices=indices)
+
+    with pytest.raises(ModelSurfaceError, match="model_surface_thickness_unknown"):
+        _available_surface_depth_mm(base, footprint)
+
+
+def test_surface_depth_does_not_skip_a_sub_tolerance_wall_exit():
+    outer = trimesh.creation.box(extents=(20.0, 10.0, 4.0))
+    top = tuple(np.flatnonzero(outer.face_normals[:, 2] > 0.99))
+    cavity = trimesh.creation.box(extents=(18.0, 8.0, 0.02))
+    cavity.apply_translation((0.0, 0.0, 2.0 - 0.0000005 - 0.01))
+    cavity.invert()
+    base = trimesh.util.concatenate([outer, cavity])
+    footprint = build_surface_footprint(base, top)
+
+    assert _available_surface_depth_mm(base, footprint) <= 1e-6
+
+
+def test_surface_depth_samples_only_inside_footprint_with_a_central_hole():
+    base = trimesh.creation.annulus(r_min=2.0, r_max=5.0, height=4.0)
+    top = tuple(np.flatnonzero(base.face_normals[:, 2] > 0.99))
+    footprint = build_surface_footprint(base, top)
+
+    assert _available_surface_depth_mm(base, footprint) == pytest.approx(4.0)
+
+
+def test_surface_depth_does_not_treat_an_unclosed_entry_as_a_wall():
+    base = trimesh.creation.box(extents=(20.0, 10.0, 4.0))
+    top = np.flatnonzero(base.face_normals[:, 2] > 0.99)
+    footprint = build_surface_footprint(base, tuple(top))
+    open_surface = base.submesh([top], append=True)
+
+    with pytest.raises(ModelSurfaceError, match="model_surface_thickness_unknown"):
+        _available_surface_depth_mm(open_surface, footprint)
 
 
 def test_build_embedded_overlay_scene_rejects_pattern_deeper_than_model():

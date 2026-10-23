@@ -12,8 +12,6 @@ from typing import Any
 
 import numpy as np
 
-from core.material_lut_provider import load_materials
-
 RGB = tuple[int, int, int]
 
 
@@ -33,43 +31,25 @@ def resolve_coating_material(
     preview_colors: Mapping[object, object],
     material_types: Mapping[str, str | None],
 ) -> ExportMaterial:
-    """Resolve an explicit palette slot or independent material archive.
+    """Follow a uniform source material type; mixed or unknown types use PLA.
 
-    Args:
-        reference: User-selected source and stable key. 用户选择的来源和键。
-        slot_names: Current optical palette identities. 当前光学调色板身份。
-        preview_colors: Source preview colours. 来源预览颜色。
-        material_types: Actual source material types. 来源材料类型。
-
-    Returns:
-        Actual coating identity, type and colour. 涂层的实际材料身份、类型和颜色。
-
-    Raises:
-        ValueError: Missing or stale selection. 未选择涂层耗材或选择已失效。
+    ``reference`` and ``preview_colors`` remain accepted for older callers.
+    Historical coating choices do not affect the automatic material policy.
     """
-    if not isinstance(reference, Mapping) or not reference.get("key"):
-        raise ValueError("Choose a coating material before generating / 请先选择涂层耗材")
-    source, key = reference.get("source"), str(reference["key"])
-    if source == "palette" and key in slot_names:
-        material_type = material_types.get(key)
-        # Missing legacy archive types remain unknown. Native preflight
-        # resolves the user's selected preset; never invent PLA here.
-        rgb, _ = resolve_preview_color_for_slot(key, slot_names.index(key), preview_colors)
-        return ExportMaterial(key, material_type, rgb)
-    if source == "material_archive":
-        try:
-            material = load_materials([key])[0]
-        except (FileNotFoundError, OSError, ValueError, IndexError) as exc:
-            raise ValueError("Coating material archive is unavailable; choose it again / 涂层耗材档案不可用，请重新选择") from exc
-        return ExportMaterial(
-            f"Coating: {material.name}", material.material_type,
-            coerce_preview_rgb(material.estimated_rgb),
-        )
-    raise ValueError("Coating material selection is no longer available / 涂层材料选择已失效")
+    source_types: set[str | None] = set()
+    for name in slot_names:
+        value = material_types.get(name)
+        explicit_type = value.strip().upper() if isinstance(value, str) else ""
+        # Older archives may only record PLA/PETG in the material name.
+        label = explicit_type or name.upper()
+        polymer = re.search(r"(?<![A-Z0-9])(?:PLA|PETG)(?![A-Z0-9])", label)
+        source_types.add(polymer.group() if polymer else explicit_type or None)
+    material_type = next(iter(source_types)) if len(source_types) == 1 else None
+    return ExportMaterial("Coating", material_type or "PLA", (200, 200, 200))
 
 
 def configure_coating_material(ctx: MutableMapping[str, Any]) -> ExportMaterial | None:
-    """Bind explicit coating export facts without adding an optical solver channel.
+    """Bind automatic coating facts without adding an optical solver channel.
 
     Args:
         ctx: Resolved source and conversion settings. 已解析来源及转换设置。
