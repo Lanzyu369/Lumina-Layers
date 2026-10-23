@@ -284,12 +284,12 @@ python start_all.py
 启动器会同时启动后端和前端。在浏览器中打开启动器显示的前端地址
 （默认：`http://localhost:4174`）。
 
-SVG 分析固定使用独立项目发布的 `lumina-svg-core==0.3.3`（AGPLv3）。
+SVG 分析固定使用独立项目发布的 `lumina-svg-core==0.3.4`（AGPLv3）。
 `requirements-native-svg.txt` 会从 PyPI 选择匹配 Python 3.12～3.14、
 系统和架构的安装包。Linux x86-64 要求 glibc 2.28+；Mac 的 Python 3.12/3.13
 包要求 macOS 12+，3.14 要求 macOS 14+。Lumina 要求匹配的原生预编译包；
 不支持的平台会在安装时明确失败，不会要求本地编译。
-详见[发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.3/docs/DISTRIBUTIONS.md)。
+详见[发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.4/docs/DISTRIBUTIONS.md)。
 
 本分支需要 `fatcat-metadata==0.1.1`，requirements 会自动从
 [PyPI 正式发行](https://pypi.org/project/fatcat-metadata/0.1.1/)
