@@ -457,6 +457,16 @@ def _resolve_surface_display_stack(
         raise ModelSurfaceError("Converter display layer heights must be positive and finite.")
 
     face_orientation = str(ctx.get("bambu_face_orientation", "down") or "down").lower()
+    if ctx.get("voxel_z_edges") is not None:
+        from core.layered_z import validate_layer_z_edges
+
+        edges = validate_layer_z_edges(ctx["voxel_z_edges"], full_matrix.shape[0])
+        widths = np.diff(edges)
+        display_widths = (
+            widths[:display_layer_count] if face_orientation == "down" else widths[-display_layer_count:]
+        )
+        if np.any(display_widths != 1):
+            raise ModelSurfaceError("Converter display layers must retain their individual Z intervals.")
     if face_orientation == "down":
         # Reverse only the display stack so its viewing layer faces outward
         # while the pattern is embedded. The final rigid rotation of the

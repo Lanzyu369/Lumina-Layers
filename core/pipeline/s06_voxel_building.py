@@ -351,6 +351,8 @@ def _build_voxel_matrix(
     structure_mode,
     backing_color_id=0,
     backing_mask=None,
+    *,
+    compact_backing: bool = False,
 ):
     """Build complete voxel matrix with backing layer marked using special material_id.
     构建带底板标记的完整体素矩阵。
@@ -363,6 +365,9 @@ def _build_voxel_matrix(
         structure_mode (str): "双面" or "单面" (Double-sided or Single-sided)
         backing_color_id (int): backing material ID (0-7), default is 0 (White)
         backing_mask (np.ndarray | None): Optional 2D backing footprint mask.
+        compact_backing (bool): Store a uniform backing as one label plane.
+            Metadata then supplies voxel_z_edges in original layer coordinates;
+            backing_z_range and the per-pixel maps retain logical layer indices.
 
     Returns:
         tuple: (full_matrix, backing_metadata)
@@ -381,33 +386,40 @@ def _build_voxel_matrix(
     bottom_voxels = np.transpose(material_matrix, (2, 0, 1))
 
     spacer_layers = max(1, int(round(spacer_thick / PrinterConfig.LAYER_HEIGHT)))
+    stored_spacer_layers = 1 if compact_backing else spacer_layers
+    label_dtype = (
+        np.result_type(material_matrix.dtype, np.min_scalar_type(backing_color_id), np.int8)
+        if compact_backing and material_matrix.dtype.kind == "i" else np.dtype(int)
+    )
 
     if "双面" in structure_mode or "Double" in structure_mode:
         top_voxels = np.transpose(material_matrix[..., ::-1], (2, 0, 1))
         total_layers = optical_layers + spacer_layers + optical_layers
-        full_matrix = np.full((total_layers, target_h, target_w), -1, dtype=int)
+        stored_layers = optical_layers * 2 + stored_spacer_layers
+        full_matrix = np.full((stored_layers, target_h, target_w), -1, dtype=label_dtype)
 
         full_matrix[0:optical_layers] = bottom_voxels
 
         # Use backing_color_id parameter to mark backing layer
         spacer = np.full((target_h, target_w), -1, dtype=int)
         spacer[backing_mask_arr] = backing_color_id
-        for z in range(optical_layers, optical_layers + spacer_layers):
+        for z in range(optical_layers, optical_layers + stored_spacer_layers):
             full_matrix[z] = spacer
 
-        full_matrix[optical_layers + spacer_layers :] = top_voxels
+        full_matrix[optical_layers + stored_spacer_layers :] = top_voxels
 
         backing_z_range = (optical_layers, optical_layers + spacer_layers - 1)
     else:
         total_layers = optical_layers + spacer_layers
-        full_matrix = np.full((total_layers, target_h, target_w), -1, dtype=int)
+        stored_layers = optical_layers + stored_spacer_layers
+        full_matrix = np.full((stored_layers, target_h, target_w), -1, dtype=label_dtype)
 
         full_matrix[0:optical_layers] = bottom_voxels
 
         # Use backing_color_id parameter to mark backing layer
         spacer = np.full((target_h, target_w), -1, dtype=int)
         spacer[backing_mask_arr] = backing_color_id
-        for z in range(optical_layers, total_layers):
+        for z in range(optical_layers, stored_layers):
             full_matrix[z] = spacer
 
         backing_z_range = (optical_layers, total_layers - 1)
@@ -423,6 +435,11 @@ def _build_voxel_matrix(
         "backing_z_min_map": backing_z_min_map,
         "backing_z_max_map": backing_z_max_map,
     }
+    if compact_backing:
+        widths = [1] * optical_layers + [spacer_layers]
+        if "双面" in structure_mode or "Double" in structure_mode:
+            widths.extend([1] * optical_layers)
+        backing_metadata["voxel_z_edges"] = np.concatenate(([0], np.cumsum(widths, dtype=np.int64)))
 
     return full_matrix, backing_metadata
 
@@ -458,7 +475,9 @@ def _build_voxel_matrix_6layer(
     )
 
 
-def _build_voxel_matrix_faceup(material_matrix, mask_solid, spacer_thick, backing_color_id=0):
+def _build_voxel_matrix_faceup(
+    material_matrix, mask_solid, spacer_thick, backing_color_id=0, *, compact_backing: bool = False,
+):
     """Face-up voxel matrix for 5-Color Extended mode.
     面朝上体素矩阵（5-Color Extended 模式）。
 
@@ -484,23 +503,29 @@ def _build_voxel_matrix_faceup(material_matrix, mask_solid, spacer_thick, backin
         mask_solid (np.ndarray): (H, W) bool 实体掩码
         spacer_thick (float): 底板厚度 (mm)
         backing_color_id (int): 底板材料 ID
+        compact_backing (bool): Store the backing as one representative plane
+            and report its original layer boundaries in voxel_z_edges.
 
     Returns:
         tuple: (full_matrix, backing_metadata)
     """
     target_h, target_w, optical_layers = material_matrix.shape
     spacer_layers = max(1, int(round(spacer_thick / PrinterConfig.LAYER_HEIGHT)))
-    total_layers = spacer_layers + optical_layers
-    full_matrix = np.full((total_layers, target_h, target_w), -1, dtype=int)
+    stored_spacer_layers = 1 if compact_backing else spacer_layers
+    label_dtype = (
+        np.result_type(material_matrix.dtype, np.min_scalar_type(backing_color_id), np.int8)
+        if compact_backing and material_matrix.dtype.kind == "i" else np.dtype(int)
+    )
+    full_matrix = np.full((stored_spacer_layers + optical_layers, target_h, target_w), -1, dtype=label_dtype)
 
     # Backing: solid block at the bottom
     spacer = np.where(mask_solid, backing_color_id, -1).astype(int)
-    full_matrix[:spacer_layers] = spacer[np.newaxis, :, :]
+    full_matrix[:stored_spacer_layers] = spacer[np.newaxis, :, :]
 
     # Optical: reversed order so index 0 (viewing surface) -> highest Z
     for i in range(optical_layers):
         layer = material_matrix[:, :, optical_layers - 1 - i]
-        z = spacer_layers + i
+        z = stored_spacer_layers + i
         full_matrix[z] = np.where(mask_solid, layer, -1)
 
     backing_z_range = (0, spacer_layers - 1)
@@ -509,12 +534,17 @@ def _build_voxel_matrix_faceup(material_matrix, mask_solid, spacer_thick, backin
         backing_z_range[0],
         backing_z_range[1],
     )
-    return full_matrix, {
+    backing_metadata = {
         "backing_color_id": backing_color_id,
         "backing_z_range": backing_z_range,
         "backing_z_min_map": backing_z_min_map,
         "backing_z_max_map": backing_z_max_map,
     }
+    if compact_backing:
+        backing_metadata["voxel_z_edges"] = np.concatenate(
+            ([0], np.cumsum([spacer_layers] + [1] * optical_layers, dtype=np.int64)),
+        )
+    return full_matrix, backing_metadata
 
 
 def _build_relief_voxel_matrix(
@@ -764,7 +794,10 @@ def run(ctx: dict) -> dict:
         - pixel_scale (float): mm/px 缩放因子
 
     PipelineContext 输出键 / Output keys:
-        - full_matrix (np.ndarray): (Z, H, W) int 体素矩阵
+        - full_matrix (np.ndarray): (Z, H, W) signed material label planes.
+          Z counts stored representative planes when voxel_z_edges is present.
+        - voxel_z_edges (np.ndarray | None): Z+1 original layer boundaries,
+          or None for a dense volume; pass these with this volume to the mesher.
         - backing_metadata (dict): 底板元数据
         - total_layers (int): 总层数
         - heightmap_stats (dict | None): 高度图统计信息
@@ -812,7 +845,8 @@ def run(ctx: dict) -> dict:
                 _log.debug(f"5-Color Extended: 2.5D relief mode disabled (incompatible)")
                 enable_relief = False
             full_matrix, backing_metadata = _build_voxel_matrix_faceup(
-                material_matrix, mask_solid, spacer_thick, effective_backing_color_id
+                material_matrix, mask_solid, spacer_thick, effective_backing_color_id,
+                compact_backing=not enable_fridge_magnet,
             )
 
         # ========== Cloisonne Mode ==========
@@ -924,6 +958,7 @@ def run(ctx: dict) -> dict:
                     structure_mode,
                     effective_backing_color_id,
                     backing_mask=flat_backing_mask,
+                    compact_backing=not enable_fridge_magnet,
                 )
 
         if enable_fridge_magnet:
@@ -935,7 +970,8 @@ def run(ctx: dict) -> dict:
                 fridge_magnets,
             )
 
-        total_layers = full_matrix.shape[0]
+        z_edges = backing_metadata.get("voxel_z_edges")
+        total_layers = int(z_edges[-1]) if z_edges is not None else full_matrix.shape[0]
         _log.debug(f"Voxel matrix: {full_matrix.shape} (ZxHxW)")
         _log.debug(
             f"Backing layer: z={backing_metadata['backing_z_range']}, "
@@ -958,6 +994,7 @@ def run(ctx: dict) -> dict:
         return ctx
 
     ctx["full_matrix"] = full_matrix
+    ctx["voxel_z_edges"] = z_edges
     ctx["backing_metadata"] = backing_metadata
     ctx["total_layers"] = total_layers
     ctx["heightmap_stats"] = heightmap_stats

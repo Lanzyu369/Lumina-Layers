@@ -135,7 +135,7 @@ class BaseMesher(ABC):
     """Mesh generator abstract base class"""
 
     @abstractmethod
-    def generate_mesh(self, voxel_matrix, mat_id, height_px):
+    def generate_mesh(self, voxel_matrix, mat_id, height_px, *, z_edges: np.ndarray | None = None):
         """
         Generate 3D mesh for specified material
 
@@ -143,24 +143,28 @@ class BaseMesher(ABC):
             voxel_matrix: (Z, H, W) voxel matrix
             mat_id: Material ID (0-7 for regular materials, -2 for backing layer)
             height_px: Image height (pixels)
+            z_edges: Optional Z+1 integer layer boundaries for this volume.
+                Omit for dense volumes; never reused by a later mesh call.
 
         Returns:
             trimesh.Trimesh or None
         """
         pass
 
-    def generate_backing_mesh(self, voxel_matrix, height_px):
+    def generate_backing_mesh(self, voxel_matrix, height_px, *, z_edges: np.ndarray | None = None):
         """
         Generate backing mesh (convenience method)
 
         Args:
             voxel_matrix: (Z, H, W) voxel matrix
             height_px: Image height (pixels)
+            z_edges: Optional Z+1 integer layer boundaries for this volume.
 
         Returns:
             trimesh.Trimesh or None
         """
-        return self.generate_mesh(voxel_matrix, mat_id=-2, height_px=height_px)
+        kwargs = {"z_edges": z_edges} if z_edges is not None else {}
+        return self.generate_mesh(voxel_matrix, mat_id=-2, height_px=height_px, **kwargs)
 
 class VoxelMesher(BaseMesher):
     """
@@ -168,7 +172,7 @@ class VoxelMesher(BaseMesher):
     Builds one exact exposed surface from the material label volume.
     """
 
-    def generate_mesh(self, voxel_matrix, mat_id, height_px):
+    def generate_mesh(self, voxel_matrix, mat_id, height_px, *, z_edges: np.ndarray | None = None):
         """Generate a pixel-mode exact labeled surface.
         生成像素模式的精确标签表面。
 
@@ -176,6 +180,7 @@ class VoxelMesher(BaseMesher):
             voxel_matrix (np.ndarray): (Z, H, W) int voxel matrix.
             mat_id (int): Material ID (0-7 or -2 for backing).
             height_px (int): Image height in pixels.
+            z_edges: Optional Z+1 integer layer boundaries for this volume.
 
         Returns:
             trimesh.Trimesh or None
@@ -185,6 +190,7 @@ class VoxelMesher(BaseMesher):
             np.asarray(voxel_matrix),
             material_id=mat_id,
             height_px=height_px,
+            **({"z_edges": z_edges} if z_edges is not None else {}),
         )
         if mesh is not None:
             patch_count = int(
@@ -245,6 +251,8 @@ class HighFidelityMesher(BaseMesher):
         height_px,
         boundary_geometry=None,
         disable_material_dilation=None,
+        *,
+        z_edges: np.ndarray | None = None,
     ):
         """Generate a high-fidelity exact surface with optional dilation.
         生成可选膨胀的高保真精确表面。
@@ -253,6 +261,7 @@ class HighFidelityMesher(BaseMesher):
             voxel_matrix (np.ndarray): (Z, H, W) int voxel matrix.
             mat_id (int): Material ID (0-7 or -2 for backing).
             height_px (int): Image height in pixels.
+            z_edges: Optional Z+1 integer layer boundaries for this volume.
 
         Returns:
             trimesh.Trimesh or None
@@ -320,6 +329,7 @@ class HighFidelityMesher(BaseMesher):
             effective_volume,
             material_id=effective_material_id,
             height_px=height_px,
+            **({"z_edges": z_edges} if z_edges is not None else {}),
         )
         mesh = grid_mesh
         if mesh is not None:
