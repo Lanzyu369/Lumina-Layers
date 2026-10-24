@@ -1,0 +1,243 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useConverterStore, DEFAULT_STATE } from "../stores/converter";
+import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
+import { StructureMode } from "../api/types";
+import {
+  captureConversionParameters,
+  applyConversionParameters,
+  normalizeConversionPreferences,
+} from "../stores/conversionPreferences";
+import { bindConversionPreferences } from "../hooks/useConversionPreferences";
+
+describe("conversion preferences", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useSettingsStore.setState({ ...DEFAULT_SETTINGS });
+    useConverterStore.setState({ ...DEFAULT_STATE, lut_name: "", lut_names: [] });
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it("restores saved inputs after reconnecting without persisting session data", async () => {
+    const stop = bindConversionPreferences();
+    useConverterStore.getState().setStructureMode(StructureMode.SINGLE_SIDED);
+    useConverterStore.getState().setTargetWidthMm(225);
+    useConverterStore.getState().setEnableCoating(true);
+    useConverterStore.setState({ sessionId: "private-session", imagePreviewUrl: "/api/files/private" });
+    stop();
+    const stored = JSON.parse(localStorage.getItem("lumina-settings")!);
+    expect(stored.state.conversionPreferences.last).toMatchObject({
+      structure_mode: StructureMode.SINGLE_SIDED, size_mm: 225, enable_coating: true,
+    });
+    expect(JSON.stringify(stored.state.conversionPreferences)).not.toContain("private");
+    useSettingsStore.setState({ ...DEFAULT_SETTINGS });
+    localStorage.setItem("lumina-settings", JSON.stringify(stored));
+    await useSettingsStore.persist.rehydrate();
+    useConverterStore.setState({ ...DEFAULT_STATE });
+    const stopAgain = bindConversionPreferences();
+    expect(useConverterStore.getState()).toMatchObject({
+      structure_mode: StructureMode.SINGLE_SIDED, target_width_mm: 225, enable_coating: true,
+    });
+    stopAgain();
+  });
+
+  it("restores backend defaults on a fresh origin and includes them in settings synchronization", async () => {
+    const original = captureConversionParameters(useConverterStore.getState());
+    const stop = bindConversionPreferences();
+    const saved = { last: { ...original, size_mm: 230 }, presets: [
+      { id: "art", name: "常用板画", parameters: original },
+    ] };
+    useSettingsStore.getState().hydrateDeviceSettingsFromBackend({ conversion_preferences: saved });
+    expect(useConverterStore.getState().target_width_mm).toBe(230);
+    const system = await import("../api/system");
+    const save = vi.spyOn(system, "saveSettings").mockResolvedValue({ status: "success", message: "saved" });
+    await useSettingsStore.getState().syncToBackend();
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ conversion_preferences: expect.objectContaining(saved) }));
+    stop();
+  });
+
+  it("keeps a named preset unchanged until explicitly updated", () => {
+    const stop = bindConversionPreferences();
+    const original = captureConversionParameters(useConverterStore.getState());
+    useSettingsStore.getState().setConversionPreferences({
+      last: original, presets: [{ id: "art", name: "常用板画", parameters: original }],
+    });
+    useConverterStore.getState().setTargetWidthMm(180);
+    expect(useSettingsStore.getState().conversionPreferences.presets[0].parameters.size_mm).toBe(60);
+    expect(useSettingsStore.getState().conversionPreferences.last?.size_mm).toBe(180);
+    stop();
+  });
+
+  it("does not replace defaults while importing or editing an existing project", () => {
+    const stop = bindConversionPreferences();
+    useConverterStore.getState().setTargetWidthMm(225);
+    const saved = useSettingsStore.getState().conversionPreferences.last;
+    const project = new File(["project"], "project.png", { type: "image/png" });
+    useConverterStore.getState().importRecipeState({ target_width_mm: 93,
+      target_height_mm: 71, enable_coating: true }, project);
+    expect(useConverterStore.getState().target_width_mm).toBe(93);
+    useConverterStore.getState().setTargetWidthMm(94);
+    expect(useSettingsStore.getState().conversionPreferences.last).toEqual(saved);
+    useConverterStore.getState().setImageFile(null);
+    expect(useConverterStore.getState().target_width_mm).toBe(225);
+    stop();
+  });
+
+  it("uses the last manually edited dimension as the size rule for new images", async () => {
+    const stop = bindConversionPreferences();
+    useConverterStore.setState({ aspectRatio: 2 });
+    useConverterStore.getState().setTargetHeightMm(100);
+    const saved = useSettingsStore.getState().conversionPreferences.last!;
+    expect(saved).toMatchObject({ size_axis: "height", size_mm: 100 });
+    vi.stubGlobal("Image", class {
+      naturalWidth = 100;
+      naturalHeight = 200;
+      onload: (() => void) | null = null;
+      set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+    });
+    useConverterStore.getState().setImageFile(new File(["image"], "new.png", { type: "image/png" }));
+    await Promise.resolve();
+    expect(useConverterStore.getState()).toMatchObject({ target_height_mm: 100, target_width_mm: 50 });
+    stop();
+  });
+
+  it("keeps factory inputs when the first action is importing someone else's project", () => {
+    const stop = bindConversionPreferences();
+    useConverterStore.getState().importRecipeState({ target_width_mm: 93 },
+      new File(["project"], "project.png", { type: "image/png" }));
+    useConverterStore.getState().setImageFile(null);
+    expect(useConverterStore.getState().target_width_mm).toBe(60);
+    stop();
+  });
+
+  it("restores large-format dimensions without clamping them to the ordinary size limit", () => {
+    const stop = bindConversionPreferences();
+    useConverterStore.getState().setLargeFormatEnabled(true);
+    useConverterStore.getState().setTileWidthMm(210);
+    useConverterStore.getState().setTargetWidthMm(700);
+    stop();
+    useConverterStore.setState({ ...DEFAULT_STATE });
+    const stopAgain = bindConversionPreferences();
+    expect(useConverterStore.getState()).toMatchObject({ largeFormatEnabled: true,
+      target_width_mm: 700, tileWidthMm: 210 });
+    stopAgain();
+  });
+
+  it("hydrates backend preferences but does not override edits made while loading", () => {
+    const original = captureConversionParameters(useConverterStore.getState());
+    const stop = bindConversionPreferences();
+    useConverterStore.getState().setTargetWidthMm(190);
+    useSettingsStore.getState().hydrateDeviceSettingsFromBackend({
+      conversion_preferences: { last: { ...original, size_mm: 250 }, presets: [] },
+    });
+    expect(useConverterStore.getState().target_width_mm).toBe(190);
+    stop();
+  });
+
+  it("discards invalid saved values and never restores arbitrary converter keys", () => {
+    expect(normalizeConversionPreferences({ last: { size_mm: NaN }, presets: [] }).last).toBeNull();
+    const valid = captureConversionParameters(useConverterStore.getState());
+    const result = normalizeConversionPreferences({ last: { ...valid, sessionId: "private" },
+      presets: [{ id: "bad", name: "", parameters: valid }] });
+    expect(result.last).not.toHaveProperty("sessionId");
+    expect(result.presets).toEqual([]);
+  });
+
+  it("restores an unset backing selection after material selection changes it", () => {
+    useConverterStore.setState({ source_version: "material", selectedMaterialDirNames: ["old"],
+      materialBackingMaterialDirName: null });
+    const target = { ...captureConversionParameters(useConverterStore.getState()), selectedMaterialDirNames: ["new"] };
+    applyConversionParameters(useConverterStore.getState, target);
+    expect(useConverterStore.getState().materialBackingMaterialDirName).toBeNull();
+  });
+
+  it("does not reapply current settings or invalidate output when only renaming a preset", () => {
+    const parameters = captureConversionParameters(useConverterStore.getState());
+    useSettingsStore.getState().setConversionPreferences({ last: parameters, selectedPresetId: "art",
+      presets: [{ id: "art", name: "常用板画", parameters }] });
+    const stop = bindConversionPreferences();
+    useConverterStore.setState({ downloadUrl: "/api/files/existing.3mf" });
+    try {
+      expect(useConverterStore.getState().renameConversionPreset("art", "新名字")).toBeNull();
+      expect(useConverterStore.getState().downloadUrl).toBe("/api/files/existing.3mf");
+    } finally { stop(); }
+  });
+
+  it("does not reapply parameters or invalidate output when saving the first preset", () => {
+    const stop = bindConversionPreferences();
+    useConverterStore.setState({ downloadUrl: "/api/files/existing.3mf" });
+    try {
+      expect(useConverterStore.getState().saveConversionPreset("常用板画")).toHaveProperty("id");
+      expect(useConverterStore.getState().downloadUrl).toBe("/api/files/existing.3mf");
+    } finally { stop(); }
+  });
+
+  it("restores a native database subset after changing its brand populates default databases", () => {
+    const brand = (key: string, names: string[]) => ({ brand_key: key, material_type: "PLA", vendor: key,
+      display_name: key, db_options: names.map(name => ({ name, path: name, color_mode: "4-Color" })),
+      default_db_names: names, supported_modes: [] });
+    useConverterStore.setState({ source_version: "native", selectedNativeBrandKey: "old",
+      selectedNativeDbNames: ["shared"], nativeBrandGroups: [brand("old", ["shared"]), brand("new", ["shared", "extra"])] });
+    const target = { ...captureConversionParameters(useConverterStore.getState()), selectedNativeBrandKey: "new" };
+    applyConversionParameters(useConverterStore.getState, target);
+    expect(useConverterStore.getState().selectedNativeDbNames).toEqual(["shared"]);
+  });
+
+  it("persists only the completed snapshot when applying a preset with linked changes", () => {
+    const initial = captureConversionParameters(useConverterStore.getState());
+    const target = { ...initial, source_version: "material" as const, selectedMaterialDirNames: ["white"],
+      size_mm: 225, structure_mode: StructureMode.SINGLE_SIDED, enable_coating: true };
+    useSettingsStore.getState().setConversionPreferences({ last: initial,
+      presets: [{ id: "art", name: "常用板画", parameters: target }] });
+    const stop = bindConversionPreferences();
+    const writes: unknown[] = [];
+    const stopWrites = useSettingsStore.subscribe((state, previous) => {
+      if (JSON.stringify(state.conversionPreferences.last) !== JSON.stringify(previous.conversionPreferences.last)) {
+        writes.push(state.conversionPreferences.last);
+      }
+    });
+    try {
+      expect(useConverterStore.getState().applyConversionPreset("art")).toBe(true);
+      expect(writes).toEqual([target]);
+      expect(useConverterStore.getState().conversionParameterContext).toBe("defaults");
+      expect(useSettingsStore.getState().conversionPreferences.selectedPresetId).toBe("art");
+    } finally { stopWrites(); stop(); }
+  });
+
+  it("validates preset mutations even without a mounted UI or persistence binding", () => {
+    const actions = useConverterStore.getState();
+    expect(actions.saveConversionPreset("  ")).toEqual({ error: "invalid-name" });
+    expect(actions.saveConversionPreset("x".repeat(41))).toEqual({ error: "invalid-name" });
+    const result = actions.saveConversionPreset(" 常用板画 ");
+    expect(result).toHaveProperty("id");
+    if (!("id" in result)) throw new Error("Expected a saved preset");
+    expect(actions.saveConversionPreset("常用板画")).toEqual({ error: "duplicate-name" });
+    const second = actions.saveConversionPreset("挂件");
+    if (!("id" in second)) throw new Error("Expected a second preset");
+    expect(actions.renameConversionPreset(second.id, "常用板画")).toBe("duplicate-name");
+    expect(actions.renameConversionPreset(result.id, " 常用板画 ")).toBeNull();
+    expect(actions.applyConversionPreset("missing")).toBe(false);
+    expect(actions.updateConversionPreset("missing")).toBe(false);
+    expect(actions.renameConversionPreset("missing", "名称")).toBe("missing-preset");
+    actions.setTargetWidthMm(180);
+    expect(actions.applyConversionPreset(result.id)).toBe(true);
+    actions.deleteConversionPreset(result.id);
+    expect(useConverterStore.getState().target_width_mm).toBe(60);
+    expect(useSettingsStore.getState().conversionPreferences.selectedPresetId).toBeNull();
+    expect(useSettingsStore.getState().conversionPreferences.last?.size_mm).toBe(60);
+  });
+
+  it("preserves remembered defaults when saving an imported project's settings as a new preset", () => {
+    const stop = bindConversionPreferences();
+    try {
+      useConverterStore.getState().setTargetWidthMm(225);
+      useConverterStore.getState().importRecipeState({ target_width_mm: 93 },
+        new File(["project"], "project.png", { type: "image/png" }));
+      expect(useSettingsStore.getState().conversionPreferences.last?.size_mm).toBe(225);
+      const result = useConverterStore.getState().saveConversionPreset("导入的板画");
+      if (!("id" in result)) throw new Error("Expected a saved preset");
+      expect(useSettingsStore.getState().conversionPreferences).toMatchObject({ selectedPresetId: result.id,
+        last: { size_mm: 93 }, presets: [{ parameters: { size_mm: 93 } }] });
+      expect(useConverterStore.getState().conversionParameterContext).toBe("defaults");
+    } finally { stop(); }
+  });
+});

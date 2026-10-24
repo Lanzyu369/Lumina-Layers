@@ -13,6 +13,7 @@ import { useActionHistoryBootstrap } from "./hooks/useActionHistoryBootstrap";
 import { useReproMode } from "./hooks/useReproMode";
 import { useWorkspaceMode } from "./hooks/useWorkspaceMode";
 import { useSharedSettingsPersistence } from "./hooks/useSharedSettingsPersistence";
+import { useConversionPreferences } from "./hooks/useConversionPreferences";
 import Scene3D from "./components/Scene3D";
 import ExtractorCanvas from "./components/ExtractorCanvas";
 import LoadingSpinner from "./components/LoadingSpinner";
@@ -243,6 +244,7 @@ function AppContent({ connected }: { connected: boolean | null }) {
   useElectronLanguageSync();
   useElectronGeneratedFileDirectorySync();
   useSharedSettingsPersistence();
+  useConversionPreferences();
   const workspace = useWorkspaceMode();
   const reproMode = useReproMode();
 
