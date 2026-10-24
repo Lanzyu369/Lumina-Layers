@@ -49,7 +49,7 @@ describe("Button ghost variant", () => {
     );
   });
 
-  it("carries the destructive tone only on ghost buttons", () => {
+  it("supports destructive operations on ghost and neutral buttons", () => {
     render(<Button label="删除" variant="ghost" tone="danger" onClick={vi.fn()} />);
     expect(screen.getByRole("button", { name: "删除" })).toHaveAttribute(
       "data-tone",
@@ -57,11 +57,12 @@ describe("Button ghost variant", () => {
     );
 
     render(
-      <Button label="生成" variant="primary" tone="danger" onClick={vi.fn()} />,
+      <Button label="删除模板" variant="primary" tone="danger" onClick={vi.fn()} />,
     );
-    expect(screen.getByRole("button", { name: "生成" })).not.toHaveAttribute(
-      "data-tone",
-    );
+    const deleteButton = screen.getByRole("button", { name: "删除模板" });
+    expect(deleteButton).toHaveAttribute("data-tone", "danger");
+    expect(deleteButton).toHaveClass("action-control");
+    expect(deleteButton).not.toHaveClass("action-control-primary");
   });
 
   it("renders a leading icon next to the label", () => {
@@ -108,7 +109,9 @@ describe("Button ghost variant", () => {
   it("uses focus-visible (not focus) for the keyboard focus ring", () => {
     render(<Button label="预览" variant="secondary" onClick={vi.fn()} />);
     const button = screen.getByRole("button", { name: "预览" });
-    expect(button.className).toContain("focus-visible:ring-2");
+    expect(button).toHaveClass("action-control");
+    const css = readSource("index.css");
+    expect(css).toMatch(/\.action-control:focus-visible\s*\{[^}]*outline: 2px solid var\(--focus-ring\)/);
     expect(button.className).not.toContain("focus:ring-4");
   });
 });

@@ -269,7 +269,7 @@ export default function ActionBar() {
                 <span>{t("action_sync_editor_commit_hint")}</span>
                 <Button
                   label={t("action_sync_editor_commit")}
-                  variant="primary"
+                  variant="secondary"
                   onClick={() => void reconcileUnknownContentCommit()}
                   disabled={replacePreviewLoading || isGenerating}
                   className="w-full"
@@ -301,7 +301,7 @@ export default function ActionBar() {
             )}
             <Button
               label={t("native_material_edit_button")}
-              variant="primary"
+              variant="secondary"
               size="sm"
               onClick={() => void openNativeMaterialSelection()}
               disabled={!hasPreview || !sourceSelection.isReady || isLoading || isGenerating || batchLoading || replacePreviewLoading || contentCommitStatus === "unknown"}
@@ -314,7 +314,7 @@ export default function ActionBar() {
                 <div className="flex gap-2">
                   <Button
                     label={isExporting ? t("recipe_export_loading") : t("recipe_export_btn")}
-                    variant="primary"
+                    variant="secondary"
                     onClick={() => {
                       setIsExporting(true)
                       setExportError(null)
@@ -333,7 +333,7 @@ export default function ActionBar() {
                   />
                   <Button
                     label={t("recipe_export_sidecar_btn")}
-                    variant="primary"
+                    variant="secondary"
                     onClick={() => {
                       setIsExporting(true)
                       setExportError(null)

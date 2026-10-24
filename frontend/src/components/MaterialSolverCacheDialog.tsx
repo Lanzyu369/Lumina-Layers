@@ -37,7 +37,7 @@ export default function MaterialSolverCacheDialog({
     <>
       <Button
         label={t("basic_material_cache_open_button")}
-        variant="primary"
+        variant="secondary"
         onClick={() => setOpen(true)}
         disabled={disabled}
         className="px-3 text-xs"

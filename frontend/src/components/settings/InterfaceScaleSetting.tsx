@@ -58,7 +58,7 @@ export default function InterfaceScaleSetting() {
   return (
     <div
       data-testid="settings-interface-scale-section"
-      className="flex flex-col gap-3 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+      className="flex flex-col gap-3 border-t panel-divider pt-5"
     >
       <Dropdown
         label={t("settings.interface_scale_label")}

@@ -24,18 +24,16 @@ export default function HeaderNavAlignmentSetting() {
   return (
     <div
       data-testid="settings-header-nav-alignment-section"
-      className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+      className="flex flex-col gap-4 border-t panel-divider pt-5"
     >
       <div className="min-w-0">
-        <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+        <h3 className="text-sm font-medium text-slate-700 dark:text-slate-200">
           {t("settings.header_nav_alignment_heading")}
         </h3>
-        <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-          {t("settings.header_nav_alignment_description")}
-        </p>
       </div>
       <RadioGroup
         label={t("settings.header_nav_alignment_label")}
+        tooltip={t("settings.header_nav_alignment_description")}
         value={alignment}
         options={HEADER_NAV_ALIGNMENTS.map((value) => ({
           value,

@@ -3119,8 +3119,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Clear backend temporary files and cached data",
   },
   "settings.cache_summary": {
-    zh: "快速回收后端临时文件，适合在长时间使用后整理空间。",
-    en: "Reclaim backend temporary files after longer sessions to tidy up storage.",
+    zh: "清除转换过程中产生的临时文件和缓存数据，回收存储空间。",
+    en: "Remove temporary files and cached data created during conversion to reclaim storage space.",
   },
   "settings.cache_cleared": {
     zh: "缓存已清除",
@@ -3361,6 +3361,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.template_excluded": {
     zh: "支持图像、矢量、材料档案、大幅分块和模型覆面导出。批量、拼图、校准和色块生成请先选择内置配置。",
     en: "Supports image, vector, material-archive, large-format and model-surface exports. Select built-in settings for batch, puzzle, calibration and swatch generation.",
+  },
+  "settings.template_active_scope_hint": {
+    zh: "当前已选自定义模板；批量、拼图、校准和色块生成需先切回内置配置。",
+    en: "A custom template is selected. Switch to built-in settings before batch, puzzle, calibration or swatch generation.",
   },
   "settings.template_missing_option": {
     zh: "所选模板在本机不可用",

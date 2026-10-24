@@ -379,15 +379,15 @@ const CornerNudgeControl = ({
       />
       <div className="grid grid-cols-3 gap-2 justify-items-center">
         <div />
-        <Button label={t("ext_nudge_up")} icon={<ChevronUp />} variant="primary" size="icon" onClick={() => onNudge(0, -1)} disabled={!nudgeEnabled} />
+        <Button label={t("ext_nudge_up")} icon={<ChevronUp />} variant="secondary" size="icon" onClick={() => onNudge(0, -1)} disabled={!nudgeEnabled} />
         <div />
-        <Button label={t("ext_nudge_left")} icon={<ChevronLeft />} variant="primary" size="icon" onClick={() => onNudge(-1, 0)} disabled={!nudgeEnabled} />
+        <Button label={t("ext_nudge_left")} icon={<ChevronLeft />} variant="secondary" size="icon" onClick={() => onNudge(-1, 0)} disabled={!nudgeEnabled} />
         <div className="flex items-center justify-center text-xs tabular-nums text-slate-500 dark:text-slate-400">
           {activeCornerPoint ? `(${Math.round(activeCornerPoint[0])}, ${Math.round(activeCornerPoint[1])})` : "—"}
         </div>
-        <Button label={t("ext_nudge_right")} icon={<ChevronRight />} variant="primary" size="icon" onClick={() => onNudge(1, 0)} disabled={!nudgeEnabled} />
+        <Button label={t("ext_nudge_right")} icon={<ChevronRight />} variant="secondary" size="icon" onClick={() => onNudge(1, 0)} disabled={!nudgeEnabled} />
         <div />
-        <Button label={t("ext_nudge_down")} icon={<ChevronDown />} variant="primary" size="icon" onClick={() => onNudge(0, 1)} disabled={!nudgeEnabled} />
+        <Button label={t("ext_nudge_down")} icon={<ChevronDown />} variant="secondary" size="icon" onClick={() => onNudge(0, 1)} disabled={!nudgeEnabled} />
         <div />
       </div>
     </div>
@@ -797,7 +797,7 @@ export default function GradientCardExtractPanel() {
       />
       <Button
         label={t("mat_gradient_save_override_btn")}
-        variant="primary"
+        variant="secondary"
         onClick={() => handleSave(anchor, "override")}
         disabled={!sessionId || !materialName.trim() || isSaving}
         loading={isSaving}
@@ -987,7 +987,7 @@ export default function GradientCardExtractPanel() {
               </div>
               <Button
                 label={t("mat_gradient_select_dataset_btn")}
-                variant="primary"
+                variant="secondary"
                 onClick={() => datasetInputRef.current?.click()}
                 className="w-full"
               />
@@ -1074,14 +1074,14 @@ export default function GradientCardExtractPanel() {
                 <div className="grid gap-2 sm:grid-cols-2">
                   <Button
                     label={t("mat_gradient_colorchecker_white_btn")}
-                    variant="primary"
+                    variant="secondary"
                     onClick={() => openColorcheckerDialog("white")}
                     disabled={!whiteImageFile || colorcheckerPending}
                     className="w-full"
                   />
                   <Button
                     label={t("mat_gradient_colorchecker_black_btn")}
-                    variant="primary"
+                    variant="secondary"
                     onClick={() => openColorcheckerDialog("black")}
                     disabled={!blackImageFile || colorcheckerPending}
                     className="w-full"
@@ -1154,7 +1154,7 @@ export default function GradientCardExtractPanel() {
               </div>
               <Button
                 label={t("mat_gradient_select_image_btn")}
-                variant="primary"
+                variant="secondary"
                 onClick={() => whiteImageInputRef.current?.click()}
                 disabled={isExtracting}
                 className="w-full"
@@ -1162,7 +1162,7 @@ export default function GradientCardExtractPanel() {
               <div className="grid gap-3 grid-cols-2">
                 <Button
                   label={t("mat_gradient_rotate_ccw_btn")}
-                  variant="primary"
+                  variant="secondary"
                   onClick={() => void rotateWhiteImage("ccw")}
                   disabled={!whiteImageFile || isRotatingWhite || isExtracting || colorcheckerPending}
                   loading={isRotatingWhite}
@@ -1171,7 +1171,7 @@ export default function GradientCardExtractPanel() {
                 />
                 <Button
                   label={t("mat_gradient_rotate_cw_btn")}
-                  variant="primary"
+                  variant="secondary"
                   onClick={() => void rotateWhiteImage("cw")}
                   disabled={!whiteImageFile || isRotatingWhite || isExtracting || colorcheckerPending}
                   loading={isRotatingWhite}
@@ -1181,7 +1181,7 @@ export default function GradientCardExtractPanel() {
               </div>
               <Button
                 label={t("mat_gradient_clear_points_btn")}
-                variant="primary"
+                variant="secondary"
                 onClick={clearWhiteCornerPoints}
                 disabled={whiteCornerPoints.length === 0}
                 className="w-full"
@@ -1241,7 +1241,7 @@ export default function GradientCardExtractPanel() {
               </div>
               <Button
                 label={t("mat_gradient_select_image_btn")}
-                variant="primary"
+                variant="secondary"
                 onClick={() => blackImageInputRef.current?.click()}
                 disabled={isExtracting}
                 className="w-full"
@@ -1249,7 +1249,7 @@ export default function GradientCardExtractPanel() {
               <div className="grid gap-3 grid-cols-2">
                 <Button
                   label={t("mat_gradient_rotate_ccw_btn")}
-                  variant="primary"
+                  variant="secondary"
                   onClick={() => void rotateBlackImage("ccw")}
                   disabled={!blackImageFile || isRotatingBlack || isExtracting || colorcheckerPending}
                   loading={isRotatingBlack}
@@ -1258,7 +1258,7 @@ export default function GradientCardExtractPanel() {
                 />
                 <Button
                   label={t("mat_gradient_rotate_cw_btn")}
-                  variant="primary"
+                  variant="secondary"
                   onClick={() => void rotateBlackImage("cw")}
                   disabled={!blackImageFile || isRotatingBlack || isExtracting || colorcheckerPending}
                   loading={isRotatingBlack}
@@ -1268,7 +1268,7 @@ export default function GradientCardExtractPanel() {
               </div>
               <Button
                 label={t("mat_gradient_clear_points_btn")}
-                variant="primary"
+                variant="secondary"
                 onClick={clearBlackCornerPoints}
                 disabled={blackCornerPoints.length === 0}
                 className="w-full"
@@ -1527,7 +1527,7 @@ export default function GradientCardExtractPanel() {
                 <div className="flex justify-end">
                   <Button
                     label={t("mat_gradient_view_details_btn")}
-                    variant="primary"
+                    variant="secondary"
                     onClick={() => setDetailsDialogOpen(true)}
                     className="w-full sm:w-auto"
                   />

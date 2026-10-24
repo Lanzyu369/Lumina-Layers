@@ -660,7 +660,7 @@ export function BugReportModal({
                   <p data-testid="bug-report-collection-incomplete">{t("bug_report_collection_incomplete")}</p>
                   <Button
                     label={submitting ? t("bug_report_upload_retrying") : t("bug_report_recapture")}
-                    variant="primary"
+                    variant="secondary"
                     onClick={handleRecaptureReport}
                     disabled={submitting}
                     className="mt-2"
@@ -702,7 +702,7 @@ export function BugReportModal({
                   type="button"
                   data-testid="bug-report-copy-ticket"
                   onClick={handleCopyTicket}
-                  className="action-control rounded-lg px-3 py-1 text-xs font-medium transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
+                  className="action-control rounded-lg px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                   style={{ color: "var(--surface-text-muted)" }}
                 >
                   {copied
@@ -748,7 +748,7 @@ export function BugReportModal({
                     data-testid="bug-report-upload-retry"
                     onClick={handleRetryUpload}
                     disabled={upload.retrying}
-                    className="action-control rounded-lg px-3 py-1 text-xs font-medium transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
+                    className="action-control rounded-lg px-3 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                     style={{ color: "var(--surface-text-muted)" }}
                   >
                     {upload.retrying
@@ -809,7 +809,7 @@ export function BugReportModal({
                       type="button"
                       data-testid="bug-report-copy-submitted-report"
                       onClick={handleCopySubmittedReport}
-                      className="action-control rounded-lg px-3 py-1 text-xs font-medium transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
+                      className="action-control rounded-lg px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                       style={{ color: "var(--surface-text-muted)" }}
                     >
                       {submittedReportCopied
@@ -835,7 +835,7 @@ export function BugReportModal({
             <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-4 dark:border-slate-700">
               <Button
                 label={t("bug_report_success_close")}
-                variant="primary"
+                variant="secondary"
                 onClick={handleCancel}
                 className="px-4"
               />
@@ -870,7 +870,7 @@ export function BugReportModal({
                       type="button"
                       data-testid="bug-report-copy-failed-report"
                       onClick={handleCopyFailedReport}
-                      className="action-control rounded-lg px-3 py-1 text-xs font-medium transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
+                      className="action-control rounded-lg px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                       style={{ color: "var(--surface-text-muted)" }}
                     >
                       {failedReport.copied
@@ -971,7 +971,7 @@ export function BugReportModal({
                     </span>
                     <button
                       type="button"
-                      className="action-control rounded-lg px-2 py-1 text-xs font-medium transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
+                      className="action-control rounded-lg px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                       onClick={handleRemoveScreenshot}
                     >
                       {t("bug_report_modal_screenshot_remove")}

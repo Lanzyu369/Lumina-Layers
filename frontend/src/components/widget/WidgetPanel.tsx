@@ -59,7 +59,7 @@ function WidgetErrorFallback({ onRetry }: { onRetry: () => void }) {
     <div className="p-4 text-center text-sm text-red-500">
       <p>{t('widget_error')}</p>
       <button
-        className="action-control mt-2 px-3 py-1 text-xs bg-red-100 dark:bg-red-900/30 rounded hover:bg-red-200"
+        className="action-control mt-2 px-3 py-1 text-xs rounded"
         onClick={onRetry}
       >
         {t('widget_retry')}

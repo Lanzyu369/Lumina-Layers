@@ -155,7 +155,7 @@ export default function AnnouncementDialog({
           />
           <Button
             label={t("announcement_mark_read")}
-            variant="primary"
+            variant="secondary"
             onClick={onDismissVersion}
             className="px-4"
           />

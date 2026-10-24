@@ -250,12 +250,36 @@ Image-to-Vector tab (`VectorizerPanel.tsx`) is the canonical reference:
 
 - **Do not** use native `title` attribute or custom `?`/`ⓘ` spans; always use `HelpDot` (for Switch) or the `tooltip` prop (for Slider/Checkbox/Dropdown/RadioGroup)
 - Keep static explanations, parameter guidance, and optional detail in the tooltip popover; do not repeat them in a visible paragraph below the control.
-- Keep current status, unavailable-option reasons, compatibility limits, validation errors, and action-critical warnings visible. Do not make users open a tooltip to find out why an action is unavailable or unsafe.
+- Keep current values, actionable status, unavailable-option reasons, active compatibility limits, validation errors, and action-critical warnings visible. Do not make users open a tooltip to find out why an action is unavailable or unsafe.
 - When inline text and a help icon both appear, the inline text states the current result or constraint briefly; the tooltip supplies the explanation and detail. Do not reuse the same explanation in both places.
 - Hint text must be bilingual (`zh` + `en`) in `translations.ts` with a `*_hint` suffix key
 - The ⓘ icon visual style is fixed in `HelpDot` (stroke-style `InfoIcon`, no background); do not recreate it inline
 - Every control that has a hint **must** display a visible ⓘ icon — never use a hidden/implicit-only tooltip
 - Hint copy is written for end users: describe the visible effect and the trade-off, avoid algorithm terms (e.g. no "K-Means", "8-neighborhood", "L\* roll-off")
+
+#### 提示语与帮助说明的信息分工
+
+判断一句话放在哪里，先问：**用户现在是否必须看到它，才能正确完成操作？** 必须看到的信息直接展示；用于理解功能的信息放入 ⓘ；只在特定条件下有用的信息按条件显示。
+
+| 信息类型 | 展示位置与时机 | 示例 |
+|---|---|---|
+| 功能解释、使用方法、默认值与取舍 | 标签旁的 ⓘ 帮助中，不在控件下方重复 | 模板继承哪些参数、SVG 清晰度的适用范围、缓存清理的作用 |
+| 当前取值、已选内容 | 控件自身或附近的简短摘要 | 保存目录、模板名称、模板设备信息、当前颜色计算精度 |
+| 影响当前操作的限制 | 相关选项启用、内容选中或操作触发后直接显示 | 自定义模板不支持批量、拼图、校准和色块生成 |
+| 错误、不可用原因及处理办法 | 对应控件或操作附近直接显示，不依赖打开帮助；问题解决后移除 | 模板缺失、通知权限被拒绝、功能不可用、路径校验失败 |
+| 用户操作的结果 | 操作完成后在原操作附近显示 | 缓存清理数量与释放空间、路径保存结果 |
+
+提示语与 ⓘ 可以同时存在，但必须提供不同的信息：行内文字简述当前状态或限制，帮助说明解释功能和细节。不要在两处复述同一段内容，也不要把所有解释都变成常驻提示条。没有需要处理的问题时，不使用成功或警告提示条长期占位。
+
+设置页遵循以下具体规则：
+
+- **3MF 项目模板**：使用内置配置时，不显示自定义模板的限制段落；匹配规则、参数继承和支持范围放入帮助。选中自定义模板后，显示模板摘要及简短的生成范围限制，帮助中不再重复该范围说明。模板丢失或校验失败时，直接给出原因和恢复方式；生成入口仍须直接解释实际的不兼容问题。
+- **完成通知**：正常的权限状态放在帮助中；权限被拒绝、浏览器不支持或请求失败时，直接显示原因及可行的处理办法，不能仅放进 ⓘ。
+- **SVG 清晰度与缓存管理**：通用适用范围、使用取舍和清理作用放入帮助。SVG 小洞补偿不可用的原因、缓存清理结果仍在界面中直接展示。
+- **手动设置切片软件**：折叠入口保留一句适用条件，帮助用户决定是否展开；路径格式和示例在展开后展示。
+- **父级设置与从属字段**：共享说明由父级提供一个帮助入口。只有子字段存在独立含义或操作要求时，才增加自己的 ⓘ，避免同一帮助在父子两处重复。
+
+行内提示保持简短，说明当前发生了什么；错误和限制需要给出下一步做法。中英文同步维护于 `frontend/src/i18n/translations.ts`，复用 `HelpDot`、控件的 `tooltip` 和现有状态提示组件。
 
 ### Hierarchy v2 — 单层卡片 + 凹槽 + 分割线 (Single-Card Layering)
 
@@ -303,8 +327,8 @@ Radii step **down** as you go inward so outer and inner shapes never compete:
 | Level | Radius | Applies to |
 |---|---|---|
 | Card | `16px` (`rounded-2xl`) | `.panel-card` section shells |
-| Control / Well | `10px` (`rounded-[10px]`) | wells, inputs, dropdown trigger, primary/secondary buttons (md) |
-| Small control | `8px` (`rounded-lg`) | small buttons, dropdown menu items, swatch tiles |
+| Control / Well | `10px` (`rounded-[10px]`) | wells, inputs, dropdown trigger |
+| Small control | `8px` (`rounded-lg`) | buttons, dropdown menu items, swatch tiles |
 | Chip / banner | `6px` | status banners, hue-filter pills stay `rounded-full` by intent |
 
 Never flatten everything to one radius, and never let an inner element's radius meet or exceed its container's.
@@ -366,6 +390,8 @@ JS layer — `frontend/src/components/ui/panelPrimitives.tsx`:
 
 #### Migration status (迁移状态)
 
+设置页各分类复用 `cardPadClass` 作为唯一外层卡片，内部设备摘要和路径使用 10px 无边框凹槽，选项之间使用 `panel-divider`。普通选项标签统一 14px medium、次要墨色；组标题使用 14px semibold，弹窗标题使用 15px semibold。独立选项间距为 20px，开关行使用 16px 横向间距并垂直居中；开关展开的从属参数使用 `dependentGroupClass`。帮助说明统一由标签旁的 `HelpDot` 或控件的 `tooltip` 提供，兼容限制、当前状态和错误仍直接显示。分类导航复用主导航标签样式；打印机和打印板选项以底色及显式选中标记表达状态，内部不增加卡片描边或阴影。
+
 > Verified against the working tree on 2026-10-14. An earlier revision of this document claimed Settings had already migrated; that was wrong, and is corrected below.
 > 2026-10-14 按工作区实际代码核对。此前本文档写“设置页已迁移”与代码不符，已在下方更正。
 
@@ -379,7 +405,7 @@ JS layer — `frontend/src/components/ui/panelPrimitives.tsx`:
 | Material Management — `MaterialLibraryPanel`, `GradientCardGeneratePanel`, `GradientCardExtractPanel`, `MaterialRecipeQueryPanel` | **Pending** |
 | LUT Management — `CalibrationPanel`, `ExtractorPanel`, `FiveColorQueryPanel`, `ColorcheckerConfirmDialog` | **Pending** |
 | Image to Vector — `VectorizerPanel` | **Pending** |
-| Settings — `SettingsPanel`, `MachineSelectionDialog` | **Pending** |
+| Settings — `SettingsPanel`, category navigation, device / build-plate chooser and setting rows | **Migrated** |
 | Creative Workshop — `WorkshopPanel`, `ModuleDetails` | **Pending** |
 | Dialogs — `CustomRecipeDialog`, `CustomRecipeSidePanel`, `MaterialPickerDialog`, `BugReportModal` | **Pending** (dialog shells keep their single card; inner panels still nest) |
 
@@ -400,12 +426,15 @@ Legacy helpers scheduled for removal once the last user migrates: `sectionCardCl
 
 | Level | At rest | Used for |
 |---|---|---|
-| **Primary / function** | blue fill + white text (`.action-control`) | every button that opens an operation dialog or executes a function: preview, generate, import, crop/rotate, apply, export, undo/redo, edit, history, clear/reset |
-| **Secondary** | hairline border + light fill | neutral dismissal or navigation, such as cancel, close and back |
-| **Ghost** | text / icon only | mode selections, toggles, dialog close icons and collapse headers |
+| **Primary** | blue fill + white text (`.action-control-primary`) | the main commit in an area: generate, apply, confirm, save |
+| **Secondary / ordinary operation** | neutral fill + dark text + thin gray border (`.action-control`) | import, choose a file or device, edit, history, reset, cancel, close, back |
+| **Ghost** | text / icon only | compact tools, mode selections, toggles, dialog close icons and collapse headers |
 
-Function buttons use `Button variant="primary"`; raw function buttons use the same `.action-control` class. Do not use gray, bordered or ghost treatments to distinguish different functions. Field pickers, selectable options, tabs and switches retain their own component styles.
-功能按钮统一蓝底白字：打开操作窗或直接执行功能都使用 `Button variant="primary"`；原生功能按钮复用 `.action-control`。不再按功能主次混用灰底、描边或纯文字样式。字段选择器、选项、导航标签和开关沿用各自的控件样式。
+`Button` defaults to `secondary`. Explicitly select `variant="primary"` for the main commit; an operation dialog or a function call alone does not justify blue emphasis. A group usually has one primary action. Destructive actions use a neutral button with `tone="danger"` (red text), including delete and uninstall. Raw buttons use `.action-control` for ordinary operations and add `.action-control-primary` only for the main commit. Field pickers, selectable options, tabs and switches retain their own component styles.
+按钮默认使用中性 `secondary`；仅区域内的主要提交动作显式设置 `variant="primary"`，通常一组只保留一个蓝色主按钮。导入、选文件、更改设备、历史、重置和撤销等普通操作使用中性底色；删除与卸载使用中性底配 `tone="danger"` 红字。原生按钮沿用 `.action-control`，主要提交额外添加 `.action-control-primary`。导航选中态、字段选择器和开关保持各自语义。
+
+Standard text buttons use 8px corners: ordinary controls have a 32px minimum height and primary actions 36px. Small buttons remain 32px; icon-only buttons may remain circular. Buttons change fill on hover and press without moving or scaling. Both neutral and primary buttons use gray fill/text when disabled. The `--button-*` tokens in `index.css` define light and dark appearances; avoid per-page color overrides. Keyboard focus remains visible through an outline.
+普通文字按钮高度至少 32px，主操作至少 36px，圆角 8px；图标按钮可保留圆形。悬停与按下只改变底色，不上浮、不缩放。禁用时统一灰底灰字。深浅色统一使用 `--button-*` 变量，不在页面另写按钮配色；键盘聚焦保留轮廓提示。
 
 Exception: the slicer launch/download control (`SlicerSelector`, including "Generate and open in BBS") retains its slicer-specific brand colors and split-button styling.
 例外：切片软件启动/下载控件（`SlicerSelector`，包括「生成并在 BBS 中打开」）保留原有品牌配色和分体按钮样式。
@@ -484,12 +513,12 @@ A swatch, a layer thumbnail or a preview tile is *content*, not a container. A b
 
 > Lumina-specific rules for `TabNavBar` (primary tabs) and `SubTabBar` (sub tabs). 主导航与子导航的专用规则。
 
-- **One tab style for both levels:** borderless tabs with no track behind the group; the selected tab is a raised chip (`--nav-chip-active` fill, `--shadow-nav-chip`, 8px radius) and hover uses `--nav-chip-hover`. Shared classes live in `frontend/src/components/widget/navTabStyles.ts`.
-  两级导航使用同一种标签：无描边、无底槽，选中项是浅色浮起块（8px 圆角），悬停用浅灰底。
+- **One tab style for both levels:** borderless tabs with no track behind the group; the selected tab uses a solid blue fill (`--nav-tab-selected-bg`), white text and icons (`--nav-tab-selected-text`), 8px radius and no shadow. Hover uses `--nav-chip-hover`. Shared classes live in `frontend/src/components/widget/navTabStyles.ts`; Settings category navigation uses the same selected treatment.
+  两级导航使用同一种标签：无描边、无底槽，选中项是蓝底白字、白色图标（8px 圆角、无阴影），悬停用浅灰底。设置分类导航沿用同一选中态。
 - **Rows and dividers carry the hierarchy, not boxes:** the header row (brand, primary tabs, tools) and the sub-tab row share the chrome surface, one `panel-divider` hairline separates them and a second one closes the sub-tab row. Never add tracks, outlines or tinted bands to tell the levels apart.
   层级靠行和分隔线表达：顶栏行与子导航行同底色，中间一条细线，子导航行下方再一条；不要用底槽、描边或色带区分层级。
-- **Primary vs sub:** both levels use the same blue selected text in light and dark themes; primary tabs are semibold with 16px icons, while sub tabs are medium weight with 14px icons.
-  两级导航的选中文字在浅色和深色主题下均使用一致的蓝色；主导航半粗体、16px 图标，子导航中等字重、14px 图标。
+- **Primary vs sub:** both levels use white selected text and icons in light and dark themes; both use semibold text, with 16px primary icons and 14px sub-tab icons.
+  两级导航的选中文字和图标在浅色和深色主题下均为白色；字重统一为半粗，主导航图标为 16px，子导航图标为 14px。
 - **Alignment is a user setting (`headerNavAlignment`):** `center` keeps both rows on one shared centre line, which is the window axis whenever there is room; `left` places the primary tabs after the brand and starts the sub tabs at the first primary tab. Never truncate, overlap, or stretch the tab group to the full width.
   对齐方式由用户设置决定：居中时两行共用一条中线，空间足够时就是窗口中线；居左时主导航紧跟标题，子导航从第一个主导航项开始。不截断、不重叠，也不把标签组拉满整行。
 - **A tight header gives way in a fixed order (`headerNavLayout.ts`, `useHeaderNavFit`):** the "Lumina Studio 2" title collapses to the logo whenever that gives the tabs the room they need, before the tabs move; centered tabs leave the window axis only as far as the brand and the tools require, with the sub tabs following the same centre line; only when the tabs no longer fit between the logo and the tools do they move to a row of their own, and the title returns.

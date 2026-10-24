@@ -311,10 +311,10 @@ export function CropModal({
 
         {/* Aspect ratio presets */}
         <div className="flex flex-wrap gap-2 px-4 py-2">
-          <Button label={t("crop_modal_rotate_left")} variant="primary" size="sm"
+          <Button label={t("crop_modal_rotate_left")} variant="secondary" size="sm"
             leadingIcon={<ArrowUturnLeftIcon className="size-4" />}
             onClick={() => handleRotate(-90)} disabled={isLoading} />
-          <Button label={t("crop_modal_rotate_right")} variant="primary" size="sm"
+          <Button label={t("crop_modal_rotate_right")} variant="secondary" size="sm"
             leadingIcon={<ArrowUturnRightIcon className="size-4" />}
             onClick={() => handleRotate(90)} disabled={isLoading} />
         </div>
@@ -376,6 +376,7 @@ export function CropModal({
             label={t("crop_modal_confirm")}
             onClick={handleConfirm}
             loading={isLoading}
+            variant="primary"
           />
         </div>
       </div>

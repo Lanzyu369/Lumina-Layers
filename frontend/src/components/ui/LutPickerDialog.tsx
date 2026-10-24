@@ -272,7 +272,7 @@ export default function LutPickerDialog({
               disabled={refreshing || loading}
               aria-label={labels.refreshTooltip}
               title={labels.refreshTooltip}
-              className="action-control inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 dark:text-slate-400"
+              className="action-control inline-flex h-8 w-8 items-center justify-center rounded-full"
             >
               <span className={cx("text-sm leading-none", refreshing && "animate-spin")} aria-hidden="true">⟳</span>
             </button>
@@ -330,7 +330,7 @@ export default function LutPickerDialog({
               <button
                 type="button"
                 onClick={onUploadClick}
-                className="action-control w-full rounded-lg px-2.5 py-1.5 text-left text-sm text-slate-600 dark:text-slate-400"
+                className="action-control w-full rounded-lg px-2.5 py-1.5 text-left text-sm"
               >
                 {labels.upload}
               </button>
@@ -498,13 +498,14 @@ export default function LutPickerDialog({
               label={labels.deselectAll}
               onClick={() => setStaged([])}
               disabled={staged.length === 0}
-              variant="primary"
+              variant="secondary"
               size="sm"
             />
             <Button
               label={labels.confirm}
               onClick={() => onConfirm(staged)}
               size="sm"
+              variant="primary"
             />
           </div>
         </div>

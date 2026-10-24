@@ -644,6 +644,7 @@ export default function MaterialRecipeQueryPanel() {
                         disabled={isGeneratingSwatch}
                         loading={isGeneratingSwatch}
                         label={isGeneratingSwatch ? t("material_recipe_generating_swatch") : t("material_recipe_generate_swatch")}
+                        variant="primary"
                       />
                       {swatchDownloadUrl ? (
                         <Button
@@ -651,13 +652,13 @@ export default function MaterialRecipeQueryPanel() {
                           disabled={isDownloadingSwatch}
                           loading={isDownloadingSwatch}
                           label={t("material_recipe_download_swatch")}
-                          variant="primary"
+                          variant="secondary"
                         />
                       ) : (
                         <Button
                           onClick={handleClearCollection}
                           label={t("material_recipe_collection_clear")}
-                          variant="primary"
+                          variant="secondary"
                         />
                       )}
                   </div>
@@ -677,7 +678,7 @@ export default function MaterialRecipeQueryPanel() {
                   <Button
                     onClick={handleClearCollection}
                     label={t("material_recipe_collection_clear")}
-                    variant="primary"
+                    variant="secondary"
                   />
                 )}
               </div>
@@ -930,13 +931,14 @@ export default function MaterialRecipeQueryPanel() {
                     isComputing ? t("material_recipe_query_loading") : t("material_recipe_query")
                   }
                   className="col-span-2"
+                  variant="primary"
                 />
                 {canAddToCollection && (
                   <Button
                     onClick={handleAddToCollection}
                     disabled={isAlreadyCollected}
                     label={isAlreadyCollected ? t("material_recipe_already_in_collection") : t("material_recipe_add_to_collection")}
-                    variant={isAlreadyCollected ? "secondary" : "primary"}
+                    variant="secondary"
                     className="col-span-2"
                   />
                 )}
@@ -944,19 +946,19 @@ export default function MaterialRecipeQueryPanel() {
                   onClick={handleUndo}
                   disabled={layers.length === 0}
                   label={t("material_recipe_undo")}
-                  variant="primary"
+                  variant="secondary"
                 />
                 <Button
                   onClick={handleReverse}
                   disabled={layers.length < 2}
                   label={t("material_recipe_reverse")}
-                  variant="primary"
+                  variant="secondary"
                 />
                 <Button
                   onClick={handleClear}
                   disabled={layers.length === 0}
                   label={t("material_recipe_clear")}
-                  variant="primary"
+                  variant="secondary"
                   className="col-span-2"
                 />
               </div>

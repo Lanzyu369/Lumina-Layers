@@ -283,13 +283,14 @@ export default function FiveColorQueryPanel() {
                 disabled={!canSubmitSelection || isLoading}
                 label={isLoading ? t("five_color_query_loading") : t("five_color_query")}
                 className={workspace.isCompact ? "" : "col-span-2"}
+                variant="primary"
               />
               {canAddToCollection && (
                 <Button
                   onClick={addToCollection}
                   disabled={isAlreadyCollected}
                   label={isAlreadyCollected ? t("five_color_already_in_list") : t("five_color_add_to_list")}
-                  variant={isAlreadyCollected ? "secondary" : "primary"}
+                  variant="secondary"
                   className={workspace.isCompact ? "" : "col-span-2"}
                 />
               )}
@@ -297,19 +298,19 @@ export default function FiveColorQueryPanel() {
                 onClick={removeLastSelection}
                 disabled={!hasSelection}
                 label={t("five_color_undo")}
-                variant="primary"
+                variant="secondary"
               />
               <Button
                 onClick={reverseSelection}
                 disabled={!canReverse}
                 label={t("five_color_reverse")}
-                variant="primary"
+                variant="secondary"
               />
               <Button
                 onClick={clearSelection}
                 disabled={!hasSelection}
                 label={t("five_color_clear")}
-                variant="primary"
+                variant="secondary"
                 className={workspace.isCompact ? "" : "col-span-2"}
               />
             </div>
@@ -444,6 +445,7 @@ export default function FiveColorQueryPanel() {
                         disabled={isGeneratingSwatch}
                         loading={isGeneratingSwatch}
                         label={isGeneratingSwatch ? t("five_color_generating_swatch") : t("five_color_generate_swatch")}
+                        variant="primary"
                       />
                       {swatchDownloadUrl && (
                         <Button
@@ -451,14 +453,14 @@ export default function FiveColorQueryPanel() {
                           disabled={isDownloadingSwatch}
                           loading={isDownloadingSwatch}
                           label={t("five_color_download_swatch")}
-                          variant="primary"
+                          variant="secondary"
                         />
                       )}
                       {!swatchDownloadUrl && (
                         <Button
                           onClick={handleClearCollection}
                           label={t("five_color_collection_clear")}
-                          variant="primary"
+                          variant="secondary"
                         />
                       )}
                   </div>
@@ -478,7 +480,7 @@ export default function FiveColorQueryPanel() {
                   <Button
                     onClick={handleClearCollection}
                     label={t("five_color_collection_clear")}
-                    variant="primary"
+                    variant="secondary"
                   />
                 )}
               </div>

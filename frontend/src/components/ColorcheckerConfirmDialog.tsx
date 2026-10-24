@@ -1358,7 +1358,7 @@ export function ColorcheckerConfirmDialogInner({
               <div className="grid gap-3 sm:grid-cols-3">
                 <Button
                   label={t("ext_cc_auto_detect_btn")}
-                  variant="primary"
+                  variant="secondary"
                   onClick={() => void runAutoDetect()}
                   disabled={!imageFile || !activeSourceFileId || !referenceSelectionReady || autoDetecting || sourcePreparing}
                   loading={autoDetecting}
@@ -1366,7 +1366,7 @@ export function ColorcheckerConfirmDialogInner({
                 />
                 <Button
                   label={t("ext_cc_warp_btn")}
-                  variant="primary"
+                  variant="secondary"
                   onClick={() => void runWarpPreview()}
                   disabled={!imageFile || !activeSourceFileId || !imageSize || !referenceSelectionReady || corners.length !== 4 || warping}
                   loading={warping}
@@ -1430,7 +1430,7 @@ export function ColorcheckerConfirmDialogInner({
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                   <Button
                     label={t("ext_cc_reference_upload_btn")}
-                    variant="primary"
+                    variant="secondary"
                     size="sm"
                     loading={referenceUploading}
                     onClick={() => referenceInputRef.current?.click()}
@@ -1438,11 +1438,12 @@ export function ColorcheckerConfirmDialogInner({
                   />
                   <Button
                     label={t("ext_cc_reference_delete_btn")}
-                    variant="primary"
+                    variant="secondary"
                     size="sm"
                     disabled={!selectedCustomReference || referenceUploading}
                     onClick={handleDeleteSelectedReference}
                     className="w-full sm:w-auto"
+                    tone="danger"
                   />
                   <input
                     ref={referenceInputRef}

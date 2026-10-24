@@ -100,7 +100,11 @@ export default function Custom3mfTemplateSettings() {
     <div className="space-y-3 border-t panel-divider pt-5">
       <Dropdown
         label={t("settings.template_title")}
-        tooltip={`${t("settings.template_summary")}\n\n${t("settings.template_hint")}`}
+        tooltip={[
+          t("settings.template_summary"),
+          t("settings.template_hint"),
+          ...(!selected ? [t("settings.template_excluded")] : []),
+        ].join("\n\n")}
         value={selectedId ?? ""}
         disabled={busy}
         options={options}
@@ -116,12 +120,11 @@ export default function Custom3mfTemplateSettings() {
         </p>
       )}
       {missing && <StatusBanner tone="warning">{t("settings.template_missing")}</StatusBanner>}
-      <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-        {t("settings.template_compatibility_note")}
-      </p>
-      <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-        {t("settings.template_excluded")}
-      </p>
+      {selected && (
+        <p role="status" className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+          {t("settings.template_active_scope_hint")}
+        </p>
+      )}
       <input
         ref={fileInput}
         aria-label={t("settings.template_file")}
@@ -138,7 +141,7 @@ export default function Custom3mfTemplateSettings() {
       <div className="flex min-w-0 flex-wrap items-center gap-3">
         <Button
           label={t(file ? "settings.template_change_file" : "settings.template_choose_file")}
-          variant="primary"
+          variant="secondary"
           disabled={busy}
           onClick={() => fileInput.current?.click()}
         />
@@ -148,10 +151,11 @@ export default function Custom3mfTemplateSettings() {
         {selected && (
           <Button
             label={t("settings.template_delete")}
-            variant="primary"
+            variant="secondary"
             size="sm"
             disabled={busy}
             onClick={() => void remove()}
+            tone="danger"
           />
         )}
       </div>
@@ -169,7 +173,7 @@ export default function Custom3mfTemplateSettings() {
               onChange={(event) => setName(event.target.value)}
             />
           </label>
-          <Button label={t("settings.template_import")} loading={busy} onClick={() => void upload()} />
+          <Button label={t("settings.template_import")} loading={busy} onClick={() => void upload()} variant="primary" />
         </div>
       )}
       {error && <StatusBanner tone="error">{t(error)}{errorDetail ? ` ${errorDetail}` : ""}</StatusBanner>}

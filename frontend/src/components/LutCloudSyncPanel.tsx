@@ -312,7 +312,7 @@ export default function LutCloudSyncPanel() {
         </div>
         <Button
           label={t("lut_sync_refresh_btn")}
-          variant="primary"
+          variant="secondary"
           onClick={() => void refreshCatalog()}
           loading={isRefreshing}
         />
@@ -349,7 +349,7 @@ export default function LutCloudSyncPanel() {
           {hasMoreCatalogEntries && (
             <Button
               label={t("lut_sync_load_more_btn")}
-              variant="primary"
+              variant="secondary"
               onClick={() => void loadMoreCatalog()}
               loading={isLoadingMore}
             />
