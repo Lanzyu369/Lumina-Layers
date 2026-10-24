@@ -114,7 +114,7 @@ function MaterialSelectionContent({ selection, isEditing }: {
           </div>
           <Button label={cancelLabel} variant="secondary" size="sm" onClick={cancelSelection} />
         </header>
-        <div className="panel-divider min-h-0 flex-1 space-y-5 overflow-y-auto border-t px-5 py-4">
+        <div className="panel-divider min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-y-contain border-t px-5 py-4">
           {isChecking && (
             <p className="status-banner text-sm" data-tone="info" role="status">
               {t("native_material_rechecking")}
