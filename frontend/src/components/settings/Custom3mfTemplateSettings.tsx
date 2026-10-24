@@ -10,6 +10,8 @@ import Button from "../ui/Button";
 import Dropdown from "../ui/Dropdown";
 import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
 
+const IMPORT_TEMPLATE_OPTION = "__import_3mf_template__";
+
 export default function Custom3mfTemplateSettings() {
   const { t } = useI18n();
   const nameId = useId();
@@ -94,6 +96,7 @@ export default function Custom3mfTemplateSettings() {
     { value: "", label: t("settings.template_builtin") },
     ...templates.map((item) => ({ value: item.id, label: item.name })),
     ...(missing ? [{ value: selectedId, label: t("settings.template_missing_option") }] : []),
+    { value: IMPORT_TEMPLATE_OPTION, label: t(file ? "settings.template_change_file" : "settings.template_choose_file") },
   ];
 
   return (
@@ -108,6 +111,13 @@ export default function Custom3mfTemplateSettings() {
         value={selectedId ?? ""}
         disabled={busy}
         options={options}
+        onChange={(id) => {
+          if (id === IMPORT_TEMPLATE_OPTION) {
+            fileInput.current?.click();
+            return;
+          }
+          select(id || null);
+        }}
       />
       {selected && (
         <p className="text-xs text-slate-600 dark:text-slate-300">
@@ -137,6 +147,7 @@ export default function Custom3mfTemplateSettings() {
           setErrorDetail(null);
         }}
       />
+      {(file || selected) && <div className="flex min-w-0 flex-wrap items-center gap-3">
         <span className="min-w-0 flex-1 break-all text-sm text-slate-600 dark:text-slate-300" aria-live="polite">
           {file?.name}
         </span>
@@ -150,6 +161,7 @@ export default function Custom3mfTemplateSettings() {
             tone="danger"
           />
         )}
+      </div>}
       {file && (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <label htmlFor={nameId} className="block min-w-0 flex-1 space-y-1.5 text-sm">

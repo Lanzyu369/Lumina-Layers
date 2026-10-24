@@ -91,4 +91,21 @@ describe("3MF template guidance", () => {
     renderSettings();
     expect(await screen.findByText(translations["settings.template_load_error"].zh)).toBeInTheDocument();
   });
+
+  it("opens the file chooser from the dropdown without changing the selected template", async () => {
+    useSettingsStore.setState({ custom3mfTemplateId: template.id });
+    renderSettings();
+    const picker = screen.getByRole("combobox");
+    await waitFor(() => expect(picker).toBeEnabled());
+    const fileInput = screen.getByLabelText(translations["settings.template_file"].zh);
+    const chooseFile = vi.spyOn(fileInput, "click");
+    expect(screen.queryByRole("button", { name: translations["settings.template_choose_file"].zh })).not.toBeInTheDocument();
+    fireEvent.click(picker);
+    fireEvent.click(screen.getByRole("option", { name: translations["settings.template_choose_file"].zh }));
+    expect(chooseFile).toHaveBeenCalledTimes(1);
+    expect(useSettingsStore.getState().custom3mfTemplateId).toBe(template.id);
+    expect(picker).toHaveTextContent(template.name);
+    expect(picker).toHaveAttribute("aria-expanded", "false");
+    expect(systemApi.saveSettings).not.toHaveBeenCalled();
+  });
 });

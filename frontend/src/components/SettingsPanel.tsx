@@ -599,7 +599,9 @@ export default function SettingsPanel() {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="settings-panel"
+      className="settings-workspace flex h-full min-h-0 w-full flex-col overflow-hidden"
     >
+      <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] sm:grid-cols-[12rem_minmax(0,1fr)] sm:grid-rows-[minmax(0,1fr)] lg:grid-cols-[15rem_minmax(0,1fr)]">
         <SettingsCategoryNav
           ariaLabel={t("settings.category_nav_label")}
           categories={settingsCategories}
@@ -614,8 +616,17 @@ export default function SettingsPanel() {
           aria-labelledby={`settings-category-${activeCategory}`}
           tabIndex={0}
         >
+          <header className="mx-auto mb-7 w-full max-w-4xl border-b panel-divider pb-5">
+            <h2 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+              {settingsCategories.find((category) => category.id === activeCategory)?.label}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              {settingsCategories.find((category) => category.id === activeCategory)?.description}
+            </p>
+          </header>
           {activeCategory === "device" && (
             <section
+              className="settings-content mx-auto flex w-full max-w-4xl flex-col gap-5"
             >
               <div>
                 <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-slate-50">
@@ -665,6 +676,7 @@ export default function SettingsPanel() {
 
               <div
                 data-testid="machine-adapter-summary"
+                className="grid gap-4 py-1 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
               >
                 <div className="flex min-w-0 items-center gap-4">
                   <div
@@ -861,6 +873,7 @@ export default function SettingsPanel() {
 
           {activeCategory === "general" && (
             <section
+              className="settings-content mx-auto flex w-full max-w-4xl flex-col gap-5"
             >
               <div data-testid="settings-language-section">
                 <Dropdown
@@ -972,6 +985,7 @@ export default function SettingsPanel() {
           {activeCategory === "conversion" && (
             <section
               data-testid="settings-advanced-section"
+              className="settings-content mx-auto flex w-full max-w-4xl flex-col gap-5"
             >
               <div
                 data-testid="settings-solver-cache-density-section"
@@ -1129,6 +1143,7 @@ export default function SettingsPanel() {
 
           {activeCategory === "maintenance" && (
             <section
+              className="settings-content mx-auto flex w-full max-w-4xl flex-col gap-5"
             >
               <div className="flex flex-col gap-4">
                 <div>
