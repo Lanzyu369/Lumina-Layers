@@ -282,7 +282,7 @@ Three primitives, three jobs:
 Grouping strength, weakest → strongest: **whitespace → group header → divider → well → card.** Reach for the weakest device that still reads. A divider with a small-caps header is almost always enough to separate two groups inside one card; promote to a well only when the inner content is itself a cluster of controls that needs a contained surface.
 分组强度由弱到强：**留白 → 组标题 → 分割线 → 凹槽 → 卡片**。优先用能读懂的最弱手段。卡内两个分组，"分割线 + 小标题"通常就够；只有当内部本身是一簇需要独立托底面的控件时，才升级成凹槽。
 
-图像转换的核心设置使用 `settingsGroupClass` 将导入、颜色设置（含来源类型、LUT／耗材选择与量化颜色数）、尺寸和底板、结构模式、建模模式分别放在连续的灰底分组中。分组使用 `--surface-well`、10px 圆角、12px 内边距和 16px 组间距，不再使用标题右侧横线；结构与建模直接使用单选组标题，避免重复标题。只有分组标题使用半粗字重；“来源类型”等组选项标签沿用普通字段字重。组内滑块数值框使用 `--surface-card` 与灰底区分，深色主题沿用对应表面变量。
+图像转换的核心设置使用 `settingsGroupClass` 将导入、颜色设置（含来源类型、LUT／耗材选择与量化颜色数）、尺寸和底板、单面/双面打印、建模模式分别放在连续的灰底分组中。分组使用 `--surface-well`、10px 圆角、12px 内边距和 16px 组间距，不再使用标题右侧横线；结构与建模直接使用单选组标题，避免重复标题。只有分组标题使用半粗字重；“来源类型”等组选项标签沿用普通字段字重。组内滑块数值框使用 `--surface-card` 与灰底区分，深色主题沿用对应表面变量。
 
 #### Making dividers "一眼可辨" (visibility, per the original concern)
 

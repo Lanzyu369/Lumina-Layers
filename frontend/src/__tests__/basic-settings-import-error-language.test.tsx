@@ -137,11 +137,11 @@ describe("BasicSettings recipe import visible errors", () => {
   it.each([
     {
       language: "zh" as const,
-      expected: "导入失败：此项目使用当前暂不可用的反推 LUT。请改用传统 LUT 或耗材档案。",
+      expected: "导入失败：此项目使用当前暂不可用的反推 LUT。请改用经典 LUT 或耗材档案。",
     },
     {
       language: "en" as const,
-      expected: "Import failed: This project uses an inferred LUT, which is currently unavailable. Use a legacy LUT or material archive instead.",
+      expected: "Import failed: This project uses an inferred LUT, which is currently unavailable. Use a classic LUT or material archive instead.",
     },
   ])("explains an unavailable inferred LUT through file replacement in $language", async ({ language, expected }) => {
     useSettingsStore.setState({ language });

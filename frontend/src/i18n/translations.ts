@@ -4982,12 +4982,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Source Type",
   },
   basic_source_version_hint: {
-    zh: "选择配色数据从哪里来：\n• 传统 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。",
-    en: "Choose where the color data comes from:\n• Legacy LUT: data measured from actually printed color charts — most reliable.\n• Material Archive: freely combine materials you created in Material Extraction.",
+    zh: "选择配色数据从哪里来：\n• 经典 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。",
+    en: "Choose where the color data comes from:\n• Classic LUT: data measured from actually printed color charts — most reliable.\n• Material Archive: freely combine materials you created in Material Extraction.",
   },
   basic_source_version_legacy: {
-    zh: "传统 LUT",
-    en: "Legacy LUT",
+    zh: "经典 LUT",
+    en: "Classic LUT",
   },
   basic_source_version_native: {
     zh: "\u53cd\u63a8LUT",
@@ -5706,8 +5706,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Controls infill in the deeper backing, including flat puzzles. The protected zone next to the viewing surface always stays 100% solid; relief mode stays at 100%.",
   },
   basic_structure_mode: {
-    zh: "结构模式",
-    en: "Structure Mode",
+    zh: "单面/双面打印",
+    en: "Single/Double-sided Printing",
   },
   basic_structure_mode_hint: {
     zh: "决定成品的正反面结构：\n• 双面：正反两面都呈现画面，适合挂件、灯片等两面都会被看到的场景。\n• 单面：只有正面有画面，背面是平整底板，打印更快、更省耗材。",
@@ -5770,8 +5770,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "5-color extended mode only supports a single-sided structure.",
   },
   basic_modeling_mode_hint: {
-    zh: "决定图片如何变成 3D 模型：\n• 高保真：忠实还原照片细节，适合绝大多数图片（推荐）。\n• 像素艺术：保留方块像素感，适合像素画、马赛克风格。\n• 矢量模式：生成平滑的曲线轮廓，适合 Logo、图标等颜色分明的图形。\n• 验证色卡：生成用于校准颜色的标准色卡，仅在测试耗材颜色时使用。",
-    en: "Controls how the image becomes a 3D model:\n• High-Fidelity: faithfully reproduces photo detail — recommended for most images.\n• Pixel Art: keeps the blocky pixel look — for pixel art and mosaic styles.\n• Vector: smooth curved outlines — for logos, icons, and flat-color artwork.\n• Color Card: generates a calibration color chart — only for testing filament colors.",
+    zh: "决定图片如何变成 3D 模型：\n• 高保真（位图）：忠实还原照片细节，适合绝大多数图片（推荐）。\n• 像素艺术：保留方块像素感，适合像素画、马赛克风格。\n• 矢量图：生成平滑的曲线轮廓，适合 Logo、图标等颜色分明的图形。\n• 验证色卡：生成用于校准颜色的标准色卡，仅在测试耗材颜色时使用。",
+    en: "Controls how the image becomes a 3D model:\n• High-Fidelity (Bitmap): faithfully reproduces photo detail — recommended for most images.\n• Pixel Art: keeps the blocky pixel look — for pixel art and mosaic styles.\n• Vector Image: smooth curved outlines — for logos, icons, and flat-color artwork.\n• Color Card: generates a calibration color chart — only for testing filament colors.",
   },
   basic_image_format_error: {
     zh: "仅支持 JPG/JFIF/PNG/SVG/WebP/HEIC 格式",
@@ -5896,16 +5896,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== Modeling Mode Options ====================
   "modeling_mode.high-fidelity": {
-    zh: "高保真",
-    en: "High-Fidelity",
+    zh: "高保真（位图）",
+    en: "High-Fidelity (Bitmap)",
   },
   "modeling_mode.pixel": {
     zh: "像素艺术",
     en: "Pixel Art",
   },
   "modeling_mode.vector": {
-    zh: "矢量模式",
-    en: "Vector",
+    zh: "矢量图",
+    en: "Vector Image",
   },
   "modeling_mode.color-card": {
     zh: "验证色卡",
@@ -5966,8 +5966,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Precise Color Matching (Experimental)",
   },
   adv_precise_color_matching_hint: {
-    zh: "配色时只使用打印机真正能打出来的颜色，减少成品和屏幕预览之间的色差。处理会稍慢一些，仅在传统 LUT 模式下有效。",
-    en: "Restricts color matching to colors your printer can actually produce, reducing the gap between the print and the on-screen preview. Slightly slower; only effective in Legacy LUT mode.",
+    zh: "配色时只使用打印机真正能打出来的颜色，减少成品和屏幕预览之间的色差。处理会稍慢一些，仅在经典 LUT 模式下有效。",
+    en: "Restricts color matching to colors your printer can actually produce, reducing the gap between the print and the on-screen preview. Slightly slower; only effective in Classic LUT mode.",
   },
   adv_hue_protection_disabled_hint: {
     zh: "高精度匹配开启时，色相保护已被接管，无需手动启用。",
@@ -8198,8 +8198,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "LUT not found, please select a compatible LUT manually",
   },
   recipe_import_predictive_lut_unavailable: {
-    zh: "此项目使用当前暂不可用的反推 LUT。请改用传统 LUT 或耗材档案。",
-    en: "This project uses an inferred LUT, which is currently unavailable. Use a legacy LUT or material archive instead.",
+    zh: "此项目使用当前暂不可用的反推 LUT。请改用经典 LUT 或耗材档案。",
+    en: "This project uses an inferred LUT, which is currently unavailable. Use a classic LUT or material archive instead.",
   },
   recipe_import_lut_degraded: {
     zh: "原 LUT 记录未找到，已按名称与颜色模式匹配，请确认选中了预期 LUT。",
@@ -10292,16 +10292,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Extraction Warnings",
   },
   cal_workflow_legacy: {
-    zh: "传统 LUT",
-    en: "Legacy LUT",
+    zh: "经典 LUT",
+    en: "Classic LUT",
   },
   cal_workflow_single_stage: {
     zh: "梯度卡",
     en: "Gradient Card",
   },
   ext_workflow_legacy: {
-    zh: "传统 LUT",
-    en: "Legacy LUT",
+    zh: "经典 LUT",
+    en: "Classic LUT",
   },
   ext_workflow_single_stage: {
     zh: "梯度卡",
@@ -10597,12 +10597,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Multi-color printing works by stacking a few filaments in different orders and layer counts, so light passing through them shows different colors. The software needs to know which colors your printer and filaments can actually produce, so it can find the closest stack for every color in your picture.\n\nThe color source is where that color data comes from. There are three options, explained next.",
   },
   tutorial_step_legacy_title: {
-    zh: "传统 LUT：实拍色卡",
-    en: "Legacy LUT: photographed color chart",
+    zh: "经典 LUT：实拍色卡",
+    en: "Classic LUT: photographed color chart",
   },
   tutorial_step_legacy_body: {
-    zh: "LUT 是一张颜色对照表，记录了「每一种叠法打出来是什么颜色」。\n传统 LUT 是最传统的做法：用你的打印机和耗材打印一块包含大量叠色组合的校准板，实拍照片后由软件逐格提取颜色。转换时，图片的每个颜色都去表里找最接近的一格，再按那一格的叠法打印。",
-    en: "A LUT (lookup table) records what color each layer stack prints as.\nLegacy LUT is the traditional approach: you print a calibration board full of stack combinations on your own printer and filaments, photograph it, and the software reads the color of every patch. During conversion, each color in your picture is matched to the closest patch and printed with that patch's stack.",
+    zh: "LUT 是一张颜色对照表，记录了「每一种叠法打出来是什么颜色」。\n经典 LUT 是最传统的做法：用你的打印机和耗材打印一块包含大量叠色组合的校准板，实拍照片后由软件逐格提取颜色。转换时，图片的每个颜色都去表里找最接近的一格，再按那一格的叠法打印。",
+    en: "A LUT (lookup table) records what color each layer stack prints as.\nClassic LUT is the traditional approach: you print a calibration board full of stack combinations on your own printer and filaments, photograph it, and the software reads the color of every patch. During conversion, each color in your picture is matched to the closest patch and printed with that patch's stack.",
   },
   tutorial_step_legacy_need: {
     zh: "打印一块校准板并拍照提取（在「LUT管理」里完成）。校准板色块很多，打印时间较长。也可以直接选用列表里现成的 LUT。",

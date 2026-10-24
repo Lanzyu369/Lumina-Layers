@@ -693,7 +693,7 @@ describe("BasicSettings", () => {
     );
     // The controls stay in place so the mode switch does not read as a
     // vanished feature; they are disabled and explain themselves instead.
-    expect(screen.getByText("结构模式")).toBeInTheDocument();
+    expect(screen.getByText("单面/双面打印")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "双面" })).toBeDisabled();
     expect(screen.getByRole("slider", { name: "底板填充率" })).toBeDisabled();
     expect(
@@ -713,7 +713,7 @@ describe("BasicSettings", () => {
       "导入",
       "颜色设置",
       "尺寸和底板",
-      "结构模式",
+      "单面/双面打印",
       "建模模式",
     ]) {
       expect(screen.getByText(block)).toBeInTheDocument();
@@ -799,7 +799,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     expect(screen.getByText("来源类型")).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "传统 LUT" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "经典 LUT" })).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "反推LUT" })).not.toBeInTheDocument();
     expect(screen.getByTestId("lut-picker-trigger")).toBeInTheDocument();
     expect(screen.getByText("选择LUT")).toBeInTheDocument();
