@@ -289,6 +289,9 @@ export default function SlicerSelector({
     activeSlicer?.display_name ?? null,
     t,
   );
+  const outputHint = !isDetecting && !largeFormat
+    ? slicerLinkHint ?? (!hasSlicers ? t("slicer_not_detected") : null)
+    : null;
   const resolveLatestDownloadUrl =
     getLatestDownloadUrl ?? (() => useConverterStore.getState().downloadUrl);
   const resolveLatestThreemfDiskPath =
@@ -527,6 +530,8 @@ export default function SlicerSelector({
       {launchMessage && (
         <p className="text-xs text-green-400">{launchMessage}</p>
       )}
+      {outputHint && (
+        <p role="status" className="text-xs text-slate-500 dark:text-slate-400">{outputHint}</p>
       )}
       {error && (
         <p className="text-xs text-red-400">{error}</p>
