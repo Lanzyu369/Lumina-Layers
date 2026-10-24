@@ -26,6 +26,9 @@ const labels = {
   dialogConfirm: "Confirm",
   dialogCancel: "Cancel",
   openPicker: "Choose LUT databases…",
+  change: "Change",
+  selectionSummary: "{count} LUTs selected",
+  moreSelected: "+{count} more",
 };
 
 const manufacturerOptions = [
@@ -77,25 +80,32 @@ describe("LegacyLutSelector", () => {
     expect(onRefresh).toHaveBeenCalledOnce();
   });
 
-  it("shows selected brand chip on the trigger", () => {
-    renderSelector();
+  it("shows selected metadata and color mode inside the trigger", () => {
+    renderSelector({
+      allLutOptions: [{ label: "A 4C", value: "a4", brand: "Brand A", materialType: "PETG" }],
+      colorModeSummary: <span>4-Color (RYBW)</span>,
+    });
     const trigger = screen.getByTestId("lut-picker-trigger");
-    expect(trigger).toHaveTextContent("Brand A");
+    expect(trigger).toHaveTextContent("Brand A · PETG");
+    expect(trigger).toHaveTextContent("4-Color (RYBW)");
+    expect(trigger).toHaveTextContent("Change");
+    expect(trigger).not.toHaveTextContent("Selected: 1");
   });
 
-  it("shows selected LUT chip on the trigger", () => {
+  it("shows the selected LUT name on the trigger", () => {
     renderSelector({ selectedLutNames: ["a4"] });
     const trigger = screen.getByTestId("lut-picker-trigger");
     expect(trigger).toHaveTextContent("A 4C");
   });
 
-  it("shows overflow badge when more LUTs are selected than the visible limit", () => {
+  it("summarizes multiple LUTs without expanding the full list", () => {
     renderSelector({ selectedLutNames: ["a4", "b4", "a8"] });
     const trigger = screen.getByTestId("lut-picker-trigger");
-    // 2 visible chips + 1 overflow
+    // Only the first name remains visible; the dialog retains the full selection.
     expect(trigger).toHaveTextContent("A 4C");
-    expect(trigger).toHaveTextContent("B 4C");
-    expect(trigger).toHaveTextContent("+1");
+    expect(trigger).not.toHaveTextContent("B 4C");
+    expect(trigger).toHaveTextContent("3 LUTs selected");
+    expect(trigger).toHaveTextContent("+2 more");
   });
 
   it("shows the LUT placeholder when brand is selected but no LUT is chosen", () => {
@@ -239,7 +249,7 @@ describe("LegacyLutSelector", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
 
     expect(onLutSelectionChange).toHaveBeenCalledWith(["a4", "b4"]);
-    expect(screen.getByTestId("lut-picker-trigger")).toHaveTextContent("B 4C");
+    expect(screen.getByTestId("lut-picker-trigger")).toHaveTextContent("2 LUTs selected");
     fireEvent.click(screen.getByTestId("lut-picker-trigger"));
     const reopened = screen.getByRole("dialog");
     fireEvent.click(within(reopened).getByRole("button", { name: "Brand B" }));

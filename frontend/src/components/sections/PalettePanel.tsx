@@ -408,7 +408,7 @@ export default function PalettePanel({
   };
 
   return (
-    <div className={cx(cardClass, "flex h-full min-h-0 flex-col px-4 py-4")}>
+    <div className={cx(cardClass, "color-tools-panel flex h-full min-h-0 flex-col px-4 py-4")}>
       {palette.length === 0 ? (
         <p className="py-4 text-sm text-slate-500 dark:text-slate-400">
           {t("palette_no_data")}
@@ -492,15 +492,17 @@ export default function PalettePanel({
                   onClick={clearSelection}
                   className="w-full"
                 />
-                <Button
-                  label={t("palette_selection_blink")}
-                  variant="ghost"
-                  size="sm"
-                  active={selectionBlinkEnabled}
-                  onClick={toggleSelectionBlink}
-                  className="w-full"
+                <label
+                  className="col-span-full mt-1 flex items-center justify-between gap-3 border-t border-slate-200 py-2 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300"
                   title={t("palette_selection_blink_title")}
-                />
+                >
+                  {t("palette_selection_blink")}
+                  <Switch
+                    checked={selectionBlinkEnabled}
+                    onChange={toggleSelectionBlink}
+                    ariaLabel={t("palette_selection_blink")}
+                  />
+                </label>
               </ToolbarGroup>
 
               <ToolbarGroup label={t("palette_group_free")}>

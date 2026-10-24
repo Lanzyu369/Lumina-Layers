@@ -54,7 +54,7 @@ export default function SelectionToolPicker() {
           size="sm"
           active={selectionTool === tool}
           onClick={() => setSelectionTool(tool)}
-          className="w-full"
+          className="selection-tool-control w-full"
           title={titleKey ? t(titleKey) : undefined}
         />
       ))}

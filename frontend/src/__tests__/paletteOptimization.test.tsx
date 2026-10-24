@@ -493,7 +493,7 @@ describe('PalettePanel 双色显示', () => {
     expect(modeControls).toHaveClass('grid-cols-[repeat(auto-fit,minmax(6.75rem,1fr))]');
     expect(modeControls).not.toHaveClass('h-9');
 
-    for (const label of ['同颜色全选', '点选色块', '选区画笔', '全不选', '选区闪烁']) {
+    for (const label of ['同颜色全选', '点选色块', '选区画笔', '全不选']) {
       const button = screen.getByRole('button', { name: label });
       expect(button).toHaveClass('w-full');
       expect(screen.getByText(label)).toHaveClass('whitespace-nowrap');
@@ -501,7 +501,7 @@ describe('PalettePanel 双色显示', () => {
     }
   });
 
-  it('选择工具里的选区闪烁按钮只切换前端显示状态', async () => {
+  it('选择工具下方的闪烁开关只切换前端显示状态', async () => {
     const PalettePanel = await importPalettePanel();
 
     useConverterStore.setState({
@@ -517,12 +517,14 @@ describe('PalettePanel 双色显示', () => {
 
     render(<PalettePanel />);
 
-    const blinkButton = screen.getByRole('button', { name: '选区闪烁' });
+    const blinkButton = screen.getByRole('switch', { name: '选区闪烁' });
+    expect(blinkButton).toHaveAttribute('aria-checked', 'false');
     expect(useConverterStore.getState().selectionBlinkEnabled).toBe(false);
 
     fireEvent.click(blinkButton);
     expect(useConverterStore.getState().selectionBlinkEnabled).toBe(true);
-    expect(blinkButton).toHaveAttribute(
+    expect(blinkButton).toHaveAttribute('aria-checked', 'true');
+    expect(blinkButton.parentElement).toHaveAttribute(
       'title',
       '让当前选区整体呼吸闪烁：浅色区块变暗，深色区块发白；仅前端显示，不重新生成预览',
     );
@@ -885,7 +887,9 @@ describe('PalettePanel 双色显示', () => {
 
     render(<PalettePanel />);
 
-    const switches = screen.getAllByRole('switch');
+    const switches = screen.getAllByRole('switch').filter((control) =>
+      screen.getByRole('group', { name: '悬停显示' }).contains(control),
+    );
     expect(switches).toHaveLength(2);
     expect(switches[0]).toHaveAttribute('aria-label');
     expect(switches[1]).toHaveAttribute('aria-label');

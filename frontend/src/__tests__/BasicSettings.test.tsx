@@ -1131,7 +1131,7 @@ describe("BasicSettings", () => {
     });
     const trigger = screen.getByTestId("lut-picker-trigger");
     expect(trigger).toHaveTextContent("A 4C");
-    expect(trigger).toHaveTextContent("B BW");
+    expect(trigger).toHaveTextContent("已选 2 个 LUT");
     fireEvent.click(trigger);
     dialog = screen.getByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "Brand B" }));
@@ -1210,10 +1210,9 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
-    // After catalog loads, Brand B chip should appear on the trigger
+    // Hydration still syncs the picker brand; the summary describes selected LUTs.
     await waitFor(() => {
-      expect(screen.getByTestId("lut-picker-trigger"))
-        .toHaveTextContent("Brand B");
+      expect(useConverterStore.getState().selectedLegacyManufacturer).toBe("Brand B");
     });
   });
 

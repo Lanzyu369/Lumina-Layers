@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import LutPickerDialog, { type LutPickerBrand, type LutPickerOption } from "../ui/LutPickerDialog";
 import { cx, workstationPickerTriggerClass, workstationFieldLabelClass } from "../ui/panelPrimitives";
 
 interface LegacyLutOption {
   label: string;
   value: string;
+  brand?: string;
+  materialType?: string;
 }
 
 interface LegacyLutOptionGroup {
@@ -27,6 +29,7 @@ interface LegacyLutSelectorProps {
   /** Catalog-wide labels for selected LUTs outside the visible brand. */
   allLutOptions?: LegacyLutOption[];
   brandInfo?: LegacyBrandInfo | null;
+  colorModeSummary?: ReactNode;
   onManufacturerChange: (value: string) => void;
   onLutChange: (value: string) => void;
   onLutSelectionChange?: (values: string[]) => void;
@@ -56,6 +59,9 @@ interface LegacyLutSelectorProps {
     dialogConfirm?: string;
     dialogCancel?: string;
     openPicker?: string;
+    change?: string;
+    selectionSummary?: string;
+    moreSelected?: string;
   };
 }
 
@@ -95,6 +101,7 @@ export default function LegacyLutSelector({
   groupedLutOptions,
   allLutOptions,
   brandInfo,
+  colorModeSummary,
   onManufacturerChange,
   onLutChange,
   onLutSelectionChange,
@@ -141,70 +148,63 @@ export default function LegacyLutSelector({
     }
   };
 
-  // Summary chips shown on the trigger button
-  const VISIBLE_LIMIT = 2;
-  const visibleChips = selectedOptions.slice(0, VISIBLE_LIMIT);
-  const overflowCount = selectedCount - visibleChips.length;
+  const primaryOption = selectedOptions[0];
+  const primaryMetadata = primaryOption
+    ? [primaryOption.brand, primaryOption.materialType]
+      .filter((value): value is string => !!value && !primaryOption.label.toLowerCase().includes(value.toLowerCase()))
+      .join(" · ")
+    : "";
+  const selectionSummary = (labels.selectionSummary ?? "Selected {count} LUTs")
+    .replace("{count}", String(selectedCount));
+  const moreSelected = (labels.moreSelected ?? "+{count} more")
+    .replace("{count}", String(selectedCount - 1));
 
-  // Trigger button: shows current brand + selected LUT chips
+  // Empty states describe the next selection step.
   const triggerEmpty = !manufacturer;
   const triggerPlaceholder = loading
     ? labels.loadingHint
     : triggerEmpty
       ? labels.manufacturerPlaceholder
-      : labels.openPicker ?? labels.lutPlaceholder;
+      : labels.lutPlaceholder;
 
   return (
     <div className="flex flex-col gap-2">
       {/* Brand / LUT label row */}
       <span className={workstationFieldLabelClass}>{labels.manufacturer}</span>
 
-      {/* Single trigger button: brand name + selected LUT chips */}
+      {/* Keep the collapsed selection compact; the dialog owns the full list. */}
       <button
         type="button"
         disabled={loading && manufacturerOptions.length === 0}
         onClick={() => setDialogOpen(true)}
         data-testid="lut-picker-trigger"
-        aria-label={labels.manufacturer}
+        aria-haspopup="dialog"
+        aria-expanded={dialogOpen}
         className={cx(
           workstationPickerTriggerClass,
-          "flex min-h-11 items-center justify-between gap-2 text-left",
+          "flex min-h-11 items-center justify-between gap-3 text-left",
           triggerEmpty && "text-slate-400 dark:text-slate-500",
         )}
       >
-        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-          {manufacturer && (
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-              {brandInfo?.displayName ?? manufacturer}
-            </span>
-          )}
-          {visibleChips.map((opt) => (
-            <span
-              key={opt.value}
-              className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-500/15 dark:text-blue-200"
-            >
-              {opt.label}
-            </span>
-          ))}
-          {overflowCount > 0 && (
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-              +{overflowCount}
-            </span>
-          )}
-          {!manufacturer && !loading && (
-            <span className="text-sm text-slate-400 dark:text-slate-500">
-              {triggerPlaceholder}
-            </span>
-          )}
-          {manufacturer && selectedCount === 0 && (
-            <span className="text-sm text-slate-400 dark:text-slate-500">
-              {labels.lutPlaceholder}
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="truncate text-sm font-medium">
+            {selectedCount > 1 ? selectionSummary : primaryOption?.label ?? triggerPlaceholder}
+          </span>
+          {primaryOption && (
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+              {selectedCount > 1 ? (
+                <>
+                  <span className="min-w-0 flex-1 truncate">{primaryOption.label}</span>
+                  <span className="shrink-0">{moreSelected}</span>
+                </>
+              ) : primaryMetadata ? <span>{primaryMetadata}</span> : null}
+              {colorModeSummary}
             </span>
           )}
         </span>
         {selectedCount > 0 && (
-          <span className="shrink-0 text-xs text-slate-400 dark:text-slate-500">
-            {labels.selectedCount ?? "已选"}: {selectedCount}
+          <span className="shrink-0 text-xs font-medium text-blue-600 dark:text-blue-400">
+            {labels.change ?? labels.openPicker ?? labels.manufacturer}
           </span>
         )}
       </button>
