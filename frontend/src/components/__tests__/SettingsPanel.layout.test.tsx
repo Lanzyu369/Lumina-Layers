@@ -189,8 +189,8 @@ describe("SettingsPanel information architecture", () => {
     );
     expect(screen.getByRole("region", { name: /转换与精度/ })).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "转换与精度" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("heading", { name: "转换与精度", level: 2 }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", {
         name: "SVG 清晰度",
@@ -203,8 +203,8 @@ describe("SettingsPanel information architecture", () => {
     );
     expect(screen.getByRole("region", { name: /存储与维护/ })).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "存储与维护" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("heading", { name: "存储与维护", level: 2 }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "缓存管理", level: 3 }),
     ).toBeInTheDocument();

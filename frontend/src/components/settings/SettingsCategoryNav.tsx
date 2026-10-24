@@ -1,5 +1,13 @@
 import { cx } from "../ui/panelPrimitives";
 import { primaryNavTabClass } from "../widget/navTabStyles";
+import { AdjustmentsHorizontalIcon, Cog6ToothIcon, PrinterIcon, CircleStackIcon } from "@heroicons/react/24/outline";
+
+const categoryIcons = {
+  device: PrinterIcon,
+  general: Cog6ToothIcon,
+  conversion: AdjustmentsHorizontalIcon,
+  maintenance: CircleStackIcon,
+};
 
 export type SettingsCategoryId =
   | "device"
@@ -34,10 +42,11 @@ export default function SettingsCategoryNav({
     <nav
       aria-label={ariaLabel}
       data-testid="settings-category-nav"
-      className="dock-scrollbar flex min-h-0 min-w-0 gap-2 overflow-x-auto p-1 lg:max-h-full lg:flex-col lg:self-start lg:overflow-y-auto"
+      className="settings-sidebar dock-scrollbar flex min-h-0 min-w-0 gap-1 overflow-x-auto border-b panel-divider p-3 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:border-b-0 sm:border-r sm:py-6"
     >
       {categories.map((category) => {
         const active = category.id === activeCategory;
+        const Icon = categoryIcons[category.id];
         return (
           <button
             key={category.id}
@@ -49,18 +58,13 @@ export default function SettingsCategoryNav({
             onClick={() => onChange(category.id)}
             className={cx(
               primaryNavTabClass(active, false),
-              "min-h-11 text-left lg:w-full",
+              "flex min-h-11 items-center gap-3 text-left sm:w-full",
               active && "bg-[var(--nav-tab-selected-bg)]",
             )}
           >
-            <span className="block whitespace-nowrap text-sm font-semibold">
+            <Icon aria-hidden="true" className="h-5 w-5 shrink-0" />
+            <span className="block whitespace-nowrap text-sm font-medium">
               {category.label}
-            </span>
-            <span className={cx(
-              "mt-1 hidden text-xs leading-5 lg:block",
-              active ? "text-white/90" : "text-slate-500 dark:text-slate-400",
-            )}>
-              {category.description}
             </span>
           </button>
         );

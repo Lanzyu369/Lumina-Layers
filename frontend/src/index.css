@@ -379,6 +379,22 @@ body.lumina-canvas-orbiting [data-widget-id] {
   border-color: var(--surface-divider);
 }
 
+/* Settings use a continuous split view; only individual controls have shells. */
+.settings-workspace {
+  background: var(--surface-panel);
+}
+
+.settings-sidebar {
+  background: var(--surface-section-muted);
+}
+
+.settings-content .panel-card {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 /* The color editor is a continuous workstation divided into columns and rows. */
 .color-adjustment-workspace .panel-card {
   border: 0;

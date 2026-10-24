@@ -6,7 +6,6 @@
 import { motion } from "framer-motion";
 import { useState, useEffect, useCallback } from "react";
 import { useI18n } from "../i18n/context";
-import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import { apiErrorToVisibleMessage } from "../api/client";
 import { clearCache, getMachineRegistryAssetUrl, getPrinters, getSlicers } from "../api/system";
 import {
@@ -59,7 +58,6 @@ import SettingsCategoryNav, {
 } from "./settings/SettingsCategoryNav";
 import {
   StatusBanner,
-  cardPadClass,
   dependentGroupClass,
   workstationInputClass,
 } from "./ui/panelPrimitives";
@@ -106,7 +104,6 @@ function formatSettingsOptionsLoadError(template: string, error: unknown): strin
 
 export default function SettingsPanel() {
   const { t } = useI18n();
-  const workspace = useWorkspaceMode();
 
   const [clearing, setClearing] = useState(false);
   const [cacheResult, setCacheResult] = useState<string | null>(null);
@@ -602,9 +599,9 @@ export default function SettingsPanel() {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="settings-panel"
-      className={`panel-surface flex h-full min-h-0 w-full flex-col overflow-hidden px-3 py-3 sm:px-5 sm:py-4 lg:px-7 lg:py-5 ${workspace.isCompact ? "sm:px-4" : ""}`}
+      className="settings-workspace flex h-full min-h-0 w-full flex-col overflow-hidden"
     >
-      <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-5 lg:grid-cols-[14rem_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] sm:grid-cols-[12rem_minmax(0,1fr)] sm:grid-rows-[minmax(0,1fr)] lg:grid-cols-[15rem_minmax(0,1fr)]">
         <SettingsCategoryNav
           ariaLabel={t("settings.category_nav_label")}
           categories={settingsCategories}
@@ -618,11 +615,19 @@ export default function SettingsPanel() {
           role="region"
           aria-labelledby={`settings-category-${activeCategory}`}
           tabIndex={0}
-          className="dock-scrollbar min-h-0 min-w-0 overflow-auto"
+          className="dock-scrollbar min-h-0 min-w-0 overflow-auto px-5 py-6 sm:px-7 lg:px-10"
         >
+          <header className="mx-auto mb-7 w-full max-w-4xl border-b panel-divider pb-5">
+            <h2 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+              {settingsCategories.find((category) => category.id === activeCategory)?.label}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              {settingsCategories.find((category) => category.id === activeCategory)?.description}
+            </p>
+          </header>
           {activeCategory === "device" && (
             <section
-              className={`${cardPadClass} flex flex-col gap-5`}
+              className="settings-content mx-auto flex w-full max-w-4xl flex-col gap-5"
             >
               <div>
                 <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-slate-50">
@@ -672,7 +677,7 @@ export default function SettingsPanel() {
 
               <div
                 data-testid="machine-adapter-summary"
-                className="panel-well grid gap-4 rounded-[10px] p-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
+                className="grid gap-4 py-1 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
               >
                 <div className="flex min-w-0 items-center gap-4">
                   <div
@@ -842,7 +847,7 @@ export default function SettingsPanel() {
                 {manualSetupOpen && (
                   <div
                     id="settings-manual-slicer-setup"
-                    className="panel-well mt-2 flex flex-col gap-3 rounded-[10px] p-3"
+                    className="mt-2 flex flex-col gap-3 border-t panel-divider py-4"
                   >
                     <div>
                       <label
@@ -897,7 +902,7 @@ export default function SettingsPanel() {
 
           {activeCategory === "general" && (
             <section
-              className={`${cardPadClass} flex flex-col gap-5`}
+              className="settings-content mx-auto flex w-full max-w-4xl flex-col gap-5"
             >
               <div data-testid="settings-language-section">
                 <Dropdown
@@ -1009,7 +1014,7 @@ export default function SettingsPanel() {
           {activeCategory === "conversion" && (
             <section
               data-testid="settings-advanced-section"
-              className={`${cardPadClass} flex flex-col gap-5`}
+              className="settings-content mx-auto flex w-full max-w-4xl flex-col gap-5"
             >
               <div
                 data-testid="settings-solver-cache-density-section"
@@ -1167,7 +1172,7 @@ export default function SettingsPanel() {
 
           {activeCategory === "maintenance" && (
             <section
-              className={`${cardPadClass} flex flex-col gap-5`}
+              className="settings-content mx-auto flex w-full max-w-4xl flex-col gap-5"
             >
               <div className="flex flex-col gap-4">
                 <div>
