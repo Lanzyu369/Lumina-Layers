@@ -1,3 +1,4 @@
+import type { PresetNameError, SavePresetResult } from "../conversionPreferences";
 import type { ApiRequestOptions } from "../../api/client";
 import type {
   AutoHeightMode,
@@ -148,6 +149,8 @@ export interface ConverterState {
   imageFile: File | null;
   imagePreviewUrl: string | null;
   aspectRatio: number | null;
+  preferredSizeAxis: "width" | "height";
+  conversionParameterContext: "defaults" | "restoring" | "project";
   workshopSource: WorkshopRecipeSource | null;
 
   // 模型覆面
@@ -478,6 +481,12 @@ export interface ConverterState {
 // ========== Actions Interface ==========
 
 export interface ConverterActions {
+  restoreConversionDefaults: () => void;
+  applyConversionPreset: (id: string | null) => boolean;
+  saveConversionPreset: (name: string) => SavePresetResult;
+  updateConversionPreset: (id: string) => boolean;
+  renameConversionPreset: (id: string, name: string) => PresetNameError | "missing-preset" | null;
+  deleteConversionPreset: (id: string) => void;
   // 图片
   setImageFile: (file: File | null) => void;
   rotateImageForExport: (degrees: ImageRotationDegrees) => Promise<void>;

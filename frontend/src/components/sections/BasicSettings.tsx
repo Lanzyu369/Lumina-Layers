@@ -19,6 +19,7 @@ import type { SavedMaterialLibraryItem } from "../../api/types";
 import { listGradientCardMaterials } from "../../api/extractor";
 import { reconcileDirectoryNames } from "../../utils/materialDirectoryMigration";
 import UnifiedUploader from "../ui/UnifiedUploader";
+import ConversionPresets from "./ConversionPresets";
 import Checkbox from "../ui/Checkbox";
 import Dropdown from "../ui/Dropdown";
 import Slider from "../ui/Slider";
@@ -1035,6 +1036,8 @@ export default function BasicSettings() {
         </button>
       )}
       </div>
+
+      <ConversionPresets />
 
       {workshopSource ? (
         <WorkshopSourceBanner

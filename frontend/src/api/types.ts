@@ -2312,6 +2312,7 @@ export interface PrinterListResponse {
 // ========== Settings Models ==========
 
 export interface UserSettings {
+  conversion_preferences?: import("../stores/conversionPreferences").ConversionPreferences | null;
   custom_3mf_template_id?: string | null;
   language: "zh" | "en";
   theme: "light" | "dark";
