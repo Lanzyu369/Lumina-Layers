@@ -24,6 +24,7 @@ import {
   type CanvasPreviewRenderingQuality,
 } from "./canvasPreviewUtils"
 import { useI18n } from "../../i18n/context"
+import { wheelZoomDelta, wheelZoomFactor } from "../../utils/wheelZoom"
 import {
   useSpacePanModifier,
   type SpacePanDeactivateReason,
@@ -506,10 +507,12 @@ export default function CanvasPreviewSurface({
       x: event.clientX - rect.left,
       y: event.clientY - rect.top,
     }
+    if (!Number.isFinite(event.deltaY) || event.deltaY === 0) {
+      return
+    }
+    const deltaPixels = wheelZoomDelta(event.deltaY, event.deltaMode, rect.height)
     const nextScale = clampCanvasPreviewScale(
-      wheelZoomStepMultiplier
-        ? scale * (event.deltaY < 0 ? wheelZoomStepMultiplier : 1 / wheelZoomStepMultiplier)
-        : scale * (1 - event.deltaY * wheelZoomSensitivity),
+      scale * wheelZoomFactor(deltaPixels, wheelZoomStepMultiplier ?? Math.exp(100 * wheelZoomSensitivity)),
       minScale,
       maxScale,
     )
