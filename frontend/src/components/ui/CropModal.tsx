@@ -9,6 +9,7 @@ import { useI18n } from "../../i18n/context";
 import type { ImageRotationDegrees } from "../../utils/imageRotation";
 import Button from "./Button";
 import { compactFieldClass, cx } from "./panelPrimitives";
+import { wheelZoomDelta, wheelZoomFactor } from "../../utils/wheelZoom";
 
 // ========== Types ==========
 
@@ -60,6 +61,7 @@ export function CropModal({
 }: CropModalProps) {
   const { t } = useI18n();
   const cropperRef = useRef<ReactCropperElement>(null);
+  const cropAreaRef = useRef<HTMLDivElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
@@ -137,6 +139,28 @@ export function CropModal({
   }, [open, onClose]);
 
   // ---------- Cropper callbacks ----------
+
+  useEffect(() => {
+    const area = cropAreaRef.current;
+    if (!open || !area) return;
+    const handleWheel = (event: WheelEvent) => {
+      const cropper = cropperRef.current?.cropper;
+      if (!cropper) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const delta = wheelZoomDelta(event.deltaY, event.deltaMode, area.clientHeight);
+      if (delta === 0) return;
+      const canvas = cropper.getCanvasData();
+      if (!(canvas.naturalWidth > 0) || !(canvas.width > 0)) return;
+      const rect = (area.querySelector(".cropper-container") ?? area).getBoundingClientRect();
+      cropper.zoomTo(canvas.width / canvas.naturalWidth * wheelZoomFactor(delta), {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      });
+    };
+    area.addEventListener("wheel", handleWheel, { passive: false });
+    return () => area.removeEventListener("wheel", handleWheel);
+  }, [open]);
 
   const handleCropEvent = useCallback(() => {
     if (isManualInputRef.current) return;
@@ -268,6 +292,7 @@ export function CropModal({
         </div>
 
         {/* Cropper area */}
+        <div ref={cropAreaRef} className="h-[42vh] shrink-0 overflow-hidden px-4 py-3">
           <ReactCropper
             ref={cropperRef}
             src={imageSrc}
@@ -277,6 +302,7 @@ export function CropModal({
             autoCrop={allowCrop}
             autoCropArea={1}
             responsive={true}
+            zoomOnWheel={false}
             guides={true}
             crop={handleCropEvent}
             ready={handleReady}
