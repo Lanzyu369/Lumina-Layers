@@ -148,7 +148,7 @@ export default function Slider(props: SliderProps) {
         )}
         <div
           className={cx(
-            "flex shrink-0 items-center gap-1 rounded-[8px] border border-transparent bg-[var(--surface-well)] pr-1.5 transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-[var(--focus-ring)]",
+            "slider-value-field flex shrink-0 items-center gap-1 rounded-[8px] border border-transparent bg-[var(--surface-well)] pr-1.5 transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-[var(--focus-ring)]",
             disabled && "cursor-not-allowed opacity-45",
           )}
         >

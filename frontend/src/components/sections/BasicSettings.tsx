@@ -47,8 +47,8 @@ import {
 } from "../../recipe/importRecipe";
 import {
   StatusBanner,
-  blockHeaderClass,
-  blockHeaderRuleClass,
+  settingsGroupClass,
+  settingsGroupHeadingClass,
   dependentGroupClass,
   groupHeaderClass,
   workstationInputClass,
@@ -215,41 +215,26 @@ function legacyBucketLabel(bucket: ColorModeBucket, t: (key: string) => string):
   return key ? t(key) : bucket;
 }
 
-/**
- * Everything in this column is named by a label-plus-rule, not by a heading
- * weight: the panel title already tops the hierarchy, so an inner heading that
- * grows bigger or bolder only competes with it and with the field labels below.
- * 这一列的所有分组都用「文字 + 细线」命名，不再用字重取胜：面板标题已经在最
- * 上层，内层标题再加大加粗只会同时跟它和下面的字段标签抢注意力。
- */
 /** Sub-group inside a block (e.g. model-assisted matching under a brand). */
 function SubGroupHeading({ label }: { label: string }) {
   return <p className={groupHeaderClass}>{label}</p>;
 }
 
-/** Names a block: the label, then a hairline trailing to the right edge. */
-function BlockRule({ label }: { label: string }) {
-  return (
-    <p className={blockHeaderClass}>
-      <span className="shrink-0">{label}</span>
-      <span aria-hidden="true" className={blockHeaderRuleClass} />
-    </p>
-  );
-}
-
-/** A named block: the label-plus-rule, then its controls. */
+/** A borderless tinted group; radio groups provide their own heading. */
 function Block({
   label,
   children,
   className,
+  tutorial,
 }: {
-  label: string;
+  label?: string;
   children: React.ReactNode;
   className?: string;
+  tutorial?: string;
 }) {
   return (
-    <div className={cx("flex flex-col gap-3", className)}>
-      <BlockRule label={label} />
+    <div data-tutorial={tutorial} className={cx(settingsGroupClass, !label && "settings-choice-group", className)}>
+      {label && <p className={settingsGroupHeadingClass}>{label}</p>}
       {children}
     </div>
   );
@@ -1068,8 +1053,7 @@ export default function BasicSettings() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div data-tutorial="image-upload" className="flex flex-col gap-3">
-        <BlockRule label={t("basic_group_input")} />
+      <Block label={t("basic_group_input")} tutorial="image-upload">
         {uploaderExpanded ? (
           <UnifiedUploader
             singlePreview={imagePreviewUrl ?? undefined}
@@ -1145,10 +1129,9 @@ export default function BasicSettings() {
           onClose={() => setCropModalOpen(false)}
           isLoading={isCropping || isLoading}
         />
-      </div>
+      </Block>
 
-      <div data-tutorial="color-source" className="flex flex-col gap-4">
-        <BlockRule label={t("basic_group_color_source")} />
+      <Block label={t("basic_group_color_source")} tutorial="color-source">
         <RadioGroup
           label={t("basic_source_version_label")}
           tooltip={t("basic_source_version_hint")}
@@ -1157,222 +1140,222 @@ export default function BasicSettings() {
           options={sourceVersionOptions}
           onChange={(value) => setSourceVersion(value as "legacy" | "material")}
         />
-      </div>
 
-      {source_version === "material" ? (
-        <div className={dependentGroupClass}>
-          <SubGroupHeading label={t("basic_material_select_label")} />
+        {source_version === "material" ? (
+          <div className={dependentGroupClass}>
+            <SubGroupHeading label={t("basic_material_select_label")} />
 
-          <button
-            type="button"
-            onClick={() => setMaterialPickerOpen(true)}
-            data-testid="material-picker-trigger"
-            className={`${workstationInputClass} flex items-center justify-between gap-3 text-left`}
-          >
-            <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-              {materialSummary === null ? (
-                <span className="text-slate-400 dark:text-slate-500">
-                  {t("basic_material_picker_open")}
-                </span>
-              ) : (
-                <>
-                  {materialSummary.visible.map((name) => (
-                    <span
-                      key={name}
-                      className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                    >
-                      {name}
-                    </span>
-                  ))}
-                  {materialSummary.more && (
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                      {materialSummary.more}
-                    </span>
-                  )}
-                </>
-              )}
-            </span>
-            <span className="shrink-0 text-xs text-slate-400 dark:text-slate-500">
-              {t("basic_material_selected_count")}: {selectedMaterialDirNames.length}
-            </span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setMaterialPickerOpen(true)}
+              data-testid="material-picker-trigger"
+              className={`${workstationInputClass} flex items-center justify-between gap-3 text-left`}
+            >
+              <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+                {materialSummary === null ? (
+                  <span className="text-slate-400 dark:text-slate-500">
+                    {t("basic_material_picker_open")}
+                  </span>
+                ) : (
+                  <>
+                    {materialSummary.visible.map((name) => (
+                      <span
+                        key={name}
+                        className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                      >
+                        {name}
+                      </span>
+                    ))}
+                    {materialSummary.more && (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                        {materialSummary.more}
+                      </span>
+                    )}
+                  </>
+                )}
+              </span>
+              <span className="shrink-0 text-xs text-slate-400 dark:text-slate-500">
+                {t("basic_material_selected_count")}: {selectedMaterialDirNames.length}
+              </span>
+            </button>
 
-          <MaterialPickerDialog
-            open={materialPickerOpen}
-            materials={materialLibrary}
-            loading={materialLibraryLoading}
-            loadError={materialLibraryLoadError}
-            initialSelected={selectedMaterialDirNames}
-            onConfirm={handleMaterialPickerConfirm}
-            onCancel={() => setMaterialPickerOpen(false)}
-            onRetry={retryMaterialLibraryLoad}
-          />
+            <MaterialPickerDialog
+              open={materialPickerOpen}
+              materials={materialLibrary}
+              loading={materialLibraryLoading}
+              loadError={materialLibraryLoadError}
+              initialSelected={selectedMaterialDirNames}
+              onConfirm={handleMaterialPickerConfirm}
+              onCancel={() => setMaterialPickerOpen(false)}
+              onRetry={retryMaterialLibraryLoad}
+            />
 
-          <Checkbox
-            label={t("basic_material_dynamic_layer_count_label")}
-            tooltip={t("basic_material_dynamic_layer_count_hint")}
-            wikiPath={WIKI_DOCS.materialArchiveSource}
-            checked={materialDynamicLayerCountEnabled}
-            onChange={setMaterialDynamicLayerCountEnabled}
-          />
-
-          {materialDynamicLayerCountEnabled ? (
-            <>
-              <Slider
-                label={t("basic_material_min_layer_count_label")}
-                tooltip={t("basic_material_min_layer_count_hint")}
-                wikiPath={WIKI_DOCS.materialArchiveSource}
-                value={materialMinLayerCount}
-                min={MATERIAL_DYNAMIC_LAYER_COUNT_MIN}
-                max={MATERIAL_DYNAMIC_LAYER_COUNT_MAX}
-                step={1}
-                onChange={(v) => setMaterialMinLayerCount(Math.round(v))}
-              />
-              <Slider
-                label={t("basic_material_max_layer_count_label")}
-                tooltip={t("basic_material_max_layer_count_hint")}
-                wikiPath={WIKI_DOCS.materialArchiveSource}
-                value={materialMaxLayerCount}
-                min={MATERIAL_DYNAMIC_LAYER_COUNT_MIN}
-                max={MATERIAL_DYNAMIC_LAYER_COUNT_MAX}
-                step={1}
-                onChange={(v) => setMaterialMaxLayerCount(Math.round(v))}
-              />
-              <StatusBanner tone="info">
-                {t("basic_material_dynamic_range_status")}
-              </StatusBanner>
-            </>
-          ) : (
-            <Slider
-              label={t("basic_material_layer_count_label")}
-              tooltip={t("basic_material_layer_count_hint")}
+            <Checkbox
+              label={t("basic_material_dynamic_layer_count_label")}
+              tooltip={t("basic_material_dynamic_layer_count_hint")}
               wikiPath={WIKI_DOCS.materialArchiveSource}
-              value={materialLayerCount}
-              min={5}
-              max={10}
-              step={1}
-              onChange={(v) => setMaterialLayerCount(Math.round(v))}
+              checked={materialDynamicLayerCountEnabled}
+              onChange={setMaterialDynamicLayerCountEnabled}
             />
-          )}
 
-          <Dropdown
-            label={t("basic_material_layer_height_label")}
-            tooltip={t("basic_material_layer_height_hint")}
-            wikiPath={WIKI_DOCS.materialArchiveSource}
-            value={String(materialLayerHeightMm)}
-            options={materialLayerHeightOptions}
-            onChange={(v) => setMaterialLayerHeightMm(Number(v))}
-          />
-
-          <Dropdown
-            label={t("basic_material_backing_label")}
-            tooltip={t("basic_material_backing_hint")}
-            wikiPath={WIKI_DOCS.materialArchiveSource}
-            value={resolvedMaterialBackingDirName}
-            options={materialBackingOptions}
-            onChange={(v) => setMaterialBackingMaterialDirName(v || null)}
-            disabled={selectedMaterialDirNames.length === 0}
-            placeholder={t("basic_material_backing_placeholder")}
-          />
-
-          {!materialDynamicLayerCountEnabled && (
-            <MaterialSolverCacheDialog
-              materialDirectoryNames={selectedMaterialDirNames}
-              layerCount={materialLayerCount}
-              layerHeightMm={materialLayerHeightMm}
-            />
-          )}
-        </div>
-      ) : source_version === "legacy" && !isPredictiveLutSource(selectedLutInfo?.source_kind) ? (
-        <>
-          <LegacyLutSelector
-            manufacturer={selectedLegacyManufacturer}
-            lutName={lut_name}
-            selectedLutNames={lut_names.length > 0 ? lut_names : (lut_name ? [lut_name] : [])}
-            manufacturerOptions={manufacturerOptions}
-            groupedLutOptions={groupedLutOptions}
-            allLutOptions={allLegacyLutOptions}
-            brandInfo={selectedLegacyBrandInfo}
-            onManufacturerChange={setLegacyManufacturer}
-            onLutChange={setLutName}
-            onLutSelectionChange={setLegacyLutNames}
-            onRefresh={() => void handleRefreshLut()}
-            onUploadClick={() => lutFileRef.current?.click()}
-            loading={legacyCatalogLoading}
-            lutLoading={lutListLoading}
-            refreshing={isRefreshingLut}
-            labels={{
-              manufacturer: t("basic_lut_manufacturer_label"),
-              manufacturerPlaceholder: t("basic_lut_manufacturer_placeholder"),
-              lutPlaceholder: t("basic_lut_lut_placeholder"),
-              refreshTooltip: t("basic_lut_refresh_tooltip"),
-              upload: `+ ${t("basic_lut_upload")}`,
-              loadingHint: t("basic_brand_loading"),
-              noBrandHint: t("basic_lut_no_brand_hint"),
-              selectedCount: t("basic_lut_selected_count"),
-              brandInfo: t("basic_native_brand_summary_label"),
-              materialType: t("basic_native_material_label"),
-              vendor: t("basic_native_vendor_label"),
-              dialogTitle: t("basic_lut_picker_title"),
-              dialogSearchPlaceholder: t("basic_lut_picker_search_placeholder"),
-              dialogAllGroups: t("basic_lut_picker_all_groups"),
-              dialogNoMatch: t("basic_lut_picker_no_match"),
-              dialogDeselectAll: t("basic_lut_picker_deselect_all"),
-              dialogConfirm: t("basic_lut_picker_confirm"),
-              dialogCancel: t("basic_lut_picker_cancel"),
-              openPicker: t("basic_lut_picker_open"),
-            }}
-          />
-          <input
-            ref={lutFileRef}
-            type="file"
-            accept=".npy,.json,.npz,.msgpack"
-            className="hidden"
-            onChange={(e) => void handleLutUpload(e)}
-          />
-
-          {lut_name && (
-            <div className="px-1 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-              <span>{t("basic_color_mode_label")}:</span>
-              <ColorModeDots mode={color_mode} />
-              <span>{color_mode}</span>
-            </div>
-          )}
-
-          {lut_name && selectedLutInfo && supportsDynamicLayers && (
-            <div className={dependentGroupClass}>
+            {materialDynamicLayerCountEnabled ? (
+              <>
+                <Slider
+                  label={t("basic_material_min_layer_count_label")}
+                  tooltip={t("basic_material_min_layer_count_hint")}
+                  wikiPath={WIKI_DOCS.materialArchiveSource}
+                  value={materialMinLayerCount}
+                  min={MATERIAL_DYNAMIC_LAYER_COUNT_MIN}
+                  max={MATERIAL_DYNAMIC_LAYER_COUNT_MAX}
+                  step={1}
+                  onChange={(v) => setMaterialMinLayerCount(Math.round(v))}
+                />
+                <Slider
+                  label={t("basic_material_max_layer_count_label")}
+                  tooltip={t("basic_material_max_layer_count_hint")}
+                  wikiPath={WIKI_DOCS.materialArchiveSource}
+                  value={materialMaxLayerCount}
+                  min={MATERIAL_DYNAMIC_LAYER_COUNT_MIN}
+                  max={MATERIAL_DYNAMIC_LAYER_COUNT_MAX}
+                  step={1}
+                  onChange={(v) => setMaterialMaxLayerCount(Math.round(v))}
+                />
+                <StatusBanner tone="info">
+                  {t("basic_material_dynamic_range_status")}
+                </StatusBanner>
+              </>
+            ) : (
               <Slider
-                label={t("basic_color_layers_label")}
-                tooltip={t("basic_color_layers_hint")}
-                wikiPath={WIKI_DOCS.legacyLutSource}
-                value={color_layers ?? selectedLutInfo.max_color_layers ?? 5}
-                min={1}
+                label={t("basic_material_layer_count_label")}
+                tooltip={t("basic_material_layer_count_hint")}
+                wikiPath={WIKI_DOCS.materialArchiveSource}
+                value={materialLayerCount}
+                min={5}
                 max={10}
                 step={1}
-                onChange={(value) => setColorLayers(Math.round(value))}
+                onChange={(v) => setMaterialLayerCount(Math.round(v))}
               />
-              <Dropdown
-                label={t("basic_layer_height_label")}
-                tooltip={t("basic_layer_height_hint")}
-                wikiPath={WIKI_DOCS.legacyLutSource}
-                value={String(layer_height_mm ?? selectedLutInfo.layer_height_mm ?? 0.08)}
-                options={supportedLayerHeightOptions}
-                onChange={(value) => setLayerHeightMm(Number(value))}
-              />
-              {supportedModes.length > 0 && (
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {t("basic_supported_modes_label")}:{" "}
-                  {supportedModes
-                    .map((mode) => `${mode.color_layers}L @ ${mode.layer_height_mm.toFixed(2)}mm`)
-                    .join(", ")}
-                </p>
-              )}
-            </div>
-          )}
-        </>
-      ) : null}
+            )}
 
-      <QuantizeColorsControl />
+            <Dropdown
+              label={t("basic_material_layer_height_label")}
+              tooltip={t("basic_material_layer_height_hint")}
+              wikiPath={WIKI_DOCS.materialArchiveSource}
+              value={String(materialLayerHeightMm)}
+              options={materialLayerHeightOptions}
+              onChange={(v) => setMaterialLayerHeightMm(Number(v))}
+            />
+
+            <Dropdown
+              label={t("basic_material_backing_label")}
+              tooltip={t("basic_material_backing_hint")}
+              wikiPath={WIKI_DOCS.materialArchiveSource}
+              value={resolvedMaterialBackingDirName}
+              options={materialBackingOptions}
+              onChange={(v) => setMaterialBackingMaterialDirName(v || null)}
+              disabled={selectedMaterialDirNames.length === 0}
+              placeholder={t("basic_material_backing_placeholder")}
+            />
+
+            {!materialDynamicLayerCountEnabled && (
+              <MaterialSolverCacheDialog
+                materialDirectoryNames={selectedMaterialDirNames}
+                layerCount={materialLayerCount}
+                layerHeightMm={materialLayerHeightMm}
+              />
+            )}
+          </div>
+        ) : source_version === "legacy" && !isPredictiveLutSource(selectedLutInfo?.source_kind) ? (
+          <>
+            <LegacyLutSelector
+              manufacturer={selectedLegacyManufacturer}
+              lutName={lut_name}
+              selectedLutNames={lut_names.length > 0 ? lut_names : (lut_name ? [lut_name] : [])}
+              manufacturerOptions={manufacturerOptions}
+              groupedLutOptions={groupedLutOptions}
+              allLutOptions={allLegacyLutOptions}
+              brandInfo={selectedLegacyBrandInfo}
+              onManufacturerChange={setLegacyManufacturer}
+              onLutChange={setLutName}
+              onLutSelectionChange={setLegacyLutNames}
+              onRefresh={() => void handleRefreshLut()}
+              onUploadClick={() => lutFileRef.current?.click()}
+              loading={legacyCatalogLoading}
+              lutLoading={lutListLoading}
+              refreshing={isRefreshingLut}
+              labels={{
+                manufacturer: t("basic_lut_manufacturer_label"),
+                manufacturerPlaceholder: t("basic_lut_manufacturer_placeholder"),
+                lutPlaceholder: t("basic_lut_lut_placeholder"),
+                refreshTooltip: t("basic_lut_refresh_tooltip"),
+                upload: `+ ${t("basic_lut_upload")}`,
+                loadingHint: t("basic_brand_loading"),
+                noBrandHint: t("basic_lut_no_brand_hint"),
+                selectedCount: t("basic_lut_selected_count"),
+                brandInfo: t("basic_native_brand_summary_label"),
+                materialType: t("basic_native_material_label"),
+                vendor: t("basic_native_vendor_label"),
+                dialogTitle: t("basic_lut_picker_title"),
+                dialogSearchPlaceholder: t("basic_lut_picker_search_placeholder"),
+                dialogAllGroups: t("basic_lut_picker_all_groups"),
+                dialogNoMatch: t("basic_lut_picker_no_match"),
+                dialogDeselectAll: t("basic_lut_picker_deselect_all"),
+                dialogConfirm: t("basic_lut_picker_confirm"),
+                dialogCancel: t("basic_lut_picker_cancel"),
+                openPicker: t("basic_lut_picker_open"),
+              }}
+            />
+            <input
+              ref={lutFileRef}
+              type="file"
+              accept=".npy,.json,.npz,.msgpack"
+              className="hidden"
+              onChange={(e) => void handleLutUpload(e)}
+            />
+
+            {lut_name && (
+              <div className="px-1 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <span>{t("basic_color_mode_label")}:</span>
+                <ColorModeDots mode={color_mode} />
+                <span>{color_mode}</span>
+              </div>
+            )}
+
+            {lut_name && selectedLutInfo && supportsDynamicLayers && (
+              <div className={dependentGroupClass}>
+                <Slider
+                  label={t("basic_color_layers_label")}
+                  tooltip={t("basic_color_layers_hint")}
+                  wikiPath={WIKI_DOCS.legacyLutSource}
+                  value={color_layers ?? selectedLutInfo.max_color_layers ?? 5}
+                  min={1}
+                  max={10}
+                  step={1}
+                  onChange={(value) => setColorLayers(Math.round(value))}
+                />
+                <Dropdown
+                  label={t("basic_layer_height_label")}
+                  tooltip={t("basic_layer_height_hint")}
+                  wikiPath={WIKI_DOCS.legacyLutSource}
+                  value={String(layer_height_mm ?? selectedLutInfo.layer_height_mm ?? 0.08)}
+                  options={supportedLayerHeightOptions}
+                  onChange={(value) => setLayerHeightMm(Number(value))}
+                />
+                {supportedModes.length > 0 && (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {t("basic_supported_modes_label")}:{" "}
+                    {supportedModes
+                      .map((mode) => `${mode.color_layers}L @ ${mode.layer_height_mm.toFixed(2)}mm`)
+                      .join(", ")}
+                  </p>
+                )}
+              </div>
+            )}
+          </>
+        ) : null}
+
+        <QuantizeColorsControl />
+      </Block>
 
       <Block label={t("basic_block_size_and_base_plate")} className="gap-y-4">
         <div className="flex flex-col gap-3">
@@ -1527,7 +1510,7 @@ export default function BasicSettings() {
         )}
       </Block>
 
-      <Block label={t("basic_block_structure")}>
+      <Block>
         <RadioGroup
           label={t("basic_structure_mode")}
           tooltip={t("basic_structure_mode_hint")}
@@ -1551,7 +1534,7 @@ export default function BasicSettings() {
         )}
       </Block>
 
-      <Block label={t("basic_block_modeling")}>
+      <Block>
         <RadioGroup
           label={t("basic_modeling_mode")}
           tooltip={t("basic_modeling_mode_hint")}

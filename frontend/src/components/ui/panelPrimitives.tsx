@@ -51,19 +51,12 @@ export const cardDividerClass =
 export const groupHeaderClass =
   "flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400";
 
-/** Block header: label, then a hairline that trails off to the right edge.
- *  The label matches the option text size (text-sm) with semibold weight. The trailing
- *  rule — not the fill and not extra size — is what separates the block from
- *  the one above it. A tinted strip would read as a disabled field here, since
- *  `--surface-well` is already the input background.
- * 区块标题：标题在前，一条细线向右延伸。标题与选项字号一致（text-sm 半粗），
- *  因为分隔由后面那条线承担，不靠填充也不靠放大字号。这界面里浅色填充已经
- *  等于输入框底色，用灰带会被读成一个禁用的控件。 */
-export const blockHeaderClass =
-  "flex items-center gap-2 text-sm font-semibold text-slate-600 dark:text-slate-50";
+/** Settings sections use one continuous tinted surface around their controls. */
+export const settingsGroupClass =
+  "settings-group flex min-w-0 flex-col gap-3 rounded-[10px] bg-[var(--surface-well)] p-3";
 
-export const blockHeaderRuleClass =
-  "h-px min-w-4 flex-1 origin-center scale-y-50 bg-slate-600 dark:bg-slate-200";
+export const settingsGroupHeadingClass =
+  "text-sm font-semibold text-slate-800 dark:text-slate-100";
 
 export const workstationFieldLabelClass =
   "text-sm font-medium text-slate-700 dark:text-slate-200";

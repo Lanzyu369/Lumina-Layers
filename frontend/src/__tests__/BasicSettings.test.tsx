@@ -711,10 +711,10 @@ describe("BasicSettings", () => {
 
     for (const block of [
       "导入",
-      "颜色来源",
+      "颜色设置",
       "尺寸和底板",
-      "结构",
-      "建模",
+      "结构模式",
+      "建模模式",
     ]) {
       expect(screen.getByText(block)).toBeInTheDocument();
     }

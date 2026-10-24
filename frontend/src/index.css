@@ -320,6 +320,20 @@ body.lumina-canvas-orbiting [data-widget-id] {
   border: 1px solid transparent;
 }
 
+/* A light field stays distinct from the continuous settings-group surface. */
+.settings-group .slider-value-field {
+  background: var(--surface-card);
+}
+
+.settings-choice-group > fieldset > div:first-child > span:first-child {
+  font-weight: 600;
+  color: var(--color-slate-800);
+}
+
+.dark .settings-choice-group > fieldset > div:first-child > span:first-child {
+  color: var(--color-slate-100);
+}
+
 .panel-divider {
   border-color: var(--surface-divider);
 }

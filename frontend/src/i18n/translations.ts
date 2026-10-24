@@ -5722,8 +5722,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Import",
   },
   basic_group_color_source: {
-    zh: "颜色来源",
-    en: "Color Source",
+    zh: "颜色设置",
+    en: "Color Settings",
   },
   basic_group_output_size: {
     zh: "输出尺寸",
