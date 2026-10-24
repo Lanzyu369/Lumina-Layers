@@ -1,9 +1,13 @@
+import "./LutDetailsPanel.css";
+import HelpDot from "./ui/HelpDot";
+import CloseButton from "./ui/CloseButton";
+import DisclosureSummary from "./ui/DisclosureSummary";
 import { memo, startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { useI18n } from "../i18n/context";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import Dropdown from "./ui/Dropdown";
-import { StatusBanner, cardPadClass, desktopPrimaryColumnClass, desktopSecondaryColumnClass, resolveDesktopSplitLayoutClass, resolvePanelSurfaceClass, wellClass, wellPadClass } from "./ui/panelPrimitives";
+import { StatusBanner, cardPadClass, resolvePanelSurfaceClass, wellClass, wellPadClass } from "./ui/panelPrimitives";
 import { useLutDetailsStore, filterLutDetailsCatalog } from "../stores/lutDetailsStore";
 import {
   LutScatterChart,
@@ -80,16 +84,18 @@ function renderErrorMessage(error: string, t: (key: string) => string): string {
 function InfoField({
   label,
   value,
+  fullWidth = false,
 }: {
   label: string;
   value: string;
+  fullWidth?: boolean;
 }) {
   return (
-    <div className={`${wellPadClass} px-3 py-2`}>
-      <dt className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+    <div className={`lut-details-field min-w-0 ${fullWidth ? "col-span-full" : ""}`}>
+      <dt className="text-xs text-slate-500 dark:text-slate-400">
         {label}
       </dt>
-      <dd className="mt-1 break-all text-sm leading-6 text-slate-800 dark:text-slate-100">
+      <dd className="mt-1 break-words [overflow-wrap:anywhere] text-sm leading-5 text-slate-800 dark:text-slate-100">
         {value}
       </dd>
     </div>
@@ -646,22 +652,23 @@ const LutDetailsLoadedPrimaryColumn = memo(function LutDetailsLoadedPrimaryColum
           </div>
           {detailLoading ? <span className="text-xs text-slate-500 dark:text-slate-400">{t("lut_details_loading")}</span> : null}
         </div>
-        <dl className="grid gap-3 sm:grid-cols-2">
-          <InfoField label={t("lut_details_summary_name")} value={detail.name} />
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+          <InfoField fullWidth label={t("lut_details_summary_name")} value={detail.name} />
           <InfoField label={t("lut_details_summary_manufacturer")} value={detail.manufacturer} />
           <InfoField label={t("lut_details_summary_material")} value={detail.material_type} />
           <InfoField label={t("lut_details_summary_color_mode")} value={detail.color_mode} />
           <InfoField label={t("lut_details_summary_color_count")} value={String(detail.color_count)} />
           <InfoField label={t("lut_details_summary_source_kind")} value={detail.source_kind} />
-          <InfoField label={t("lut_details_summary_path")} value={detail.path} />
+          <InfoField fullWidth label={t("lut_details_summary_path")} value={detail.path} />
         </dl>
       </section>
+      <LutDetailsPalette detail={detail} t={t} />
       <section className={`${cardPadClass} flex flex-col gap-4`}>
         <div>
           <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{t("lut_details_metadata_title")}</h3>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{t("lut_details_metadata_desc")}</p>
         </div>
-        <dl className="grid gap-3 sm:grid-cols-2">
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
           <InfoField label={t("lut_details_metadata_schema")} value={valueOrDash(detail.schema_version, t)} />
           <InfoField label={t("lut_details_metadata_manufacturer_source")} value={valueOrDash(detail.manufacturer_source, t)} />
           <InfoField label={t("lut_details_metadata_material_source")} value={valueOrDash(detail.material_source, t)} />
@@ -671,7 +678,7 @@ const LutDetailsLoadedPrimaryColumn = memo(function LutDetailsLoadedPrimaryColum
           <InfoField label={t("lut_details_metadata_base_layers")} value={String(detail.base_layers)} />
           <InfoField label={t("lut_details_metadata_base_channel")} value={String(detail.base_channel_idx)} />
           <InfoField label={t("lut_details_metadata_layer_order")} value={detail.layer_order} />
-          <InfoField label={t("lut_details_metadata_coverage")} value={replaceTokens(t("lut_details_coverage_summary"), { entries: detail.coverage_stats.entry_count, points: detail.coverage_stats.plotted_point_count })} />
+          <InfoField fullWidth label={t("lut_details_metadata_coverage")} value={replaceTokens(t("lut_details_coverage_summary"), { entries: detail.coverage_stats.entry_count, points: detail.coverage_stats.plotted_point_count })} />
         </dl>
         <div className="flex flex-col gap-3">
           <div>
@@ -689,7 +696,7 @@ const LutDetailsLoadedPrimaryColumn = memo(function LutDetailsLoadedPrimaryColum
         </div>
       </section>
       <details data-testid="lut-details-raw-metadata" className={`${cardPadClass} group`}>
-        <summary className="cursor-pointer list-none text-base font-semibold text-slate-900 outline-none dark:text-slate-50">{t("lut_details_raw_metadata_title")}</summary>
+        <DisclosureSummary className="cursor-pointer list-none text-base font-semibold text-slate-900 outline-none dark:text-slate-50">{t("lut_details_raw_metadata_title")}</DisclosureSummary>
         {rawMetadataDescription ? <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{rawMetadataDescription}</p> : null}
         <pre className="dock-scrollbar mt-4 max-h-96 overflow-auto rounded-[10px] bg-slate-950/95 p-4 text-xs leading-6 text-slate-100">{JSON.stringify(detail.raw_metadata, null, 2)}</pre>
       </details>
@@ -710,6 +717,8 @@ const LutDetailsLoadedPrimaryColumn = memo(function LutDetailsLoadedPrimaryColum
  */
 export const LutColorDistributionCharts = memo(function LutColorDistributionCharts({
   source,
+  className = "flex flex-col gap-5",
+  compactHeaders = false,
 }: {
   source: {
     lab_points: LutDetailsResponse["lab_points"];
@@ -719,6 +728,8 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
     coverage_stats: LutDetailsResponse["coverage_stats"];
   };
   workspaceMode?: ReturnType<typeof useWorkspaceMode>["mode"];
+  className?: string;
+  compactHeaders?: boolean;
 }) {
   const { t } = useI18n();
   const [labChartView, setLabChartView] = useState<"2d" | "3d">("2d");
@@ -822,10 +833,11 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
   );
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className={className}>
       {labChartView === "2d" ? (
         <LutScatterChart
           title={t("lut_details_lab_chart_title")}
+          descriptionAsTooltip={compactHeaders}
           description={t("lut_details_lab_chart_desc")}
           dataTestId="lut-details-lab-chart"
           points={source.lab_points ?? []}
@@ -840,14 +852,18 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
           plotShape="square"
           footer={labChartFooter}
           headerAction={labChartViewToggle}
-          squareViewportClassName="mx-auto block w-full max-w-[680px] aspect-square max-h-[680px]"
+          squareViewportClassName={compactHeaders
+            ? "mx-auto block w-full max-w-[560px] aspect-square max-h-[560px]"
+            : "mx-auto block w-full max-w-[680px] aspect-square max-h-[680px]"}
         />
       ) : (
         <section className={cardPadClass}>
           <div className="mb-4 flex items-start justify-between gap-3">
-            <div className="flex-1 min-w-0">
+            <div className={compactHeaders ? "flex min-h-8 min-w-0 flex-1 items-center gap-2" : "flex-1 min-w-0"}>
               <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{t("lut_details_lab_chart_title")}</h3>
-              <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">{t("lut_details_lab_chart_3d_desc")}</p>
+              {compactHeaders
+                ? <HelpDot title={t("lut_details_lab_chart_title")} description={t("lut_details_lab_chart_3d_desc")} />
+                : <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">{t("lut_details_lab_chart_3d_desc")}</p>}
             </div>
             {labChartViewToggle}
           </div>
@@ -869,6 +885,7 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
       )}
       <LutScatterChart
         title={t("lut_details_rgb_chart_title")}
+        descriptionAsTooltip={compactHeaders}
         description={t("lut_details_rgb_chart_desc")}
         dataTestId="lut-details-rgb-chart"
         points={source.rgb_points ?? []}
@@ -888,6 +905,7 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
       />
       <LutScatterChart
         title={t("lut_details_hue_lightness_chart_title")}
+        descriptionAsTooltip={compactHeaders}
         description={t("lut_details_hue_lightness_chart_desc")}
         dataTestId="lut-details-hue-lightness-chart"
         points={hueLightnessPoints}
@@ -909,6 +927,7 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
       />
       <LutScatterChart
         title={t("lut_details_hue_chroma_chart_title")}
+        descriptionAsTooltip={compactHeaders}
         description={t("lut_details_hue_chroma_chart_desc")}
         dataTestId="lut-details-hue-chroma-chart"
         points={hueChromaPoints}
@@ -932,58 +951,59 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
   );
 });
 
+function LutDetailsPalette({ detail, t }: {
+  detail: LutDetailsResponse;
+  t: (key: string) => string;
+}) {
+  const palette = detail.palette ?? [];
+  return (
+    <section className={`${cardPadClass} flex flex-col gap-4`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{t("lut_details_palette_title")}</h3>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{t("lut_details_palette_desc")}</p>
+        </div>
+        <span className="text-xs text-slate-500 dark:text-slate-400">{replaceTokens(t("lut_details_palette_count"), { count: palette.length })}</span>
+      </div>
+      {palette.length > 0 ? (
+        <div className={`${wellClass} overflow-hidden`}>
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="border-b border-slate-200/70 text-left text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:border-slate-800/70 dark:text-slate-400">
+                <th className="px-3 py-3">{t("lut_details_palette_color")}</th>
+                <th className="px-3 py-3">{t("lut_details_palette_material")}</th>
+                <th className="px-3 py-3">{t("lut_details_palette_hex")}</th>
+              </tr>
+            </thead>
+            <tbody>{palette.map((item, index) => renderPaletteRow(item, index, t))}</tbody>
+          </table>
+        </div>
+      ) : <div className={`${wellPadClass} px-4 py-5 text-sm leading-6 text-slate-500 dark:text-slate-400`}>{t("lut_details_no_palette")}</div>}
+    </section>
+  );
+}
+
 const LutDetailsLoadedSecondaryColumn = memo(function LutDetailsLoadedSecondaryColumn({
   detail,
-  t,
   workspaceMode,
 }: {
   detail: LutDetailsResponse;
   t: (key: string) => string;
   workspaceMode: ReturnType<typeof useWorkspaceMode>["mode"];
 }) {
-  const palette = detail.palette ?? [];
-
   return (
-    <div className="flex flex-col gap-5">
-      <section className={`${cardPadClass} flex flex-col gap-4`}>
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{t("lut_details_palette_title")}</h3>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{t("lut_details_palette_desc")}</p>
-          </div>
-          <span className="text-xs text-slate-500 dark:text-slate-400">{replaceTokens(t("lut_details_palette_count"), { count: palette.length })}</span>
-        </div>
-        {palette.length > 0 ? (
-          <div className={`${wellClass} overflow-hidden`}>
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200/70 text-left text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:border-slate-800/70 dark:text-slate-400">
-                  <th className="px-3 py-3">{t("lut_details_palette_color")}</th>
-                  <th className="px-3 py-3">{t("lut_details_palette_material")}</th>
-                  <th className="px-3 py-3">{t("lut_details_palette_hex")}</th>
-                </tr>
-              </thead>
-              <tbody>{palette.map((item, index) => renderPaletteRow(item, index, t))}</tbody>
-            </table>
-          </div>
-        ) : <div className={`${wellPadClass} px-4 py-5 text-sm leading-6 text-slate-500 dark:text-slate-400`}>{t("lut_details_no_palette")}</div>}
-      </section>
-      {/* The four scatter charts (Lab a-b, RGB isometric, Hue × Lightness,
-          Hue × Saturation) are rendered by the shared component so the
-          solver-cache "color distribution" view in
-          ``MaterialSolverCacheStatusCard`` stays pixel-identical. */}
-      {/* 四张散点图由共享组件渲染，使求解缓存「色彩分布图」与本面板视觉完全一致。 */}
-      <LutColorDistributionCharts
-        source={{
-          lab_points: detail.lab_points,
-          lab_points_3d: detail.lab_points_3d,
-          lab_hull: detail.lab_hull,
-          rgb_points: detail.rgb_points,
-          coverage_stats: detail.coverage_stats,
-        }}
-        workspaceMode={workspaceMode}
-      />
-    </div>
+    <LutColorDistributionCharts
+      compactHeaders
+      className="lut-details-charts grid grid-cols-1 gap-4 @[48rem]/lut-charts:grid-cols-2 [&>*]:min-w-0"
+      source={{
+        lab_points: detail.lab_points,
+        lab_points_3d: detail.lab_points_3d,
+        lab_hull: detail.lab_hull,
+        rgb_points: detail.rgb_points,
+        coverage_stats: detail.coverage_stats,
+      }}
+      workspaceMode={workspaceMode}
+    />
   );
 });
 
@@ -1121,89 +1141,85 @@ export default function LutDetailsPanel() {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="lut-details-panel"
-      className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
+      className={`${resolvePanelSurfaceClass(workspace.mode)} lut-details-panel @container/lut-details flex flex-col gap-5`}
     >
-      <div data-testid="lut-details-layout" className={resolveDesktopSplitLayoutClass(workspace.mode)}>
-        <div data-testid="lut-details-primary-column" className={desktopPrimaryColumnClass}>
-          <section data-testid="lut-details-selection-card" className={`${cardPadClass} flex flex-col gap-4`}>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-200" htmlFor="lut-details-query">
-                {t("lut_details_query_label")}
-              </label>
-              <input
-                id="lut-details-query"
-                type="text"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={t("lut_details_query_placeholder")}
-                className="min-h-11 rounded-[10px] border border-slate-200/80 bg-slate-50 px-3.5 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 hover:bg-slate-100 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100 dark:hover:border-slate-600"
-              />
-            </div>
+      <section data-testid="lut-details-selection-card" className="lut-details-toolbar flex flex-col gap-3">
+        <div className="lut-details-selectors grid items-end gap-3">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-200" htmlFor="lut-details-query">
+              {t("lut_details_query_label")}
+            </label>
+            <input
+              id="lut-details-query"
+              type="text"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={t("lut_details_query_placeholder")}
+              className="min-h-11 w-full rounded-[10px] border border-slate-200/80 bg-slate-100 px-3.5 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 hover:bg-slate-200 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100 dark:hover:border-slate-600"
+            />
+          </div>
 
-            <div data-testid="lut-details-manufacturer-dropdown">
-              <Dropdown
-                label={t("lut_details_manufacturer_label")}
-                value={selectedManufacturer}
-                options={manufacturerOptions}
-                onChange={(value) => selectManufacturer(value)}
-                disabled={catalogLoading}
-                placeholder={t("lut_details_manufacturer_placeholder")}
-              />
-            </div>
+          <div data-testid="lut-details-manufacturer-dropdown" className="min-w-0">
+            <Dropdown
+              label={t("lut_details_manufacturer_label")}
+              value={selectedManufacturer}
+              options={manufacturerOptions}
+              onChange={(value) => selectManufacturer(value)}
+              disabled={catalogLoading}
+              placeholder={t("lut_details_manufacturer_placeholder")}
+            />
+          </div>
 
-            <div data-testid="lut-details-lut-dropdown">
-              <Dropdown
-                label={t("lut_details_lut_label")}
-                value={selectedLutName}
-                options={lutOptions}
-                onChange={(value) => selectLut(value)}
-                disabled={catalogLoading || filteredCatalog.items.length === 0}
-                placeholder={t("lut_details_lut_placeholder")}
-              />
-            </div>
+          <div data-testid="lut-details-lut-dropdown" className="min-w-0">
+            <Dropdown
+              label={t("lut_details_lut_label")}
+              value={selectedLutName}
+              options={lutOptions}
+              onChange={(value) => selectLut(value)}
+              disabled={catalogLoading || filteredCatalog.items.length === 0}
+              placeholder={t("lut_details_lut_placeholder")}
+            />
+          </div>
 
-            <button
-              type="button"
-              onClick={handleLoadSelected}
-              disabled={catalogLoading || !canLoadSelectedLut}
-              className="action-control inline-flex min-h-11 items-center justify-center rounded-[10px] px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed"
-            >
-              {t("lut_details_load_action")}
-            </button>
+          <button
+            type="button"
+            onClick={handleLoadSelected}
+            disabled={catalogLoading || !canLoadSelectedLut}
+            className="action-control inline-flex min-h-11 shrink-0 items-center justify-center rounded-[10px] px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed"
+          >
+            {t("lut_details_load_action")}
+          </button>
+        </div>
 
-            {catalogLoading ? <StatusBanner tone="info">{t("lut_details_catalog_loading")}</StatusBanner> : null}
-            {!showLoadedView && !detailLoading && !error ? <StatusBanner tone="info">{t("lut_details_load_hint")}</StatusBanner> : null}
-            {showSelectionDirtyNotice ? <StatusBanner tone="info">{t("lut_details_pending_loaded_notice")}</StatusBanner> : null}
-            {!showLoadedView && detailLoading ? <StatusBanner tone="info">{t("lut_details_loading_selected")}</StatusBanner> : null}
+        {catalogLoading ? <StatusBanner tone="info">{t("lut_details_catalog_loading")}</StatusBanner> : null}
+        {!showLoadedView && !detailLoading && !error ? <StatusBanner tone="info">{t("lut_details_load_hint")}</StatusBanner> : null}
+        {showSelectionDirtyNotice ? <StatusBanner tone="info">{t("lut_details_pending_loaded_notice")}</StatusBanner> : null}
+        {!showLoadedView && detailLoading ? <StatusBanner tone="info">{t("lut_details_loading_selected")}</StatusBanner> : null}
 
-            {error ? (
-              <StatusBanner
-                tone="error"
-                action={(
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleRetry}
-                      className="action-control rounded-full border border-current/20 px-3 py-1 text-xs transition-colors"
-                    >
-                      {t("widget_retry")}
-                    </button>
-                    <button
-                      onClick={handleDismissError}
-                      className="rounded-full border border-current/20 px-2 py-1 text-xs text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-300"
-                      aria-label={t("lut_details_close_error")}
-                    >
-                      ×
-                    </button>
-                  </div>
-                )}
-              >
-                {renderErrorMessage(error, t)}
-              </StatusBanner>
-            ) : null}
+        {error ? (
+          <StatusBanner
+            tone="error"
+            action={(
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleRetry}
+                  className="action-control rounded-full border border-current/20 px-3 py-1 text-xs transition-colors"
+                >
+                  {t("widget_retry")}
+                </button>
+                <CloseButton label={t("lut_details_close_error")} onClick={handleDismissError} />
+              </div>
+            )}
+          >
+            {renderErrorMessage(error, t)}
+          </StatusBanner>
+        ) : null}
 
-            {showNoMatches ? <StatusBanner tone="warning">{t("lut_details_no_matches")}</StatusBanner> : null}
-          </section>
+        {showNoMatches ? <StatusBanner tone="warning">{t("lut_details_no_matches")}</StatusBanner> : null}
+      </section>
 
+      <div data-testid="lut-details-layout" className="grid min-h-0 shrink-0 grid-cols-1 items-start gap-4 @[60rem]/lut-details:grid-cols-[22rem_minmax(0,1fr)]">
+        <div data-testid="lut-details-primary-column" className="flex min-w-0 flex-col gap-4">
           {showLoadedView && visibleLoadedDetail ? (
             <LutDetailsLoadedPrimaryColumn
               detail={visibleLoadedDetail}
@@ -1221,8 +1237,13 @@ export default function LutDetailsPanel() {
                 description={t("lut_details_metadata_desc")}
                 emptyMessage={t("lut_details_no_detail")}
               />
+              <EmptyCard
+                title={t("lut_details_palette_title")}
+                description={t("lut_details_palette_desc")}
+                emptyMessage={t("lut_details_no_palette")}
+              />
               <details data-testid="lut-details-raw-metadata" className={`${cardPadClass} group`}>
-                <summary className="cursor-pointer list-none text-base font-semibold text-slate-900 outline-none dark:text-slate-50">{t("lut_details_raw_metadata_title")}</summary>
+                <DisclosureSummary className="cursor-pointer list-none text-base font-semibold text-slate-900 outline-none dark:text-slate-50">{t("lut_details_raw_metadata_title")}</DisclosureSummary>
                 <pre className="dock-scrollbar mt-4 max-h-96 overflow-auto rounded-[10px] bg-slate-950/95 p-4 text-xs leading-6 text-slate-100">
                   {t("lut_details_no_raw_metadata")}
                 </pre>
@@ -1231,7 +1252,7 @@ export default function LutDetailsPanel() {
           )}
         </div>
 
-        <div data-testid="lut-details-secondary-column" className={desktopSecondaryColumnClass}>
+        <div data-testid="lut-details-secondary-column" className="@container/lut-charts flex min-w-0 flex-col gap-4">
           {showLoadedView && visibleLoadedDetail ? (
             <LutDetailsLoadedSecondaryColumn
               detail={visibleLoadedDetail}
@@ -1240,11 +1261,6 @@ export default function LutDetailsPanel() {
             />
           ) : (
             <div className="flex flex-col gap-5">
-              <EmptyCard
-                title={t("lut_details_palette_title")}
-                description={t("lut_details_palette_desc")}
-                emptyMessage={t("lut_details_no_palette")}
-              />
               <EmptyCard
                 title={t("lut_details_lab_chart_title")}
                 description={t("lut_details_lab_chart_desc")}
