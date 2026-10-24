@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import HelpDot from "../ui/HelpDot";
 
 export interface LutScatterPoint {
   x: number;
@@ -10,6 +11,7 @@ export interface LutScatterPoint {
 export interface LutScatterChartProps {
   title: string;
   description?: string;
+  descriptionAsTooltip?: boolean;
   dataTestId: string;
   points: LutScatterPoint[];
   referenceImageHref?: string;
@@ -179,6 +181,7 @@ export function formatNumberRange(min: number, max: number, precision = 1): stri
 export function LutScatterChart({
   title,
   description,
+  descriptionAsTooltip = false,
   dataTestId,
   points,
   referenceImageHref,
@@ -212,6 +215,11 @@ export function LutScatterChart({
     <section className={className ?? "panel-section rounded-[28px] px-4 py-4 sm:px-5 sm:py-5"}>
       <div className="mb-4 flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
+          <div className="flex min-h-8 items-center gap-2">
+            <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{title}</h3>
+            {description && descriptionAsTooltip ? <HelpDot title={title} description={description} /> : null}
+          </div>
+          {description && !descriptionAsTooltip && <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">{description}</p>}
         </div>
         {headerAction ? <div className="shrink-0">{headerAction}</div> : null}
       </div>
