@@ -40,6 +40,8 @@ function readPixels(value: string): number {
 function isSameFit(previous: HeaderNavFit, next: HeaderNavFit): boolean {
   return (
     previous.singleRow === next.singleRow &&
+    previous.paddingLeft === next.paddingLeft &&
+    previous.paddingRight === next.paddingRight &&
     previous.showBrandTitle === next.showBrandTitle &&
     previous.primaryTabsInsetPx === next.primaryTabsInsetPx &&
     previous.centerLineClearance?.brandSidePx === next.centerLineClearance?.brandSidePx &&
@@ -95,6 +97,7 @@ export function useHeaderNavFit(
           columnGap: readPixels(style.columnGap),
         },
         readPixels(style.paddingLeft),
+        readPixels(style.paddingRight),
       );
       setFit((previous) => (isSameFit(previous, next) ? previous : next));
     };
