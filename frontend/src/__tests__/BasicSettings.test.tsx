@@ -1120,6 +1120,7 @@ describe("BasicSettings", () => {
     });
     const trigger = screen.getByTestId("lut-picker-trigger");
     expect(trigger).toHaveTextContent("A 4C");
+    expect(trigger).toHaveTextContent("已选 2 个 LUT");
     fireEvent.click(trigger);
     dialog = screen.getByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "Brand B" }));
@@ -1198,7 +1199,9 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
+    // Hydration still syncs the picker brand; the summary describes selected LUTs.
     await waitFor(() => {
+      expect(useConverterStore.getState().selectedLegacyManufacturer).toBe("Brand B");
     });
   });
 

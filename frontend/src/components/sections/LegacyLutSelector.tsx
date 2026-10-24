@@ -1,9 +1,12 @@
+import { useState, type ReactNode } from "react";
 import LutPickerDialog, { type LutPickerBrand, type LutPickerOption } from "../ui/LutPickerDialog";
 import { cx, workstationPickerTriggerClass, workstationFieldLabelClass } from "../ui/panelPrimitives";
 
 interface LegacyLutOption {
   label: string;
   value: string;
+  brand?: string;
+  materialType?: string;
 }
 
 interface LegacyLutOptionGroup {
@@ -26,6 +29,7 @@ interface LegacyLutSelectorProps {
   /** Catalog-wide labels for selected LUTs outside the visible brand. */
   allLutOptions?: LegacyLutOption[];
   brandInfo?: LegacyBrandInfo | null;
+  colorModeSummary?: ReactNode;
   onManufacturerChange: (value: string) => void;
   onLutChange: (value: string) => void;
   onLutSelectionChange?: (values: string[]) => void;
@@ -55,6 +59,9 @@ interface LegacyLutSelectorProps {
     dialogConfirm?: string;
     dialogCancel?: string;
     openPicker?: string;
+    change?: string;
+    selectionSummary?: string;
+    moreSelected?: string;
   };
 }
 
@@ -94,6 +101,7 @@ export default function LegacyLutSelector({
   groupedLutOptions,
   allLutOptions,
   brandInfo,
+  colorModeSummary,
   onManufacturerChange,
   onLutChange,
   onLutSelectionChange,
@@ -140,31 +148,63 @@ export default function LegacyLutSelector({
     }
   };
 
+  const primaryOption = selectedOptions[0];
+  const primaryMetadata = primaryOption
+    ? [primaryOption.brand, primaryOption.materialType]
+      .filter((value): value is string => !!value && !primaryOption.label.toLowerCase().includes(value.toLowerCase()))
+      .join(" · ")
+    : "";
+  const selectionSummary = (labels.selectionSummary ?? "Selected {count} LUTs")
+    .replace("{count}", String(selectedCount));
+  const moreSelected = (labels.moreSelected ?? "+{count} more")
+    .replace("{count}", String(selectedCount - 1));
+
+  // Empty states describe the next selection step.
   const triggerEmpty = !manufacturer;
   const triggerPlaceholder = loading
     ? labels.loadingHint
     : triggerEmpty
       ? labels.manufacturerPlaceholder
+      : labels.lutPlaceholder;
 
   return (
     <div className="flex flex-col gap-2">
       {/* Brand / LUT label row */}
       <span className={workstationFieldLabelClass}>{labels.manufacturer}</span>
 
+      {/* Keep the collapsed selection compact; the dialog owns the full list. */}
       <button
         type="button"
         disabled={loading && manufacturerOptions.length === 0}
         onClick={() => setDialogOpen(true)}
         data-testid="lut-picker-trigger"
+        aria-haspopup="dialog"
+        aria-expanded={dialogOpen}
         className={cx(
           workstationPickerTriggerClass,
+          "flex min-h-11 items-center justify-between gap-3 text-left",
           triggerEmpty && "text-slate-400 dark:text-slate-500",
         )}
       >
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="truncate text-sm font-medium">
+            {selectedCount > 1 ? selectionSummary : primaryOption?.label ?? triggerPlaceholder}
+          </span>
+          {primaryOption && (
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+              {selectedCount > 1 ? (
+                <>
+                  <span className="min-w-0 flex-1 truncate">{primaryOption.label}</span>
+                  <span className="shrink-0">{moreSelected}</span>
+                </>
+              ) : primaryMetadata ? <span>{primaryMetadata}</span> : null}
+              {colorModeSummary}
             </span>
           )}
         </span>
         {selectedCount > 0 && (
+          <span className="shrink-0 text-xs font-medium text-blue-600 dark:text-blue-400">
+            {labels.change ?? labels.openPicker ?? labels.manufacturer}
           </span>
         )}
       </button>

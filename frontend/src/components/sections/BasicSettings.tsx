@@ -735,6 +735,7 @@ export default function BasicSettings() {
   const allLegacyLutOptions = useMemo(
     () => legacyCatalogGroups.flatMap((group) => group.items.flatMap((item) => {
       const value = lutNameByPath.get(normalizeLutPath(item.path));
+      return value ? [{ label: item.name, value, brand: group.manufacturer, materialType: item.material_type }] : [];
     })),
     [legacyCatalogGroups, lutNameByPath],
   );
@@ -1155,6 +1156,12 @@ export default function BasicSettings() {
               groupedLutOptions={groupedLutOptions}
               allLutOptions={allLegacyLutOptions}
               brandInfo={selectedLegacyBrandInfo}
+              colorModeSummary={lut_name ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <ColorModeDots mode={color_mode} />
+                  <span>{color_mode}</span>
+                </span>
+              ) : undefined}
               onManufacturerChange={setLegacyManufacturer}
               onLutChange={setLutName}
               onLutSelectionChange={setLegacyLutNames}
@@ -1183,6 +1190,9 @@ export default function BasicSettings() {
                 dialogConfirm: t("basic_lut_picker_confirm"),
                 dialogCancel: t("basic_lut_picker_cancel"),
                 openPicker: t("basic_lut_picker_open"),
+                change: t("basic_lut_picker_change"),
+                selectionSummary: t("basic_lut_picker_selection_summary"),
+                moreSelected: t("basic_lut_picker_more_selected"),
               }}
             />
             <input
