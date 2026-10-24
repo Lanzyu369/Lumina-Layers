@@ -310,6 +310,7 @@ export default function LutPickerDialog({
               <button
                 type="button"
                 onClick={onUploadClick}
+                className="action-control w-full rounded-lg px-2.5 py-1.5 text-left text-sm"
               >
                 {labels.upload}
               </button>
@@ -477,12 +478,14 @@ export default function LutPickerDialog({
               label={labels.deselectAll}
               onClick={() => setStaged([])}
               disabled={staged.length === 0}
+              variant="secondary"
               size="sm"
             />
             <Button
               label={labels.confirm}
               onClick={() => onConfirm(staged)}
               size="sm"
+              variant="primary"
             />
           </div>
         </div>

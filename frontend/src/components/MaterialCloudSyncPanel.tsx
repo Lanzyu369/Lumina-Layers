@@ -67,6 +67,7 @@ export default function MaterialCloudSyncPanel() {
           action={(
             <Button
               label={t("mat_sync_full_catalog_retry_btn")}
+              variant="secondary"
               size="sm"
               onClick={catalog.retryFullCatalog}
             />

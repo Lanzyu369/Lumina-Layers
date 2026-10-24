@@ -439,18 +439,21 @@ function InstalledCard({
               }
               onClick={onOpenCandidate}
               disabled={!module.enabled || !candidateOpenAllowed}
+              variant="secondary"
               className="flex-1"
             />
           ) : null}
           {detail ? (
             <Button
               label={t("workshop.manager.details")}
+              variant="secondary"
               onClick={() => onDetails(detail.details_url)}
             />
           ) : null}
           {update ? (
             <Button
               label={t("workshop.manager.update")}
+              variant="secondary"
               onClick={() => onUpdate(update)}
               loading={busy}
             />
@@ -458,6 +461,7 @@ function InstalledCard({
           {module.previous_version ? (
             <Button
               label={t("workshop.manager.rollback")}
+              variant="secondary"
               onClick={onRollback}
               loading={busy}
             />
@@ -469,14 +473,17 @@ function InstalledCard({
                   ? "workshop.manager.disable"
                   : "workshop.manager.enable",
               )}
+              variant="secondary"
               onClick={onToggle}
               loading={busy}
             />
           ) : null}
           <Button
             label={t("workshop.manager.uninstall")}
+            variant="secondary"
             onClick={onUninstall}
             disabled={busy}
+            tone="danger"
           />
         </div>
       )}
@@ -1254,6 +1261,7 @@ export function WorkshopPanel({
                 label={t(
                   "workshop.manager.recipeModuleDiscover",
                 )}
+                variant="secondary"
                 onClick={() => openView("discover")}
               />
             </div>
@@ -1328,6 +1336,7 @@ export function WorkshopPanel({
               action={
                 <Button
                   label={t("workshop.manager.retry")}
+                  variant="secondary"
                   size="sm"
                   onClick={() => void loadCatalog()}
                 />
@@ -1471,6 +1480,7 @@ export function WorkshopPanel({
                   label={t("workshop.manager.installGithub")}
                   onClick={() => void installGithub()}
                   loading={busyModuleId === "github-install"}
+                  variant="primary"
                 />
               </div>
             </section>
@@ -1543,6 +1553,7 @@ export function WorkshopPanel({
                   setPermissionPrompt(null);
                   prompt.confirm();
                 }}
+                variant="primary"
               />
             </div>
           </section>
@@ -1582,6 +1593,7 @@ export function WorkshopPanel({
               <Button
                 label={t("workshop.manager.confirmUninstall")}
                 onClick={() => void confirmUninstall()}
+                tone="danger"
               />
             </div>
           </section>

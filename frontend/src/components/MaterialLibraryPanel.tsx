@@ -427,19 +427,23 @@ export default function MaterialLibraryPanel() {
                 ? "mat_gradient_library_clear_selection_btn"
                 : "mat_gradient_library_select_all_btn",
             )}
+            variant="secondary"
             onClick={toggleSelectAll}
           <Button
             label={t("mat_gradient_library_import_btn")}
+            variant="secondary"
             onClick={handleImportClick}
             disabled={isLoading || isExporting || pendingDeleteDirectoryName !== null}
             loading={isImporting}
           />
             label={t("mat_gradient_library_export_btn")}
+            variant="secondary"
             onClick={() => void handleExportSelected()}
             disabled={selectedCount === 0 || isLoading || isImporting || pendingDeleteDirectoryName !== null}
             loading={isExporting}
           <Button
             label={t("mat_gradient_library_refresh_btn")}
+            variant="secondary"
             onClick={() => void refreshMaterials()}
             disabled={isLoading || isImporting || isExporting}
             loading={isLoading}
@@ -872,6 +876,7 @@ function MaterialLibraryEditDialog({
             disabled={!materialName.trim() || Boolean(colorHexError)}
             loading={pending}
             className="w-full sm:w-auto"
+            variant="primary"
           />
         </div>
       </section>

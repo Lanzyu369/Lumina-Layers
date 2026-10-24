@@ -455,18 +455,21 @@ export default function PalettePanel({
             <div className="grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-2">
                 <Button
                   label={t("palette_undo")}
+                  variant="secondary"
                   size="sm"
                   onClick={undoColorRemap}
                   disabled={!canUndoHistory || replacePreviewLoading}
                 />
                 <Button
                   label={t("palette_redo")}
+                  variant="secondary"
                   size="sm"
                   onClick={redoColorRemap}
                   disabled={!canRedoHistory || replacePreviewLoading}
                 />
                 <Button
                   label={t("palette_clear_remaps")}
+                  variant="secondary"
                   size="sm"
                   onClick={clearAllRemaps}
                   disabled={!hasRemaps || replacePreviewLoading}
@@ -480,6 +483,7 @@ export default function PalettePanel({
                 <SelectionToolPicker />
                 <Button
                   label={t("palette_clear_selection")}
+                  variant="secondary"
                   size="sm"
                   onClick={clearSelection}
                   className="w-full"
@@ -489,6 +493,7 @@ export default function PalettePanel({
 
                 <Button
                   label={t("conv_free_color_btn")}
+                  variant="secondary"
                   size="sm"
                   onClick={() => {
                     if (selectedColor) toggleFreeColor(selectedColor);
@@ -497,6 +502,7 @@ export default function PalettePanel({
                 />
                 <Button
                   label={t("conv_free_color_clear_btn")}
+                  variant="secondary"
                   size="sm"
                   onClick={clearFreeColors}
                   disabled={free_color_set.size === 0}
@@ -505,6 +511,7 @@ export default function PalettePanel({
 
                 <Button
                   label={t("recipe_custom_button")}
+                  variant="secondary"
                   size="sm"
                   onClick={() => setRecipeDialogOpen(true)}
                   disabled={!canUseCustomRecipe}

@@ -274,12 +274,14 @@ export default function UnifiedUploader({
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <Button
             label={t("upload_replace_current")}
+            variant="secondary"
             size="sm"
             leadingIcon={<ArrowPathIcon className="size-4" />}
             onClick={handleClick}
           />
           <Button
             label={t("upload_add_more")}
+            variant="secondary"
             size="sm"
             leadingIcon={<PlusIcon className="size-4" />}
             onClick={handleAddMoreClick}

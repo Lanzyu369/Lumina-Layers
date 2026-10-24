@@ -88,6 +88,7 @@ export function ErrorTicketPrompt({
           label={t("error_ticket_prompt_submit")}
           size="sm"
           onClick={onReport}
+          variant="primary"
         />
       </div>
     </div>,

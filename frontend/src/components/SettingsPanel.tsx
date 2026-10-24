@@ -58,6 +58,7 @@ import SettingsCategoryNav, {
 } from "./settings/SettingsCategoryNav";
 import {
   StatusBanner,
+  dependentGroupClass,
   workstationInputClass,
 } from "./ui/panelPrimitives";
 import { WIKI_DOCS } from "../utils/wikiDocs";
@@ -617,6 +618,7 @@ export default function SettingsPanel() {
             <section
             >
               <div>
+                <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-slate-50">
                   <span>{t("settings.current_device_heading")}</span>
                   <HelpDot
                     title={t("settings.current_device_heading")}
@@ -633,6 +635,7 @@ export default function SettingsPanel() {
                   action={(
                     <Button
                       label={t("widget_retry")}
+                      variant="secondary"
                       size="sm"
                       loading={slicersLoading}
                       onClick={() => { void loadSlicerOptions(); }}
@@ -649,6 +652,7 @@ export default function SettingsPanel() {
                   action={(
                     <Button
                       label={t("widget_retry")}
+                      variant="secondary"
                       size="sm"
                       loading={printersLoading}
                       onClick={() => { void loadPrinterOptions(); }}
@@ -667,6 +671,7 @@ export default function SettingsPanel() {
                     className={`flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden ${
                       selectedPrinterThumbnailUrl
                         ? "rounded-none bg-transparent"
+                        : "rounded-[8px] bg-[var(--surface-card)]"
                     }`}
                   >
                     {selectedPrinterThumbnailUrl ? (
@@ -695,15 +700,18 @@ export default function SettingsPanel() {
                           t("settings.machine_options_loading")}
                       </span>
                     </div>
+                    <h4 className="mt-1 truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
                       {selectedPrinter?.display_name ??
                         resolvedPrinterModel ??
                         t("settings.machine_options_loading")}
                     </h4>
                     {selectedPrinter && (
                       <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600 dark:text-slate-300">
+                        <span className="px-0 py-1">
                           {t("settings.bed_size")}: {selectedPrinter.bed_width}
                           &times;{selectedPrinter.bed_depth} {t("common_unit_mm")}
                         </span>
+                        <span className="px-0 py-1">
                           {t("settings.nozzle_size")}: {resolvedNozzleSize}{" "}
                           {t("common_unit_mm")}
                         </span>
@@ -753,8 +761,10 @@ export default function SettingsPanel() {
 
               <div
                 data-testid="wipe-tower-auto-placement-row"
+                className="flex items-center justify-between gap-4 border-t panel-divider pt-5"
               >
                 <div className="flex min-w-0 items-center gap-1.5">
+                  <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
                     {t("settings.wipe_tower_auto_placement")}
                   </span>
                   <HelpDot
@@ -776,8 +786,27 @@ export default function SettingsPanel() {
               {supportsLayerConfigRanges(resolvedSlicerSoftware) && (
                 <div
                   data-testid="base-layer-height-modifier-row"
+                  className="flex items-center justify-between gap-4 border-t panel-divider pt-5"
                 >
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                      {t("settings.base_layer_height_modifier")}
+                    </span>
+                    <HelpDot
+                      title={t("settings.base_layer_height_modifier")}
+                      description={t("settings.base_layer_height_modifier_desc")}
+                      wikiPath={WIKI_DOCS.baseLayerModifier}
+                      placement="left"
                     />
+                  </div>
+                  <Switch
+                    checked={enableBaseLayerHeightModifier}
+                    onChange={(enabled) => {
+                      setEnableBaseLayerHeightModifier(enabled);
+                      void syncToBackend();
+                    }}
+                    ariaLabel={t("settings.base_layer_height_modifier")}
+                  />
                 </div>
               )}
 
@@ -789,6 +818,7 @@ export default function SettingsPanel() {
                     <div>
                       <label
                         htmlFor="custom-slicer-path"
+                        className="text-sm font-medium text-slate-700 dark:text-slate-200"
                       >
                         {t("settings.custom_slicer_path")}
                       </label>
@@ -808,10 +838,12 @@ export default function SettingsPanel() {
                         onClick={handleSaveCustomSlicerPath}
                         loading={isValidatingCustomPath}
                         disabled={!customSlicerPathInput.trim()}
+                        variant="primary"
                       />
                       <Button
                         label={t("settings.custom_slicer_clear")}
                         onClick={handleClearCustomSlicerPath}
+                        variant="secondary"
                         disabled={!customSlicerPath && !customSlicerPathInput}
                       />
                     </div>
@@ -846,13 +878,23 @@ export default function SettingsPanel() {
               <InterfaceScaleSetting />
               <div
                 data-testid="settings-completion-notifications-section"
+                className="flex flex-col gap-4 border-t panel-divider pt-5"
               >
+                <div className="flex items-center justify-between gap-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
+                      <h3 className="text-sm font-medium text-slate-700 dark:text-slate-200">
                         {t("settings.completion_notifications_heading")}
                       </h3>
                       <HelpDot
                         title={t("settings.completion_notifications_heading")}
+                        description={[
+                          t("settings.completion_notifications_description"),
+                          t("settings.completion_notifications_hint"),
+                          ...(["info", "success"].includes(completionNotificationStatus.tone)
+                            ? [t(completionNotificationStatus.translationKey)]
+                            : []),
+                        ].join("\n\n")}
                       />
                     </div>
                   </div>
@@ -868,12 +910,27 @@ export default function SettingsPanel() {
                     ariaLabel={t("settings.completion_notifications_heading")}
                   />
                 </div>
+                {(completionNotificationStatus.tone === "warning" ||
+                  completionNotificationStatus.tone === "error") && (
+                  <StatusBanner
+                    tone={completionNotificationStatus.tone}
+                    role={
+                      completionNotificationStatus.tone === "error"
+                        ? "alert"
+                        : undefined
+                    }
+                  >
+                    {t(completionNotificationStatus.translationKey)}
+                  </StatusBanner>
+                )}
               </div>
 
               <div
                 data-testid="settings-preserve-upload-filename-section"
+                className="flex items-center justify-between gap-4 border-t panel-divider pt-5"
               >
                 <div className="min-w-0">
+                  <h3 className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
                     <span>{t("settings.preserve_upload_filename_heading")}</span>
                     <HelpDot
                       title={t("settings.preserve_upload_filename_heading")}
@@ -890,7 +947,9 @@ export default function SettingsPanel() {
 
               <GeneratedFileDirectorySetting />
 
+              <div className="flex items-center justify-between gap-4 border-t panel-divider pt-5">
                 <div className="min-w-0">
+                  <h3 className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
                     <span>{t("settings.witty_loading")}</span>
                     <HelpDot
                       title={t("settings.witty_loading")}
@@ -918,7 +977,9 @@ export default function SettingsPanel() {
                 data-testid="settings-solver-cache-density-section"
                 className="flex flex-col gap-4"
               >
+                <div className="flex items-center justify-between gap-4">
                   <div className="min-w-0">
+                    <h3 className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
                       <span>{t("settings.solver_cache_density_heading")}</span>
                       <HelpDot
                         title={t("settings.solver_cache_density_heading")}
@@ -937,6 +998,7 @@ export default function SettingsPanel() {
                 {enableSolverCacheGridSelection ? (
                   <div
                     data-testid="settings-solver-cache-density-dropdown-row"
+                    className={dependentGroupClass}
                   >
                     <Dropdown
                       label={t("settings.solver_cache_density_select_label")}
@@ -961,8 +1023,10 @@ export default function SettingsPanel() {
 
               <div
                 data-testid="settings-material-delta-e00-tolerance-section"
+                className="flex flex-col gap-4 border-t panel-divider pt-5"
               >
                 <div>
+                  <h3 className="text-sm font-medium text-slate-700 dark:text-slate-200">
                     {t("settings.material_delta_e00_tolerance_heading")}
                   </h3>
                 </div>
@@ -981,8 +1045,10 @@ export default function SettingsPanel() {
 
               <div
                 data-testid="settings-svg-raster-density-section"
+                className="flex flex-col gap-4 border-t panel-divider pt-5"
               >
                 <div>
+                  <h3 className="text-sm font-medium text-slate-700 dark:text-slate-200">
                     {t("settings.svg_pixels_per_mm_heading")}
                   </h3>
                 </div>
@@ -1003,6 +1069,7 @@ export default function SettingsPanel() {
                   <Button
                     label={t("settings.svg_pixels_per_mm_reset")}
                     onClick={resetSvgPixelsPerMm}
+                    variant="secondary"
                     disabled={svgPixelsPerMm === SVG_PIXELS_PER_MM_DEFAULT}
                     className="w-full min-[960px]:w-auto min-[960px]:min-w-max min-[960px]:self-end"
                   />
@@ -1013,8 +1080,11 @@ export default function SettingsPanel() {
 
               <div
                 data-testid="settings-auto-replace-gradient-section"
+                className="flex flex-col gap-4 border-t panel-divider pt-5"
               >
+                <div className="flex items-center justify-between gap-4">
                   <div className="min-w-0">
+                    <h3 className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
                       <span>{t("settings.auto_replace_gradient_heading")}</span>
                       <HelpDot
                         title={t("settings.auto_replace_gradient_heading")}
@@ -1034,9 +1104,11 @@ export default function SettingsPanel() {
 
               <div
                 data-testid="settings-smooth-vector-preview-section"
+                className="flex items-center justify-between gap-4 border-t panel-divider pt-5"
               >
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
+                    <h3 className="text-sm font-medium text-slate-700 dark:text-slate-200">
                       {t("settings.smooth_vector_preview_heading")}
                     </h3>
                     <HelpDot
@@ -1060,6 +1132,7 @@ export default function SettingsPanel() {
             >
               <div className="flex flex-col gap-4">
                 <div>
+                  <h3 className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
                     <span>{t("settings.cache")}</span>
                     <HelpDot
                       title={t("settings.cache")}
@@ -1068,10 +1141,12 @@ export default function SettingsPanel() {
                     />
                   </h3>
                 </div>
+                <div>
                   <Button
                     label={t("settings.clear_cache")}
                     onClick={handleClearCache}
                     loading={clearing}
+                    variant="secondary"
                     className="w-full sm:w-auto"
                   />
                 </div>

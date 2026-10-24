@@ -576,9 +576,11 @@ function SortableRecipeRow({
       <div className="flex flex-wrap gap-2">
         <Button
           label={removeLabel}
+          variant="secondary"
           size="sm"
           onClick={() => onRemoveLayer(index)}
           disabled={!canRemove}
+          tone="danger"
         />
       </div>
     </div>
@@ -1351,6 +1353,7 @@ export default function CustomRecipeDialog({
               />
               <Button
                 label={t("recipe_custom_pattern_apply")}
+                variant="secondary"
                 onClick={handleApplyPattern}
               />
             </div>
@@ -1414,11 +1417,13 @@ export default function CustomRecipeDialog({
             <div className="flex flex-wrap gap-2">
               <Button
                 label={t("recipe_custom_add_layer")}
+                variant="secondary"
                 onClick={handleAddLayer}
                 disabled={recipe.length >= 10}
               />
               <Button
                 label={t("recipe_custom_undo")}
+                variant="secondary"
                 onClick={handleUndo}
                 disabled={editStack.length === 0}
               />
@@ -1428,6 +1433,7 @@ export default function CustomRecipeDialog({
                     ? t("recipe_custom_predicting")
                     : t("recipe_custom_predict")
                 }
+                variant="secondary"
                 onClick={() => void handlePredict()}
                 disabled={isPredicting || !canPredictRecipe}
                 loading={isPredicting}
@@ -1443,6 +1449,7 @@ export default function CustomRecipeDialog({
                 onClick={handleApplyClick}
                 disabled={!canApply || isApplying}
                 loading={isApplying}
+                variant="primary"
               />
             </div>
           </div>

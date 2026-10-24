@@ -173,6 +173,7 @@ export default function ImportConfirmDialog({
             onContinueEditing && (
               <Button
                 label={t("recipe_import_continue_workshop")}
+                variant="secondary"
                 onClick={onContinueEditing}
                 disabled={isLoading}
                 className="px-4"

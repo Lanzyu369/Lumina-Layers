@@ -583,6 +583,7 @@ export default function ExtractorPanel() {
                 <Button
                   label={t("ext_nudge_up")}
                   icon={<ChevronUp />}
+                  variant="secondary"
                   size="icon"
                   onClick={() => nudgeActiveCorner(0, -1)}
                   disabled={!nudgeEnabled}
@@ -591,6 +592,7 @@ export default function ExtractorPanel() {
                 <Button
                   label={t("ext_nudge_left")}
                   icon={<ChevronLeft />}
+                  variant="secondary"
                   size="icon"
                   onClick={() => nudgeActiveCorner(-1, 0)}
                   disabled={!nudgeEnabled}
@@ -603,6 +605,7 @@ export default function ExtractorPanel() {
                 <Button
                   label={t("ext_nudge_right")}
                   icon={<ChevronRight />}
+                  variant="secondary"
                   size="icon"
                   onClick={() => nudgeActiveCorner(1, 0)}
                   disabled={!nudgeEnabled}
@@ -611,6 +614,7 @@ export default function ExtractorPanel() {
                 <Button
                   label={t("ext_nudge_down")}
                   icon={<ChevronDown />}
+                  variant="secondary"
                   size="icon"
                   onClick={() => nudgeActiveCorner(0, 1)}
                   disabled={!nudgeEnabled}
@@ -653,6 +657,7 @@ export default function ExtractorPanel() {
                         </span>
                         <Button
                           label={t("ext_cc_recalibrate_btn")}
+                          variant="secondary"
                           size="sm"
                           onClick={openColorcheckerDialog}
                           disabled={isLoading}
@@ -662,6 +667,7 @@ export default function ExtractorPanel() {
                       imageFile !== null && (
                         <Button
                           label={t("ext_cc_open_dialog_btn")}
+                          variant="secondary"
                           size="sm"
                           onClick={openColorcheckerDialog}
                           disabled={isLoading}
@@ -719,6 +725,7 @@ export default function ExtractorPanel() {
           <div data-testid="clear-corners-button" className="lg:flex-1 lg:min-w-0">
             <Button
               label={t("ext_clear_corners")}
+              variant="secondary"
               onClick={clearCornerPoints}
               className="w-full"
             />

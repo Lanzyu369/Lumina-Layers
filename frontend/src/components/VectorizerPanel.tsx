@@ -310,6 +310,7 @@ export default function VectorizerPanel() {
           onClick={handleSubmit}
           loading={isProcessing}
           disabled={!imagePreviewUrl}
+          variant="primary"
         />
 
         {/* Error */}
@@ -521,6 +522,7 @@ export default function VectorizerPanel() {
               <button
                 type="button"
                 onClick={compareZoom.reset}
+                className="action-control rounded-xl px-2.5 py-1 text-xs transition-colors"
               >
                 {t("zoom_reset")}
               </button>
@@ -597,11 +599,13 @@ export default function VectorizerPanel() {
                 label={t("vec.send_to_converter")}
                 onClick={handleSendToConverter}
                 loading={isSending}
+                variant="primary"
               />
               <Button
                 label={t("vec.download_svg")}
                 onClick={handleDownload}
                 loading={isDownloading}
+                variant="secondary"
               />
             </div>
             {resultActionError && (

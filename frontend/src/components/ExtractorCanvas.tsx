@@ -513,6 +513,7 @@ export default function ExtractorCanvas() {
         <button
           data-testid="rotate-image-btn"
           onClick={rotateImage}
+          className="action-control rounded-full border px-3 py-1 text-sm transition-colors"
         >
           {t("ext_rotate_btn")}
         </button>
@@ -594,6 +595,7 @@ function ManualFixPopover({
         data-testid="fix-submit-button"
         onClick={handleSubmit}
         disabled={loading}
+        className="action-control action-control-primary rounded-lg px-3 py-1.5 text-sm"
       >
         {loading ? t("ext_canvas_fixing") : t("ext_canvas_confirm_fix")}
       </button>

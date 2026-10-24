@@ -1094,6 +1094,7 @@ export default function BasicSettings() {
               <Button
                 label={t("basic_crop_image")}
                 leadingIcon={<ScissorsIcon className="size-4" />}
+                variant="secondary"
                 size="sm"
                 onClick={() => setCropModalOpen(true)}
                 disabled={!imagePreviewUrl || isLoading || isCropping}
@@ -1458,6 +1459,7 @@ function QuantizeColorsControl() {
       />
       <Button
         label={autoDetectLoading ? t("conv_auto_color_calculating") : t("conv_auto_color_btn")}
+        variant="secondary"
         size="sm"
         onClick={autoDetectColors}
         disabled={!imageFile || autoDetectLoading}

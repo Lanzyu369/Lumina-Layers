@@ -1,4 +1,5 @@
 import { cx } from "../ui/panelPrimitives";
+import { primaryNavTabClass } from "../widget/navTabStyles";
 
 export type SettingsCategoryId =
   | "device"
@@ -46,6 +47,8 @@ export default function SettingsCategoryNav({
             aria-controls={`settings-category-panel-${category.id}`}
             onClick={() => onChange(category.id)}
             className={cx(
+              primaryNavTabClass(active, false),
+              active && "bg-[var(--nav-tab-selected-bg)]",
             )}
           >
               {category.label}

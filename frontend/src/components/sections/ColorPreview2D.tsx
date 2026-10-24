@@ -1793,12 +1793,14 @@ export default function ColorPreview2D({
           <button
             type="button"
             onClick={executeBrushDraft}
+            className="action-control action-control-primary rounded-lg px-3 py-1.5 text-xs font-semibold"
           >
             {t('selection_brush_apply')}
           </button>
           <button
             type="button"
             onClick={clearBrushDraft}
+            className="action-control rounded-lg px-3 py-1.5 text-xs"
           >
             {t('selection_brush_clear')}
           </button>

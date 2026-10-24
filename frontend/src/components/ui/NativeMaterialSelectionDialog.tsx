@@ -199,6 +199,7 @@ function MaterialSelectionContent({ selection, isEditing }: {
               label={t(isEditing ? "native_material_edit_save" : "native_material_apply")}
               disabled={!canApply}
               onClick={() => void applySelection(profiles, plateId)}
+              variant="primary"
             />
           )}
         </footer>

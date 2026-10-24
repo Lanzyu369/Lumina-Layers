@@ -192,6 +192,7 @@ export default function ModelSurfacePanel() {
               <button
                 type="button"
                 onClick={clearModelSurface}
+                className="action-control self-start rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
               >
                 {t("model_surface_clear_model")}
               </button>

@@ -452,6 +452,7 @@ function LutColorGridInner() {
                 <button
                   type="button"
                   onClick={() => confirmReplacement()}
+                  className="action-control rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors"
                 >
                   {t("replace_confirm_btn")}
                 </button>

@@ -65,7 +65,14 @@ describe("BuildPlateSelector", () => {
     expect(onSelect).toHaveBeenCalledWith("textured-pei-plate");
   });
 
+  it("exposes the selected plate after a controlled selection changes", () => {
+    const view = renderSelector();
+    expect(screen.getByRole("radio", { name: "纹理PEI打印板" })).toBeChecked();
+    view.unmount();
 
+    renderSelector(vi.fn(), "zh", "engineering-plate");
+    expect(screen.getByRole("radio", { name: "工程材料打印板" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "纹理PEI打印板" })).not.toBeChecked();
   });
 
   it("scales the card and artwork frame for wide 4K viewports", () => {
