@@ -42,6 +42,7 @@ export default function SettingsCategoryNav({
     <nav
       aria-label={ariaLabel}
       data-testid="settings-category-nav"
+      className="settings-sidebar dock-scrollbar flex min-h-0 min-w-0 gap-1 overflow-x-auto border-b panel-divider p-3 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:overscroll-y-contain sm:border-b-0 sm:border-r sm:py-6"
     >
       {categories.map((category) => {
         const active = category.id === activeCategory;
