@@ -7498,6 +7498,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "已选颜色 {n}: {name}",
     en: "Selected color {n}: {name}",
   },
+  five_color_viewing_face: {
+    zh: "观赏面",
+    en: "Viewing Face",
+  },
+  five_color_bottom_face: {
+    zh: "底面",
+    en: "Bottom",
+  },
   five_color_slot_empty: {
     zh: "颜色槽 {n}: 空",
     en: "Color slot {n}: empty",
