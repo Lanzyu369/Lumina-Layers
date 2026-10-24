@@ -2084,7 +2084,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     // --- 图片 ---
     setImageFile: (file: File | null) => {
-      restoreConversionDefaultsForNewSource();
+      const currentFile = _get().imageFile;
+      // Rotations and other derived images still belong to the current project.
+      // Restore daily defaults only when the underlying source is replaced or cleared.
+      if (!file || !currentFile || resolveSourceFile(file) !== resolveSourceFile(currentFile)) {
+        restoreConversionDefaultsForNewSource();
+      }
       _cancelPreviewWork();
 
       // Revoke previous blob URL to avoid memory leaks

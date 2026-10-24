@@ -82,6 +82,42 @@ describe("conversion preferences", () => {
     stop();
   });
 
+  it.each([90, 180, 270] as const)("keeps imported printing parameters when rotating the project's SVG by %i degrees", async (degrees) => {
+    const stop = bindConversionPreferences();
+    try {
+      useConverterStore.getState().setTargetWidthMm(225);
+      useConverterStore.getState().setStructureMode(StructureMode.DOUBLE_SIDED);
+      useConverterStore.getState().setSpacerThick(1.2);
+      useConverterStore.getState().saveConversionPreset("日常默认");
+      const remembered = useSettingsStore.getState().conversionPreferences;
+      const source = new File([
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 100"><rect width="80" height="100" fill="red"/><rect x="80" width="80" height="100" fill="blue"/></svg>',
+      ], "project.svg", { type: "image/svg+xml" });
+      useConverterStore.getState().importRecipeState({ target_width_mm: 93, target_height_mm: 58.125,
+        structure_mode: StructureMode.SINGLE_SIDED, base_spacer_thick: 3, spacer_thick: 3 }, source);
+
+      await useConverterStore.getState().rotateImageForExport(degrees);
+
+      const rotated = useConverterStore.getState();
+      expect(rotated.imageFile).not.toBe(source);
+      expect(await rotated.imageFile!.text()).toContain(`rotate(${degrees})`);
+      expect(rotated).toMatchObject({ target_width_mm: 93, target_height_mm: 58.125,
+        structure_mode: StructureMode.SINGLE_SIDED, base_spacer_thick: 3, spacer_thick: 3,
+        conversionParameterContext: "project", error: null });
+      expect(useSettingsStore.getState().conversionPreferences).toEqual(remembered);
+
+      // A second edit still belongs to this project; a newly selected file does not,
+      // even if its filename and bytes match the imported source.
+      await rotated.rotateImageForExport(90);
+      expect(useConverterStore.getState()).toMatchObject({ target_width_mm: 93,
+        structure_mode: StructureMode.SINGLE_SIDED, base_spacer_thick: 3, conversionParameterContext: "project" });
+      useConverterStore.getState().setImageFile(new File([await source.text()], source.name, { type: source.type }));
+      expect(useConverterStore.getState()).toMatchObject({ target_width_mm: 225,
+        structure_mode: StructureMode.DOUBLE_SIDED, base_spacer_thick: 1.2, conversionParameterContext: "defaults" });
+      expect(useSettingsStore.getState().conversionPreferences.selectedPresetId).toBe(remembered.selectedPresetId);
+    } finally { stop(); }
+  });
+
   it("uses the last manually edited dimension as the size rule for new images", async () => {
     const stop = bindConversionPreferences();
     useConverterStore.setState({ aspectRatio: 2 });
