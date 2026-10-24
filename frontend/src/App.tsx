@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, Suspense, Component, lazy } from "react";
 import type { ReactNode } from "react";
 import apiClient from "./api/client";
+import { useApplicationMenuCommand, useApplicationMenuLanguage } from "./integrations/applicationMenu";
 import type { HealthResponse } from "./api/types";
 import { trackLuminaEvent } from "./analytics/umami";
 import { useAutoPreview } from "./hooks/useAutoPreview";
@@ -238,6 +239,7 @@ function AppContent({ connected }: { connected: boolean | null }) {
   useVectorPreviewRenderer();
   usePuzzleLayoutPreview();
   useElectronLanguageSync();
+  useApplicationMenuLanguage();
   useElectronGeneratedFileDirectorySync();
   useSharedSettingsPersistence();
   useDocumentThemeClass();
@@ -377,6 +379,9 @@ function AppContent({ connected }: { connected: boolean | null }) {
     },
     [activeTab, setActiveTab, clearMaterialVerification],
   );
+
+  useApplicationMenuCommand('settings', () => handleTabChange('settings'));
+  useApplicationMenuCommand('report', () => openBugReport(''), !reproMode.enabled);
 
   useEffect(() => {
     trackLuminaEvent("lumina_tab_view", {

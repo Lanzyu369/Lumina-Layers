@@ -15,6 +15,7 @@ import {
 import type { SlicerInfo } from "../../api/types";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
 import SlicerLogo from "../slicer/SlicerLogo";
+import { useApplicationMenuCommand } from "../../integrations/applicationMenu";
 import WikiTooltip from "../ui/WikiTooltip";
 
 /** Brand color style for a slicer button. 切片软件品牌配色样式。 */
@@ -405,6 +406,7 @@ export default function SlicerSelector({
 
   const isDisabled = !canSubmit || isDetecting || isLaunching || isAutoGenerating || isDownloading;
   const actionBusy = isLaunching || isAutoGenerating || isDownloading;
+  useApplicationMenuCommand('export', () => { void handleDownloadFromMenu(); }, Boolean(downloadUrl) && !isDisabled);
   const showActiveSlicerLogo = !largeFormat && activeSlicerId !== null;
 
   const mainButtonLabel = getButtonLabel(

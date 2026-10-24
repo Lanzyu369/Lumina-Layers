@@ -1,6 +1,12 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
+  setApplicationMenuState: (state) => ipcRenderer.send("application-menu-state", state),
+  onApplicationMenuCommand: (listener) => {
+    const forward = (_event, command) => listener(command);
+    ipcRenderer.on("application-menu-command", forward);
+    return () => ipcRenderer.removeListener("application-menu-command", forward);
+  },
   saveGeneratedFile: (payload) => ipcRenderer.invoke("save-generated-file", payload),
   setGeneratedFileDirectory: (directory) =>
     ipcRenderer.invoke("set-generated-file-directory", directory),
