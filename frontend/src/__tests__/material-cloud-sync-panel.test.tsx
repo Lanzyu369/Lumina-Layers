@@ -188,8 +188,24 @@ describe("MaterialCloudSyncPanel", () => {
     });
   });
 
+  it("keeps the new view inspectable without installing and supports the previous view", async () => {
+    render(<MaterialCloudSyncPanel />);
+    const card = await screen.findByRole("button", { name: /Silk PETG/ });
+    fireEvent.click(card);
+    expect(installMaterialRegistryCatalogEntry).not.toHaveBeenCalled();
+    const close = screen.getByRole("button", { name: /关闭|Close/i });
+    expect(close).toHaveFocus();
+    fireEvent.click(close);
+    expect(card).toHaveFocus();
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
+    expect(screen.getByTestId("material-cloud-sync-panel")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /新版|New/ }));
+    expect(screen.getByRole("button", { name: /Silk PETG/ })).toBeInTheDocument();
+  });
+
   it("renders the cloud catalog and installs a selected material", async () => {
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByTestId("material-cloud-sync-panel")).toBeInTheDocument();
     expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
@@ -236,6 +252,7 @@ describe("MaterialCloudSyncPanel", () => {
     );
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /下载到本地|download/i }));
@@ -258,6 +275,7 @@ describe("MaterialCloudSyncPanel", () => {
     );
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /下载到本地|download/i }));
@@ -270,6 +288,7 @@ describe("MaterialCloudSyncPanel", () => {
 
   it("reloads the cloud catalog without exposing an official password", async () => {
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
     vi.mocked(fetchMaterialRegistryCatalog).mockClear();
@@ -302,6 +321,7 @@ describe("MaterialCloudSyncPanel", () => {
     ]));
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     const cards = await screen.findAllByTestId("material-cloud-catalog-card");
     const cardFor = (name: string) => cards.find((card) => within(card).queryByText(name))!;
@@ -340,10 +360,10 @@ describe("MaterialCloudSyncPanel", () => {
     });
     expect(within(silkPetgCard).getByTestId("material-cloud-brand-tag")).toHaveTextContent("BrandB");
     expect(within(silkPetgCard).getByText("· #1478DC")).toBeInTheDocument();
-    expect(within(silkPetgCard).getAllByTestId("material-cloud-card-meta")).toHaveLength(4);
-    expect(within(silkPetgCard).getByText("BrandB/petg-silk")).toBeInTheDocument();
-    expect(within(silkPetgCard).getByText(/内容指纹|Fingerprint/i)).toBeInTheDocument();
-    expect(within(silkPetgCard).getByText("cloud")).toBeInTheDocument();
+    expect(within(silkPetgCard).getAllByTestId("material-cloud-card-meta")).toHaveLength(3);
+    expect(within(silkPetgCard).queryByText("BrandB/petg-silk")).not.toBeInTheDocument();
+    expect(within(silkPetgCard).queryByText(/内容指纹|Fingerprint/i)).not.toBeInTheDocument();
+    expect(within(silkPetgCard).queryByText("cloud")).not.toBeInTheDocument();
     expect(within(silkPetgCard).queryByText("rev_cloud")).not.toBeInTheDocument();
   });
 
@@ -352,6 +372,7 @@ describe("MaterialCloudSyncPanel", () => {
     vi.mocked(fetchMaterialRegistryCatalog).mockImplementation(serveCatalog(manyEntries(30)));
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByText("Item 00 PLA")).toBeInTheDocument();
     expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({ limit: PAGE_SIZE, offset: 0 });
@@ -383,6 +404,7 @@ describe("MaterialCloudSyncPanel", () => {
     vi.mocked(fetchMaterialRegistryCatalog).mockImplementation(serveCatalog(liveEntries));
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByText("Item 00 PLA")).toBeInTheDocument();
     liveEntries.splice(PAGE_SIZE);
@@ -405,6 +427,7 @@ describe("MaterialCloudSyncPanel", () => {
     vi.mocked(fetchMaterialRegistryCatalog).mockImplementation(serveCatalog(manyEntries(30)));
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByText("Item 00 PLA")).toBeInTheDocument();
     expect(screen.getByTestId("material-cloud-update-count")).toHaveTextContent("0");
@@ -427,6 +450,7 @@ describe("MaterialCloudSyncPanel", () => {
     vi.mocked(fetchMaterialRegistryCatalog).mockImplementation(serveCatalog(entries));
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByText("Item 00 PLA")).toBeInTheDocument();
     await waitFor(() => {
@@ -462,6 +486,7 @@ describe("MaterialCloudSyncPanel", () => {
     });
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("material-cloud-filter-updates"));
@@ -484,6 +509,7 @@ describe("MaterialCloudSyncPanel", () => {
     ]));
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByText("Item 00 PLA")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /下一页|next/i }));
@@ -506,6 +532,7 @@ describe("MaterialCloudSyncPanel", () => {
   it("debounces rapid typing while keeping refresh and clear immediate", async () => {
     vi.mocked(fetchMaterialSyncStatus).mockResolvedValue(statusWith([]));
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
     vi.mocked(fetchMaterialRegistryCatalog).mockClear();
@@ -564,6 +591,7 @@ describe("MaterialCloudSyncPanel", () => {
     vi.mocked(installMaterialRegistryCatalogEntry).mockReturnValueOnce(pendingInstall);
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
     expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole("button", { name: /下载到本地|download/i })[0]);
@@ -607,6 +635,7 @@ describe("MaterialCloudSyncPanel", () => {
     vi.mocked(fetchMaterialSyncStatus).mockResolvedValue(statusWith([]));
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
     expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
 
     vi.useFakeTimers();
@@ -670,6 +699,7 @@ describe("MaterialCloudSyncPanel", () => {
     });
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
     expect(await screen.findByText("Item 00 PLA")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /下一页|next/i }));
@@ -710,9 +740,10 @@ describe("MaterialCloudSyncPanel", () => {
 
   it("updates an installed material when the catalog revision is newer", async () => {
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect((await screen.findAllByText("PLA Pro")).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: /更新到 newer|update to newer/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(更新|Update)$/i }));
 
     await waitFor(() => {
       expect(installMaterialRegistryCatalogEntry).toHaveBeenCalledWith({
@@ -732,6 +763,7 @@ describe("MaterialCloudSyncPanel", () => {
     ]));
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect((await screen.findAllByText("PLA Basic")).length).toBeGreaterThan(0);
     await waitFor(() => {
@@ -739,7 +771,7 @@ describe("MaterialCloudSyncPanel", () => {
     });
     expect(screen.getByTestId("material-cloud-state-mat_test")).not.toHaveTextContent(/有新版本|update available/i);
     expect(screen.queryByRole("button", { name: /更新到 old|update to old/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /更新到 newer|update to newer/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^(更新|Update)$/i })).toBeInTheDocument();
   });
 
   it("treats matching local directory and content hash as installed when material ids differ", async () => {
@@ -763,6 +795,7 @@ describe("MaterialCloudSyncPanel", () => {
     ]));
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect((await screen.findAllByText("PLA Local")).length).toBeGreaterThan(0);
     expect(screen.getByTestId("material-cloud-sync-installed-count")).toHaveTextContent("1");
@@ -789,6 +822,7 @@ describe("MaterialCloudSyncPanel", () => {
     vi.mocked(fetchMaterialRegistryCatalog).mockImplementation(serveCatalog([]));
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByTestId("material-cloud-catalog-empty")).toBeInTheDocument();
     expect(screen.getByTestId("material-cloud-sync-installed-count")).toHaveTextContent("0");
@@ -798,6 +832,7 @@ describe("MaterialCloudSyncPanel", () => {
 
   it("shows the local revision notice collapsed with a count and short revision labels", async () => {
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     const section = await screen.findByTestId("material-cloud-local-installed-section");
     const toggle = within(section).getByTestId("material-cloud-local-toggle");
@@ -816,6 +851,7 @@ describe("MaterialCloudSyncPanel", () => {
 
   it("rolls back from the local revision notice when catalog search hides the card", async () => {
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
     fireEvent.change(screen.getByTestId("material-cloud-search-input"), {
@@ -837,6 +873,7 @@ describe("MaterialCloudSyncPanel", () => {
     vi.mocked(fetchMaterialRegistryCatalog).mockRejectedValue(new Error("catalog unavailable"));
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByTestId("material-cloud-sync-error")).toHaveTextContent("catalog unavailable");
 
@@ -855,6 +892,7 @@ describe("MaterialCloudSyncPanel", () => {
     ));
 
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByTestId("material-cloud-sync-notice")).toHaveTextContent(/未配置|not configured/i);
     expect(screen.queryByTestId("material-cloud-sync-error")).not.toBeInTheDocument();
@@ -868,6 +906,7 @@ describe("MaterialCloudSyncPanel", () => {
 
   it("renders installed catalog status and rolls back a previous revision", async () => {
     render(<MaterialCloudSyncPanel />);
+    fireEvent.click(screen.getByRole("tab", { name: /旧版|Previous/ }));
 
     expect(await screen.findByText("PLA Basic")).toBeInTheDocument();
     expect(screen.queryByTestId("material-cloud-filter-official")).not.toBeInTheDocument();

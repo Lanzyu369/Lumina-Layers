@@ -1,15 +1,17 @@
+import DisclosureChevron from "../ui/DisclosureChevron";
 import { useId, useState } from "react";
 
 import type { MaterialSyncInstalledEntry } from "../../api/types";
 import { useI18n } from "../../i18n/context";
 import { tRuntime } from "../../i18n/runtime";
 import Button from "../ui/Button";
-import { ChevronDown, HistoryIcon } from "../ui/icons";
-import { cardClass, cardDividerClass, cx } from "../ui/panelPrimitives";
+import { HistoryIcon } from "../ui/icons";
+import { cardClass, cardDividerClass } from "../ui/panelPrimitives";
 import { resolveRollbackRevisions, shortRevisionLabel } from "./catalogModel";
 
 interface MaterialCloudLocalRevisionsProps {
   entries: MaterialSyncInstalledEntry[];
+  compact?: boolean;
   pendingRollback: string | null;
   formatDate: (value: string | null | undefined) => string;
   onRollback: (entry: MaterialSyncInstalledEntry, revisionId: string) => void;
@@ -21,6 +23,7 @@ interface MaterialCloudLocalRevisionsProps {
  */
 export default function MaterialCloudLocalRevisions({
   entries,
+  compact = false,
   pendingRollback,
   formatDate,
   onRollback,
@@ -36,7 +39,7 @@ export default function MaterialCloudLocalRevisions({
   return (
     <section
       data-testid="material-cloud-local-installed-section"
-      className={`${cardClass} px-4 py-3`}
+      className={compact ? "min-w-0" : `${cardClass} px-4 py-3`}
     >
       <button
         type="button"
@@ -46,9 +49,9 @@ export default function MaterialCloudLocalRevisions({
         onClick={() => setExpanded((value) => !value)}
         className="flex w-full min-w-0 items-center gap-3 rounded-[10px] text-left focus:outline-none focus-visible:ring-4 focus-visible:ring-[var(--focus-ring)]"
       >
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300">
+        {!compact && <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300">
           <HistoryIcon />
-        </span>
+        </span>}
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-50">
             {t("mat_sync_local_section_title")}
@@ -56,15 +59,13 @@ export default function MaterialCloudLocalRevisions({
               {entries.length}
             </span>
           </span>
-          <span className="mt-0.5 block truncate text-xs text-slate-500 dark:text-slate-400">
-            {t("mat_sync_local_section_hint")}
-          </span>
+          {!compact && <span className="mt-0.5 block truncate text-xs text-slate-500 dark:text-slate-400">{t("mat_sync_local_section_hint")}</span>}
         </span>
         <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
           <span className="hidden sm:inline">
             {t(expanded ? "mat_sync_local_section_collapse" : "mat_sync_local_section_expand")}
           </span>
-          <ChevronDown className={cx("h-4 w-4 transition-transform", expanded && "rotate-180")} />
+          <DisclosureChevron expanded={expanded} />
         </span>
       </button>
 

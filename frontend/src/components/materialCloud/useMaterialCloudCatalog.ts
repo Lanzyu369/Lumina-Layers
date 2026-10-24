@@ -563,6 +563,10 @@ export function useMaterialCloudCatalog() {
     dismissError: () => setError(null),
     dismissSuccess: () => setSuccess(null),
     resolveEntryInstallState,
+    resolveLocalDirectory: (entry: MaterialRegistryCatalogEntry): string | null => {
+      const installed = resolveCatalogInstalledEntry(entry);
+      return installed && hasLocalMaterialFiles(installed) ? installed.local_directory : null;
+    },
     handleSearchQueryChange,
     selectFilter,
     goToPage,

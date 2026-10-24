@@ -1,3 +1,5 @@
+import { LibraryIdentity, LibraryFields } from "./ui/LibraryDetails";
+import CloudLibraryPreview, { CloudLibraryVersionTabs } from "./ui/CloudLibraryPreview";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 
@@ -87,14 +89,6 @@ const normalizeRecord = (value: unknown): Record<string, unknown> | null =>
     ? value as Record<string, unknown>
     : null;
 
-const shortFingerprint = (value: string): string => {
-  const normalized = value
-    .replace(/^sha256:/i, "")
-    .replace(/^rev_/i, "")
-    .trim();
-  return normalized ? normalized.slice(0, 12) : "-";
-};
-
 const catalogItemKey = (entry: CloudLutRegistryCatalogItem): string =>
   `${entry.lut_id}:${entry.revision_id}`;
 
@@ -109,6 +103,11 @@ const resolveCatalogInstallState = (
   }
   return "not_installed";
 };
+
+const resolveLocalPath = (entry: CloudLutRegistryCatalogItem): string | null =>
+  resolveCatalogInstallState(entry) === "not_installed"
+    ? null
+    : entry.installed_path || entry.local_match_path || null;
 
 const mergeCatalogPage = (
   current: CloudLutRegistryCatalogResponse | null,
@@ -132,6 +131,8 @@ export default function LutCloudSyncPanel() {
   const workspace = useWorkspaceMode();
   const [status, setStatus] = useState<CloudLutRegistryStatusResponse | null>(null);
   const [catalog, setCatalog] = useState<CloudLutRegistryCatalogResponse | null>(null);
+  const [modern, setModern] = useState(true);
+  const versionTabs = <CloudLibraryVersionTabs modern={modern} onChange={setModern} />;
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -255,6 +256,36 @@ export default function LutCloudSyncPanel() {
     : (status?.installed_count ?? 0);
   const hasMoreCatalogEntries = status?.configured === true && catalogLoadedCount < catalogTotalCount;
 
+  // The new view completes the lightweight catalog before presenting search as complete.
+  useEffect(() => {
+    if (modern && hasMoreCatalogEntries && !isLoading && !isLoadingMore && !error) void loadMoreCatalog();
+  }, [modern, hasMoreCatalogEntries, isLoading, isLoadingMore, error, loadMoreCatalog]);
+
+  if (modern) return <CloudLibraryPreview versions={versionTabs} resetKey={searchQuery} busy={isLoading}
+    toolbar={<><input type="search" aria-label={t("lut_sync_search_placeholder")} placeholder={t("lut_sync_search_placeholder")} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} className="min-w-48 flex-1 rounded-lg bg-slate-100 px-4 py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-slate-800" /><span className="text-xs text-slate-500">{t("cloud_library_results")} · {filteredItems.length}</span><Button label={t("lut_sync_refresh_btn")} variant="secondary" loading={isRefreshing} onClick={() => void refreshCatalog()} /></>}
+    notices={<>{notice && <StatusBanner tone="warning">{notice}</StatusBanner>}{error && <StatusBanner tone="error">{error}</StatusBanner>}{success && <StatusBanner tone="success">{success}</StatusBanner>}{hasMoreCatalogEntries && <StatusBanner tone="info">{t("cloud_library_loading_index")}<Button label={t("lut_sync_load_more_btn")} variant="secondary" loading={isLoadingMore} onClick={() => void loadMoreCatalog()} /></StatusBanner>}</>}
+    items={filteredItems.map((entry) => {
+      const display = normalizeRecord(entry.display);
+      const name = readDisplayString(display, ["name", "display_name", "lut_name", "title"]) ?? entry.local_path ?? entry.lut_id;
+      const maker = readDisplayString(display, ["manufacturer", "brand", "vendor"]) ?? t("lut_sync_unknown");
+      const mode = readCompatibilityString(normalizeRecord(entry.compatibility), ["color_mode", "mode", "profile"]) ?? t("lut_sync_unknown");
+      const state = resolveCatalogInstallState(entry);
+      const key = catalogItemKey(entry);
+      const action = state === "not_installed" ? <Button label={t("lut_sync_install_btn")} variant="secondary" loading={pendingInstall === key} disabled={pendingInstall !== null} onClick={() => void handleInstall(entry)} /> : undefined;
+      return {key, name, subtitle: maker, metric: mode, state: t(`lut_sync_catalog_state_${state}`), action,
+        detail: <div className="grid gap-5">
+          <LibraryIdentity name={name} subtitle={[maker, readDisplayString(display, ["material_type", "material"])].filter(Boolean).join(" · ")} />
+          <LibraryFields rows={[{ label: t("lut_library_color_mode_label"), value: mode }]} />
+          <LibraryFields rows={[
+            { label: t("lut_sync_catalog_state_label"), value: t(`lut_sync_catalog_state_${state}`) },
+            ...(entry.channel ? [{ label: t("mat_sync_channel_label"), value: ["official", "community", "team"].includes(entry.channel) ? t(`mat_sync_channel_${entry.channel}`) : entry.channel }] : []),
+            { label: t("lut_sync_package_size_label"), value: formatBytes(Number(entry.package_bytes)) },
+            ...(resolveLocalPath(entry) ? [{ label: t("lut_sync_local_path_label"), value: resolveLocalPath(entry), multiline: true }] : []),
+          ]} />
+          {action}
+        </div>};
+    })} />;
+
   return (
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
@@ -263,6 +294,7 @@ export default function LutCloudSyncPanel() {
       data-testid="lut-cloud-sync-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
+      {versionTabs}
       <section className={`${cardPadClass} grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center`}>
         <div className="min-w-0">
           <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">
@@ -428,19 +460,15 @@ export default function LutCloudSyncPanel() {
                         {t(`lut_sync_catalog_state_${installState}`)}
                       </dd>
                     </div>
-                    <div data-testid="lut-cloud-card-meta" className="min-w-0">
-                      <dt className="font-medium text-slate-500 dark:text-slate-400">
-                        {t("lut_sync_local_path_label")}
-                      </dt>
-                      <dd className="mt-1 truncate">{entry.local_path || "-"}</dd>
-                    </div>
-                    <div data-testid="lut-cloud-card-meta" className="grid min-w-0 grid-cols-2 gap-3">
-                      <div className="min-w-0">
+                    {resolveLocalPath(entry) && (
+                      <div data-testid="lut-cloud-card-meta" className="min-w-0">
                         <dt className="font-medium text-slate-500 dark:text-slate-400">
-                          {t("lut_sync_content_fingerprint_label")}
+                          {t("lut_sync_local_path_label")}
                         </dt>
-                        <dd className="mt-1 truncate">{shortFingerprint(entry.content_hash)}</dd>
+                        <dd className="mt-1 truncate">{resolveLocalPath(entry)}</dd>
                       </div>
+                    )}
+                    <div data-testid="lut-cloud-card-meta" className="min-w-0">
                       <div className="min-w-0">
                         <dt className="font-medium text-slate-500 dark:text-slate-400">
                           {t("lut_sync_package_size_label")}

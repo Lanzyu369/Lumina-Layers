@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { LibraryIdentity, LibraryFields } from "./ui/LibraryDetails";
+import CloudLibraryPreview, { CloudLibraryVersionTabs } from "./ui/CloudLibraryPreview";
+import { resolveCatalogDisplay, resolveCatalogFitError, resolveCatalogChannel, formatBytes, toRgbCss } from "./materialCloud/catalogModel";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
@@ -14,7 +17,7 @@ import {
 } from "./materialCloud/useMaterialCloudCatalog";
 import Button from "./ui/Button";
 import Pagination from "./ui/Pagination";
-import { XIcon } from "./ui/icons";
+import CloseButton from "./ui/CloseButton";
 import {
   StatusBanner,
   cardPadClass,
@@ -36,19 +39,7 @@ const filterChipClass = (active: boolean) => cx(
     : "border-slate-200/80 bg-[var(--surface-panel)] text-slate-600 hover:border-slate-300 dark:border-slate-700/80 dark:text-slate-300 dark:hover:border-slate-600",
 );
 
-function DismissButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-900/5 hover:text-slate-800 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)] dark:text-slate-400 dark:hover:bg-slate-100/10 dark:hover:text-slate-100"
-    >
-      <XIcon />
-    </button>
-  );
-}
+const DismissButton = CloseButton;
 
 function StatTile({
   label,
@@ -125,6 +116,9 @@ export default function MaterialCloudSyncPanel() {
   const { t, lang } = useI18n();
   const workspace = useWorkspaceMode();
   const catalog = useMaterialCloudCatalog();
+  const [modern, setModern] = useState(true);
+  const [showHistory, setShowHistory] = useState(false);
+  const versionTabs = <CloudLibraryVersionTabs modern={modern} onChange={setModern} />;
   const { dismissSuccess, success, view } = catalog;
   const listTopRef = useRef<HTMLDivElement | null>(null);
 
@@ -241,6 +235,7 @@ export default function MaterialCloudSyncPanel() {
               <MaterialCloudCatalogCard
                 key={entryKey}
                 entry={entry}
+                localDirectory={catalog.resolveLocalDirectory(entry)}
                 installState={catalog.resolveEntryInstallState(entry)}
                 isInstalling={catalog.pendingInstall === entryKey}
                 installDisabled={catalog.pendingInstall !== null}
@@ -275,6 +270,46 @@ export default function MaterialCloudSyncPanel() {
     );
   };
 
+  if (modern) {
+    const entries = view.kind === "entries" ? view.entries : [];
+    return <CloudLibraryPreview versions={versionTabs} busy={isListBusy || view.kind !== "entries"} resetKey={`${catalog.searchQuery}:${catalog.activeFilter}:${view.kind === "entries" ? view.page : 0}`}
+      toolbar={<>
+        <input type="search" aria-label={t("mat_sync_search_placeholder")} placeholder={t("mat_sync_search_placeholder")} value={catalog.searchQuery} onChange={(event) => catalog.handleSearchQueryChange(event.target.value)} className="min-w-48 flex-1 rounded-lg bg-slate-100 px-4 py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-slate-800" />
+        <div className="flex flex-wrap gap-2" role="group" aria-label={t("mat_sync_filter_group_label")}>{CATALOG_FILTERS.map((filter) => <button key={filter} type="button" aria-pressed={catalog.activeFilter === filter} onClick={() => catalog.selectFilter(filter)} className={`rounded-lg px-3 py-2 text-xs focus-visible:ring-2 focus-visible:ring-blue-500 ${catalog.activeFilter === filter ? "bg-slate-200 dark:bg-slate-700" : "bg-slate-100 dark:bg-slate-800"}`}>{t(`mat_sync_filter_${filter}`)} {catalog.filterCounts[filter] ?? "…"}</button>)}</div>
+        <Button label={t("mat_sync_local_section_title")} variant="secondary" onClick={() => setShowHistory((value) => !value)} />
+        <Button label={t("mat_sync_refresh_btn")} variant="secondary" loading={catalog.isRefreshing} disabled={catalog.isLoading} onClick={() => void catalog.refreshCatalog()} />
+      </>}
+      notices={<>{showHistory && <MaterialCloudLocalRevisions entries={catalog.rollbackCandidates} pendingRollback={catalog.pendingRollback} formatDate={formatDate} onRollback={(item, revision) => void catalog.rollbackEntry(item, revision)} />}{catalog.error && <StatusBanner tone="error">{catalog.error}</StatusBanner>}{catalog.notice && <StatusBanner tone="info">{catalog.notice}</StatusBanner>}{success && <StatusBanner tone="success">{success}</StatusBanner>}{view.kind !== "entries" && renderCatalogBody()}</>}
+      footer={view.kind === "entries" && <><span className="text-xs text-slate-500">{t("cloud_library_results")} · {view.total}</span>{view.pageCount > 1 && <Pagination page={view.page} pageCount={view.pageCount} onPageChange={handlePageChange} disabled={paginationDisabled} showJump={view.pageCount > 7} />}</>}
+      items={entries.map((entry) => {
+        const display = resolveCatalogDisplay(entry);
+        const fit = resolveCatalogFitError(entry);
+        const state = catalog.resolveEntryInstallState(entry);
+        const key = catalogEntryKey(entry);
+        return { key, name: display.name, subtitle: [display.brand, display.materialType].filter(Boolean).join(" · "), color: display.rgb ? toRgbCss(display.rgb) : undefined,
+          metric: fit.meanDeltaE === null ? t("mat_sync_fit_error_missing") : `${t("mat_sync_fit_error_label")} ${fit.meanDeltaE.toFixed(2)}`,
+          state: t(`mat_sync_catalog_state_${state}`),
+          action: state === "installed" || state === "local_available" ? undefined : <Button label={t(state === "update_available" ? "cloud_library_update" : "mat_sync_install_btn")} variant="secondary" loading={catalog.pendingInstall === key} disabled={catalog.pendingInstall !== null} onClick={() => void catalog.installEntry(entry)} />,
+          detail: <div className="grid gap-5">
+            <LibraryIdentity name={display.name} subtitle={[display.brand, display.materialType].filter(Boolean).join(" · ")} color={display.rgb ? toRgbCss(display.rgb) : undefined} />
+            <LibraryFields rows={[
+              { label: t("mat_sync_fit_error_label"), value: fit.meanDeltaE?.toFixed(2) ?? "—" },
+              ...(fit.layerHeightMm !== null ? [{ label: t("mat_gradient_library_layer_height_label"), value: `${fit.layerHeightMm} mm` }] : []),
+              ...(fit.verificationCount !== null ? [{ label: t("mat_gradient_library_verification_count_label"), value: fit.verificationCount }] : []),
+            ]} />
+            <LibraryFields rows={[
+              { label: t("mat_sync_catalog_state_label"), value: t(`mat_sync_catalog_state_${state}`) },
+            { label: t("mat_sync_channel_label"), value: resolveCatalogChannel(entry) === "other" ? entry.channel : t(`mat_sync_channel_${resolveCatalogChannel(entry)}`) },
+              { label: t("mat_sync_package_size_label"), value: formatBytes(entry.package_bytes) },
+              ...(catalog.resolveLocalDirectory(entry) ? [{ label: t("mat_gradient_library_directory_label"), value: catalog.resolveLocalDirectory(entry), multiline: true }] : []),
+            ]} />
+              {state !== "installed" && state !== "local_available" && <Button label={t(state === "update_available" ? "cloud_library_update" : "mat_sync_install_btn")} variant="secondary" loading={catalog.pendingInstall === key} disabled={catalog.pendingInstall !== null} onClick={() => void catalog.installEntry(entry)} />}
+            <MaterialCloudLocalRevisions compact entries={catalog.rollbackCandidates.filter((item) => item.material_id === entry.material_id)} pendingRollback={catalog.pendingRollback} formatDate={formatDate} onRollback={(item, revision) => void catalog.rollbackEntry(item, revision)} />
+          </div>
+        };
+      })} />;
+  }
+
   return (
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
@@ -283,6 +318,7 @@ export default function MaterialCloudSyncPanel() {
       data-testid="material-cloud-sync-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-4`}
     >
+      {versionTabs}
       <section className={`${cardPadClass} grid gap-4`}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
