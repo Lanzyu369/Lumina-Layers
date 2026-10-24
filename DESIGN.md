@@ -1,10 +1,113 @@
 # Design System Inspired by Apple
 
+## Application Background Levels
+
+- 浅色模式的默认页面背景使用 `slate-50`；顶部两级导航和设置页左侧分类导航使用 `slate-200`，与内容区形成层次。
+- macOS 桌面端使用 `hidden` 标题栏，保留系统原生红黄绿按钮；一级导航直接放入标题栏，省去独立标题行，保留 Logo 和应用标题，左侧预留按钮空间。空白区域可拖动，导航及右侧控件使用 `no-drag`；窄窗口沿用标题收起和导航换行布局。浏览器和 Linux 保持原有窗口布局。
+- macOS 红黄绿按钮与顶栏第一行 Logo 垂直居中对齐，距窗口左边缘 16pt；首次在纵向边距为零时通过 Window Controls Overlay 测量原生按钮高度，按界面缩放换算定位，左侧按 `titlebar-area-x` 预留按钮空间。导航换行时仍对齐第一行，不使用固定按钮高度或人工纵向偏移。
+- Windows 同样合并一级导航，使用 Window Controls Overlay 保留系统窗口按钮，按 `titlebar-area-*` 环境变量避让右侧按钮并适应缩放；窗口按钮区域同步浅色／深色主题。浏览器和 Linux 保持原有布局。
+- 页面容器使用 `--surface-panel`，弹窗使用 `--surface-panel-strong`，浅色模式均映射到 `slate-50`。需要保留卡片外框的整块工作面板使用 `panel-default-surface`，不要直接沿用白色 `--surface-card`；卡片和输入控件不等同于页面背景。
+- 原先使用 `slate-50` 的内部控件、浅灰卡片和分组背景使用 `slate-100`；页面本身不随之加深。耗材卡片的悬停与选中背景使用 `slate-200`，文字保留原色。
+- 深色模式保持独立映射；真实颜色色块、透明棋盘格、图标和主题开关指示点不参与背景色阶迁移。
+
+## 仓库类页面设计规范
+
+适用于以浏览、查找、选择和管理资源为主要任务的页面，例如耗材库、LUT 库。目标是让用户持续定位资源、切换比较，并在需要时查看详细信息。页面应按以下规则实现；资源特有的字段、操作和分组名称按业务决定。
+
+### 页面结构与视觉层级
+
+- 页面由固定工具栏、可滚动资源列表、按需打开的详情区组成。工具栏放在导航下方，列表独立滚动；不在整页、统计区或整个列表外再套圆角卡片。
+- 页面与工具栏浅色背景使用 `slate-50`，搜索框和资源卡片使用 `slate-100`。悬停、选中使用 `slate-200`，保留原文字颜色。深色对应页面 `slate-950`、卡片 `slate-800`、悬停和选中 `slate-700`。
+- 卡片使用 10px 圆角、1px 细边框、无阴影。浅色默认边框 `slate-200`、选中 `slate-300`；深色默认 `slate-700`、选中 `slate-500`。以底色层次表达状态，不复用导航的白字蓝底选中样式。
+- 资源名称使用主文字色，类型、误差、日期等使用次要文字色。只使用现有 slate 色阶与共享主题令牌，不为单个仓库另建颜色体系。真实资源色块保留自身颜色。
+
+### 固定工具栏
+
+- 左侧放搜索与简洁统计，右侧放展开／收起、选择、导入、刷新等操作。工具栏宽度不足时自然换行，不压缩按钮文字。导航已经说明页面位置时，不重复放页面标题。
+- 统计使用“资源数 · 分组数”；选择模式显示已选数量。搜索时统计反映匹配结果，避免把全库总量当作当前结果数。
+- 工具栏保持不动，下方内容独立滚动。分界线在内容滚离顶部时显示，回到顶部时在 200ms 内渐隐；保留边框占位，避免布局跳动。减少动态效果偏好下关闭过渡。
+- 格式说明、导入方式等静态帮助放在操作入口的提示中。错误、当前进度及无法操作的原因保持可见，不用常驻说明段落占据工具栏空间。
+
+### 搜索与选择
+
+- 搜索覆盖用户可识别的名称、品牌／分组和资源类型，忽略首尾空白及大小写。搜索后回到列表顶部、自动展开匹配分组，并提供明确的无结果状态。
+- 搜索期间的分组展开状态与常规浏览分开维护。清空搜索后恢复原来的展开状态，不改写固定分组偏好。
+- 浏览模式下点击卡片查看详情；批量操作由明确的“选择”入口进入，卡片增加勾选标记。不得让一次点击同时承担查看详情和批量选择。
+- 搜索后的“全选／清除选择”只作用于当前结果，保留结果之外的已有选择；已选总数应仍可见。切换分组展开状态不清除选择。
+
+### 分组管理
+
+- 分组栏使用名称、带单位的数量、展开箭头及固定按钮。数量单位应符合资源含义，例如耗材显示“6种”，不只显示裸数字。
+- 普通分组默认收起。固定按钮记住“每次进入默认展开”的偏好；当前手动收起或“全部收起”不取消固定。所有当前分组已收起时，工具栏按钮变为“全部展开”，否则为“全部收起”。
+- 整条分组栏支持拖拽排序，不额外占用位置放拖动把手。拖动前设置小幅移动阈值，普通点击仍执行展开／收起；固定按钮独立响应，不触发拖动。
+- 拖动时浮层呈现完整分组栏，其他分组实时让位；松手后保存顺序，Esc 取消。固定、展开、选择等状态按资源／分组身份关联，不依赖显示位置。新分组不打乱已保存顺序。
+- 分组栏可通过键盘聚焦，使用上下方向键调整顺序；展开状态、固定状态和焦点应有可访问的表达。
+
+### 资源卡片
+
+- 卡片服务于快速识别和比较：优先展示色块／缩略图、名称、类型，以及确实影响选择的少量指标。耗材的拟合误差属于比较信息，可以直接展示；目录、路径、内部来源枚举等实现信息放入详情。
+- 默认卡片宽度为 `15rem`，卡片间距为 `1rem`。采用固定列宽并自动换行，不用 `1fr` 均分剩余宽度。详情打开或关闭时只改变列数，不改变卡片宽度、色块、字号和内部间距；极窄容器不足 `15rem` 时允许卡片收缩至容器宽度，避免横向溢出。
+- 卡片内边距为 `1.25rem`，图文间距为 `1rem`；耗材色块为 `3.5rem × 3.5rem`。名称与次要信息之间留 `0.5rem`，类型、误差、日期之间留 `0.25rem`。不强制截断长名称来凑相同高度。
+- 同一品牌／分组内的卡片保持等高，高度由该分组内容最多的卡片自然撑开，可使用 `auto-rows-fr` 与 `items-stretch`；不同分组独立计算，不设置全库统一的固定高度。
+- 等高卡片的文字区域统一顶部对齐，标题从相同的顶部内边距开始，后续字段按规定间距自然排列。短内容留下的空间放在底部，不将整块文字垂直居中，也不拉大字段间距填满卡片；按钮形式的卡片应显式设置内容布局，避免浏览器默认对齐造成错位。
+- 同名资源需要明确区分时，增加简洁的更新日期／时间，缺失时回退创建时间；不把长目录名追加到卡片，也不以临时序号代替可识别信息。完整来源和时间保留在详情中。
+- 信息缺失应如实显示未填写或缺失值，不推断类型、不把未知误差显示成零。
+
+### 详情与交互反馈
+
+- 详情统一按资源身份、选择依据、辅助信息、底部操作排列。顶部直接显示资源名称、品牌／类型和可用的色块，不重复“查看详情”标题；关闭按钮在右上角。
+- 普通字段使用左标签右数值的紧凑行，路径和目录默认与标签同行，仅空间不足时自然换行。耗材优先显示拟合误差和采集层高，LUT 优先显示颜色模式；仅展示实际可用的数据，不推测配色或日期。
+- 云端安装状态紧邻下载／更新操作，已安装不显示禁用的大按钮；可回退的版本记录按需打开。详情的全部操作集中在完整信息之后，不穿插字段；多个操作使用等尺寸两列布局，删除用红字中性底并入操作区。
+
+
+- 宽窗口下详情占独立侧列，与资源列表并列展示；不覆盖可点击的列表。允许卡片换行，固定卡片自身尺寸，方便连续切换比较。
+- 窄窗口下详情进入正常文档布局，避免将列表挤成不可用的窄列。详情按基本信息、业务指标和使用记录组织；路径、日期、大小等文件字段直接与其他详情排列，不设置“文件信息”标题、分组边界或折叠层级，其他低频信息可折叠，破坏性操作用红字中性底明确区分。
+- 切换资源时复用详情区，不跳转到独立页面。关闭按钮和 Esc 均可关闭详情，并把焦点还给触发卡片；宽窗口下打开详情不应主动滚动列表。
+- 拖拽、固定等简短操作提示使用共享的样式化悬停／键盘焦点提示组件（`HeaderTooltip`）；拖动期间隐藏提示。参数说明和详细帮助使用 `HelpDot`／控件 `tooltip`，不使用浏览器原生 `title` 气泡。
+- 普通操作复用共享按钮组件。通过语义状态、勾选标记、细边框和键盘焦点区分交互，不增加与导航争夺注意力的大面积强调色。
+
+### 实现与验收
+
+- 复用共享颜色、按钮、提示和拖拽组件；文本集中维护在翻译表。分组固定和顺序保存在本地，存储不可用时当前会话仍能操作；临时搜索和展开不覆盖长期偏好。
+- 验证宽窄布局、深浅主题、键盘操作和减少动态效果。检查列表滚动时工具栏稳定，打开详情前后卡片宽度不变，清空搜索恢复分组状态，拖拽后顺序与固定设置可恢复。
+- 不把业务字段或当前数据量写成所有仓库都必须一致的模板。新增字段应先判断它是否帮助用户在列表中识别或比较，否则放入详情。
+
+### 云端仓库的差异
+
+- 沿用仓库页面底色、固定工具栏、固定宽度卡片及并列详情；云端目录以搜索、状态筛选和分页浏览为主，不默认复制本地品牌折叠、拖拽排序及固定展开。
+- 卡片保留安装状态与下载／更新快捷入口，点击主体只查看详情，不触发安装。已安装状态不再重复占用一个禁用的大按钮。状态应有文字表达，不仅依靠颜色。
+- 卡片按当前行等高、文字顶部对齐、操作贴底，不因后续加载的长标题改变整个品牌已有卡片高度。
+- 搜索必须说明覆盖范围；未加载完整目录时不能把局部无结果表述为全库无结果。统计区分当前匹配目录与本地安装记录，不用同一个“已安装”标签表示不同范围的数量。
+- 路径、体积与版本记录放在详情；内容哈希仅供内部比对，不在用户界面展示；版本管理仍应提供全局入口，保证已不在当前目录中的本地记录也能访问。普通浏览不执行下载、更新或回滚。
+- 未下载或本地文件缺失的条目不显示本地路径；本地路径仅取自已确认存在的本地匹配或安装记录，不用云端目录预设的安装目标代替。
+- 新旧版对比入口是临时验收功能，两个版本共用数据和操作逻辑；切换不得清空搜索或中断正在执行的操作。
+
+## 关闭按钮
+
+- 详情区、侧栏及弹窗的关闭入口统一使用共享 `CloseButton`，放在右上角：圆形灰底、居中的叉号图标，无边框、无阴影，不使用单独的“关闭”文字或方形底。
+- 点击区域为 32×32px，叉号为 20×20px。浅色底为 `slate-200`、图标为 `slate-600`，悬停加深至 `slate-300`；深色底为 `slate-700`、图标为 `slate-300`，悬停为 `slate-600`。使用矢量叉号，避免 emoji 随平台改变颜色和外观。
+- 使用本地化的“关闭”可访问名称（`aria-label`），保留可见焦点环；叉号含义明确，不显示悬停／键盘焦点提示，也不添加原生 `title`。普通关闭不使用删除操作的危险色。
+- 关闭图标、Esc 和允许的遮罩点击应调用同一关闭逻辑；存在未保存检查时不能绕过。关闭后将焦点恢复至触发入口。
+- “取消编辑”“退出选择模式”“返回”和“退出应用”具有不同含义，不因采用此样式而替换成关闭图标。系统原生窗口按钮沿用平台外观。
+
+## 展开与收起
+
+- 可折叠的内容分组及面板统一使用 `DisclosureChevron`：16×16px、2px 细线箭头，收起向右、展开向下，不使用实心三角或文字字符代替图标。
+- 箭头放在标题行右侧，不另加圆形底或边框；它表示内容展开状态，与圆形灰底叉号的关闭操作区分。沿用 slate 次要文字色，旋转过渡为 200ms，减少动态效果时取消过渡。
+- 原生 `details` 使用共享 `DisclosureSummary`，隐藏浏览器默认标记，保留原生点击和键盘行为；受控按钮通过 `aria-expanded` 表达状态。图标本身对辅助技术隐藏，按钮保留明确名称和键盘焦点。
+- 下拉选择器、导航返回、排序方向和全屏按钮有不同含义，不套用内容折叠规则。
+
+## Native Scroll Boundaries
+
+- 独立页面、工作区侧栏和弹窗正文使用稳定的原生滚动容器，并设置 `overscroll-y-contain`，让触顶或触底后的滚动停留在所属区域。
+- 区域内的小列表保留默认滚动衔接：列表到边界后可以继续滚动所属面板。不要给所有 `overflow-auto` 或 `.dock-scrollbar` 统一加隔离。
+- 悬停只改变滚动条的外观，不切换 `overflow`；普通 DOM 内的滚动不通过 `wheel` 监听器手动改写 `scrollTop`。跨 Portal 的滚动衔接也必须尊重所属面板的边界。
+
 ## Color Workstation Selection Invariants
 
 - 颜色调整页使用连续的直角工作区：预览、选择工具、换色与 LUT 区域通过横向或竖向 `panel-divider` 分割，不使用圆角卡片外框或阴影。控件保留自身圆角。
 - 历史、选择工具、自由色、配方、悬停显示、目标颜色 B 和相似配方的分组标题使用中性文字，不添加装饰色点。
-- 该页工具的选中态使用导航选中态主题变量（蓝底白字与同色细边框），保留 `aria-pressed` 和键盘焦点轮廓；悬停时继续显示选中态。
+- 共享选择工具使用独立的 `selection-tool-control` 样式，不引用导航选中态变量。浅色默认 `slate-100`、激活 `slate-200`，文字 `slate-900`；深色默认 `slate-800`、激活 `slate-700`，文字 `slate-100`。保留 `aria-pressed`、细描边和键盘焦点轮廓，悬停不清除激活态。「选区闪烁」放在选择工具下方的独立行，使用共享 `Switch` 组件，不使用工具按钮选中态。
 
 - **Tool is not selection:** switching between Same color, Pick blocks, and Selection brush never clears or rewrites the shared selection.
 - **The server mask is authoritative:** every tool edits one revisioned union mask; the frontend may render an exact local flood-fill immediately, but stale responses cannot overwrite a newer intent.
@@ -210,7 +313,7 @@ Typography is the stabilizer. SF Pro Display carries hero and merchandising hier
 
 #### Placement Standard (放置标准)
 
-All hover tooltip hints across all tabs follow this single source of truth. A visible info icon (ⓘ, stroke-style, no background — rendered by `HelpDot`) is shown for every control that has a hint — there is no hidden/implicit tooltip.
+Parameter explanations across all tabs follow this single source of truth. A visible info icon (ⓘ, stroke-style, no background — rendered by `HelpDot`) is shown for controls with explanatory help. Short action hints (such as pinning or dragging) use the shared `HeaderTooltip` on the action itself, as specified for repository pages above; they do not require an additional info icon.
 
 | Trigger type | When used | Implementation |
 |---|---|---|
@@ -258,7 +361,7 @@ Image-to-Vector tab (`VectorizerPanel.tsx`) is the canonical reference:
 - When inline text and a help icon both appear, the inline text states the current result or constraint briefly; the tooltip supplies the explanation and detail. Do not reuse the same explanation in both places.
 - Hint text must be bilingual (`zh` + `en`) in `translations.ts` with a `*_hint` suffix key
 - The ⓘ icon visual style is fixed in `HelpDot` (stroke-style `InfoIcon`, no background); do not recreate it inline
-- Every control that has a hint **must** display a visible ⓘ icon — never use a hidden/implicit-only tooltip
+- Every control with parameter explanations **must** display a visible ⓘ icon. Short action hints use the shared hover/focus tooltip exception described above.
 - Hint copy is written for end users: describe the visible effect and the trade-off, avoid algorithm terms (e.g. no "K-Means", "8-neighborhood", "L\* roll-off")
 
 #### 提示语与帮助说明的信息分工
