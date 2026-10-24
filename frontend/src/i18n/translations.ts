@@ -4,6 +4,9 @@
  * Contains all zh/en translation key-value pairs
  */
 export const translations: Record<string, Record<"zh" | "en", string>> = {
+  cloud_library_update: { zh: "更新", en: "Update" },
+  cloud_library_results: { zh: "匹配结果", en: "Matching results" },
+  cloud_library_loading_index: { zh: "正在加载完整目录，搜索结果尚不完整…", en: "Loading the full catalog; search results are not complete yet…" },
   desktop_menu_about: { zh: "关于 Lumina Studio", en: "About Lumina Studio" },
   desktop_menu_settings: { zh: "设置…", en: "Settings…" },
   desktop_menu_services: { zh: "服务", en: "Services" },
@@ -5634,6 +5637,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "选择 LUT 数据库…",
     en: "Choose LUT databases…",
   },
+  basic_lut_picker_change: {
+    zh: "更换",
+    en: "Change",
+  },
+  basic_lut_picker_selection_summary: {
+    zh: "已选 {count} 个 LUT",
+    en: "{count} LUTs selected",
+  },
+  basic_lut_picker_more_selected: {
+    zh: "另 {count} 个",
+    en: "+{count} more",
+  },
   basic_lut_picker_title: {
     zh: "选择 LUT",
     en: "Choose LUT",
@@ -9541,6 +9556,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Import LUT File",
   },
   lut_library_search_placeholder: {
+    zh: "搜索名称、品牌、类型、颜色模式…",
+    en: "Search names, brands, types, color modes…",
   },
   lut_library_loading: {
     zh: "正在加载本地 LUT...",
@@ -10117,7 +10134,34 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Fit Error",
   },
   mat_gradient_library_layer_height_label: {
+    zh: "采集层高",
+    en: "Calibration Layer Height",
   },
+  mat_gradient_library_details: {
+    zh: "详细信息",
+    en: "Details",
+  },
+  mat_gradient_library_type_missing: { zh: "类型未填写", en: "Type not specified" },
+  mat_gradient_library_calibration: { zh: "标定信息", en: "Calibration" },
+  mat_gradient_library_usage: { zh: "使用记录", en: "Usage" },
+  mat_gradient_library_files: { zh: "文件信息", en: "File information" },
+  mat_gradient_library_browse_summary: { zh: "耗材库 · {count} 个耗材", en: "Material library · {count} materials" },
+  mat_gradient_library_selection_start: { zh: "选择耗材", en: "Select materials" },
+  mat_gradient_library_collapse_all: { zh: "全部收起", en: "Collapse all" },
+  mat_gradient_library_expand_all: { zh: "全部展开", en: "Expand all" },
+  library_pin_hint: { zh: "每次进入仓库时自动展开", en: "Expand automatically whenever you open the library" },
+  lut_library_inventory_summary: { zh: "{count}个 LUT · {brands}个品牌", en: "{count} LUTs · {brands} brands" },
+  lut_library_analyze_btn: { zh: "查看完整 LUT 分析", en: "Open full LUT analysis" },
+  mat_gradient_library_search: { zh: "搜索耗材名称、品牌、类型…", en: "Search materials, brands, types…" },
+  mat_gradient_library_inventory_summary: { zh: "{count}种耗材 · {brands}个品牌", en: "{count} materials · {brands} brands" },
+  mat_gradient_library_search_empty: { zh: "没有找到匹配的耗材，试试其他关键词。", en: "No matching materials. Try another search." },
+  mat_gradient_library_reorder_hint: { zh: "拖拽调整品牌顺序，也可用上下方向键调整", en: "Drag to reorder brands, or use the up and down arrow keys" },
+  mat_gradient_library_brand_count: { zh: "{count}种", en: "{count} types" },
+  mat_gradient_library_pin_brand: { zh: "固定展开 {brand}", en: "Pin {brand} open" },
+  mat_gradient_library_unpin_brand: { zh: "取消固定 {brand}", en: "Unpin {brand}" },
+  mat_gradient_library_pin_hint: { zh: "每次进入耗材库时自动展开", en: "Expand automatically whenever you open the library" },
+  mat_gradient_library_unpin_hint: { zh: "取消默认展开", en: "Stop expanding by default" },
+  mat_gradient_library_selection_done: { zh: "完成选择", en: "Done selecting" },
   mat_gradient_library_edit_btn: {
     zh: "编辑信息",
     en: "Edit Details",

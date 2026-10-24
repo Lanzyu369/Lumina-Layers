@@ -1,3 +1,4 @@
+import CloseButton from "./CloseButton";
 import { createPortal } from "react-dom";
 import { useI18n } from "../../i18n/context";
 import Button from "./Button";
@@ -56,6 +57,7 @@ export default function ImportConfirmDialog({
         </div>
 
         {/* Body */}
+        <div className="flex-1 overflow-y-auto overscroll-y-contain px-5 py-4">
           {/* Cover preview */}
           {recipe.cover && (
             <div className="mb-4 flex justify-center">

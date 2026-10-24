@@ -1,3 +1,4 @@
+import CloseButton from "../ui/CloseButton";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -168,6 +169,7 @@ export default function MachineSelectionDialog({
               {t("settings.machine_dialog_description")}
             </p>
           </div>
+          <CloseButton label={t("settings.machine_dialog_close")} onClick={onClose} />
         </header>
 
         <div className="grid gap-3 border-b panel-divider px-4 py-4 sm:grid-cols-[minmax(14rem,0.75fr)_minmax(18rem,1.25fr)] sm:px-6">

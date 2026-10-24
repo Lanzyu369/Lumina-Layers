@@ -1,3 +1,4 @@
+import CloseButton from "./ui/CloseButton";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useI18n } from "../i18n/context";
@@ -287,6 +288,7 @@ const SubstrateSignalCard = ({
   return (
     <div
       data-testid={testId}
+      className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50"
     >
       <dt className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
         <span>{label}</span>
@@ -1402,6 +1404,7 @@ export default function GradientCardExtractPanel() {
                     </h4>
                   </div>
                   <dl className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                       <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                         {t("mat_gradient_rgb_label")}
                       </dt>
@@ -1409,6 +1412,7 @@ export default function GradientCardExtractPanel() {
                         {estimatedRgbLabel}
                       </dd>
                     </div>
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                       <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                         {t("mat_gradient_hex_label")}
                       </dt>
@@ -1418,6 +1422,7 @@ export default function GradientCardExtractPanel() {
                     </div>
                   </dl>
                   <dl className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                       <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                         {t("mat_gradient_mean_delta_e_label")}
                       </dt>
@@ -1425,6 +1430,7 @@ export default function GradientCardExtractPanel() {
                         {formatMetricValue(meanDeltaE, 3)}
                       </dd>
                     </div>
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                       <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                         {t("mat_gradient_max_delta_e_label")}
                       </dt>
@@ -1432,6 +1438,7 @@ export default function GradientCardExtractPanel() {
                         {formatMetricValue(maxDeltaE, 3)}
                       </dd>
                     </div>
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                       <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                         {t("mat_gradient_rmse_linear_label")}
                       </dt>
@@ -1439,6 +1446,7 @@ export default function GradientCardExtractPanel() {
                         {formatMetricValue(rmseLinear, 4)}
                       </dd>
                     </div>
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50 sm:col-span-3">
                       <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                         {t("mat_gradient_channel_rmse_label")}
                       </dt>
@@ -1469,6 +1477,7 @@ export default function GradientCardExtractPanel() {
                         )}
                       </div>
                       <dl className="grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                           <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                             {t("mat_gradient_white_orientation_label")}
                           </dt>
@@ -1476,6 +1485,7 @@ export default function GradientCardExtractPanel() {
                             {bestCandidate.white_orientation}
                           </dd>
                         </div>
+                        <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                           <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                             {t("mat_gradient_black_orientation_label")}
                           </dt>
@@ -1483,6 +1493,7 @@ export default function GradientCardExtractPanel() {
                             {bestCandidate.black_orientation}
                           </dd>
                         </div>
+                        <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                           <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                             {t("mat_gradient_delta_e_gap_label")}
                           </dt>
@@ -1588,8 +1599,10 @@ export default function GradientCardExtractPanel() {
                       {t("mat_gradient_details_dialog_desc")}
                     </p>
                   </div>
+                  <CloseButton label={t("mat_gradient_details_close_btn")} onClick={() => setDetailsDialogOpen(false)} />
                 </div>
 
+                <div className="flex-1 overflow-y-auto overscroll-y-contain px-5 py-4">
                   <div className="flex flex-col gap-4">
                     {stageAParamsUrl ? (
                       <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>

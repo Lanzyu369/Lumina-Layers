@@ -1,3 +1,5 @@
+import CloseButton from "./CloseButton";
+import DisclosureChevron from "./DisclosureChevron";
 import {
   ChevronDownIcon,
   MagnifyingGlassIcon,
@@ -549,6 +551,7 @@ export default function MaterialPickerDialog({
             {formatMessage(t("basic_material_picker_profile_count"), {
               count: displayProfiles.length,
             })}
+            <DisclosureChevron expanded={expanded} />
           </button>
         </div>
 
@@ -695,6 +698,7 @@ export default function MaterialPickerDialog({
                 {t("basic_material_picker_dialog_subtitle")}
               </p>
             </div>
+            <CloseButton label={t("basic_material_picker_close")} onClick={onCancel} />
           </header>
 
           <div className="border-b border-slate-200/80 px-4 py-3 dark:border-slate-700/80 sm:px-6">
@@ -797,6 +801,7 @@ export default function MaterialPickerDialog({
               <p className="px-4 pb-2 pt-4 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
                 {t("basic_material_picker_brand_filter_label")}
               </p>
+              <div className="dock-scrollbar min-h-0 space-y-1 overflow-y-auto overscroll-y-contain px-2 pb-4">
                 {brandOptions.map((option) => {
                   const selected = brandKey === option.key;
                   return (

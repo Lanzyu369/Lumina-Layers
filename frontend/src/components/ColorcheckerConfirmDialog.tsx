@@ -1,3 +1,4 @@
+import CloseButton from "./ui/CloseButton";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
@@ -318,6 +319,7 @@ function LuminanceCurve({
   return (
     <svg
       viewBox="0 0 200 100"
+      className="h-24 w-full rounded-2xl border border-slate-200/80 bg-slate-100/70 dark:border-slate-700/80 dark:bg-slate-900/50"
       role="img"
       aria-label={ariaLabel}
     >
@@ -1718,6 +1720,7 @@ export function ColorcheckerModalShell({
   onClose: () => void;
   children: React.ReactNode;
 }) {
+  const { t } = useI18n();
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1747,6 +1750,8 @@ export function ColorcheckerModalShell({
         onClick={(event) => event.stopPropagation()}
         className="relative flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-[24px]"
       >
+        <div className="absolute right-4 top-4 z-10"><CloseButton label={t("announcement_close")} onClick={onClose} /></div>
+        <div className="min-h-0 flex-1 overflow-auto overscroll-y-contain">{children}</div>
       </div>
     </div>,
     document.body,

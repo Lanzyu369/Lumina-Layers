@@ -238,6 +238,7 @@ export default function CalibrationPanel() {
                   data-testid="preview-image"
                   src={previewImageUrl}
                   alt={t("cal_preview_alt")}
+                  className="w-full rounded-[24px] border border-slate-200/80 object-contain shadow-[var(--shadow-control)] dark:border-slate-700/80 max-h-[60vh] bg-slate-100 dark:bg-slate-900"
                 />
                 
                 {activeLayerImages.length > 0 && (

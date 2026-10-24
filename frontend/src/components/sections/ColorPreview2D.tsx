@@ -1790,6 +1790,7 @@ export default function ColorPreview2D({
       )}
 
       {selectionTool === 'brush' && (brushStrokesRef.current.length > 0 || brushPointsRef.current.length > 0) && (
+        <div className="pointer-events-auto absolute bottom-2 left-1/2 z-30 flex -translate-x-1/2 gap-2 rounded-[10px] border border-slate-300/80 bg-slate-50 p-2 dark:border-slate-700/80 dark:bg-slate-900/95">
           <button
             type="button"
             onClick={executeBrushDraft}

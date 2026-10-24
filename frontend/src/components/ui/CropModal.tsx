@@ -1,3 +1,4 @@
+import CloseButton from "./CloseButton";
 import "cropperjs/dist/cropper.css";
 
 import { useState, useRef, useEffect, useCallback } from "react";
@@ -283,12 +284,14 @@ export function CropModal({
         aria-modal="true"
         aria-label={t("crop_modal_title")}
         onClick={(e) => e.stopPropagation()}
+        className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-y-auto overscroll-y-contain rounded-2xl bg-slate-50 outline-none dark:bg-slate-900"
       >
         {/* Title bar */}
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
           <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100">
             {t("crop_modal_title")}
           </h2>
+          <CloseButton label={t("crop_modal_close")} onClick={onClose} />
         </div>
 
         {/* Cropper area */}

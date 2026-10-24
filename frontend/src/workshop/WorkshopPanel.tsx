@@ -1507,6 +1507,7 @@ export function WorkshopPanel({
           )}
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
         >
+          <section className="panel-section w-full max-w-lg rounded-[28px] p-5 shadow-2xl" style={{ background: "var(--surface-panel-strong)" }}>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
               {t(
                 permissionPrompt.kind === "staged"
@@ -1567,6 +1568,7 @@ export function WorkshopPanel({
           aria-label={t("workshop.manager.uninstallTitle")}
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
         >
+          <section className="panel-section w-full max-w-lg rounded-[28px] p-5 shadow-2xl" style={{ background: "var(--surface-panel-strong)" }}>
             <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
               {t("workshop.manager.uninstallDescription")}
             </p>

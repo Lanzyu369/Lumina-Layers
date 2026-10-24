@@ -1811,12 +1811,14 @@ function RotationPanel({
       "h-7 w-[54px] rounded-lg px-1 text-center font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)]",
       isAxisActive(axis)
         ? "border border-current bg-sky-50 font-semibold ring-2 ring-current dark:bg-slate-800"
+        : "border border-slate-300/80 bg-slate-100 text-slate-900 dark:border-slate-500/80 dark:bg-slate-900 dark:text-slate-100",
     ].join(" ");
   const quickButtonClassName = (axis: RotationAxis) =>
     [
       "action-control h-7 min-w-[46px] rounded-lg px-1.5 text-center text-[10px] font-semibold focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)]",
       isAxisActive(axis)
         ? "border border-current bg-sky-50 ring-2 ring-current hover:bg-sky-100 dark:bg-slate-800 dark:hover:bg-slate-700"
+        : "border border-slate-300/80 bg-slate-100 text-slate-800 hover:bg-slate-200 dark:border-slate-500/80 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800",
     ].join(" ");
   const relativeInputHint = relativeInputHintOverride ?? t("model_surface_rotation_relative_input_hint");
   const absoluteInputHint = absoluteInputHintOverride ?? t("model_surface_rotation_absolute_input_hint");

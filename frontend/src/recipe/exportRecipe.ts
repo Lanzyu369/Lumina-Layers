@@ -415,6 +415,7 @@ export async function buildCoverImage(
 
   // 3) Compute footer layout (QR size, font, wrapped lines) for the canvas
   //    width using a real canvas measurer so caption shrink/wrap is accurate.
+  await document.fonts.load('400 14px "MiSans"');
   const measureCanvas = document.createElement("canvas");
   const measureCtx = measureCanvas.getContext("2d");
   if (!measureCtx) {

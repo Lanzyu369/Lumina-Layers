@@ -151,6 +151,7 @@ export default function MaterialColorPicker() {
           <p className="text-xs text-slate-100">{t("lut_grid_loading")}</p>
         </div>
       )}
+      <div className={cx(cardClass, "panel-default-surface flex h-full flex-col gap-3 px-4 py-4")}>
         {/* Pending replacement bar — mirrors LutColorGrid for consistent UX */}
         {pendingReplacement && (
           <div className={cx(wellPadClass, "flex flex-col gap-2")}>

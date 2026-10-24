@@ -1,3 +1,4 @@
+import DisclosureChevron from "./ui/DisclosureChevron";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useExtractorStore, ACCEPT_EXTRACTOR_FORMATS } from "../stores/extractorStore";
@@ -462,6 +463,7 @@ export default function ExtractorPanel() {
             <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
               {t("ext_correction_section")}
             </h3>
+            <DisclosureChevron expanded={correctionOpen} />
           </button>
           <AnimatePresence initial={false}>
             {correctionOpen && (
@@ -516,6 +518,7 @@ export default function ExtractorPanel() {
             <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
               {t("ext_nudge_section")}
             </h3>
+            <DisclosureChevron expanded={nudgeOpen} />
           </button>
           {nudgeOpen && (
             <div id="corner-nudge-panel" className="flex flex-col gap-2 pt-4">

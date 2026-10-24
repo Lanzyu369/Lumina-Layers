@@ -1,3 +1,4 @@
+import CloseButton from "./CloseButton";
 import {
   useEffect,
   useId,
@@ -273,6 +274,7 @@ export default function LutPickerDialog({
           {/* Brand sidebar */}
           <aside
             data-testid="lut-picker-brand-sidebar"
+            className="dock-scrollbar flex w-44 shrink-0 flex-col gap-1 overflow-y-auto overscroll-y-contain border-r p-3"
             style={{ borderColor: "var(--surface-outline)" }}
           >
             <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">

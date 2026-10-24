@@ -1,3 +1,4 @@
+import CloseButton from "../ui/CloseButton";
 import { memo, useCallback, useState, type ChangeEvent } from "react";
 import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
@@ -485,6 +486,7 @@ function HighlightPreviewDialog({
           <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
             {title}
           </h3>
+          <CloseButton label={t("gradient_groups_view_highlight_close")} onClick={onClose} />
         </div>
         <div
           className="flex min-h-[320px] flex-1 items-center justify-center overflow-hidden rounded-lg"

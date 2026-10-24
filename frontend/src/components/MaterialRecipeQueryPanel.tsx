@@ -1,3 +1,5 @@
+import CloseButton from "./ui/CloseButton";
+import DisclosureChevron from "./ui/DisclosureChevron";
 import { motion, AnimatePresence } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -475,6 +477,7 @@ export default function MaterialRecipeQueryPanel() {
                         className={`h-9 rounded-lg border text-xs font-medium transition-all ${
                           isActive
                             ? "border-blue-400 bg-blue-500/10 text-blue-600 ring-1 ring-blue-500/20 dark:border-blue-500 dark:text-blue-400"
+                            : "border-slate-200 bg-slate-100 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600"
                         }`}
                         data-testid={`material-recipe-substrate-${option}`}
                       >
@@ -500,6 +503,7 @@ export default function MaterialRecipeQueryPanel() {
                     setResult(null);
                     setError(null);
                   }}
+                  className="min-h-9 rounded-lg border border-slate-200 bg-slate-100 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                   data-testid="material-recipe-layer-height"
                 >
                   {ALLOWED_LAYER_HEIGHTS_MM.map((value) => (
@@ -539,6 +543,7 @@ export default function MaterialRecipeQueryPanel() {
                       animate={{ opacity: 1, height: "auto" }}
                       exit={{ opacity: 0, height: 0 }}
                       transition={{ duration: 0.2 }}
+                      className="group flex items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-100/80 p-2 shadow-sm dark:border-slate-700/80 dark:bg-slate-900/70"
                     >
                       <div
                         className="h-8 w-8 shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm"
@@ -582,6 +587,7 @@ export default function MaterialRecipeQueryPanel() {
                           step={1}
                           value={swatchBlockSize}
                           onChange={(e) => setSwatchBlockSize(Math.max(5, Math.min(50, Number(e.target.value))))}
+                          className="h-9 rounded-lg border border-slate-200 bg-slate-100 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                         />
                       </label>
                       <label className="flex flex-col gap-1">
@@ -593,6 +599,7 @@ export default function MaterialRecipeQueryPanel() {
                           step={0.5}
                           value={swatchGap}
                           onChange={(e) => setSwatchGap(Math.max(0.5, Math.min(10, Number(e.target.value))))}
+                          className="h-9 rounded-lg border border-slate-200 bg-slate-100 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                         />
                       </label>
                       <label className="flex flex-col gap-1">
@@ -604,6 +611,7 @@ export default function MaterialRecipeQueryPanel() {
                           step={1}
                           value={swatchCols}
                           onChange={(e) => setSwatchCols(Math.max(0, Math.min(20, Math.round(Number(e.target.value)))))}
+                          className="h-9 rounded-lg border border-slate-200 bg-slate-100 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                         />
                       </label>
                   </div>
@@ -622,6 +630,7 @@ export default function MaterialRecipeQueryPanel() {
                               className={`h-9 rounded-lg border text-xs font-medium transition-all ${
                                 isActive
                                   ? "border-blue-400 bg-blue-500/10 text-blue-600 ring-1 ring-blue-500/20 dark:border-blue-500 dark:text-blue-400"
+                                  : "border-slate-200 bg-slate-100 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600"
                               }`}
                             >
                               {t(labelKey)}
@@ -692,6 +701,7 @@ export default function MaterialRecipeQueryPanel() {
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
                   placeholder={t("material_recipe_search_placeholder")}
+                  className="h-9 w-full rounded-lg border border-slate-200 bg-slate-100 px-3 pr-8 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                   data-testid="material-recipe-search-input"
                 />
                 {searchQuery && (
@@ -747,6 +757,7 @@ export default function MaterialRecipeQueryPanel() {
                             {items.length}
                           </span>
                         </span>
+                        <DisclosureChevron expanded={!isCollapsed} />
                       </button>
                       {isCollapsed ? null : (
                         <div
@@ -804,6 +815,7 @@ export default function MaterialRecipeQueryPanel() {
             <StatusBanner
               tone="error"
               action={
+                <CloseButton label={t("material_recipe_close_error")} onClick={() => setError(null)} />
               }
             >
               {error}
@@ -811,6 +823,7 @@ export default function MaterialRecipeQueryPanel() {
           </div>
         )}
 
+        <div className="relative flex-1 min-h-0 overflow-y-auto overscroll-y-contain p-4 sm:p-6 lg:p-8">
           <div className="mx-auto grid w-full max-w-6xl gap-5 lg:grid-cols-[minmax(320px,430px)_minmax(0,1fr)]">
             <section className={`${resolveSectionCardClass(workspace.mode)} flex min-h-[420px] flex-col gap-4`}>
               <div className="flex items-center justify-between gap-3">
@@ -847,6 +860,7 @@ export default function MaterialRecipeQueryPanel() {
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -4 }}
                         transition={{ duration: 0.15 }}
+                        className="group flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-slate-100/90 p-2.5 shadow-sm transition-colors hover:border-slate-300 dark:border-slate-700/80 dark:bg-slate-900/75 dark:hover:border-slate-600"
                         data-testid="material-recipe-layer-item"
                       >
                         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-200/70 font-mono text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
