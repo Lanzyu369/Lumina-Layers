@@ -1,3 +1,4 @@
+import DisclosureChevron from "./ui/DisclosureChevron";
 /**
  * SettingsPanel - System settings page.
  * 系统设置页面，包含切片软件设置和缓存清理功能。
@@ -615,7 +616,7 @@ export default function SettingsPanel() {
           role="region"
           aria-labelledby={`settings-category-${activeCategory}`}
           tabIndex={0}
-          className="dock-scrollbar min-h-0 min-w-0 overflow-auto px-5 py-6 sm:px-7 lg:px-10"
+          className="dock-scrollbar min-h-0 min-w-0 overflow-auto overscroll-y-contain px-5 py-6 sm:px-7 lg:px-10"
         >
           <header className="mx-auto mb-7 w-full max-w-4xl border-b panel-divider pb-5">
             <h2 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
@@ -823,31 +824,35 @@ export default function SettingsPanel() {
                 </div>
               )}
 
-              <div className="border-t panel-divider pt-2">
-                <button
-                  type="button"
-                  aria-expanded={manualSetupOpen}
-                  aria-controls="settings-manual-slicer-setup"
-                  onClick={() => setManualSetupOpen((open) => !open)}
-                  className="flex min-h-11 w-full items-center justify-between gap-4 ghost-control rounded-[10px] px-2 py-3 text-left"
-                >
-                  <span>
-                    <span className="block text-sm font-semibold text-slate-900 dark:text-slate-50">
-                      {t("settings.manual_setup_heading")}
-                    </span>
-                    <span className="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">
-                      {t("settings.manual_setup_description")}
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-xs font-medium text-blue-600 dark:text-blue-300">
-                    {t(manualSetupOpen ? "widget_collapse" : "widget_expand")}
-                  </span>
-                </button>
+              <div className="border-t panel-divider pt-5">
+                <div className="relative flex min-h-11 items-center gap-1.5 pr-7">
+                  <button
+                    type="button"
+                    aria-label={t("settings.manual_setup_heading")}
+                    aria-expanded={manualSetupOpen}
+                    aria-controls="settings-manual-slicer-setup"
+                    onClick={() => setManualSetupOpen((open) => !open)}
+                    className="absolute inset-0 flex items-center justify-end text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  >
+                    <DisclosureChevron expanded={manualSetupOpen} />
+                  </button>
+                  <h3 className="pointer-events-none relative min-w-0 text-sm font-medium text-slate-700 dark:text-slate-200">
+                    {t("settings.manual_setup_heading")}
+                  </h3>
+                  <div className="relative shrink-0">
+                    <HelpDot
+                      title={t("settings.manual_setup_heading")}
+                      ariaLabel={t("settings.manual_setup_description")}
+                      description={`${t("settings.manual_setup_description")}\n\n${t("settings.custom_slicer_path_help")}`}
+                      wikiPath={WIKI_DOCS.deviceAndSlicer}
+                    />
+                  </div>
+                </div>
 
                 {manualSetupOpen && (
                   <div
                     id="settings-manual-slicer-setup"
-                    className="mt-2 flex flex-col gap-3 border-t panel-divider py-4"
+                    className="mt-3 flex flex-col gap-3"
                   >
                     <div>
                       <label
@@ -856,9 +861,6 @@ export default function SettingsPanel() {
                       >
                         {t("settings.custom_slicer_path")}
                       </label>
-                      <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                        {t("settings.custom_slicer_path_help")}
-                      </p>
                     </div>
                     <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
                       <input
@@ -885,14 +887,14 @@ export default function SettingsPanel() {
                       />
                     </div>
                     {customPathMessage && (
-                      <p className="text-xs text-emerald-600 dark:text-emerald-400">
+                      <StatusBanner tone="success">
                         {customPathMessage}
-                      </p>
+                      </StatusBanner>
                     )}
                     {customPathError && (
-                      <p className="text-xs text-red-500 dark:text-red-400">
+                      <StatusBanner tone="error">
                         {customPathError}
-                      </p>
+                      </StatusBanner>
                     )}
                   </div>
                 )}

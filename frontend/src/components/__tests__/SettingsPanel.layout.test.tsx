@@ -167,6 +167,9 @@ describe("SettingsPanel information architecture", () => {
     });
 
     expect(deviceButton).toHaveAttribute("aria-current", "page");
+    // A settings category owns its scroll boundary. Chaining into the clipped
+    // app shell can latch a wheel sequence there, even after it reverses.
+    expect(screen.getByRole("region", { name: /打印与切片/ })).toHaveClass("overscroll-y-contain");
     expect(
       await screen.findByRole("heading", { name: "当前设备", level: 3 }),
     ).toBeInTheDocument();
@@ -188,6 +191,7 @@ describe("SettingsPanel information architecture", () => {
       within(navigation).getByRole("button", { name: /转换与精度/ }),
     );
     expect(screen.getByRole("region", { name: /转换与精度/ })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /转换与精度/ })).toHaveClass("overscroll-y-contain");
     expect(
       screen.getByRole("heading", { name: "转换与精度", level: 2 }),
     ).toBeInTheDocument();
@@ -202,6 +206,7 @@ describe("SettingsPanel information architecture", () => {
       within(navigation).getByRole("button", { name: /存储与维护/ }),
     );
     expect(screen.getByRole("region", { name: /存储与维护/ })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /存储与维护/ })).toHaveClass("overscroll-y-contain");
     expect(
       screen.getByRole("heading", { name: "存储与维护", level: 2 }),
     ).toBeInTheDocument();
