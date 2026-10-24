@@ -562,7 +562,7 @@ export default function VectorizerPanel() {
             </div>
 
             {/* Stats & Download */}
-            <div className={`flex flex-col gap-3 rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-800/60 ${workspace.isWide ? "xl:flex-row xl:items-center xl:justify-between" : ""}`}>
+            <div className={`flex flex-col gap-3 rounded-[24px] border border-slate-200 bg-slate-100 px-4 py-3 dark:border-slate-700 dark:bg-slate-800/60 ${workspace.isWide ? "xl:flex-row xl:items-center xl:justify-between" : ""}`}>
               <div className={`text-sm text-slate-600 dark:text-slate-300 ${workspace.isCompact ? "grid gap-2" : "flex flex-wrap items-center gap-6"}`}>
                 <span>
                   {t("vec.shapes")}: <strong>{result.num_shapes}</strong>

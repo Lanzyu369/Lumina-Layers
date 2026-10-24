@@ -1,3 +1,4 @@
+import CloseButton from "./ui/CloseButton";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
@@ -318,7 +319,7 @@ function LuminanceCurve({
   return (
     <svg
       viewBox="0 0 200 100"
-      className="h-24 w-full rounded-2xl border border-slate-200/80 bg-slate-50/70 dark:border-slate-700/80 dark:bg-slate-900/50"
+      className="h-24 w-full rounded-2xl border border-slate-200/80 bg-slate-100/70 dark:border-slate-700/80 dark:bg-slate-900/50"
       role="img"
       aria-label={ariaLabel}
     >
@@ -1719,6 +1720,7 @@ export function ColorcheckerModalShell({
   onClose: () => void;
   children: React.ReactNode;
 }) {
+  const { t } = useI18n();
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1748,22 +1750,8 @@ export function ColorcheckerModalShell({
         onClick={(event) => event.stopPropagation()}
         className="relative flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-[24px]"
       >
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label={title}
-          className="absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/80 text-slate-500 shadow-[var(--shadow-control)] transition-colors hover:text-slate-700 dark:border-slate-700/80 dark:text-slate-300 dark:hover:text-slate-100"
-          style={{ background: "var(--surface-panel-strong)" }}
-        >
-          <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-            <path
-              fillRule="evenodd"
-              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-              clipRule="evenodd"
-            />
-          </svg>
-        </button>
-        <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+        <div className="absolute right-4 top-4 z-10"><CloseButton label={t("announcement_close")} onClick={onClose} /></div>
+        <div className="min-h-0 flex-1 overflow-auto overscroll-y-contain">{children}</div>
       </div>
     </div>,
     document.body,

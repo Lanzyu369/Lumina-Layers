@@ -1,3 +1,4 @@
+import CloseButton from "./CloseButton";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -527,7 +528,7 @@ function SortableRecipeRow({
   return (
     <div
       ref={setNodeRef}
-      className={`grid gap-2 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3 transition-colors dark:border-slate-700/70 dark:bg-slate-900/50 lg:grid-cols-[auto_auto_auto_minmax(0,1fr)_auto] lg:items-center ${
+      className={`grid gap-2 rounded-2xl border border-slate-200/80 bg-slate-100/70 p-3 transition-colors dark:border-slate-700/70 dark:bg-slate-900/50 lg:grid-cols-[auto_auto_auto_minmax(0,1fr)_auto] lg:items-center ${
         isDragging
           ? "relative z-10 border-blue-400/70 bg-blue-50/60 opacity-60 shadow-lg dark:border-blue-500/60 dark:bg-blue-500/10"
           : ""
@@ -1306,7 +1307,7 @@ export default function CustomRecipeDialog({
         style={{ backgroundColor: "var(--surface-panel-strong)" }}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="max-h-[90vh] overflow-y-auto p-5">
+        <div className="max-h-[90vh] overflow-y-auto overscroll-y-contain p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
             {headerRegionHex && (
@@ -1338,16 +1339,12 @@ export default function CustomRecipeDialog({
               </p>
             </div>
           </div>
-          <Button
-            label={t("recipe_custom_close")}
-            variant="secondary"
-            onClick={onClose}
-          />
+          <CloseButton label={t("recipe_custom_close")} onClick={onClose} />
         </div>
 
         <div className="mt-4 grid gap-4 lg:grid-cols-[1.4fr_1fr]">
           <div className="flex flex-col gap-3">
-            <div className="rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3 text-xs text-slate-500 dark:border-slate-700/70 dark:bg-slate-900/50 dark:text-slate-400">
+            <div className="rounded-2xl border border-slate-200/80 bg-slate-100/70 p-3 text-xs text-slate-500 dark:border-slate-700/70 dark:bg-slate-900/50 dark:text-slate-400">
               {t("recipe_custom_pattern_hint")}
               <div className="mt-2 font-mono">{paletteHint}</div>
             </div>
@@ -1463,7 +1460,7 @@ export default function CustomRecipeDialog({
           </div>
 
           <div className="flex flex-col gap-3">
-            <div className="flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4 dark:border-slate-700/70 dark:bg-slate-900/50">
+            <div className="flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-slate-100/70 p-4 dark:border-slate-700/70 dark:bg-slate-900/50">
               <div className="text-sm font-medium text-slate-700 dark:text-slate-200">
                 {t("recipe_custom_preview_color")}
               </div>

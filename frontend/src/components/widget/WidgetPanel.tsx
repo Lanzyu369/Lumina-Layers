@@ -1,6 +1,6 @@
 /**
- * Widget panel component with drag, collapse animation, and frosted glass effect.
- * Widget 面板组件，支持拖拽、折叠动画和毛玻璃效果。
+ * Widget panel component with drag, collapse animation, and a translucent background.
+ * Widget 面板组件，支持拖拽、折叠动画和半透明背景。
  *
  * Uses ResizeObserver on the content area to measure expanded height.
  * Content stays laid out until the collapse animation finishes, then is hidden

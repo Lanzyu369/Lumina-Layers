@@ -1,3 +1,4 @@
+import CloseButton from "./CloseButton";
 import {
   useEffect,
   useId,
@@ -6,7 +7,6 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { XMarkIcon } from "@heroicons/react/24/outline";
 import Button from "./Button";
 import {
   cx,
@@ -276,14 +276,7 @@ export default function LutPickerDialog({
             >
               <span className={cx("text-sm leading-none", refreshing && "animate-spin")} aria-hidden="true">⟳</span>
             </button>
-            <button
-              type="button"
-              onClick={onCancel}
-              aria-label={labels.cancel}
-              className="ghost-control inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 dark:text-slate-400"
-            >
-              <XMarkIcon className="h-4 w-4" aria-hidden="true" />
-            </button>
+            <CloseButton label={labels.cancel} onClick={onCancel} />
           </div>
         </div>
 
@@ -292,7 +285,7 @@ export default function LutPickerDialog({
           {/* Brand sidebar */}
           <aside
             data-testid="lut-picker-brand-sidebar"
-            className="dock-scrollbar flex w-44 shrink-0 flex-col gap-1 overflow-y-auto border-r p-3"
+            className="dock-scrollbar flex w-44 shrink-0 flex-col gap-1 overflow-y-auto overscroll-y-contain border-r p-3"
             style={{ borderColor: "var(--surface-outline)" }}
           >
             <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">

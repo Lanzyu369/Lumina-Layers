@@ -1,3 +1,5 @@
+import CloseButton from "./ui/CloseButton";
+import DisclosureSummary from "./ui/DisclosureSummary";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChangeEvent, FormEvent, JSX } from "react";
 import { createPortal } from "react-dom";
@@ -627,19 +629,12 @@ export function BugReportModal({
           <h2 className="text-base font-semibold text-slate-900 dark:text-slate-50">
             {t("bug_report_modal_title")}
           </h2>
-          <button
-            type="button"
-            aria-label={t("announcement_close")}
-            className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800 dark:hover:text-slate-200"
-            onClick={handleCancel}
-          >
-            ×
-          </button>
+          <CloseButton label={t("announcement_close")} onClick={handleCancel} />
         </div>
 
         {submittedTicket ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+            <div className="flex-1 space-y-4 overflow-y-auto overscroll-y-contain px-5 py-4">
               <StatusBanner
                 tone={
                   collectionIncomplete || upload.status === "failed" || upload.status === "disabled"
@@ -843,7 +838,7 @@ export function BugReportModal({
           </div>
         ) : (
           <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleSubmit}>
-            <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+            <div className="flex-1 space-y-4 overflow-y-auto overscroll-y-contain px-5 py-4">
               {notice && (
                 <StatusBanner
                   tone={notice.tone}
@@ -1002,9 +997,9 @@ export function BugReportModal({
                     "color-mix(in srgb, var(--surface-panel-strong) 68%, transparent)",
                 }}
               >
-                <summary className="cursor-pointer list-none text-sm font-medium text-slate-700 dark:text-slate-200">
+                <DisclosureSummary className="cursor-pointer list-none text-sm font-medium text-slate-700 dark:text-slate-200">
                   {t("bug_report_modal_context_disclosure")}
-                </summary>
+                </DisclosureSummary>
                 <pre
                   data-testid="bug-report-context-json"
                   className="mt-3 overflow-x-auto rounded-2xl px-3 py-3 text-xs leading-5 text-slate-100"

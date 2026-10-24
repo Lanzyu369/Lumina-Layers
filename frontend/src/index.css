@@ -1,16 +1,79 @@
 @import "tailwindcss";
 
 @theme {
+  --font-sans: "MiSans", sans-serif;
   --shadow-glow-yellow: none;
   --shadow-glow-blue: none;
   --shadow-glass-panel: none;
 }
 
+@font-face {
+  font-family: "MiSans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/misans/MiSans-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "MiSans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/misans/MiSans-Medium.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "MiSans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/misans/MiSans-Semibold.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "MiSans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/misans/MiSans-Bold.woff2") format("woff2");
+}
+
 @custom-variant dark (&:where(.dark, .dark *));
 
+@layer base {
+  /* UI labels must not start text selections during clicks or dragging. */
+  body {
+    font-family: var(--font-sans);
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Keep editable fields and diagnostic output available for copying.
+   * Tailwind select-text/select-all utilities can opt other content in. */
+  input,
+  textarea,
+  [contenteditable=""],
+  [contenteditable="true"],
+  [contenteditable="plaintext-only"],
+  pre,
+  code {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+.desktop-titlebar {
+  -webkit-app-region: drag;
+}
+
+.desktop-titlebar .desktop-titlebar-controls {
+  -webkit-app-region: no-drag;
+}
+
 :root {
-  --surface-panel: transparent;
-  --surface-panel-strong: rgba(255, 255, 255, 0.98);
+  --surface-panel: var(--color-slate-50);
+  --surface-panel-strong: var(--color-slate-50);
   --surface-section: transparent;
   --surface-section-muted: rgba(255, 255, 255, 0.46);
   --surface-scrim: rgba(15, 23, 42, 0.56);
@@ -356,6 +419,15 @@ body.lumina-canvas-orbiting [data-widget-id] {
   box-shadow: var(--shadow-card);
 }
 
+/* Page-sized panels retain card geometry without using a white card fill. */
+.panel-card.panel-default-surface {
+  background: var(--surface-panel-strong);
+}
+
+.dark .panel-card.panel-default-surface {
+  background: var(--surface-card);
+}
+
 .panel-well {
   background: var(--surface-well);
   border: 1px solid transparent;
@@ -385,6 +457,10 @@ body.lumina-canvas-orbiting [data-widget-id] {
 }
 
 .settings-sidebar {
+  background: var(--color-slate-200);
+}
+
+.dark .settings-sidebar {
   background: var(--surface-section-muted);
 }
 
@@ -395,23 +471,114 @@ body.lumina-canvas-orbiting [data-widget-id] {
   box-shadow: none;
 }
 
+/* Material browsing uses tonal separation instead of elevated white cards. */
+.material-library-workspace,
+.lut-library-workspace {
+  background: var(--color-slate-50);
+  box-shadow: none;
+}
+
+.dark .material-library-workspace,
+.dark .lut-library-workspace {
+  background: var(--color-slate-950);
+}
+
+.material-library-workspace .panel-card,
+.lut-library-workspace .panel-card {
+  background: var(--color-slate-100);
+  border-color: var(--color-slate-200);
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.dark .material-library-workspace .panel-card,
+.dark .lut-library-workspace .panel-card {
+  background: var(--color-slate-800);
+  border-color: var(--color-slate-700);
+}
+
+.material-library-group:hover,
+.material-library-card:hover {
+  background: var(--color-slate-200);
+}
+
+.dark .material-library-group:hover,
+.dark .material-library-workspace .material-library-card:hover,
+.dark .lut-library-workspace .material-library-card:hover {
+  background: var(--color-slate-700);
+}
+
+.material-library-card-name {
+  color: var(--color-slate-900);
+}
+
+.material-library-card-meta {
+  color: var(--color-slate-600);
+}
+
+.dark .material-library-card-name {
+  color: var(--color-slate-50);
+}
+
+.dark .material-library-card-meta {
+  color: var(--color-slate-400);
+}
+
+.material-library-workspace .material-library-card:is([aria-expanded="true"], [aria-pressed="true"]),
+.lut-library-workspace .material-library-card[aria-expanded="true"] {
+  background: var(--color-slate-200);
+  border-color: var(--color-slate-300);
+}
+
+.dark .material-library-workspace .material-library-card:is([aria-expanded="true"], [aria-pressed="true"]),
+.dark .lut-library-workspace .material-library-card[aria-expanded="true"] {
+  background: var(--color-slate-700);
+  border-color: var(--color-slate-500);
+}
+
+.material-library-card:focus-visible,
+.material-library-group:focus-visible {
+  outline: 2px solid var(--color-blue-500);
+  outline-offset: 3px;
+}
+
 /* The color editor is a continuous workstation divided into columns and rows. */
+.panel-card.color-tools-panel {
+  background: var(--color-slate-50);
+}
+
+.dark .panel-card.color-tools-panel {
+  background: var(--color-slate-950);
+}
+
 .color-adjustment-workspace .panel-card {
   border: 0;
   border-radius: 0;
   box-shadow: none;
 }
 
-.color-adjustment-workspace .ghost-control:is([aria-pressed="true"], [data-active="true"]) {
-  border-color: var(--nav-tab-selected-bg);
-  background-color: var(--nav-tab-selected-bg);
-  color: var(--nav-tab-selected-text);
+.ghost-control.selection-tool-control {
+  background-color: var(--color-slate-100);
+  color: var(--color-slate-900);
 }
 
-.color-adjustment-workspace .ghost-control:is([aria-pressed="true"], [data-active="true"]):hover:not(:disabled):not([aria-disabled="true"]) {
-  border-color: var(--nav-tab-selected-bg);
-  background-color: var(--nav-tab-selected-bg);
-  color: var(--nav-tab-selected-text);
+.ghost-control.selection-tool-control[aria-pressed="true"],
+.ghost-control.selection-tool-control:hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--color-slate-300);
+  background-color: var(--color-slate-200);
+  color: var(--color-slate-900);
+}
+
+.dark .ghost-control.selection-tool-control {
+  background-color: var(--color-slate-800);
+  color: var(--color-slate-100);
+}
+
+.dark .ghost-control.selection-tool-control[aria-pressed="true"],
+.dark .ghost-control.selection-tool-control:hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--color-slate-600);
+  background-color: var(--color-slate-700);
+  color: var(--color-slate-100);
 }
 
 .surface-divider {
@@ -499,12 +666,18 @@ body.lumina-canvas-orbiting [data-widget-id] {
 }
 
 .dock-scrollbar-hover {
-  overflow-y: hidden;
+  /* Keep the same native scroller when the pointer crosses widgets or portals. */
+  overflow-y: auto;
 }
 
-.dock-scrollbar-hover:hover,
-.dock-scrollbar-hover:focus-within {
-  overflow-y: auto;
+.dock-scrollbar-hover:not(:hover):not(:focus-within)::-webkit-scrollbar-thumb {
+  background-color: transparent;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .dock-scrollbar-hover:not(:hover):not(:focus-within) {
+    scrollbar-color: transparent transparent;
+  }
 }
 
 .scrollbar-hidden {
@@ -652,3 +825,7 @@ body.lumina-canvas-orbiting [data-widget-id] {
     8px -8px,
     -8px 0px;
 }
+/* Native disclosure semantics with the same indicator as controlled sections. */
+.disclosure-summary::-webkit-details-marker { display: none; }
+.disclosure-summary::marker { content: ""; }
+details[open] > .disclosure-summary > .disclosure-chevron { transform: rotate(90deg); }

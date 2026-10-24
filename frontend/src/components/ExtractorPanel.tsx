@@ -1,3 +1,4 @@
+import DisclosureChevron from "./ui/DisclosureChevron";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useExtractorStore, ACCEPT_EXTRACTOR_FORMATS } from "../stores/extractorStore";
@@ -462,20 +463,7 @@ export default function ExtractorPanel() {
             <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
               {t("ext_correction_section")}
             </h3>
-            <motion.svg
-              animate={{ rotate: correctionOpen ? 90 : 0 }}
-              transition={{ type: "spring", stiffness: 300, damping: 20 }}
-              className="h-4 w-4 shrink-0 text-slate-500 dark:text-slate-400"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <polyline points="9 18 15 12 9 6" />
-            </motion.svg>
+            <DisclosureChevron expanded={correctionOpen} />
           </button>
           <AnimatePresence initial={false}>
             {correctionOpen && (
@@ -530,20 +518,7 @@ export default function ExtractorPanel() {
             <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
               {t("ext_nudge_section")}
             </h3>
-            <motion.svg
-              animate={{ rotate: nudgeOpen ? 90 : 0 }}
-              transition={{ type: "spring", stiffness: 300, damping: 20 }}
-              className="h-4 w-4 shrink-0 text-slate-500 dark:text-slate-400"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <polyline points="9 18 15 12 9 6" />
-            </motion.svg>
+            <DisclosureChevron expanded={nudgeOpen} />
           </button>
           {nudgeOpen && (
             <div id="corner-nudge-panel" className="flex flex-col gap-2 pt-4">

@@ -1,3 +1,4 @@
+import CloseButton from "./ui/CloseButton";
 import { motion, AnimatePresence } from "framer-motion"
 import { useEffect, useMemo, useCallback, useState } from "react"
 import type { FormEvent } from "react"
@@ -261,7 +262,7 @@ export default function FiveColorQueryPanel() {
                   value={targetHex}
                   onChange={(event) => setTargetHex(event.target.value)}
                   placeholder={t("five_color_match_input_placeholder")}
-                  className="min-h-11 rounded-2xl border border-slate-200/80 bg-slate-50 px-3.5 py-2 text-sm font-mono text-slate-800 shadow-[var(--shadow-control)] outline-none transition-all focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100"
+                  className="min-h-11 rounded-2xl border border-slate-200/80 bg-slate-100 px-3.5 py-2 text-sm font-mono text-slate-800 shadow-[var(--shadow-control)] outline-none transition-all focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100"
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -343,7 +344,7 @@ export default function FiveColorQueryPanel() {
                       animate={{ opacity: 1, height: "auto" }}
                       exit={{ opacity: 0, height: 0 }}
                       transition={{ duration: 0.2 }}
-                      className="group flex items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/80 p-2 shadow-sm dark:border-slate-700/80 dark:bg-slate-900/70"
+                      className="group flex items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-100/80 p-2 shadow-sm dark:border-slate-700/80 dark:bg-slate-900/70"
                     >
                       <div
                         className="h-8 w-8 shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm"
@@ -386,7 +387,7 @@ export default function FiveColorQueryPanel() {
                           step={1}
                           value={swatchBlockSize}
                           onChange={(e) => setSwatchBlockSize(Number(e.target.value))}
-                          className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                          className="h-9 rounded-lg border border-slate-200 bg-slate-100 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                         />
                       </label>
                       <label className="flex flex-col gap-1">
@@ -398,7 +399,7 @@ export default function FiveColorQueryPanel() {
                           step={0.5}
                           value={swatchGap}
                           onChange={(e) => setSwatchGap(Number(e.target.value))}
-                          className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                          className="h-9 rounded-lg border border-slate-200 bg-slate-100 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                         />
                       </label>
                       <label className="flex flex-col gap-1">
@@ -410,7 +411,7 @@ export default function FiveColorQueryPanel() {
                           step={1}
                           value={swatchCols}
                           onChange={(e) => setSwatchCols(Number(e.target.value))}
-                          className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                          className="h-9 rounded-lg border border-slate-200 bg-slate-100 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                         />
                       </label>
                   </div>
@@ -429,7 +430,7 @@ export default function FiveColorQueryPanel() {
                               className={`h-9 rounded-lg border text-xs font-medium transition-all ${
                                 isActive
                                   ? "border-blue-400 bg-blue-500/10 text-blue-600 ring-1 ring-blue-500/20 dark:border-blue-500 dark:text-blue-400"
-                                  : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600"
+                                  : "border-slate-200 bg-slate-100 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600"
                               }`}
                             >
                               {t(labelKey)}
@@ -496,13 +497,7 @@ export default function FiveColorQueryPanel() {
               <StatusBanner
                 tone="error"
                 action={
-                  <button
-                    onClick={handleClearVisibleError}
-                    aria-label={t("five_color_close_error")}
-                    className="rounded-full border border-current/20 px-2 py-1 text-xs text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-300"
-                  >
-                    {t("five_color_error_close_icon")}
-                  </button>
+                  <CloseButton label={t("five_color_close_error")} onClick={handleClearVisibleError} />
                 }
               >
                 {swatchDownloadError ?? (error ? resolveFiveColorError(error, t) : null)}
@@ -545,12 +540,12 @@ export default function FiveColorQueryPanel() {
                   {isRecipeUnavailable ? t("five_color_match_recipe_unavailable_title") : t("five_color_not_found")}
                 </StatusBanner>
                 {queryResult.message && (
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-300">
+                  <div className="rounded-lg border border-slate-200 bg-slate-100 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-300">
                     {resolveFiveColorFailureMessage(queryResult, t)}
                   </div>
                 )}
                 {!isRecipeUnavailable && (
-                  <div className="text-xs text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/50 rounded-lg p-3 border border-slate-200 dark:border-slate-700">
+                  <div className="text-xs text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-900/50 rounded-lg p-3 border border-slate-200 dark:border-slate-700">
                     <div className="font-medium mb-1">{t("five_color_not_found_suggestions_title")}</div>
                     <ul className="list-disc list-inside space-y-0.5 ml-1">
                       <li>{t("five_color_not_found_tip_reverse")}</li>
@@ -614,7 +609,7 @@ function MatchColorDetails({
     rgb ? t("five_color_match_rgb_value").replace("{value}", rgb.join(", ")) : ""
 
   return (
-    <div className="grid gap-4 rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4 shadow-sm dark:border-slate-700/80 dark:bg-slate-900/70 lg:grid-cols-[minmax(0,1fr)_auto]">
+    <div className="grid gap-4 rounded-2xl border border-slate-200/80 bg-slate-100/80 p-4 shadow-sm dark:border-slate-700/80 dark:bg-slate-900/70 lg:grid-cols-[minmax(0,1fr)_auto]">
       <div className="flex flex-col gap-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <ColorMatchChip

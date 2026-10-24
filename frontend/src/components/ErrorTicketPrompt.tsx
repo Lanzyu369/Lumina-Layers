@@ -1,3 +1,4 @@
+import CloseButton from "./ui/CloseButton";
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
 
@@ -55,15 +56,7 @@ export function ErrorTicketPrompt({
         >
           {t("error_ticket_prompt_title")}
         </h2>
-        <button
-          type="button"
-          data-testid="error-ticket-prompt-close"
-          className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
-          onClick={onDismiss}
-          aria-label={t("error_ticket_prompt_close")}
-        >
-          ✕
-        </button>
+        <CloseButton label={t("error_ticket_prompt_close")} onClick={onDismiss} data-testid="error-ticket-prompt-close" />
       </div>
       <p
         data-testid="error-ticket-prompt-message"

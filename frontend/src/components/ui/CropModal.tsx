@@ -1,3 +1,4 @@
+import CloseButton from "./CloseButton";
 import "cropperjs/dist/cropper.css";
 
 import { useState, useRef, useEffect, useCallback } from "react";
@@ -283,27 +284,14 @@ export function CropModal({
         aria-modal="true"
         aria-label={t("crop_modal_title")}
         onClick={(e) => e.stopPropagation()}
-        className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-y-auto rounded-2xl bg-slate-50 outline-none dark:bg-slate-900"
+        className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-y-auto overscroll-y-contain rounded-2xl bg-slate-50 outline-none dark:bg-slate-900"
       >
         {/* Title bar */}
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
           <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100">
             {t("crop_modal_title")}
           </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="ghost-control rounded-lg p-1 text-slate-500 dark:text-slate-400"
-            aria-label={t("crop_modal_close")}
-          >
-            <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path
-                fillRule="evenodd"
-                d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-                clipRule="evenodd"
-              />
-            </svg>
-          </button>
+          <CloseButton label={t("crop_modal_close")} onClick={onClose} />
         </div>
 
         {/* Cropper area */}
