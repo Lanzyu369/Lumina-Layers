@@ -1054,7 +1054,7 @@ export default function BasicSettings() {
   return (
     <div className="flex flex-col gap-4">
       <Block label={t("basic_group_input")} tutorial="image-upload">
-        {uploaderExpanded ? (
+        <div hidden={!uploaderExpanded}>
           <UnifiedUploader
             singlePreview={imagePreviewUrl ?? undefined}
             batchFiles={batchFiles}
@@ -1065,7 +1065,8 @@ export default function BasicSettings() {
             accept={ACCEPT_IMAGE_FORMATS}
             onShareCardDetected={(file) => void handleShareCardDetected(file)}
           />
-        ) : (
+        </div>
+        {!uploaderExpanded && (
           <button
             type="button"
             onClick={() => setUploaderExpanded(true)}

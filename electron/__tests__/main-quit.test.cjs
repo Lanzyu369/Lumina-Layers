@@ -26,6 +26,7 @@ async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}
   const timers = new Set();
   const ipcMain = new EventEmitter();
   const ipcHandlers = new Map();
+  let applicationMenu;
   ipcMain.handle = (channel, handler) => { ipcHandlers.set(channel, handler); };
   const event = () => ({ defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } });
   const app = new EventEmitter();
@@ -86,7 +87,7 @@ async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}
   const modules = {
     electron: {
       shell: { async openExternal(url) { externalUrls.push(url); } },
-      app, BrowserWindow: Window, ipcMain, Menu: { setApplicationMenu() {} }, screen,
+      app, BrowserWindow: Window, ipcMain, Menu: { setApplicationMenu(menu) { applicationMenu = menu; }, buildFromTemplate: template => template }, screen,
       dialog: {
         showErrorBox(...args) { errors.push(args); },
         showMessageBox(_window, options) { return new Promise(resolve => dialogs.push({ options, resolve })); },
@@ -143,6 +144,7 @@ async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}
   await until(() => healthCallback || app.quitted);
   const mainWindow = () => windows.find(w => w.options.title === "Lumina Studio 2");
   return { app, children, dialogs, errors, commands, signals, ipcMain, ipcHandlers, mainWindow, externalUrls,
+    menu: () => applicationMenu,
     portStatePath: path.join(root, "backend-port.json"),
     interfaceScalePath: path.join(root, "interface-scale.json"),
     async healthy() {
@@ -156,6 +158,23 @@ async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}
     },
   };
 }
+
+test('macOS installs a menu during startup and accepts state only from its trusted main frame', async t => {
+  const f = await fixture(t, 'darwin');
+  const item = id => f.menu().flatMap(entry => entry.submenu).find(entry => entry.id === id);
+  assert.equal(item('settings').enabled, false);
+  await f.healthy();
+  const contents = f.mainWindow().webContents;
+  const payload = { commands: { settings: true } };
+  f.ipcMain.emit('application-menu-state', { sender: contents, senderFrame: { url: contents.mainFrame.url } }, payload);
+  assert.equal(item('settings').enabled, false);
+  f.ipcMain.emit('application-menu-state', { sender: contents, senderFrame: contents.mainFrame }, payload);
+  assert.equal(item('settings').enabled, true);
+  contents.emit('did-start-navigation', {}, 'http://127.0.0.1:4174/', false, false);
+  assert.equal(item('settings').enabled, true);
+  contents.emit('did-start-navigation', {}, 'http://127.0.0.1:4174/', false, true);
+  assert.equal(item('settings').enabled, false);
+});
 
 for (const platform of ["win32", "darwin"]) {
   test(`source desktop on ${platform} launches Python and Vite, then confirms and cleans up on exit`, async t => {

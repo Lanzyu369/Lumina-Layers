@@ -17,12 +17,13 @@ const nodeNet = require("net");
 const fs = require("fs");
 const path = require("path");
 const { saveGeneratedFile } = require("./generated-file-save.cjs");
+const { createApplicationMenu } = require("./application-menu.cjs");
 const {
   createGeneratedFileDirectoryState,
   pickGeneratedFileDirectory,
   resolveDefaultSavePath,
-  isTrustedMainFrameSender,
   setGeneratedFileDirectory,
+  isTrustedMainFrameSender,
 } = require("./generated-file-directory.cjs");
 const { assertPortsAvailable, selectBackendEndpoint, commitBackendEndpoint, validateHealthResponse } = require("./backend-endpoint.cjs");
 const {
@@ -393,6 +394,7 @@ if (!gotLock) {
 
 let win = null;
 let interfaceScale = null;
+let applicationMenu = null;
 const generatedFileDirectory = createGeneratedFileDirectoryState();
 let splashWin = null;
 let isQuitting = false;
@@ -600,7 +602,11 @@ function createWindow() {
     win.show();
   });
 
-  Menu.setApplicationMenu(null);
+  applicationMenu?.rebuild();
+  win.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) applicationMenu?.reset();
+  });
+  win.webContents.on("render-process-gone", () => applicationMenu?.reset());
 
   win.webContents.setWindowOpenHandler(({ url, referrer }) => {
     const openerUrl = referrer?.url || null;
@@ -741,6 +747,10 @@ function createWindow() {
 // ═══════════════════════════════════════════════════════════
 //  IPC handlers
 // ═══════════════════════════════════════════════════════════
+
+ipcMain.on("application-menu-state", (event, payload) => {
+  if (isTrustedMainFrameSender(event, win, `${FRONTEND_URL}/`)) applicationMenu?.update(payload);
+});
 
 ipcMain.on("set-language", (_event, lang) => {
   if (lang === "zh" || lang === "en") {
@@ -927,6 +937,17 @@ app.whenReady().then(async () => {
     } catch (err) {
       logErr(`Dock icon set failed: ${err.message}`);
     }
+  }
+
+  if (IS_MAC) {
+    applicationMenu = createApplicationMenu({
+      Menu, app, getWindow: () => win, getScale: () => interfaceScale,
+      onError: (error) => logErr(`Menu import could not open: ${error.message}`),
+      openDocs: () => { void shell.openExternal(`https://wiki.luminastudio.com.cn/${currentLang}/`).catch((error) => logErr(`Documentation could not open: ${error.message}`)); },
+    });
+    applicationMenu.rebuild();
+  } else {
+    Menu.setApplicationMenu(null);
   }
 
   createSplash();

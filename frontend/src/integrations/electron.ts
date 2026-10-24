@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import { useSettingsStore } from "../stores/settingsStore";
 
 interface ElectronAPI {
+  setApplicationMenuState?: (state: { commands?: Record<string, boolean>; labels?: Record<string, string> }) => void;
+  onApplicationMenuCommand?: (listener: (command: string) => void) => () => void;
   setLanguage: (lang: string) => void;
   getAppVersion: () => Promise<string>;
   getNativeBedModel?: (
