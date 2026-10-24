@@ -7140,8 +7140,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Detecting slicers...",
   },
   slicer_not_detected: {
-    zh: "未检测到切片软件",
-    en: "No slicers detected",
+    zh: "未检测到切片软件，仍可下载 3MF 文件。",
+    en: "No slicer detected. You can still download the 3MF file.",
   },
   slicer_toggle_list: {
     zh: "切换切片软件列表",
@@ -7156,8 +7156,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Current export format targets {expected}, but the action bar is set to {actual}",
   },
   slicer_preferred_missing: {
-    zh: "当前导出格式为 {name}，但本机未检测到对应切片软件",
-    en: "Current export format targets {name}, but the matching slicer is not detected on this device",
+    zh: "未检测到 {name}，仍可下载 3MF 文件后手动打开。",
+    en: "{name} was not detected. You can still download the 3MF file and open it manually.",
   },
 
   // ==================== Crop Modal ====================

@@ -289,6 +289,9 @@ export default function SlicerSelector({
     activeSlicer?.display_name ?? null,
     t,
   );
+  const outputHint = !isDetecting && !largeFormat
+    ? slicerLinkHint ?? (!hasSlicers ? t("slicer_not_detected") : null)
+    : null;
   const resolveLatestDownloadUrl =
     getLatestDownloadUrl ?? (() => useConverterStore.getState().downloadUrl);
   const resolveLatestThreemfDiskPath =
@@ -520,7 +523,6 @@ export default function SlicerSelector({
             <p className="text-xs text-slate-400">{t("slicer_detecting")}</p>
           ) : (
             <>
-              <p className="text-xs text-slate-400">{t("slicer_not_detected")}</p>
               <WikiTooltip
                 title={mainButtonLabel}
                 description={t("slicer_output_hint")}
@@ -532,7 +534,7 @@ export default function SlicerSelector({
                   type="button"
                   onClick={() => void handleMainClick()}
                   disabled={isDisabled}
-                  className={`flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
+                  className={`flex w-full items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
                 >
                   {(isAutoGenerating || isDownloading) && (
                     <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
@@ -551,8 +553,8 @@ export default function SlicerSelector({
       {launchMessage && (
         <p className="text-xs text-green-400">{launchMessage}</p>
       )}
-      {slicerLinkHint && (
-        <p className="text-xs text-amber-600 dark:text-amber-400">{slicerLinkHint}</p>
+      {outputHint && (
+        <p role="status" className="text-xs text-slate-500 dark:text-slate-400">{outputHint}</p>
       )}
       {error && (
         <p className="text-xs text-red-400">{error}</p>

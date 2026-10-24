@@ -244,7 +244,7 @@ export default function ActionBar() {
       {batchMode ? (
         <>
           {!canBatchSubmit && (
-            <p className="text-xs text-yellow-600 dark:text-yellow-400">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
               {t(batchUploadHintKey)}
             </p>
           )}
@@ -278,7 +278,7 @@ export default function ActionBar() {
             </StatusBanner>
           )}
           {!canSubmit && (
-            <p className="text-xs text-yellow-600 dark:text-yellow-400">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
               {singleSubmitHintKey ? t(singleSubmitHintKey) : null}
             </p>
           )}
