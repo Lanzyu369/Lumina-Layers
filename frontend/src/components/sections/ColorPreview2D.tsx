@@ -1824,6 +1824,7 @@ export default function ColorPreview2D({
           data-testid="color-preview-2d-hold-original"
           data-active={showOriginal || undefined}
           className={cx(
+            "pointer-events-auto absolute right-2 top-2 z-30 flex h-7 w-7 items-center justify-center rounded-lg",
             "bg-slate-900/60 text-slate-100 backdrop-blur-sm transition-colors",
             "hover:bg-slate-900/75 active:bg-slate-900/85",
             showOriginal && "bg-slate-900/85",

@@ -88,7 +88,9 @@ export default function Color2DOverlay() {
     >
       {/* Content: left = 2D preview, right = palette + LUT grid in two columns */}
       {contentReady && (
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(18rem,0.82fr)_minmax(17rem,0.46fr)_minmax(20rem,0.72fr)]">
         {/* Left: 2D preview image (click to select color/region) */}
+        <div className="min-h-0">
           <ColorPreview2D
             showMagnifier={showHoverMagnifier}
             showLayerDetails={showHoverLayerDetails}
@@ -96,6 +98,7 @@ export default function Color2DOverlay() {
         </div>
 
         {/* Middle: palette panel */}
+        <div className="panel-divider min-h-0 border-l">
             <PalettePanel
               showHoverMagnifier={showHoverMagnifier}
               showHoverLayerDetails={showHoverLayerDetails}

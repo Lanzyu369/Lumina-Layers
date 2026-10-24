@@ -18,6 +18,8 @@ interface ToolbarGroupProps {
   contentClassName?: string;
 }
 
+/** Toolbar groups use neutral headings and spacing. */
+function ToolbarGroup({ label, children, contentClassName }: ToolbarGroupProps) {
   return (
     <div className="flex flex-col gap-1" role="group" aria-label={label}>
       <span className={groupHeaderClass}>
@@ -453,6 +455,7 @@ export default function PalettePanel({
 
             {/* Grouped toolbar: auto-fit grid keeps every group card the same width */}
             <div className="grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-2">
+              <ToolbarGroup label={t("palette_group_history")}>
                 <Button
                   label={t("palette_undo")}
                   variant="secondary"
@@ -491,6 +494,7 @@ export default function PalettePanel({
                   title={t("palette_selection_blink_title")}
               </ToolbarGroup>
 
+              <ToolbarGroup label={t("palette_group_free")}>
                 <Button
                   label={t("conv_free_color_btn")}
                   variant="secondary"
@@ -509,6 +513,7 @@ export default function PalettePanel({
                 />
               </ToolbarGroup>
 
+              <ToolbarGroup label={t("palette_group_recipe")}>
                 <Button
                   label={t("recipe_custom_button")}
                   variant="secondary"
@@ -519,6 +524,7 @@ export default function PalettePanel({
                 />
               </ToolbarGroup>
 
+              <ToolbarGroup label={t("viewer_hover_toggle_group")}>
                 <label className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-slate-600 dark:text-slate-300">
                   <Switch
                     checked={showHoverMagnifier}

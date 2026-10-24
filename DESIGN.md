@@ -2,6 +2,9 @@
 
 ## Color Workstation Selection Invariants
 
+- 颜色调整页使用连续的直角工作区：预览、选择工具、换色与 LUT 区域通过横向或竖向 `panel-divider` 分割，不使用圆角卡片外框或阴影。控件保留自身圆角。
+- 历史、选择工具、自由色、配方、悬停显示、目标颜色 B 和相似配方的分组标题使用中性文字，不添加装饰色点。
+
 - **Tool is not selection:** switching between Same color, Pick blocks, and Selection brush never clears or rewrites the shared selection.
 - **The server mask is authoritative:** every tool edits one revisioned union mask; the frontend may render an exact local flood-fill immediately, but stale responses cannot overwrite a newer intent.
 - **No approximate flash:** click feedback uses strict RGB, 4-connected local flood-fill against the unhighlighted preview buffer. Bounding boxes and whole-image same-colour contours are never optimistic placeholders.
