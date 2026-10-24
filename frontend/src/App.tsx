@@ -67,6 +67,7 @@ import { useExtractorStore } from "./stores/extractorStore";
 import { collectConverterKeepFileIds, useConverterStore } from "./stores/converter";
 import { useShallow } from "zustand/react/shallow";
 import {
+  electronAPI,
   useElectronGeneratedFileDirectorySync,
   useElectronLanguageSync,
 } from "./integrations/electron";
@@ -247,12 +248,39 @@ function AppContent({ connected }: { connected: boolean | null }) {
   const workspace = useWorkspaceMode();
   const reproMode = useReproMode();
   const headerNavAlignment = useSettingsStore((s) => s.headerNavAlignment);
+  const mergedTitlebar = electronAPI?.platform === "darwin" || electronAPI?.platform === "win32";
   const headerRef = useRef<HTMLElement>(null);
   const headerContentProbeRef = useRef<HTMLSpanElement>(null);
   const headerBrandLogoRef = useRef<HTMLImageElement>(null);
   const headerBrandTitleRef = useRef<HTMLHeadingElement>(null);
   const headerToolsRef = useRef<HTMLDivElement>(null);
   const primaryTabsRef = useRef<HTMLElement>(null);
+  const windowControlsProbeRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (electronAPI?.platform !== "darwin" || !electronAPI.alignTrafficLights) return;
+    const alignTrafficLights = electronAPI.alignTrafficLights;
+    const header = headerRef.current;
+    const logo = headerBrandLogoRef.current;
+    const controlsProbe = windowControlsProbeRef.current;
+    if (!header || !logo || !controlsProbe) return;
+    const align = () => {
+      const bounds = logo.getBoundingClientRect();
+      void alignTrafficLights(bounds.top + bounds.height / 2, controlsProbe.getBoundingClientRect().height)
+        .catch(() => { /* Keep the native title bar if the host is unavailable. */ });
+    };
+    const observer = new ResizeObserver(align);
+    observer.observe(header);
+    observer.observe(logo);
+    observer.observe(controlsProbe);
+    window.addEventListener("resize", align);
+    const unsubscribe = electronAPI.onInterfaceScaleChanged?.(align);
+    align();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", align);
+      unsubscribe?.();
+    };
+  }, []);
   const headerNavFit = useHeaderNavFit(headerNavAlignment, {
     header: headerRef,
     contentWidthProbe: headerContentProbeRef,
@@ -398,13 +426,29 @@ function AppContent({ connected }: { connected: boolean | null }) {
   }, []);
 
   return (
+    <div className="flex h-screen flex-col overflow-hidden bg-slate-200 text-slate-900 dark:bg-slate-950 dark:text-white">
       <header
         ref={headerRef}
         inert={infoOpen}
         aria-hidden={infoOpen || undefined}
+        style={electronAPI?.platform === "darwin" ? {
+          paddingLeft: "calc(env(titlebar-area-x, 80px) + 12px)",
+        } : electronAPI?.platform === "win32" ? {
+          paddingRight: "calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100% - 180px)) + 12px)",
+          minHeight: "max(3rem, env(titlebar-area-height, 40px))",
+        } : undefined}
+        className={`${mergedTitlebar ? "desktop-titlebar min-h-12" : ""} relative z-50 grid items-center gap-x-6 gap-y-2 border-b panel-divider ${headerPaddingXClass} ${
           workspace.isCompact ? "py-1.5" : "py-2.5"
         } ${HEADER_NAV_GRID_CLASS}`}
       >
+        {electronAPI?.platform === "darwin" && (
+          <span
+            ref={windowControlsProbeRef}
+            aria-hidden="true"
+            className="pointer-events-none invisible absolute w-0"
+            style={{ height: "env(titlebar-area-height, 0px)" }}
+          />
+        )}
         <span
           ref={headerContentProbeRef}
           aria-hidden="true"
@@ -415,6 +459,7 @@ function AppContent({ connected }: { connected: boolean | null }) {
             ref={headerBrandLogoRef}
             src="/favicon.ico"
             alt={t("app_logo_alt")}
+            draggable={false}
             className="h-8 w-8 shrink-0 rounded"
           />
           {/* Collapses to zero width when the tabs need the room; the title
@@ -435,6 +480,7 @@ function AppContent({ connected }: { connected: boolean | null }) {
         {/* Right Side: Controls */}
         <div
           ref={headerToolsRef}
+          className="desktop-titlebar-controls col-start-3 row-start-1 flex w-max items-center gap-2 justify-self-end"
         >
           <WidgetToggles />
           <HeaderMenu
@@ -446,6 +492,7 @@ function AppContent({ connected }: { connected: boolean | null }) {
         </div>
 
         {/* Primary tabs: same row as brand and tools when they fit */}
+        <div className={`desktop-titlebar-controls ${primaryTabsCellClass(headerNavAlignment, headerNavFit.singleRow)}`}>
           <AlignedNavStrip
             alignment={headerNavAlignment}
             centerShift={primaryTabsCellShift(headerNavFit)}
@@ -467,9 +514,11 @@ function AppContent({ connected }: { connected: boolean | null }) {
         {hasSubTabs(activeTab) && (
           <div
             data-testid="sub-tab-row"
+            className={`flex shrink-0 border-b panel-divider bg-slate-200 py-0.5 dark:bg-slate-950 ${headerPaddingXClass} ${subTabRowJustifyClass(headerNavAlignment)}`}
             style={
               headerNavAlignment === "left"
                 ? { paddingLeft: headerNavFit.primaryTabsInsetPx }
+                : { paddingLeft: headerNavFit.paddingLeft, paddingRight: headerNavFit.paddingRight }
             }
           >
             <AlignedNavStrip
@@ -492,6 +541,7 @@ function AppContent({ connected }: { connected: boolean | null }) {
             <WidgetWorkspace>
               <SceneErrorBoundary
                 fallback={
+                  <div className="absolute inset-0 flex items-center justify-center bg-slate-50 dark:bg-slate-950">
                     <p className="text-red-400 text-sm">{t("app_3d_scene_error")}</p>
                   </div>
                 }

@@ -393,6 +393,7 @@ if (!gotLock) {
 // ═══════════════════════════════════════════════════════════
 
 let win = null;
+let trafficLightButtonHeight = null;
 let interfaceScale = null;
 let applicationMenu = null;
 const generatedFileDirectory = createGeneratedFileDirectoryState();
@@ -567,6 +568,7 @@ function closeSplash() {
 }
 
 function createWindow() {
+  trafficLightButtonHeight = null;
   interfaceScale = createInterfaceScaleController({
     screen,
     stateFile: path.join(app.getPath("userData"), "interface-scale.json"),
@@ -577,6 +579,18 @@ function createWindow() {
   const windowOptions = {
     ...placement.bounds,
     title: "Lumina Studio 2",
+    // Keep macOS traffic lights while the renderer paints the title bar.
+    ...(process.platform === "darwin" ? {
+      titleBarStyle: "hidden",
+      titleBarOverlay: true,
+      // With zero vertical margin, WCO reports the actual native button height.
+      trafficLightPosition: { x: 16, y: 0 },
+    } : {}),
+    ...(process.platform === "win32" ? {
+      titleBarStyle: "hidden",
+      autoHideMenuBar: true,
+      titleBarOverlay: { color: "#e2e8f0", symbolColor: "#334155", height: 40 },
+    } : {}),
     icon: fs.existsSync(ICON_PATH) ? ICON_PATH : undefined,
     webPreferences: {
       contextIsolation: true,
@@ -750,6 +764,31 @@ function createWindow() {
 
 ipcMain.on("application-menu-state", (event, payload) => {
   if (isTrustedMainFrameSender(event, win, `${FRONTEND_URL}/`)) applicationMenu?.update(payload);
+});
+
+ipcMain.on("set-titlebar-theme", (event, theme) => {
+  if (process.platform !== "win32" || !isTrustedMainFrameSender(event, win, `${FRONTEND_URL}/`)) return;
+  if (theme !== "light" && theme !== "dark") return;
+  win.setTitleBarOverlay(theme === "dark"
+    ? { color: "#020617", symbolColor: "#cbd5e1" }
+    : { color: "#e2e8f0", symbolColor: "#334155" });
+});
+
+ipcMain.handle("align-traffic-lights", (event, centerY, controlsHeight) => {
+  if (process.platform !== "darwin" || !isTrustedMainFrameSender(event, win, `${FRONTEND_URL}/`)) return null;
+  if (typeof centerY !== "number" || !Number.isFinite(centerY) || centerY < 0 || centerY > 200) return null;
+  const zoom = win.webContents.getZoomFactor();
+  if (trafficLightButtonHeight === null) {
+    if (typeof controlsHeight !== "number" || !Number.isFinite(controlsHeight) || controlsHeight <= 0 || controlsHeight > 200) return null;
+    // Capture before the first move: subsequent WCO heights include our margins.
+    trafficLightButtonHeight = controlsHeight * zoom;
+  }
+  // CSS pixels become window points through page zoom, not devicePixelRatio.
+  win.setWindowButtonPosition({
+    x: 16,
+    y: Math.max(0, Math.round(centerY * zoom - trafficLightButtonHeight / 2)),
+  });
+  return null;
 });
 
 ipcMain.on("set-language", (_event, lang) => {
