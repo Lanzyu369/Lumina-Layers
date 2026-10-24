@@ -63,7 +63,7 @@ export function computeBedPreviewCameraPose(
   const fitDistance = (radius / Math.sin(halfFovRadians)) * 1.2;
   return {
     position: [0, -fitDistance * 0.42, fitDistance * 0.91],
-    target: [0, 0, -MIN_VISIBLE_BED_THICKNESS_MM * 0.75],
+    target: [0, 0, 0],
     fitDistance,
   };
 }
