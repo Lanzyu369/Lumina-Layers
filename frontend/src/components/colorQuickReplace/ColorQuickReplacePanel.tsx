@@ -157,7 +157,6 @@ export default function ColorQuickReplacePanel() {
           <section className="flex flex-col gap-2" aria-label={t("quick_replace_recipes_heading")}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h4 className={groupHeaderClass}>
-                <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                 {t("quick_replace_recipes_heading")}
               </h4>
               {recipeReference && (

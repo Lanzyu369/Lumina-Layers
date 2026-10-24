@@ -379,6 +379,25 @@ body.lumina-canvas-orbiting [data-widget-id] {
   border-color: var(--surface-divider);
 }
 
+/* The color editor is a continuous workstation divided into columns and rows. */
+.color-adjustment-workspace .panel-card {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.color-adjustment-workspace .ghost-control:is([aria-pressed="true"], [data-active="true"]) {
+  border-color: var(--nav-tab-selected-bg);
+  background-color: var(--nav-tab-selected-bg);
+  color: var(--nav-tab-selected-text);
+}
+
+.color-adjustment-workspace .ghost-control:is([aria-pressed="true"], [data-active="true"]):hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--nav-tab-selected-bg);
+  background-color: var(--nav-tab-selected-bg);
+  color: var(--nav-tab-selected-text);
+}
+
 .surface-divider {
   background: var(--surface-outline);
 }

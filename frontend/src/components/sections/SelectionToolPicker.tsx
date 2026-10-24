@@ -15,6 +15,7 @@ import {
   type SelectionTool,
 } from "../../stores/converter";
 import Button from "../ui/Button";
+import Slider from "../ui/Slider";
 
 const TOOLS: { tool: SelectionTool; labelKey: string; titleKey?: string }[] = [
   { tool: "same-color", labelKey: "palette_mode_select_all", titleKey: "palette_mode_select_all" },
@@ -22,9 +23,6 @@ const TOOLS: { tool: SelectionTool; labelKey: string; titleKey?: string }[] = [
   { tool: "point", labelKey: "palette_mode_multi_select" },
   { tool: "brush", labelKey: "palette_mode_brush" },
 ];
-
-const CONTROL_ROW_CLASS =
-  "col-span-full flex items-center gap-2 px-1 text-[11px] text-slate-600 dark:text-slate-300";
 
 export default function SelectionToolPicker() {
   const { t } = useI18n();
@@ -61,37 +59,30 @@ export default function SelectionToolPicker() {
         />
       ))}
       {selectionTool === "color-range" && (
-        <label className={CONTROL_ROW_CLASS} data-testid="color-range-tolerance-control">
-          <span className="shrink-0">{t("selection_color_range_tolerance")}</span>
-          <input
-            aria-label={t("selection_color_range_tolerance")}
-            type="range"
+        <div className="col-span-full px-1" data-testid="color-range-tolerance-control">
+          <Slider
+            label={t("selection_color_range_tolerance")}
             min={0}
             max={MAX_COLOR_RANGE_TOLERANCE}
             step={0.5}
             value={colorRangeTolerance}
-            onChange={(event) => setColorRangeTolerance(Number(event.target.value))}
-            className="min-w-0 flex-1 accent-sky-500"
+            onChange={setColorRangeTolerance}
+            unit="ΔE00"
+            tooltip={t("selection_color_range_hint")}
           />
-          <span className="shrink-0 tabular-nums">
-            {t("quick_replace_delta_e_value").replace("{value}", colorRangeTolerance.toFixed(1))}
-          </span>
-        </label>
+        </div>
       )}
       {selectionTool === "brush" && (
-        <label className={CONTROL_ROW_CLASS}>
-          <span className="shrink-0">{t("selection_brush_size")}</span>
-          <input
-            aria-label={t("selection_brush_size")}
-            type="range"
-            min={2}
-            max={160}
-            value={brushSizePx}
-            onChange={(event) => setBrushSizePx(Number(event.target.value))}
-            className="min-w-0 flex-1 accent-pink-500"
-          />
-          <span className="w-10 text-right tabular-nums">{brushSizePx}px</span>
-        </label>
+        <Slider
+          className="col-span-full px-1"
+          label={t("selection_brush_size")}
+          min={2}
+          max={160}
+          step={1}
+          value={brushSizePx}
+          onChange={setBrushSizePx}
+          unit="px"
+        />
       )}
     </>
   );

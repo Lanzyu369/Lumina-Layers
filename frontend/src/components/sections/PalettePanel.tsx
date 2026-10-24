@@ -12,40 +12,17 @@ import SelectionToolPicker from "./SelectionToolPicker";
 
 // ========== ToolbarGroup ==========
 
-type ToolbarGroupTint = "slate" | "sky" | "rose" | "amber" | "emerald";
-
-/* Hierarchy v2: groups are borderless — a colored dot + small-caps label
- * carries the category, so the card interior stays a single flat surface.
- * 层级 v2：工具组不再是彩色边框小卡片，改为“彩点 + 小标题”，卡片内部
- * 保持一个平面，靠留白分组。 */
-const TOOLBAR_GROUP_DOT_CLASS: Record<ToolbarGroupTint, string> = {
-  slate: "bg-slate-400",
-  sky: "bg-sky-500",
-  rose: "bg-rose-500",
-  amber: "bg-amber-500",
-  emerald: "bg-emerald-500",
-};
-
 interface ToolbarGroupProps {
   label: string;
-  tint: ToolbarGroupTint;
   children: ReactNode;
   contentClassName?: string;
 }
 
-/**
- * Toolbar group: colored dot + small caps label above a row of compact
- * controls. No border, no background — grouping is typographic.
- * 工具栏分组：彩点 + 小标题 + 紧凑按钮行，无边框无底色，靠排版分组。
- */
-function ToolbarGroup({ label, tint, children, contentClassName }: ToolbarGroupProps) {
+/** Toolbar groups use neutral headings and spacing. */
+function ToolbarGroup({ label, children, contentClassName }: ToolbarGroupProps) {
   return (
     <div className="flex flex-col gap-1" role="group" aria-label={label}>
       <span className={groupHeaderClass}>
-        <span
-          aria-hidden="true"
-          className={cx("h-1.5 w-1.5 shrink-0 rounded-full", TOOLBAR_GROUP_DOT_CLASS[tint])}
-        />
         {label}
       </span>
       <div className={contentClassName ?? "flex min-h-9 flex-wrap items-center gap-1.5"}>{children}</div>
@@ -479,7 +456,7 @@ export default function PalettePanel({
 
             {/* Grouped toolbar: auto-fit grid keeps every group card the same width */}
             <div className="grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-2">
-              <ToolbarGroup label={t("palette_group_history")} tint="slate">
+              <ToolbarGroup label={t("palette_group_history")}>
                 <Button
                   label={t("palette_undo")}
                   variant="secondary"
@@ -505,7 +482,6 @@ export default function PalettePanel({
 
               <ToolbarGroup
                 label={t("palette_group_mode")}
-                tint="sky"
                 contentClassName="grid min-h-9 grid-cols-[repeat(auto-fit,minmax(6.75rem,1fr))] items-center gap-1.5"
               >
                 <SelectionToolPicker />
@@ -527,7 +503,7 @@ export default function PalettePanel({
                 />
               </ToolbarGroup>
 
-              <ToolbarGroup label={t("palette_group_free")} tint="rose">
+              <ToolbarGroup label={t("palette_group_free")}>
                 <Button
                   label={t("conv_free_color_btn")}
                   variant="secondary"
@@ -546,7 +522,7 @@ export default function PalettePanel({
                 />
               </ToolbarGroup>
 
-              <ToolbarGroup label={t("palette_group_recipe")} tint="amber">
+              <ToolbarGroup label={t("palette_group_recipe")}>
                 <Button
                   label={t("recipe_custom_button")}
                   variant="secondary"
@@ -557,7 +533,7 @@ export default function PalettePanel({
                 />
               </ToolbarGroup>
 
-              <ToolbarGroup label={t("viewer_hover_toggle_group")} tint="emerald">
+              <ToolbarGroup label={t("viewer_hover_toggle_group")}>
                 <label className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-slate-600 dark:text-slate-300">
                   <Switch
                     checked={showHoverMagnifier}

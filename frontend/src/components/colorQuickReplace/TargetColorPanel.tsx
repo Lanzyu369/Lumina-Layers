@@ -76,7 +76,6 @@ export default function TargetColorPanel({
   return (
     <section className="flex flex-col gap-3" aria-label={t("quick_replace_target_heading")}>
       <h3 className={groupHeaderClass}>
-        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-amber-500" />
         {t("quick_replace_target_heading")}
       </h3>
 

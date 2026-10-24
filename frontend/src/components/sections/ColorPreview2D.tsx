@@ -1789,21 +1789,6 @@ export default function ColorPreview2D({
         </div>
       )}
 
-      <div
-        className="pointer-events-none absolute inset-0 z-20"
-        aria-hidden="true"
-      >
-        <div
-          className="absolute right-2 top-2 rounded-full px-2 py-1 text-[10px] font-semibold"
-          style={{
-            background: 'var(--surface-well)',
-            color: 'var(--surface-text-muted)',
-          }}
-        >
-          {t('preview_debug_main_2d')}
-        </div>
-      </div>
-
       {selectionTool === 'brush' && (brushStrokesRef.current.length > 0 || brushPointsRef.current.length > 0) && (
         <div className="pointer-events-auto absolute bottom-2 left-1/2 z-30 flex -translate-x-1/2 gap-2 rounded-[10px] border border-slate-300/80 bg-white/95 p-2 dark:border-slate-700/80 dark:bg-slate-900/95">
           <button
@@ -1840,7 +1825,7 @@ export default function ColorPreview2D({
           data-testid="color-preview-2d-hold-original"
           data-active={showOriginal || undefined}
           className={cx(
-            "pointer-events-auto absolute right-2 top-10 z-30 flex h-7 w-7 items-center justify-center rounded-lg",
+            "pointer-events-auto absolute right-2 top-2 z-30 flex h-7 w-7 items-center justify-center rounded-lg",
             "bg-slate-900/60 text-slate-100 backdrop-blur-sm transition-colors",
             "hover:bg-slate-900/75 active:bg-slate-900/85",
             showOriginal && "bg-slate-900/85",
