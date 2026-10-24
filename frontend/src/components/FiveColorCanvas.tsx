@@ -4,6 +4,7 @@
  */
 
 import { useRef, useEffect, useCallback, useState } from "react";
+import { useI18n } from "../i18n/context";
 
 interface SliceColor {
   hex: string;
@@ -242,6 +243,7 @@ export default function FiveColorCanvas({
   isLoading,
   layerCount: requestedLayerCount = DEFAULT_LAYER_COUNT,
 }: FiveColorCanvasProps) {
+  const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const phaseRef = useRef<"idle" | "stacking" | "merging" | "done">("idle");
@@ -318,8 +320,8 @@ export default function FiveColorCanvas({
       }
       
       // 绘制观赏面和底面标签
-      drawFaceLabel(ctx, "观赏面 Viewing Face", w / 2, startY - 35, isDark, true);
-      drawFaceLabel(ctx, "底面 Bottom", w / 2, startY + totalStackH + 35, isDark, false);
+      drawFaceLabel(ctx, t("five_color_viewing_face"), w / 2, startY - 35, isDark, true);
+      drawFaceLabel(ctx, t("five_color_bottom_face"), w / 2, startY + totalStackH + 35, isDark, false);
       
       // 绘制添加位置指示（第一个位置）
       const pulseProgress = (timestamp % 2000) / 2000; // 2秒一个周期
@@ -369,8 +371,8 @@ export default function FiveColorCanvas({
         const labelAlpha = 1 - progress * 2;
         ctx.save();
         ctx.globalAlpha = labelAlpha;
-        drawFaceLabel(ctx, "观赏面 Viewing Face", w / 2, startY - 35, isDark, true);
-        drawFaceLabel(ctx, "底面 Bottom", w / 2, startY + totalStackH + 35, isDark, false);
+        drawFaceLabel(ctx, t("five_color_viewing_face"), w / 2, startY - 35, isDark, true);
+        drawFaceLabel(ctx, t("five_color_bottom_face"), w / 2, startY + totalStackH + 35, isDark, false);
         ctx.restore();
       }
     } else {
@@ -404,8 +406,8 @@ export default function FiveColorCanvas({
       }
       
       // 绘制观赏面和底面标签
-      drawFaceLabel(ctx, "观赏面 Viewing Face", w / 2, startY - 35, isDark, true);
-      drawFaceLabel(ctx, "底面 Bottom", w / 2, startY + totalStackH + 35, isDark, false);
+      drawFaceLabel(ctx, t("five_color_viewing_face"), w / 2, startY - 35, isDark, true);
+      drawFaceLabel(ctx, t("five_color_bottom_face"), w / 2, startY + totalStackH + 35, isDark, false);
       
       // 绘制添加位置指示（下一个要添加的位置）
       if (slices.length < layerCount) {
@@ -421,11 +423,10 @@ export default function FiveColorCanvas({
       ctx.fillStyle = loadingTextColor;
       ctx.font = "13px sans-serif";
       ctx.textAlign = "center";
-      const dots = ".".repeat(Math.floor((timestamp / 400) % 4));
-      ctx.fillText(`查询中${dots}`, w / 2, h - 30);
+      ctx.fillText(t("five_color_query_loading"), w / 2, h - 30);
       ctx.restore();
     }
-  }, [isLoading, requestedLayerCount, resizeCanvas, resultHex, slices]);
+  }, [isLoading, requestedLayerCount, resizeCanvas, resultHex, slices, t]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
