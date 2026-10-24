@@ -1,3 +1,4 @@
+import { useState, type MouseEvent } from "react";
 import { motion } from "framer-motion";
 import { useCalibrationStore } from "../stores/calibrationStore";
 import { useI18n } from "../i18n/context";
@@ -8,7 +9,9 @@ import { MATERIAL_PRESET_OPTIONS } from "../constants/materialPresets";
 import {
   StatusBanner,
   resolvePanelSurfaceClass,
-  resolveSectionCardClass,
+  cardPadClass,
+  cardDividerClass,
+  workstationInputClass,
 } from "./ui/panelPrimitives";
 import HelpDot from "./ui/HelpDot";
 import { WIKI_DOCS } from "../utils/wikiDocs";
@@ -18,12 +21,19 @@ const singleStageLayerHeightOptions = [0.04, 0.08, 0.1].map((value) => ({
   value: value.toString(),
 }));
 
-const textInputClass =
-  "min-h-10 w-full rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-100";
-
 export default function GradientCardGeneratePanel() {
   const { t } = useI18n();
   const workspace = useWorkspaceMode();
+  const [linkError, setLinkError] = useState(false);
+  const handleModelLink = (event: MouseEvent<HTMLAnchorElement>) => {
+    const openModel = (window as Window & {
+      electronAPI?: { openGradientModel?: (url: string) => Promise<unknown> };
+    }).electronAPI?.openGradientModel;
+    if (!openModel) return;
+    event.preventDefault();
+    setLinkError(false);
+    void openModel(event.currentTarget.href).catch(() => setLinkError(true));
+  };
   const {
     substrateId,
     substrateDisplayName,
@@ -43,17 +53,17 @@ export default function GradientCardGeneratePanel() {
 
   return (
     <motion.aside
-      initial={{ opacity: 0, y: 30 }}
-      animate={{ opacity: 1, y: 0 }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
       transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="gradient-card-generate-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
       <div className="flex flex-col gap-6 w-full">
-        <div className="grid gap-6 lg:grid-cols-2 w-full">
-          <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4 h-full`}>
+        <div className="grid w-full items-start gap-5 lg:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]">
+          <section className={`${cardPadClass} flex flex-col gap-4 min-w-0`}>
             <div>
-              <h3 className="flex items-center gap-1.5 text-base font-semibold text-slate-900 dark:text-slate-50">
+              <h3 className="flex items-center gap-1.5 text-[15px] font-semibold text-slate-900 dark:text-slate-50">
                 <span>{t("mat_gradient_generate_section_title")}</span>
                 <HelpDot
                   title={t("mat_gradient_generate_section_title")}
@@ -81,7 +91,7 @@ export default function GradientCardGeneratePanel() {
                     {t("cal_substrate_id_label")}
                   </span>
                   <input
-                    className={textInputClass}
+                    className={workstationInputClass}
                     value={substrateId}
                     onChange={(event) => setSubstrateId(event.target.value)}
                   />
@@ -94,7 +104,7 @@ export default function GradientCardGeneratePanel() {
                     {t("cal_substrate_name_label")}
                   </span>
                   <input
-                    className={textInputClass}
+                    className={workstationInputClass}
                     value={substrateDisplayName}
                     onChange={(event) => setSubstrateDisplayName(event.target.value)}
                   />
@@ -111,7 +121,7 @@ export default function GradientCardGeneratePanel() {
               </div>
             </div>
 
-            <div className="mt-auto pt-2">
+            <div className="pt-2">
               <Button
                 label={t("mat_gradient_generate_btn")}
                 variant="primary"
@@ -123,36 +133,40 @@ export default function GradientCardGeneratePanel() {
             </div>
           </section>
 
-          <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4 h-full`}>
+          <section className={`${cardPadClass} flex flex-col gap-4 min-w-0`}>
             <div>
-              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+              <h3 className="text-[15px] font-semibold text-slate-900 dark:text-slate-50">
                 {t("mat_gradient_generate_notice_title")}
               </h3>
             </div>
 
-            <div className="rounded-2xl border border-blue-200/80 bg-blue-50/50 p-4 text-sm leading-6 text-blue-800 dark:border-blue-900/30 dark:bg-blue-900/20 dark:text-blue-200 flex-1">
+            <div className="text-sm leading-6 text-slate-600 dark:text-slate-300">
               <p>{t("mat_gradient_generate_notice_dual_print")}</p>
-              <p className="mt-2">{t("mat_gradient_generate_notice_online_model")}</p>
-              <div className="mt-4 flex flex-col gap-3">
+              <p className="mt-2">{t("mat_gradient_generate_notice_config")}</p>
+              <p className="mt-3">{t("mat_gradient_generate_notice_online_model")}</p>
+              <div className={`${cardDividerClass} mt-4 flex flex-col gap-3 pt-4`}>
                 <a
                   href="https://makerworld.com.cn/zh/models/2394753-lumina2-0-ti-xing-xiao-se-se-qia-0-08ceng-gao-15ce#profileId-2721317"
+                  onClick={handleModelLink}
                   target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex max-w-full self-start items-center gap-2 text-sm font-medium text-blue-600 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                  rel="noopener noreferrer"
+                  className="inline-flex max-w-full self-start items-center gap-2 text-sm font-medium text-blue-600 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
                   {t("mat_gradient_generate_online_model_link")}
                 </a>
                 <a
                   href="https://makerworld.com.cn/zh/models/2400920-can-shu-hua-lumina-2-0ti-du-se-qia-zi-ding-yi-shou#profileId-2729620"
+                  onClick={handleModelLink}
                   target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex max-w-full self-start items-center gap-2 text-sm font-medium text-blue-600 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                  rel="noopener noreferrer"
+                  className="inline-flex max-w-full self-start items-center gap-2 text-sm font-medium text-blue-600 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
                   {t("mat_gradient_generate_parametric_box_link")}
                 </a>
               </div>
+              {linkError && <StatusBanner tone="error" role="alert">{t("mat_gradient_model_open_error")}</StatusBanner>}
             </div>
           </section>
         </div>
@@ -172,9 +186,9 @@ export default function GradientCardGeneratePanel() {
             )}
 
             {downloadUrl && (
-              <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
+              <section className={`${cardPadClass} flex flex-col gap-3`}>
                 <div>
-                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                  <h3 className="text-[15px] font-semibold text-slate-900 dark:text-slate-50">
                     {t("mat_gradient_download_title")}
                   </h3>
                   <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
@@ -186,7 +200,7 @@ export default function GradientCardGeneratePanel() {
                     data-testid="download-link"
                     href={downloadUrl}
                     download
-                    className="inline-flex min-h-11 items-center justify-center rounded-2xl bg-blue-600 px-6 py-2.5 text-sm font-medium text-white shadow-[var(--shadow-control-hover)] transition-colors hover:bg-blue-700"
+                    className="action-control action-control-primary inline-flex min-h-9 items-center justify-center rounded-lg px-4 py-2 text-sm font-medium"
                   >
                     <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                     {t("mat_gradient_download_btn")}

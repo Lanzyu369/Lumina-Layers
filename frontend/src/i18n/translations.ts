@@ -8887,12 +8887,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Please read these instructions before printing to ensure smooth operation later.",
   },
   mat_gradient_generate_notice_dual_print: {
-    zh: "注意：每种测试耗材需要打印两张梯度卡（一张白底，一张黑底）。无论你使用本地生成还是下载线上模型，都必须在这里点击生成并下载配置文件包（ZIP），后续「提取梯度卡」步骤会用到它。",
-    en: "Note: Each test material requires printing two gradient cards (one on a white base, one on a black base). Whether you generate them locally or download the online models, you must generate and download the configuration package (ZIP) here, as it is required for the 'Extract Gradient Card' step later.",
+    zh: "每种耗材需要打印两张梯度卡：白底、黑底各一张。",
+    en: "Each material requires printing two gradient cards: one with a white base and one with a black base.",
+  },
+  mat_gradient_generate_notice_config: {
+    zh: "请按打印层高生成并保存配置文件包（ZIP），提取梯度卡时需要导入。使用在线模型也需要此配置包。",
+    en: "Generate and save the configuration ZIP for your print layer height. Import it when extracting gradient cards, including cards printed from online models.",
   },
   mat_gradient_generate_notice_online_model: {
-    zh: "线上模型与本地生成的模型完全相同。如果你通过 MakerWorld 下载在线模型，可以为 Lumina 团队提供积分支持，积分将用于社区抽奖福利。",
-    en: "The online models are identical to the locally generated ones. Downloading via MakerWorld provides points to the Lumina team, which will be used for community giveaways.",
+    zh: "也可从 MakerWorld 下载模型，请确认模型层高与所选层高一致。下载获得的积分将用于 Lumina 社区抽奖。",
+    en: "Models are also available on MakerWorld. Check that the model layer height matches your selection. Download points support Lumina community giveaways.",
+  },
+  mat_gradient_model_open_error: {
+    zh: "无法打开模型页面，请重试或复制链接到浏览器中打开。",
+    en: "Could not open the model page. Try again or copy the link into your browser.",
   },
   mat_gradient_generate_online_model_link: {
     zh: "梯度卡在线模型",
