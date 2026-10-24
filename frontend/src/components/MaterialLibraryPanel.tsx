@@ -1,6 +1,12 @@
+import { LibraryIdentity, LibraryFields } from "./ui/LibraryDetails";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { motion } from "framer-motion";
+import { createPortal } from "react-dom";
+import { DndContext, DragOverlay, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import { CheckIcon } from "@heroicons/react/24/outline";
 
 import { apiErrorToVisibleMessage } from "../api/client";
 import { tRuntime } from "../i18n/runtime";
@@ -19,15 +25,28 @@ import { useWidgetStore } from "../stores/widgetStore";
 
 import { normalizeResourceUrl } from "../utils/resourceUrl";
 import Button from "./ui/Button";
+import CloseButton from "./ui/CloseButton";
+import { LibraryBrandHeader as MaterialBrandHeader, SortableLibraryBrand as SortableMaterialBrand } from "./ui/LibraryBrandGroup";
 import {
   StatusBanner,
+  cardPadClass,
   mutedSectionCardClass,
-  resolvePanelSurfaceClass,
   resolveSectionCardClass,
 } from "./ui/panelPrimitives";
 
 const isRgbTriplet = (value: number[] | null | undefined): value is [number, number, number] =>
   Array.isArray(value) && value.length === 3;
+
+const PINNED_BRANDS_STORAGE_KEY = "lumina-material-library-pinned-brands";
+const BRAND_ORDER_STORAGE_KEY = "lumina-material-library-brand-order";
+function readBrandPreference(storageKey: string): string[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(storageKey) ?? "[]");
+    return Array.isArray(value) ? value.filter((key): key is string => typeof key === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 const toRgbCss = (rgb: [number, number, number]) => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 
@@ -149,7 +168,24 @@ export default function MaterialLibraryPanel() {
   const setActiveTab = useWidgetStore((state) => state.setActiveTab);
   const startMaterialVerification = useSingleStageStore((state) => state.startMaterialVerification);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const listScrollRef = useRef<HTMLDivElement | null>(null);
+  const [listScrolled, setListScrolled] = useState(false);
   const [materials, setMaterials] = useState<SavedMaterialLibraryItem[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchCollapsedBrands, setSearchCollapsedBrands] = useState<string[]>([]);
+  const searchTerm = searchQuery.trim().toLocaleLowerCase();
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [detailDirectory, setDetailDirectory] = useState<string | null>(null);
+  const detailCloseRef = useRef<HTMLButtonElement | null>(null);
+  const detailTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const detailMaterial = materials.find((item) => item.directory_name === detailDirectory);
+  useEffect(() => {
+    if (detailDirectory) detailCloseRef.current?.focus({ preventScroll: window.innerWidth >= 1024 });
+  }, [detailDirectory]);
+  const closeDetails = () => {
+    setDetailDirectory(null);
+    detailTriggerRef.current?.focus();
+  };
   const [isLoading, setIsLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -160,7 +196,25 @@ export default function MaterialLibraryPanel() {
   const [historyMaterial, setHistoryMaterial] = useState<SavedMaterialLibraryItem | null>(null);
   const [selectedDirectoryNames, setSelectedDirectoryNames] = useState<string[]>([]);
   const [editingMaterial, setEditingMaterial] = useState<SavedMaterialLibraryItem | null>(null);
-  const [expandedBrandGroupKeys, setExpandedBrandGroupKeys] = useState<string[]>([]);
+  const [pinnedBrandGroupKeys, setPinnedBrandGroupKeys] = useState<string[]>(() => readBrandPreference(PINNED_BRANDS_STORAGE_KEY));
+  const [brandOrder, setBrandOrder] = useState<string[]>(() => readBrandPreference(BRAND_ORDER_STORAGE_KEY));
+  const [draggedBrand, setDraggedBrand] = useState<string | null>(null);
+  const brandSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  useEffect(() => {
+    try {
+      localStorage.setItem(BRAND_ORDER_STORAGE_KEY, JSON.stringify(brandOrder));
+    } catch {
+      // Sorting still works for this session when storage is unavailable.
+    }
+  }, [brandOrder]);
+  const [expandedBrandGroupKeys, setExpandedBrandGroupKeys] = useState<string[]>(() => [...pinnedBrandGroupKeys]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(PINNED_BRANDS_STORAGE_KEY, JSON.stringify(pinnedBrandGroupKeys));
+    } catch {
+      // Keep the current session usable when browser storage is unavailable.
+    }
+  }, [pinnedBrandGroupKeys]);
 
   const refreshMaterials = useCallback(async () => {
     setIsLoading(true);
@@ -214,7 +268,6 @@ export default function MaterialLibraryPanel() {
   }, [dateFormatter]);
 
   const selectedCount = selectedDirectoryNames.length;
-  const allSelected = materials.length > 0 && selectedCount === materials.length;
   const materialDuplicateCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const item of materials) {
@@ -246,10 +299,32 @@ export default function MaterialLibraryPanel() {
     if (unassigned.length > 0) {
       result.push({ brand: null, items: [...unassigned].sort(compareMaterialLibraryItems) });
     }
-    return result;
-  }, [materials]);
+    const positions = new Map(brandOrder.map((key, index) => [key, index]));
+    return result.sort((a, b) =>
+      (positions.get(getMaterialBrandGroupKey(a.brand)) ?? brandOrder.length)
+      - (positions.get(getMaterialBrandGroupKey(b.brand)) ?? brandOrder.length));
+  }, [materials, brandOrder]);
 
-  const expandedBrandGroupKeySet = useMemo(() => new Set(expandedBrandGroupKeys), [expandedBrandGroupKeys]);
+  const visibleGroups = useMemo(() => groupedMaterials.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !searchTerm || [item.material_name, group.brand ?? t("mat_gradient_library_brand_unassigned"), item.material_type]
+      .some((value) => value?.toLocaleLowerCase().includes(searchTerm))),
+  })).filter((group) => group.items.length > 0), [groupedMaterials, searchTerm, t]);
+  const visibleMaterials = visibleGroups.flatMap(({ items }) => items);
+  const allSelected = visibleMaterials.length > 0 && visibleMaterials.every((item) => selectedDirectoryNames.includes(item.directory_name));
+  const groupIsExpanded = (key: string) => searchTerm ? !searchCollapsedBrands.includes(key) : expandedBrandGroupKeys.includes(key);
+
+  const moveBrand = (source: string, target: string) => {
+    const keys = groupedMaterials.map(({ brand }) => getMaterialBrandGroupKey(brand));
+    const from = keys.indexOf(source);
+    const to = keys.indexOf(target);
+    if (from < 0 || to < 0 || from === to) return;
+    keys.splice(from, 1);
+    keys.splice(to, 0, source);
+    setBrandOrder(keys);
+  };
+
+  const hasExpandedBrand = visibleGroups.some(({ brand }) => groupIsExpanded(getMaterialBrandGroupKey(brand)));
 
   const handleStartVerification = useCallback((item: SavedMaterialLibraryItem) => {
     startMaterialVerification({
@@ -354,19 +429,17 @@ export default function MaterialLibraryPanel() {
     );
   }, []);
 
-  const toggleSelectAll = useCallback(() => {
-    setSelectedDirectoryNames(
-      allSelected ? [] : materials.map((item) => item.directory_name),
-    );
-  }, [allSelected, materials]);
+  const toggleSelectAll = () => {
+    const visibleKeys = new Set(visibleMaterials.map((item) => item.directory_name));
+    setSelectedDirectoryNames((previous) => allSelected
+      ? previous.filter((key) => !visibleKeys.has(key))
+      : [...new Set([...previous, ...visibleKeys])]);
+  };
 
-  const toggleBrandGroupCollapsed = useCallback((groupKey: string) => {
-    setExpandedBrandGroupKeys((previous) =>
-      previous.includes(groupKey)
-        ? previous.filter((item) => item !== groupKey)
-        : [...previous, groupKey],
-    );
-  }, []);
+  const toggleBrandGroupCollapsed = (groupKey: string) => {
+    const setKeys = searchTerm ? setSearchCollapsedBrands : setExpandedBrandGroupKeys;
+    setKeys((previous) => previous.includes(groupKey) ? previous.filter((key) => key !== groupKey) : [...previous, groupKey]);
+  };
 
   const handleExportSelected = useCallback(async () => {
     if (selectedDirectoryNames.length === 0) {
@@ -412,6 +485,7 @@ export default function MaterialLibraryPanel() {
           refreshedMaterials.some((material) => material.directory_name === directoryName),
         );
       setSelectedDirectoryNames(importedDirectoryNames);
+      setSelectionMode(importedDirectoryNames.length > 0);
       setSuccess(response.message || t("mat_gradient_library_import_success"));
     } catch (err) {
       setError(formatMaterialLibraryError(err, "mat_gradient_library_import_failed", t));
@@ -420,13 +494,46 @@ export default function MaterialLibraryPanel() {
     }
   }, [refreshMaterials, t]);
 
+  const renderMaterialDetails = (item: SavedMaterialLibraryItem) => {
+    const rgb = isRgbTriplet(item.estimated_rgb) ? item.estimated_rgb : null;
+    const busy = pendingDeleteDirectoryName === item.directory_name || pendingUpdateDirectoryName === item.directory_name;
+    return (
+      <div className="grid min-w-0 gap-5">
+        <LibraryIdentity name={item.material_name} subtitle={`${getMaterialBrand(item) ?? t("mat_gradient_library_brand_unassigned")} · ${item.material_type?.trim() || t("mat_gradient_library_type_missing")}`} color={rgb ? toRgbCss(rgb) : undefined}>
+          {item.sync_official && <span data-testid="material-library-official-badge" className="mt-2 block text-xs text-slate-500">{t("mat_sync_official_badge")}</span>}
+        </LibraryIdentity>
+        <LibraryFields rows={[
+          { label: t("mat_gradient_library_fit_error_label"), value: formatNumericValue(item.mean_delta_e, 2) },
+          { label: t("mat_gradient_library_layer_height_label"), value: typeof item.layer_height_mm === "number" ? `${item.layer_height_mm.toFixed(2)} mm` : "—" },
+          { label: t("mat_gradient_library_verification_count_label"), value: Math.max(1, Number(item.verification_count ?? 1)) },
+        ]} />
+        <div data-testid="material-library-item-usage" className="grid gap-3">
+          <LibraryFields rows={[{ label: t("mat_gradient_library_usage_count_label"), value: Number(item.usage_total ?? 0) }]} />
+          {item.usage_by_color_mode && <ul className="grid gap-1 text-xs text-slate-500 dark:text-slate-400">{Object.entries(item.usage_by_color_mode).sort((left, right) => right[1] - left[1]).map(([mode, count]) => <li key={mode} className="flex justify-between gap-2"><span>{mode}</span><span>{count}</span></li>)}</ul>}
+          {item.usage_last_used_at && <p className="text-xs text-slate-500">{tRuntime("mat_gradient_library_usage_last_used", { when: formatCreatedAt(item.usage_last_used_at) })}</p>}
+        </div>
+        <LibraryFields rows={[
+          { label: t("mat_gradient_library_created_at_label"), value: formatCreatedAt(item.created_at) },
+          { label: t("mat_gradient_library_updated_at_label"), value: formatCreatedAt(item.updated_at) },
+          { label: t("mat_gradient_library_directory_label"), value: item.directory_name, multiline: true },
+        ]} />
+        <div className="grid grid-cols-2 gap-2">
+          <Button label={t("mat_gradient_library_edit_btn")} variant="secondary" onClick={() => handleOpenEditDialog(item)} disabled={busy} />
+          <Button label={t("mat_gradient_library_reverify_btn")} variant="secondary" onClick={() => handleStartVerification(item)} disabled={busy} />
+          <Button label={t("mat_gradient_library_show_history_btn")} variant="secondary" onClick={() => handleOpenHistoryDialog(item)} disabled={busy} />
+          <Button label={t("mat_gradient_library_delete_btn")} variant="secondary" tone="danger" onClick={() => void handleDeleteMaterial(item)} disabled={busy} loading={pendingDeleteDirectoryName === item.directory_name} />
+        </div>
+      </div>
+    );
+  };
+
   return (
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="material-library-panel"
-      className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
+      className="material-library-workspace flex h-full min-h-0 w-full flex-col overflow-hidden"
     >
       <input
         ref={importInputRef}
@@ -438,20 +545,42 @@ export default function MaterialLibraryPanel() {
         onChange={(event) => void handleImportArchives(event)}
       />
 
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className={`${mutedSectionCardClass} flex flex-col gap-1 px-4 py-3`}>
-          <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-            {tRuntime("mat_gradient_library_selection_summary", {
-              selected: selectedCount,
-              total: materials.length,
-            })}
-          </p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            {t("mat_gradient_library_import_hint")}
+      <div data-testid="material-library-toolbar"
+        style={{ borderBottomColor: listScrolled ? "var(--surface-divider)" : "transparent" }}
+        className="z-10 flex shrink-0 flex-col gap-3 border-b bg-slate-50 px-3 py-3 transition-colors duration-200 motion-reduce:transition-none sm:px-5 xl:flex-row xl:items-center xl:justify-between dark:bg-slate-950">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+          <div className="relative min-w-48 flex-1 xl:max-w-sm">
+            <svg aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg>
+            <input type="search" aria-label={t("mat_gradient_library_search")} placeholder={t("mat_gradient_library_search")}
+              value={searchQuery} onChange={(event) => {
+                setSearchQuery(event.target.value);
+                setSearchCollapsedBrands([]);
+                if (listScrollRef.current) listScrollRef.current.scrollTop = 0;
+                setListScrolled(false);
+              }}
+              className="w-full rounded-lg border border-transparent bg-slate-100 py-2 pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-500 focus:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:bg-slate-800 dark:text-slate-100" />
+          </div>
+          <p aria-live="polite" className="shrink-0 text-xs text-slate-500 dark:text-slate-400">
+            {selectionMode ? tRuntime("mat_gradient_library_selection_summary", { selected: selectedCount, total: materials.length }) : tRuntime("mat_gradient_library_inventory_summary", { count: visibleMaterials.length, brands: visibleGroups.length })}
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-3">
           <Button
+            label={t(hasExpandedBrand ? "mat_gradient_library_collapse_all" : "mat_gradient_library_expand_all")}
+            variant="secondary"
+            onClick={() => {
+              const keys = visibleGroups.map(({ brand }) => getMaterialBrandGroupKey(brand));
+              if (searchTerm) setSearchCollapsedBrands(hasExpandedBrand ? keys : []);
+              else setExpandedBrandGroupKeys(hasExpandedBrand ? [] : keys);
+            }}
+            disabled={visibleGroups.length === 0}
+          />
+          <Button
+            label={t(selectionMode ? "mat_gradient_library_selection_done" : "mat_gradient_library_selection_start")}
+            variant="secondary"
+            onClick={() => { setSelectionMode(!selectionMode); setSelectedDirectoryNames([]); setDetailDirectory(null); }}
+          />
+          {selectionMode && <Button
             label={t(
               allSelected
                 ? "mat_gradient_library_clear_selection_btn"
@@ -459,22 +588,23 @@ export default function MaterialLibraryPanel() {
             )}
             variant="secondary"
             onClick={toggleSelectAll}
-            disabled={materials.length === 0 || isLoading || isExporting || isImporting}
-          />
+            disabled={visibleMaterials.length === 0 || isLoading || isExporting || isImporting}
+          />}
           <Button
             label={t("mat_gradient_library_import_btn")}
+            title={t("mat_gradient_library_import_hint")}
             variant="secondary"
             onClick={handleImportClick}
             disabled={isLoading || isExporting || pendingDeleteDirectoryName !== null}
             loading={isImporting}
           />
-          <Button
+          {selectionMode && <Button
             label={t("mat_gradient_library_export_btn")}
             variant="secondary"
             onClick={() => void handleExportSelected()}
             disabled={selectedCount === 0 || isLoading || isImporting || pendingDeleteDirectoryName !== null}
             loading={isExporting}
-          />
+          />}
           <Button
             label={t("mat_gradient_library_refresh_btn")}
             variant="secondary"
@@ -485,6 +615,9 @@ export default function MaterialLibraryPanel() {
         </div>
       </div>
 
+      <div ref={listScrollRef} data-testid="material-library-scroll-content"
+        onScroll={(event) => setListScrolled(event.currentTarget.scrollTop > 1)}
+        className="flex min-h-0 flex-1 flex-col gap-5 overflow-auto overscroll-y-contain px-3 py-4 sm:px-5">
       {error ? (
         <StatusBanner data-testid="material-library-error" tone="error">
           {error}
@@ -531,12 +664,7 @@ export default function MaterialLibraryPanel() {
                   {historyMaterial.material_name}
                 </p>
               </div>
-              <Button
-                label={t("mat_gradient_library_history_close_btn")}
-                variant="secondary"
-                onClick={handleCloseHistoryDialog}
-                className="w-full sm:w-auto"
-              />
+              <CloseButton label={t("mat_gradient_library_history_close_btn")} onClick={handleCloseHistoryDialog} />
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
@@ -562,7 +690,7 @@ export default function MaterialLibraryPanel() {
               </div>
             </div>
 
-            <div className="overflow-y-auto pr-1">
+            <div className="overflow-y-auto overscroll-y-contain pr-1">
               {(historyMaterial.verification_history?.length ?? 0) === 0 ? (
                 <p className="text-sm text-slate-500 dark:text-slate-400">
                   {t("mat_gradient_library_history_empty")}
@@ -704,266 +832,108 @@ export default function MaterialLibraryPanel() {
         <section className={`${resolveSectionCardClass(workspace.mode)} flex min-h-48 items-center justify-center`}>
           <p className="max-w-lg text-center text-sm text-slate-500 dark:text-slate-400">{t("mat_gradient_library_empty")}</p>
         </section>
+      ) : visibleGroups.length === 0 ? (
+        <p role="status" className="py-12 text-center text-sm text-slate-500">{t("mat_gradient_library_search_empty")}</p>
       ) : (
-        <div className="grid gap-6">
-          {groupedMaterials.map(({ brand, items }) => {
+        <div className={`grid items-start gap-5 ${detailMaterial ? "lg:grid-cols-[minmax(0,1fr)_22rem]" : ""}`}>
+          {detailMaterial && (
+            <section aria-label={t("mat_gradient_library_details")} data-testid="material-library-details" className={`${cardPadClass} relative order-first min-w-0 lg:sticky lg:top-0 lg:order-last lg:col-start-2 lg:row-start-1 lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto lg:overscroll-y-contain`} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); closeDetails(); } }}>
+              <div className="absolute right-4 top-3"><CloseButton ref={detailCloseRef} label={t("mat_gradient_library_history_close_btn")} onClick={closeDetails} /></div>
+              {renderMaterialDetails(detailMaterial)}
+            </section>
+          )}
+          <DndContext
+            sensors={brandSensors}
+            collisionDetection={closestCenter}
+            modifiers={[restrictToVerticalAxis]}
+            onDragStart={({ active }) => setDraggedBrand(String(active.id))}
+            onDragCancel={() => setDraggedBrand(null)}
+            onDragEnd={({ active, over }) => {
+              if (over) moveBrand(String(active.id), String(over.id));
+              setDraggedBrand(null);
+            }}
+          >
+          <SortableContext items={visibleGroups.map(({ brand }) => getMaterialBrandGroupKey(brand))} strategy={verticalListSortingStrategy}>
+          <div className="grid min-w-0 gap-6">
+          {visibleGroups.map(({ brand, items }) => {
             const groupKey = getMaterialBrandGroupKey(brand);
             const groupLabel = brand ?? t("mat_gradient_library_brand_unassigned");
-            const isCollapsed = !expandedBrandGroupKeySet.has(groupKey);
+            const isCollapsed = !groupIsExpanded(groupKey);
+            const isPinned = pinnedBrandGroupKeys.includes(groupKey);
             return (
-              <section
+              <SortableMaterialBrand
                 key={groupKey}
-                data-testid="material-library-brand-group"
-                data-brand={brand ?? ""}
-                className="grid gap-3"
+                groupKey={groupKey}
+                brand={brand}
+                label={groupLabel}
+                count={items.length}
+                collapsed={isCollapsed}
+                pinned={isPinned}
+                onToggle={() => toggleBrandGroupCollapsed(groupKey)}
+                onPin={() => {
+                  setPinnedBrandGroupKeys((previous) => isPinned ? previous.filter((key) => key !== groupKey) : [...previous, groupKey]);
+                  if (!isPinned) setExpandedBrandGroupKeys((previous) => [...new Set([...previous, groupKey])]);
+                }}
+                onMove={(direction) => {
+                  const index = groupedMaterials.findIndex(({ brand }) => getMaterialBrandGroupKey(brand) === groupKey);
+                  const target = groupedMaterials[index + direction];
+                  if (target) moveBrand(groupKey, getMaterialBrandGroupKey(target.brand));
+                }}
               >
-                <button
-                  type="button"
-                  data-testid="material-library-brand-group-toggle"
-                  aria-expanded={!isCollapsed}
-                  onClick={() => toggleBrandGroupCollapsed(groupKey)}
-                  className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200/80 px-3 py-2 text-left transition-colors hover:border-slate-300 hover:bg-slate-100/70 dark:border-slate-700/80 dark:hover:border-slate-600 dark:hover:bg-slate-800/70"
-                >
-                  <span className="flex min-w-0 flex-wrap items-center gap-3">
-                    <span className="truncate text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                      {groupLabel}
-                    </span>
-                    <span className="rounded-full border border-slate-200/80 px-2 py-0.5 text-xs font-semibold text-slate-500 dark:border-slate-700/80 dark:text-slate-400">
-                      {items.length}
-                    </span>
-                  </span>
-                  <motion.svg
-                    animate={{ rotate: isCollapsed ? 0 : 90 }}
-                    transition={{ type: "spring", stiffness: 300, damping: 20 }}
-                    className="h-4 w-4 shrink-0 text-slate-500 dark:text-slate-400"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                  >
-                    <polyline points="9 18 15 12 9 6" />
-                  </motion.svg>
-                </button>
                 {isCollapsed ? null : (
-                  <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,19rem),1fr))]">
+                  <div className="grid auto-rows-fr items-stretch gap-4 [grid-template-columns:repeat(auto-fill,min(100%,15rem))]">
                 {items.map((item) => {
-                  const estimatedRgb = isRgbTriplet(item.estimated_rgb) ? item.estimated_rgb : null;
-                  const estimatedHex = estimatedRgb ? toHex(estimatedRgb) : "-";
-                  const itemBrand = getMaterialBrand(item);
-                  const itemBrandLabel = itemBrand ?? t("mat_gradient_library_brand_unassigned");
-                  const duplicateCount = materialDuplicateCounts.get(getMaterialIdentityKey(item)) ?? 1;
-                  const createdAtLabel = formatCreatedAt(item.created_at);
-                  const updatedAtLabel = formatCreatedAt(item.updated_at);
+                  const rgb = isRgbTriplet(item.estimated_rgb) ? item.estimated_rgb : null;
+                  const selected = selectedDirectoryNames.includes(item.directory_name);
                   return (
-                    <section
-                      key={`${item.directory_name}-${item.material_name}`}
+                    <button
+                      type="button"
+                      key={item.directory_name}
                       data-testid="material-library-item"
-                      className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}
+                      aria-pressed={selectionMode ? selected : undefined}
+                      aria-expanded={!selectionMode ? detailDirectory === item.directory_name : undefined}
+                      onClick={(event) => {
+                        if (selectionMode) {
+                          toggleMaterialSelection(item.directory_name);
+                        } else {
+                          detailTriggerRef.current = event.currentTarget;
+                          setDetailDirectory(item.directory_name);
+                        }
+                      }}
+                      className={`${cardPadClass} material-library-card relative flex min-w-0 items-center gap-4 text-left transition-colors`}
                     >
-                      <div className="flex items-start gap-4">
-                        <label className="mt-1 flex shrink-0 items-center">
-                          <input
-                            type="checkbox"
-                            data-testid={`material-library-select-${item.directory_name}`}
-                            aria-label={tRuntime("mat_gradient_library_select_item_label", {
-                              materialName: item.material_name,
-                            })}
-                            checked={selectedDirectoryNames.includes(item.directory_name)}
-                            onChange={() => toggleMaterialSelection(item.directory_name)}
-                            className="h-4 w-4 rounded border-slate-300 dark:border-slate-600"
-                          />
-                        </label>
-                        <div className="flex min-w-0 flex-1 items-start gap-4">
-                          <div
-                            className="h-20 w-20 shrink-0 rounded-3xl border border-slate-200/80 dark:border-slate-700/80"
-                            style={estimatedRgb ? { backgroundColor: toRgbCss(estimatedRgb) } : undefined}
-                          />
-                          <div className="min-w-0 flex-1">
-                            <h3 className="flex min-w-0 flex-wrap items-center gap-2 text-base font-semibold text-slate-900 dark:text-slate-50">
-                              {item.sync_official ? (
-                                <span
-                                  data-testid="material-library-official-badge"
-                                  className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-800 dark:border-amber-400/60 dark:bg-amber-500/15 dark:text-amber-200"
-                                >
-                                  {t("mat_sync_official_badge")}
-                                </span>
-                              ) : null}
-                              <span
-                                data-testid="material-library-brand-tag"
-                                className="max-w-full truncate rounded-full border border-slate-200/80 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:border-slate-700/80 dark:text-slate-300"
-                              >
-                                {itemBrandLabel}
-                              </span>
-                              <span className="min-w-0 truncate">{item.material_name}</span>
-                              {duplicateCount > 1 ? (
-                                <span
-                                  data-testid="material-library-duplicate-badge"
-                                  className="shrink-0 rounded-full border border-amber-200/90 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200"
-                                >
-                                  {tRuntime("mat_gradient_library_duplicate_badge", {
-                                    count: duplicateCount,
-                                  })}
-                                </span>
-                              ) : null}
-                            </h3>
-                            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{estimatedHex}</p>
-                            <p
-                              data-testid="material-library-item-meta"
-                              className="mt-1 break-all text-xs leading-5 text-slate-500 dark:text-slate-400"
-                            >
-                              {tRuntime("mat_gradient_library_card_meta", {
-                                directoryName: item.directory_name,
-                                createdAt: createdAtLabel,
-                                updatedAt: updatedAtLabel,
-                              })}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <dl className="grid gap-3 sm:grid-cols-2">
-                  <div className={`${mutedSectionCardClass} px-4 py-3`}>
-                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                      {t("mat_gradient_library_created_at_label")}
-                    </dt>
-                    <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                      {createdAtLabel}
-                    </dd>
-                  </div>
-                  <div className={`${mutedSectionCardClass} px-4 py-3`}>
-                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                      {t("mat_gradient_library_updated_at_label")}
-                    </dt>
-                    <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                      {updatedAtLabel}
-                    </dd>
-                  </div>
-                  <div className={`${mutedSectionCardClass} px-4 py-3`}>
-                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                      {t("mat_gradient_library_brand_label")}
-                    </dt>
-                    <dd
-                      data-testid="material-library-item-brand"
-                      className="mt-1 truncate text-sm font-semibold text-slate-900 dark:text-slate-50"
-                    >
-                      {item.brand?.trim() || "-"}
-                    </dd>
-                  </div>
-                  <div className={`${mutedSectionCardClass} px-4 py-3`}>
-                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                      {t("mat_gradient_library_directory_label")}
-                    </dt>
-                    <dd className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
-                      {item.directory_name}
-                    </dd>
-                  </div>
-                  <div className={`${mutedSectionCardClass} px-4 py-3`}>
-                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                      {t("mat_gradient_library_fit_error_label")}
-                    </dt>
-                    <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                      {typeof item.mean_delta_e === "number" ? item.mean_delta_e.toFixed(2) : "-"}
-                    </dd>
-                  </div>
-                  <div className={`${mutedSectionCardClass} px-4 py-3`}>
-                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                      {t("mat_gradient_library_verification_count_label")}
-                    </dt>
-                    <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                      {Math.max(1, Number(item.verification_count ?? 1))}
-                    </dd>
-                  </div>
-                  <div
-                    data-testid="material-library-item-usage"
-                    className={`${mutedSectionCardClass} px-4 py-3`}
-                  >
-                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                      {t("mat_gradient_library_usage_count_label")}
-                    </dt>
-                    <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                      {Number(item.usage_total ?? 0)}
-                    </dd>
-                    {item.usage_by_color_mode &&
-                      Object.keys(item.usage_by_color_mode).length > 0 && (
-                        <ul className="mt-2 grid gap-1 text-xs text-slate-500 dark:text-slate-400">
-                          {Object.entries(item.usage_by_color_mode)
-                            .sort((left, right) => right[1] - left[1])
-                            .map(([mode, count]) => (
-                              <li
-                                key={mode}
-                                className="flex items-center justify-between gap-2"
-                              >
-                                <span className="truncate">{mode}</span>
-                                <span className="shrink-0 font-mono text-slate-700 dark:text-slate-200">
-                                  {count}
-                                </span>
-                              </li>
-                            ))}
-                        </ul>
-                      )}
-                    {item.usage_last_used_at && (
-                      <p className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">
-                        {tRuntime("mat_gradient_library_usage_last_used", {
-                          when: formatCreatedAt(item.usage_last_used_at),
-                        })}
-                      </p>
-                    )}
-                  </div>
-                  <div className={`${mutedSectionCardClass} px-4 py-3`}>
-                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                      {t("mat_gradient_library_layer_height_label")}
-                    </dt>
-                    <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                      {typeof item.layer_height_mm === "number" ? `${item.layer_height_mm.toFixed(2)} mm` : "-"}
-                    </dd>
-                  </div>
-                      </dl>
-
-                      <div className="grid gap-3">
-                  <Button
-                    label={t("mat_gradient_library_edit_btn")}
-                    variant="secondary"
-                    onClick={() => handleOpenEditDialog(item)}
-                    disabled={pendingDeleteDirectoryName === item.directory_name}
-                    className="w-full"
-                  />
-                  <Button
-                    label={t("mat_gradient_library_reverify_btn")}
-                    variant="secondary"
-                    onClick={() => handleStartVerification(item)}
-                    disabled={pendingDeleteDirectoryName === item.directory_name || pendingUpdateDirectoryName === item.directory_name}
-                    className="w-full"
-                  />
-                  <Button
-                    label={t("mat_gradient_library_show_history_btn")}
-                    variant="secondary"
-                    onClick={() => handleOpenHistoryDialog(item)}
-                    disabled={pendingDeleteDirectoryName === item.directory_name || pendingUpdateDirectoryName === item.directory_name}
-                    className="w-full"
-                  />
-                  <Button
-                    label={t("mat_gradient_library_delete_btn")}
-                    variant="secondary"
-                    onClick={() => void handleDeleteMaterial(item)}
-                    disabled={pendingDeleteDirectoryName === item.directory_name}
-                    loading={pendingDeleteDirectoryName === item.directory_name}
-                    className="w-full"
-                    tone="danger"
-                  />
-                      </div>
-                    </section>
+                      {selectionMode && <span aria-hidden="true" className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border text-xs ${selected ? "border-blue-500 bg-blue-500 text-white" : "border-slate-300 dark:border-slate-600"}`}>{selected && <CheckIcon className="h-3.5 w-3.5" />}</span>}
+                      <span aria-hidden="true" className="h-14 w-14 shrink-0 rounded-xl border border-black/10 bg-slate-100 dark:border-white/15 dark:bg-slate-800" style={rgb ? { backgroundColor: toRgbCss(rgb) } : undefined} />
+                      <span className="min-w-0 flex-1">
+                        <span className="material-library-card-name block break-words text-sm font-semibold">{item.material_name}</span>
+                        <span className="material-library-card-meta mt-2 block text-xs">{item.material_type?.trim() || t("mat_gradient_library_type_missing")}</span>
+                        <span data-testid="material-library-card-fit-error" className="material-library-card-meta mt-1 block text-xs tabular-nums">{t("mat_gradient_library_fit_error_label")} {formatNumericValue(item.mean_delta_e, 2)}</span>
+                        {(materialDuplicateCounts.get(getMaterialIdentityKey(item)) ?? 0) > 1 && <span data-testid="material-library-duplicate-badge" className="material-library-card-meta mt-1 block text-[11px] tabular-nums">{formatCreatedAt(item.updated_at || item.created_at)}</span>}
+                      </span>
+                    </button>
                   );
                 })}
                   </div>
                 )}
-              </section>
+              </SortableMaterialBrand>
             );
           })}
+          </div>
+          </SortableContext>
+          {createPortal(
+            <DragOverlay dropAnimation={null}>
+              {draggedBrand !== null && (() => {
+                const group = visibleGroups.find(({ brand }) => getMaterialBrandGroupKey(brand) === draggedBrand);
+                return group ? <div className="rounded-lg bg-slate-100 shadow-lg ring-1 ring-slate-300 dark:bg-slate-800 dark:ring-slate-600" aria-hidden="true">
+                  <MaterialBrandHeader label={group.brand ?? t("mat_gradient_library_brand_unassigned")} count={group.items.length} collapsed={!groupIsExpanded(draggedBrand)} pinned={pinnedBrandGroupKeys.includes(draggedBrand)} />
+                </div> : null;
+              })()}
+            </DragOverlay>, document.body,
+          )}
+          </DndContext>
         </div>
       )}
+      </div>
     </motion.aside>
   );
 }
