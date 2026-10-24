@@ -471,6 +471,15 @@ A swatch, a layer thumbnail or a preview tile is *content*, not a container. A b
 `index.css` contains `:where([class*="shadow-"], [style*="box-shadow"]) { box-shadow: none !important; }`. Tailwind draws `ring-*` with `box-shadow`, so **any element whose class string contains `shadow-` loses its focus ring as well**. Never put a `shadow-*` utility on an interactive control; use `outline` (as `.ghost-control` does) or a real border for focus styling. Only `.panel-card` carries a real shadow, and it is applied through a CSS class, not a utility.
 `index.css` 的全局规则会清掉含 `shadow-` 类名的阴影；Tailwind 的 `ring-*` 靠 box-shadow 实现，因此类名里出现 `shadow-` 的交互控件会连焦点环一起丢失。交互控件不要写 `shadow-*`，聚焦样式用 outline 或边框；全站只有 `.panel-card` 通过 CSS 类保留真实阴影。
 
+### 全局滚动条
+
+- 所有标签页、面板、列表、文本区和弹窗（包括通过 Portal 渲染的弹窗）的横向与纵向滚动条统一使用 Mac 风格：中性灰色细条、两端全圆角、透明轨道、不显示两端箭头；悬停时只加深灰度，不使用蓝色或其他强调色。
+- 唯一实现放在 `frontend/src/index.css` 的全局滚动条规则中。新增滚动区域自动继承，无需添加 `dock-scrollbar`，不要在组件内另写滚动条颜色、尺寸或圆角。
+- Chromium / Electron 使用 8px 轨道、1px 透明内边距形成的 6px 可见滑块、`9999px` 圆角和 32px 最小长度。浅色主题使用 `rgba(110, 110, 115, 0.42)`，深色主题使用 `rgba(161, 161, 166, 0.42)`；悬停透明度均为 `0.68`，通过 `--scrollbar-thumb` / `--scrollbar-thumb-hover` 统一维护。
+- 支持 `::-webkit-scrollbar` 的浏览器使用自定义圆角样式；仅在不支持时回退到标准 `scrollbar-width` / `scrollbar-color`，避免两套属性互相覆盖。
+- 顶部导航条继续使用 `scrollbar-hidden` 隐藏滚动条并保留滚动能力；`dock-scrollbar-hover` 只控制停靠面板的滚动条出现时机，不定义另一套外观。
+- 验证时覆盖浅色与深色主题、普通页面与弹窗、横向与纵向滚动，以及未添加 `dock-scrollbar` 的区域。
+
 ### Top Navigation — 两级导航 (Two-Level Tabs)
 
 > Lumina-specific rules for `TabNavBar` (primary tabs) and `SubTabBar` (sub tabs). 主导航与子导航的专用规则。
