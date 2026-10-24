@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import NoReturn
 
@@ -187,7 +188,9 @@ async def material_sync_catalog(
     返回已配置远程 Registry catalog，不安装耗材。
     """
     try:
-        catalog = list_material_registry_catalog(query=q, limit=limit, offset=offset)
+        catalog = await asyncio.to_thread(
+            list_material_registry_catalog, query=q, limit=limit, offset=offset
+        )
     except ValueError as exc:
         _raise_material_sync_error(
             event="material_sync_catalog_failed",
@@ -324,7 +327,7 @@ async def material_sync_install_from_registry(
     将用户选中的单个远程 Registry 耗材包安装到本地耗材库。
     """
     try:
-        catalog = list_material_registry_catalog()
+        catalog = await asyncio.to_thread(list_material_registry_catalog)
         catalog_entry = _select_catalog_install_entry(catalog, payload)
     except ValueError as exc:
         _raise_material_sync_error(
@@ -367,7 +370,8 @@ async def material_sync_install_from_registry(
         )
 
     try:
-        result = install_material_registry_package(
+        result = await asyncio.to_thread(
+            install_material_registry_package,
             package_url=str(catalog_entry.get("package_url") or ""),
             package_sha256=str(catalog_entry.get("package_sha256") or ""),
             material_id=payload.material_id,
@@ -443,7 +447,7 @@ async def material_sync_refresh(
             （刷新摘要与包级失败明细）
     """
     try:
-        result = refresh_material_sync_from_registry()
+        result = await asyncio.to_thread(refresh_material_sync_from_registry)
     except ValueError as exc:
         _raise_material_sync_error(
             event="material_sync_refresh_failed",
