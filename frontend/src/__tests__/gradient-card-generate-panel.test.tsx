@@ -1,3 +1,5 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 import GradientCardGeneratePanel from "../components/GradientCardGeneratePanel";
 import { useCalibrationStore } from "../stores/calibrationStore";
@@ -7,6 +9,8 @@ vi.mock("../api/calibration", () => ({
   calibrationGenerate: vi.fn(),
   generateSingleStageKit: vi.fn(),
 }));
+
+afterEach(() => vi.unstubAllGlobals());
 
 beforeEach(() => {
   useCalibrationStore.setState({
@@ -108,6 +112,25 @@ describe("GradientCardGeneratePanel", () => {
     expect(storageBoxLink).toHaveClass("self-start");
     expect(onlineModelLink).toHaveClass("max-w-full");
     expect(storageBoxLink).toHaveClass("max-w-full");
+  });
+
+  it("opens both model links through the desktop bridge", () => {
+    const openGradientModel = vi.fn().mockResolvedValue({ opened: true });
+    vi.stubGlobal("electronAPI", { openGradientModel });
+    render(<GradientCardGeneratePanel />);
+    const links = screen.getAllByRole("link");
+    for (const link of links) {
+      fireEvent.click(link);
+      expect(openGradientModel).toHaveBeenCalledWith(link.getAttribute("href"));
+    }
+    expect(openGradientModel).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports desktop browser launch failures", async () => {
+    vi.stubGlobal("electronAPI", { openGradientModel: vi.fn().mockRejectedValue(new Error("failed")) });
+    render(<GradientCardGeneratePanel />);
+    fireEvent.click(screen.getAllByRole("link")[0]);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/无法打开模型页面|Could not open/);
   });
 
   it("selecting a dropdown option updates the store with the chosen preset", () => {

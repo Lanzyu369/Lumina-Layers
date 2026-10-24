@@ -751,6 +751,18 @@ ipcMain.handle("get-app-version", () => {
   return app.getVersion();
 });
 
+ipcMain.handle("open-gradient-model", async (event, url) => {
+  const modelUrls = [
+    "https://makerworld.com.cn/zh/models/2394753-lumina2-0-ti-xing-xiao-se-se-qia-0-08ceng-gao-15ce#profileId-2721317",
+    "https://makerworld.com.cn/zh/models/2400920-can-shu-hua-lumina-2-0ti-du-se-qia-zi-ding-yi-shou#profileId-2729620",
+  ];
+  if (!isTrustedMainFrameSender(event, win, trustedMainFrameUrl) || !modelUrls.includes(url)) {
+    throw new Error("Model external link denied.");
+  }
+  await shell.openExternal(url);
+  return { opened: true };
+});
+
 ipcMain.handle("open-wiki", async (event, url) => {
   const senderFrame = event.senderFrame ?? null;
   if (
