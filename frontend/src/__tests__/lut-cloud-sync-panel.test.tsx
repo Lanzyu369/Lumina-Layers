@@ -79,6 +79,31 @@ describe("LutCloudSyncPanel", () => {
     });
   });
 
+    render(<LutCloudSyncPanel />);
+    const card = await screen.findByRole("button", { name: /Official CMYW LUT/ });
+    fireEvent.click(card);
+    expect(installCloudLut).not.toHaveBeenCalled();
+    expect(screen.queryByText("Official/CMYW.json")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /关闭|Close/i })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole("button", { name: /关闭|Close/i }), { key: "Escape" });
+    expect(card).toHaveFocus();
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "BW LUT" } });
+    expect(screen.queryByRole("button", { name: /Official CMYW LUT/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("searchbox")).toHaveValue("BW LUT");
+  });
+
+  it("loads remaining catalog pages in the new view so search finds later entries", async () => {
+    const baseline = await fetchCloudLutRegistryCatalog();
+    vi.mocked(fetchCloudLutRegistryCatalog).mockClear();
+    vi.mocked(fetchCloudLutRegistryCatalog)
+      .mockResolvedValueOnce({ ...baseline, total: 2, items: [baseline.items[0]] })
+      .mockResolvedValueOnce({ ...baseline, total: 2, items: [baseline.items[1]] });
+    render(<LutCloudSyncPanel />);
+    await waitFor(() => expect(fetchCloudLutRegistryCatalog).toHaveBeenCalledWith(expect.objectContaining({ offset: 1 })));
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "BW LUT" } });
+    expect(await screen.findByRole("button", { name: /BW LUT/ })).toBeInTheDocument();
+  });
+
   it("shows a clear notice when the cloud LUT registry is not configured", async () => {
     vi.mocked(fetchCloudLutRegistryStatus).mockResolvedValueOnce({
       configured: false,
@@ -105,6 +130,7 @@ describe("LutCloudSyncPanel", () => {
     });
     expect(within(card).getByText("Official CMYW LUT")).toBeInTheDocument();
     expect(within(card).getByText("4-Color (CMYW)")).toBeInTheDocument();
+    expect(within(card).queryByText("Official/CMYW.json")).not.toBeInTheDocument();
 
     fireEvent.click(within(card).getByRole("button", { name: /下载到本地|download/i }));
 
@@ -136,6 +162,7 @@ describe("LutCloudSyncPanel", () => {
           local_path: "Official/Test/Readable LUT.json",
           local_state: "local_available",
           local_exists: true,
+          local_match_path: "Cloud/Actual/Readable LUT.json",
           channel: "official",
           visibility: "official",
           display: {

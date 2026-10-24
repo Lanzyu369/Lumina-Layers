@@ -187,6 +187,17 @@ describe("MaterialCloudSyncPanel", () => {
     });
   });
 
+    render(<MaterialCloudSyncPanel />);
+    const card = await screen.findByRole("button", { name: /Silk PETG/ });
+    fireEvent.click(card);
+    expect(installMaterialRegistryCatalogEntry).not.toHaveBeenCalled();
+    const close = screen.getByRole("button", { name: /关闭|Close/i });
+    expect(close).toHaveFocus();
+    fireEvent.click(close);
+    expect(card).toHaveFocus();
+    expect(screen.getByRole("button", { name: /Silk PETG/ })).toBeInTheDocument();
+  });
+
   it("renders the cloud catalog and installs a selected material", async () => {
     render(<MaterialCloudSyncPanel />);
 
@@ -617,6 +628,7 @@ describe("MaterialCloudSyncPanel", () => {
     render(<MaterialCloudSyncPanel />);
 
     expect((await screen.findAllByText("PLA Pro")).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: /^(更新|Update)$/i }));
 
     await waitFor(() => {
       expect(installMaterialRegistryCatalogEntry).toHaveBeenCalledWith({
@@ -639,6 +651,7 @@ describe("MaterialCloudSyncPanel", () => {
 
     expect((await screen.findAllByText("PLA Basic")).length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: /更新到 old|update to old/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^(更新|Update)$/i })).toBeInTheDocument();
   });
 
   it("treats matching local directory and content hash as installed when material ids differ", async () => {

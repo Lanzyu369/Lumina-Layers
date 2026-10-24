@@ -1,3 +1,5 @@
+import { LibraryIdentity, LibraryFields } from "./ui/LibraryDetails";
+import { resolveCatalogDisplay, resolveCatalogFitError, resolveCatalogChannel, formatBytes, toRgbCss } from "./materialCloud/catalogModel";
 
 import { useI18n } from "../i18n/context";
 import { CATALOG_FILTERS, catalogEntryKey } from "./materialCloud/catalogModel";
@@ -6,6 +8,7 @@ import {
 } from "./materialCloud/useMaterialCloudCatalog";
 import Button from "./ui/Button";
 import Pagination from "./ui/Pagination";
+import CloseButton from "./ui/CloseButton";
 import {
   StatusBanner,
   wellClass,
@@ -47,6 +50,7 @@ function CatalogSkeleton({ label }: { label: string }) {
  */
 export default function MaterialCloudSyncPanel() {
   const catalog = useMaterialCloudCatalog();
+  const [showHistory, setShowHistory] = useState(false);
   const { dismissSuccess, success, view } = catalog;
   const handlePageChange = useCallback((nextPage: number) => {
     void catalog.goToPage(nextPage);
