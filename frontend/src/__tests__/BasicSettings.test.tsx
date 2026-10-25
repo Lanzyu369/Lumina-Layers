@@ -798,7 +798,7 @@ describe("BasicSettings", () => {
   it("renders the source version selector and legacy LUT database panel in old mode", () => {
     render(<BasicSettings />);
 
-    expect(screen.getByText("来源类型")).toBeInTheDocument();
+    expect(screen.getByText("色彩数据来源")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "经典 LUT" })).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "反推LUT" })).not.toBeInTheDocument();
     expect(screen.getByTestId("lut-picker-trigger")).toBeInTheDocument();
@@ -940,7 +940,7 @@ describe("BasicSettings", () => {
     expect(
       screen.getByRole("slider", { name: "最大有效叠层数" }),
     ).toHaveAttribute("max", "10");
-    expect(screen.getByText(/单一层数的缓存入口已隐藏/)).toBeInTheDocument();
+    expect(screen.queryByText(/单一层数的缓存入口已隐藏/)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "穷举缓存…" }),
     ).not.toBeInTheDocument();

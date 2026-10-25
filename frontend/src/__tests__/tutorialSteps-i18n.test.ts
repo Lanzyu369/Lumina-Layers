@@ -16,12 +16,11 @@ describe("beginner tutorial steps", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("explain all three color sources with a principle flow", () => {
+  it("explain available color sources in selector order with a principle flow", () => {
     const sourceSteps = TUTORIAL_STEPS.filter((step) => step.id.startsWith("source-"));
     expect(sourceSteps.map((step) => step.id)).toEqual([
-      "source-legacy-lut",
-      "source-inferred-lut",
       "source-material-archive",
+      "source-legacy-lut",
     ]);
     for (const step of sourceSteps) {
       expect(step.flowKeys?.length).toBeGreaterThanOrEqual(3);

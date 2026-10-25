@@ -5046,12 +5046,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Color Mode",
   },
   basic_source_version_label: {
-    zh: "来源类型",
-    en: "Source Type",
+    zh: "色彩数据来源",
+    en: "Color Data Source",
   },
   basic_source_version_hint: {
-    zh: "选择配色数据从哪里来：\n• 经典 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。",
-    en: "Choose where the color data comes from:\n• Classic LUT: data measured from actually printed color charts — most reliable.\n• Material Archive: freely combine materials you created in Material Extraction.",
+    zh: "选择配色数据从哪里来：\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。\n• 经典 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。",
+    en: "Choose where the color data comes from:\n• Material Archive: freely combine materials you created in Material Extraction.\n• Classic LUT: data measured from actually printed color charts — most reliable.",
   },
   basic_source_version_legacy: {
     zh: "经典 LUT",
@@ -5116,10 +5116,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_material_dynamic_range_hint: {
     zh: "动态模式会在设定范围内自动加载并评估候选；单一层数的穷举缓存入口暂不显示。",
     en: "Dynamic mode automatically loads and evaluates candidates across the configured range; the single-layer-count cache control is hidden.",
-  },
-  basic_material_dynamic_range_status: {
-    zh: "动态叠层模式已启用，单一层数的缓存入口已隐藏。",
-    en: "Dynamic-layer mode is enabled; the single-layer-count cache control is hidden.",
   },
   basic_material_layer_height_label: {
     zh: "\u5c42\u9ad8",
@@ -10721,8 +10717,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Step 2: Choose a color source",
   },
   tutorial_step_source_body: {
-    zh: "多色打印的原理是：几种耗材按不同顺序和层数叠在一起，透出不同的颜色。软件需要知道「你的打印机和耗材能叠出哪些颜色」，才能为图片的每个颜色找到最接近的叠法。\n\n「颜色来源」就是这份颜色数据从哪里来。一共有三种方式，接下来逐一介绍。",
-    en: "Multi-color printing works by stacking a few filaments in different orders and layer counts, so light passing through them shows different colors. The software needs to know which colors your printer and filaments can actually produce, so it can find the closest stack for every color in your picture.\n\nThe color source is where that color data comes from. There are three options, explained next.",
+    zh: "多色打印的原理是：几种耗材按不同顺序和层数叠在一起，透出不同的颜色。软件需要知道「你的打印机和耗材能叠出哪些颜色」，才能为图片的每个颜色找到最接近的叠法。\n\n「颜色来源」就是这份颜色数据从哪里来。有耗材档案和经典 LUT 两种方式，接下来按这个顺序介绍。",
+    en: "Multi-color printing works by stacking a few filaments in different orders and layer counts, so light passing through them shows different colors. The software needs to know which colors your printer and filaments can actually produce, so it can find the closest stack for every color in your picture.\n\nThe color source is where that color data comes from. There are two options: Material Archive and Classic LUT, explained in that order next.",
   },
   tutorial_step_legacy_title: {
     zh: "经典 LUT：实拍色卡",
@@ -10751,34 +10747,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   tutorial_flow_legacy_table: {
     zh: "得到颜色对照表",
     en: "Get a color lookup table",
-  },
-  tutorial_step_inferred_title: {
-    zh: "反推LUT：用品牌实测数据推算",
-    en: "Inferred LUT: predicted from brand measurements",
-  },
-  tutorial_step_inferred_body: {
-    zh: "软件内置了部分耗材品牌的颜色数据库，里面是已经实际打印并测量过的大量叠色结果，同时附带一个由这些实测数据反推出来的颜色预测模型。\n转换时，软件先在实测数据里为每个颜色找最接近的叠法，并自动换算到你选的层数和层高；开启「模型辅助匹配」后，实测数据里找不到足够接近的颜色时，再改用模型预测的叠法补上。",
-    en: "The software ships with color databases for some filament brands. They hold many stack colors that were actually printed and measured, plus a color prediction model inferred from those measurements.\nDuring conversion, each color is first matched against the measured data, converted automatically to the layer count and layer height you choose. With Model-Assisted Matching on, colors the measured data can't match closely enough are filled in with stacks predicted by the model.",
-  },
-  tutorial_step_inferred_need: {
-    zh: "不需要打印任何东西，只要选择耗材品牌、数据库和层数；实际使用的耗材要和所选品牌一致。",
-    en: "Nothing to print. Just choose a filament brand, database and layer count, and use filaments that match the chosen brand.",
-  },
-  tutorial_step_inferred_fit: {
-    zh: "使用支持列表里品牌耗材、想马上开始的用户。数据来自参考打印的实测，和你手上的耗材、机器可能有少量差异。",
-    en: "Getting started right away with a brand on the supported list. The data comes from reference prints, so it may differ slightly from your own spools and printer.",
-  },
-  tutorial_flow_inferred_database: {
-    zh: "品牌实测颜色数据库",
-    en: "Measured brand color database",
-  },
-  tutorial_flow_inferred_predict: {
-    zh: "反推出颜色预测模型",
-    en: "Infer a color prediction model",
-  },
-  tutorial_flow_inferred_table: {
-    zh: "按层数层高匹配叠色",
-    en: "Match stacks for your layer settings",
   },
   tutorial_step_material_title: {
     zh: "耗材档案：每卷耗材单独建档",
