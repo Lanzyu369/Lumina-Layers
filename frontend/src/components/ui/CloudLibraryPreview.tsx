@@ -17,6 +17,7 @@ export interface CloudPreviewItem {
   const detail = items.find((item) => item.key === selected);
   const close = () => { setSelected(null); triggerRef.current?.focus(); };
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; setScrolled(false); setSelected(null); }, [resetKey]);
+  useEffect(() => { if (selected) closeRef.current?.focus({ preventScroll: window.innerWidth >= 1024 }); }, [selected]);
   return <section className="flex h-full min-h-0 flex-col overflow-hidden bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
     <div className={`flex shrink-0 flex-wrap items-center gap-3 border-b p-4 transition-colors duration-200 motion-reduce:transition-none ${scrolled ? "border-slate-200 dark:border-slate-700" : "border-transparent"}`}>{toolbar}</div>
     <div ref={scrollRef} onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)} className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-4">

@@ -67,6 +67,25 @@ describe("conversion preferences", () => {
     stop();
   });
 
+  it.each([
+    [500, 500, 450], [180, 180, 180], [500, 300, 450],
+  ])("fits saved defaults after the real %i × %i mm printer bed loads", (bedWidth, bedHeight, expectedSize) => {
+    const original = captureConversionParameters(useConverterStore.getState());
+    const stop = bindConversionPreferences();
+    try {
+      useSettingsStore.getState().hydrateDeviceSettingsFromBackend({
+        conversion_preferences: { last: { ...original, size_mm: 450 }, presets: [] },
+      });
+      expect(useSettingsStore.getState().conversionPreferences.last?.size_mm).toBe(450);
+      expect(useConverterStore.getState().target_width_mm).toBe(450);
+      useConverterStore.setState({ bedSizes: [{ label: "Selected printer", width_mm: bedWidth,
+        height_mm: bedHeight, is_default: true, printer_id: useSettingsStore.getState().printerModel }] });
+      useConverterStore.getState().setBedLabel("Selected printer");
+      expect(useConverterStore.getState().target_width_mm).toBe(expectedSize);
+      expect(useSettingsStore.getState().conversionPreferences.last?.size_mm).toBe(expectedSize);
+    } finally { stop(); }
+  });
+
   it("does not replace defaults while importing or editing an existing project", () => {
     const stop = bindConversionPreferences();
     useConverterStore.getState().setTargetWidthMm(225);
@@ -178,6 +197,8 @@ describe("conversion preferences", () => {
 
   it("constrains a preset's long edge to the bed while preserving image proportions", () => {
     const parameters = { ...captureConversionParameters(useConverterStore.getState()), size_mm: 400 };
+    useConverterStore.setState({ aspectRatio: 2, bedSizes: [{ label: "Default bed", width_mm: 256,
+      height_mm: 256, is_default: true, printer_id: useSettingsStore.getState().printerModel }] });
     applyConversionParameters(useConverterStore.getState, parameters);
     expect(useConverterStore.getState()).toMatchObject({ target_width_mm: 256, target_height_mm: 128 });
   });
