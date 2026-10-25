@@ -100,6 +100,15 @@ describe("HeaderMenu", () => {
     await expectClosed();
   });
 
+  it("opens credits from a labelled row and closes the menu", async () => {
+    const onOpenCredits = vi.fn();
+    renderMenu({ onOpenCredits });
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByRole("button", { name: "致谢" }));
+    expect(onOpenCredits).toHaveBeenCalledTimes(1);
+    await expectClosed();
+  });
+
   it("closes on Escape and returns focus to the trigger", async () => {
     renderMenu();
     fireEvent.click(trigger());

@@ -6,6 +6,7 @@ import { BugReportButton } from "./BugReportButton";
 import { ThemeToggle } from "./ThemeToggle";
 import { TutorialLauncherButton } from "./tutorial/TutorialLauncherButton";
 import { HeaderTooltip } from "./ui/HeaderTooltip";
+import { HeaderMenuItem } from "./ui/HeaderMenuItem";
 import {
   HEADER_ICON_BUTTON_CLASS,
   HEADER_MENU_DIVIDER_CLASS,
@@ -19,6 +20,7 @@ interface HeaderMenuProps {
   /** Ticket being reproduced; null outside reproduction mode. */
   reproTicketId: string | null;
   onReportBug: () => void;
+  onOpenCredits?: () => void;
 }
 
 interface StatusView {
@@ -75,7 +77,7 @@ function resolveTriggerAlert(
  * unreachable or reproduction mode), so problems stay visible while closed.
  * 只有后端不可达或处于复现模式时，菜单按钮才显示提示点，菜单收起时问题依然可见。
  */
-export function HeaderMenu({ backendStatus, reproTicketId, onReportBug }: HeaderMenuProps) {
+export function HeaderMenu({ backendStatus, reproTicketId, onReportBug, onOpenCredits }: HeaderMenuProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -157,6 +159,12 @@ export function HeaderMenu({ backendStatus, reproTicketId, onReportBug }: Header
           <HeaderMenuPanel id={panelId} onItemSelected={() => close(true)}>
             <ThemeToggle />
             <TutorialLauncherButton />
+            {onOpenCredits && (
+              <HeaderMenuItem label={t("credits_title")} onSelect={onOpenCredits}
+                icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z" />
+                </svg>} />
+            )}
             <BugReportButton onClick={onReportBug} />
             <div className={HEADER_MENU_DIVIDER_CLASS} />
             <div role="status" className="flex flex-col gap-1.5 px-3 py-1.5">

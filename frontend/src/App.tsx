@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, Suspense, Component } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense, Component, lazy } from "react";
 import type { ReactNode } from "react";
 import apiClient from "./api/client";
 import { useApplicationMenuCommand, useApplicationMenuLanguage } from "./integrations/applicationMenu";
@@ -78,6 +78,7 @@ import {
 import LutDetailsPanel from "./components/LutDetailsPanel";
 
 const HEALTH_RECHECK_MS = 5_000;
+const CreditsDialog = lazy(() => import("./credits/CreditsDialog"));
 
 /* ---------- Error Boundary ---------- */
 
@@ -294,6 +295,8 @@ function AppContent({ connected }: { connected: boolean | null }) {
 
   const [announcementReady, setAnnouncementReady] = useState(false);
   const [bugReportOpen, setBugReportOpen] = useState(false);
+  const [creditsOpen, setCreditsOpen] = useState(false);
+  const closeCredits = useCallback(() => setCreditsOpen(false), []);
   const [bugReportPreset, setBugReportPreset] = useState("");
   const errorTicketPrompt = useErrorTicketPromptStore((s) => s.pending);
   const dismissErrorTicketPrompt = useErrorTicketPromptStore((s) => s.dismiss);
@@ -411,6 +414,8 @@ function AppContent({ connected }: { connected: boolean | null }) {
     <div className="flex h-screen flex-col overflow-hidden bg-slate-200 text-slate-900 dark:bg-slate-950 dark:text-white">
       <header
         ref={headerRef}
+        inert={creditsOpen}
+        aria-hidden={creditsOpen || undefined}
         style={electronAPI?.platform === "darwin" ? {
           paddingLeft: "calc(env(titlebar-area-x, 80px) + 12px)",
         } : electronAPI?.platform === "win32" ? {
@@ -467,6 +472,7 @@ function AppContent({ connected }: { connected: boolean | null }) {
             backendStatus={connected === null ? "checking" : connected ? "ok" : "fail"}
             reproTicketId={reproMode.enabled ? reproMode.ticketId : null}
             onReportBug={() => openBugReport("")}
+            onOpenCredits={() => setCreditsOpen(true)}
           />
         </div>
 
@@ -487,7 +493,9 @@ function AppContent({ connected }: { connected: boolean | null }) {
         </div>
       </header>
 
-      <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
+      <main inert={creditsOpen} aria-hidden={creditsOpen || undefined}
+        style={{ visibility: creditsOpen ? "hidden" : undefined }}
+        className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
         {hasSubTabs(activeTab) && (
           <div
             data-testid="sub-tab-row"
@@ -524,7 +532,7 @@ function AppContent({ connected }: { connected: boolean | null }) {
                 }
               >
                 <Suspense fallback={<LoadingSpinner />}>
-                  <Scene3D deferInitialization={deferredConverterEntry !== null} />
+                  <Scene3D deferInitialization={deferredConverterEntry !== null} suspended={creditsOpen} />
                 </Suspense>
               </SceneErrorBoundary>
             </WidgetWorkspace>
@@ -562,8 +570,9 @@ function AppContent({ connected }: { connected: boolean | null }) {
         {activeTab === 'settings' && <SettingsPanel />}
         </div>
       </main>
+      {creditsOpen && <Suspense fallback={<LoadingSpinner />}><CreditsDialog onClose={closeCredits} /></Suspense>}
       <AnnouncementDialog
-        open={announcementReady && announcement.visible}
+        open={!creditsOpen && announcementReady && announcement.visible}
         entries={announcement.entries}
         entry={announcement.entry}
         onClose={announcement.close}
@@ -589,7 +598,7 @@ function AppContent({ connected }: { connected: boolean | null }) {
       {/* Beginner tutorial: offered once after the release announcement is
           gone, and never during bug-report reproduction sessions. */}
       <TutorialHost
-        canAutoOffer={announcementReady && !announcement.visible && !reproMode.enabled}
+        canAutoOffer={!creditsOpen && announcementReady && !announcement.visible && !reproMode.enabled}
       />
       {/* Extractor ColorChecker calibration popup. Mounted at the app root so
           it appears regardless of whether the extractor is opened as the
