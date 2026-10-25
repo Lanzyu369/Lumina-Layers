@@ -16,6 +16,17 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-25",
+    title: { zh: "Lumina Layers — 10 月更新速览", en: "Lumina Layers — October updates" },
+    sections: [{
+      category: { zh: "颜色工作站", en: "Color Workstation" },
+      items: [{
+        zh: "“传统 LUT”现统一称为“经典 LUT”，功能和已有数据不变；历史公告保留当时的名称。",
+        en: "“Traditional LUT” is now called “Classic LUT”. Its functionality and existing data are unchanged; older announcements retain the original name.",
+      }],
+    }],
+  },
+  {
     version: "2026-10-22",
     title: {
       zh: "Lumina Layers — 10 月更新速览",

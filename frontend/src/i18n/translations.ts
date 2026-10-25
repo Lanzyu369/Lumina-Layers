@@ -58,7 +58,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   conversion_preset_cancel: { zh: "取消", en: "Cancel" },
   conversion_preset_confirm: { zh: "保存预设", en: "Save preset" },
   conversion_preset_material: { zh: "耗材档案", en: "Material archive" },
-  conversion_preset_lut: { zh: "传统 LUT", en: "Traditional LUT" },
+  conversion_preset_lut: { zh: "经典 LUT", en: "Classic LUT" },
   conversion_preset_single: { zh: "单面", en: "Single-sided" },
   conversion_preset_double: { zh: "双面", en: "Double-sided" },
   conversion_preset_width: { zh: "宽", en: "Width" },
