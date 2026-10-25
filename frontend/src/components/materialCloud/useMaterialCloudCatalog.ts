@@ -524,9 +524,9 @@ export function useMaterialCloudCatalog() {
     setError(null);
     setSuccess(null);
     try {
-      const response = await rollbackMaterialSyncRevision(entry.material_id, revisionId);
+      await rollbackMaterialSyncRevision(entry.material_id, revisionId);
       await reloadCurrentQuery({ preserveFullCatalog: true });
-      setSuccess(response.message || t("mat_sync_rollback_success"));
+      setSuccess(t("mat_sync_rollback_success"));
     } catch (err) {
       setError(resolveErrorMessage(err, t("mat_sync_rollback_failed")));
     } finally {

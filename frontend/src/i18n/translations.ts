@@ -5,9 +5,6 @@
  */
 export const translations: Record<string, Record<"zh" | "en", string>> = {
   cloud_library_update: { zh: "更新", en: "Update" },
-  cloud_library_version: { zh: "界面版本对比", en: "Interface comparison" },
-  cloud_library_new: { zh: "新版", en: "New" },
-  cloud_library_old: { zh: "旧版", en: "Previous" },
   cloud_library_results: { zh: "匹配结果", en: "Matching results" },
   cloud_library_loading_index: { zh: "正在加载完整目录，搜索结果尚不完整…", en: "Loading the full catalog; search results are not complete yet…" },
   desktop_menu_about: { zh: "关于 Lumina Studio", en: "About Lumina Studio" },
@@ -9882,9 +9879,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "本地文件缺失",
     en: "Local files missing",
   },
+  mat_sync_history_hint: { zh: "按本地安装时间查看版本，选择要恢复的版本。", en: "Versions are listed by local installation date. Select a version to restore." },
+  mat_sync_history_unknown_date: { zh: "日期未知", en: "Date unknown" },
+  mat_sync_history_current: { zh: "当前使用", en: "Current" },
+  mat_sync_history_previous: { zh: "历史版本", en: "Previous version" },
+  mat_sync_history_empty: { zh: "暂无可恢复的本地历史版本", en: "No local history available to restore" },
+  mat_sync_history_close: { zh: "关闭", en: "Close" },
+  mat_sync_history_restore: { zh: "恢复所选版本", en: "Restore selected version" },
   mat_sync_local_section_title: {
-    zh: "本地版本记录",
-    en: "Local Revision History",
+    zh: "本地历史版本",
+    en: "Local Version History",
   },
   mat_sync_local_section_hint: {
     zh: "更新耗材后会保留旧版本；如果新版本效果不理想，可以一键回滚。",

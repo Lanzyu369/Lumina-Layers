@@ -11,7 +11,7 @@ describe("cloud library detail focus", () => {
     vi.spyOn(window, "innerWidth", "get").mockReturnValue(width);
     const focus = vi.spyOn(HTMLButtonElement.prototype, "focus");
     render(<CloudLibraryPreview
-      resetKey="all" versions={null} toolbar={null}
+      resetKey="all" toolbar={null}
       items={[{ key: "lut", name: "Selected LUT", subtitle: "Brand", state: "Installed",
         detail: <p>Details</p> }]}
     />);

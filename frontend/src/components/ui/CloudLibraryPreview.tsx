@@ -2,19 +2,13 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../../i18n/context";
 import CloseButton from "./CloseButton";
 
-export function CloudLibraryVersionTabs({ modern, onChange }: { modern: boolean; onChange: (value: boolean) => void }) {
-  const { t } = useI18n();
-  return <div role="tablist" aria-label={t("cloud_library_version")} className="flex shrink-0 gap-1 bg-slate-200 px-5 py-2 dark:bg-slate-800">
-    {[true, false].map((value) => <button key={String(value)} type="button" role="tab" aria-selected={modern === value} tabIndex={modern === value ? 0 : -1} onKeyDown={(event) => { if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) { event.preventDefault(); onChange(event.key === "Home" ? true : event.key === "End" ? false : !modern); const buttons = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]'); buttons?.[event.key === "Home" ? 0 : event.key === "End" ? 1 : modern ? 1 : 0]?.focus(); } }} onClick={() => onChange(value)} className={`rounded-lg px-4 py-1.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${modern === value ? "bg-slate-50 text-slate-900 dark:bg-slate-600 dark:text-slate-50" : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"}`}>{t(value ? "cloud_library_new" : "cloud_library_old")}</button>)}
-  </div>;
-}
 export interface CloudPreviewItem {
   key: string; name: string; subtitle: string; metric?: string; color?: string;
   state: string; action?: ReactNode; detail: ReactNode;
 }
-export default function CloudLibraryPreview({ items, toolbar, notices, footer, busy, resetKey, versions }: {
+export default function CloudLibraryPreview({ items, toolbar, notices, footer, busy, resetKey, emptyMessage }: {
   items: CloudPreviewItem[]; toolbar: ReactNode; notices?: ReactNode; footer?: ReactNode;
-  busy?: boolean; resetKey: string; versions: ReactNode;
+  busy?: boolean; resetKey: string; emptyMessage?: string;
 }) {
   const { t } = useI18n();
   const [selected, setSelected] = useState<string | null>(null);
@@ -27,7 +21,6 @@ export default function CloudLibraryPreview({ items, toolbar, notices, footer, b
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; setScrolled(false); setSelected(null); }, [resetKey]);
   useEffect(() => { if (selected) closeRef.current?.focus({ preventScroll: window.innerWidth >= 1024 }); }, [selected]);
   return <section className="flex h-full min-h-0 flex-col overflow-hidden bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-    {versions}
     <div className={`flex shrink-0 flex-wrap items-center gap-3 border-b p-4 transition-colors duration-200 motion-reduce:transition-none ${scrolled ? "border-slate-200 dark:border-slate-700" : "border-transparent"}`}>{toolbar}</div>
     <div ref={scrollRef} onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)} className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-4">
       {notices && <div className="mb-4 grid gap-3" role="status">{notices}</div>}
@@ -42,7 +35,7 @@ export default function CloudLibraryPreview({ items, toolbar, notices, footer, b
               <div className="mt-4 grid gap-2"><span className="text-xs text-slate-600 dark:text-slate-300">{item.state}</span>{item.action}</div>
             </article>)}
           </div>
-          {!items.length && <p className="py-12 text-center text-sm text-slate-500">{t(busy ? "lut_sync_loading" : "lut_sync_catalog_empty")}</p>}
+          {!items.length && <p className="py-12 text-center text-sm text-slate-500">{busy ? t("lut_sync_loading") : emptyMessage ?? t("lut_sync_catalog_empty")}</p>}
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3">{footer}</div>
         </div>
         {detail && <aside onKeyDown={(event) => { if(event.key === "Escape") { event.stopPropagation(); close(); } }} className="relative order-first min-w-0 rounded-[10px] border border-slate-200 bg-slate-100 p-5 lg:sticky lg:top-0 lg:order-last lg:max-h-[calc(100vh-16rem)] lg:overflow-y-auto lg:overscroll-y-contain dark:border-slate-700 dark:bg-slate-800">

@@ -1217,6 +1217,7 @@ export interface MaterialSyncInstalledEntry {
   local_exists: boolean;
   material_file_exists: boolean;
   available_revisions: string[];
+  revision_history?: { revision_id: string; installed_at?: string | null }[];
 }
 
 export interface MaterialSyncStatusResponse {
