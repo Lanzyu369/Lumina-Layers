@@ -93,6 +93,7 @@ from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 from core import geos_buffer_fast
 from core import native_svg_adapter
+from core.svg_arc_geometry import parse_svg_document, parse_svg_path
 from core.svg_coordinate_domain import (
     PRINT_GRID_KEY,
     SVG_COORDINATE_CONTRACT_VERSION,
@@ -145,6 +146,10 @@ _MASK_SUPERSAMPLE = 4
 _ARC_SAMPLE_POSITIONS_10 = np.linspace(0.1, 1.0, 10)
 _ARC_SAMPLE_POSITIONS_10.setflags(write=False)
 _ARC_SAMPLE_POSITIONS_10_TUPLE = tuple(float(value) for value in _ARC_SAMPLE_POSITIONS_10)
+# Additional cubic approximation uses 1% of the existing legacy flatten
+# tolerance, before later viewport/clip mappings. It does not change that
+# pipeline's existing sampling or promise a total physical-error bound.
+_SVG_ARC_APPROXIMATION_BUDGET_RATIO = 0.01
 _VECTOR_LARGE_DISTANCE_WARN_LIMIT = 8
 _VECTOR_SPATIAL_GROUP_CHUNK_BYTES = 64 * 1024 * 1024
 
@@ -1917,7 +1922,9 @@ def _try_parse_strict_top_level_path_svg(processor, svg_path, target_width_mm):
         if not path_data:
             continue
         try:
-            path_obj = Path(path_data)
+            path_obj = parse_svg_path(
+                path_data, tolerance * _SVG_ARC_APPROXIMATION_BUDGET_RATIO,
+            )
         except VECTOR_HANDLED_ERRORS:
             return None
 
@@ -2065,7 +2072,7 @@ def _try_parse_strict_top_level_path_svg(processor, svg_path, target_width_mm):
 _LuminaImageProcessor = None
 _VECTOR_PARSE_CLIP_CACHE = {}
 _VECTOR_PARSE_CLIP_CACHE_MAX = 8
-_VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA = "lumina_vector_parse_clip_cache_v5"
+_VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA = "lumina_vector_parse_clip_cache_v6"
 
 
 def _vector_parse_clip_cache_key(
@@ -7338,12 +7345,16 @@ class VectorProcessor:
         )
         if svg_parse_source is None:
             svg_parse_source = svg_path
+        arc_tolerance = (
+            self.sampling_precision / max(target_width_mm / 100.0, 0.01)
+            * _SVG_ARC_APPROXIMATION_BUDGET_RATIO
+        )
         try:
-            svg = SVG.parse(svg_parse_source)
+            svg = parse_svg_document(svg_parse_source, arc_tolerance)
         except VECTOR_HANDLED_ERRORS as e:
             if svg_parse_source is not svg_path:
                 try:
-                    svg = SVG.parse(svg_path)
+                    svg = parse_svg_document(svg_path, arc_tolerance)
                     parsed_root = None
                 except VECTOR_HANDLED_ERRORS as fallback_error:
                     raise ValueError(f"Failed to parse SVG: {fallback_error}") from fallback_error
@@ -7855,8 +7866,9 @@ class VectorProcessor:
             _resolve_clip_fragment_percentages(fragment, resolved_viewport)
 
             try:
-                clip_svg = SVG.parse(
-                    io.BytesIO(ET.tostring(fragment, encoding="utf-8"))
+                clip_svg = parse_svg_document(
+                    io.BytesIO(ET.tostring(fragment, encoding="utf-8")),
+                    arc_tolerance,
                 )
             except VECTOR_HANDLED_ERRORS as exc:
                 raise ValueError("Failed to resolve SVG clip path") from exc
