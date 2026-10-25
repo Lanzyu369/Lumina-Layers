@@ -101,6 +101,7 @@ import {
 } from "../../utils/fridgeMagnetLayout";
 import {
   isSvgImageFile,
+  resolveRotatedImageSize,
   rotateImageFile,
   type ImageRotationDegrees,
 } from "../../utils/imageRotation";
@@ -2282,6 +2283,26 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         );
         rememberDerivedImageSource(rotatedFile, state.imageFile);
         _get().setImageFile(rotatedFile);
+        if (state.conversionParameterContext === "project") {
+          // A project owns exact millimeter dimensions. Publish the rotated
+          // axes before Image.onload so it only updates the artwork ratio.
+          const rotatedSize = resolveRotatedImageSize(
+            state.target_width_mm, state.target_height_mm, degrees,
+          );
+          const aspectRatio = rotatedSize.width / rotatedSize.height;
+          const dimensions = fitTargetDimensions({
+            target_width_mm: rotatedSize.width,
+            target_height_mm: rotatedSize.height,
+          }, { ...state, aspectRatio }, useSettingsStore.getState().printerModel);
+          set({
+            ...dimensions,
+            aspectRatio,
+            fridge_magnets: canonicalizeFridgeMagnets(
+              getFallbackModelBounds({ ...state, ...dimensions, modelBounds: null }),
+              state.fridge_magnets,
+            ),
+          });
+        }
       } catch (err) {
         set({
           error: visibleConverterError(err, tRuntime("basic_image_rotation_failed")),
