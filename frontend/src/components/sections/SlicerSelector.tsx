@@ -1,3 +1,4 @@
+import ButtonContent from "../ui/ButtonContent";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useSlicerStore } from "../../stores/slicerStore";
@@ -435,22 +436,14 @@ export default function SlicerSelector({
                 type="button"
                 onClick={() => void handleMainClick()}
                 disabled={isDisabled}
-                className={`flex min-h-10 flex-1 items-center justify-center gap-2 rounded-l-md px-4 py-1.5 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
+                aria-label={mainButtonLabel}
+                aria-busy={actionBusy || undefined}
+                className={`relative flex min-h-10 flex-1 items-center justify-center gap-2 rounded-l-md px-4 py-1.5 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
               >
-                {showActiveSlicerLogo && (
-                  <SlicerLogo
-                    slicerId={activeSlicerId}
-                    variant="onBrand"
-                    loading={actionBusy}
-                  />
-                )}
-                {!showActiveSlicerLogo && actionBusy && (
-                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                )}
-                {mainButtonLabel}
+                <ButtonContent loading={actionBusy}>
+                  {showActiveSlicerLogo && <SlicerLogo slicerId={activeSlicerId} variant="onBrand" />}
+                  {mainButtonLabel}
+                </ButtonContent>
               </button>
             </WikiTooltip>
 
@@ -536,15 +529,13 @@ export default function SlicerSelector({
                   type="button"
                   onClick={() => void handleMainClick()}
                   disabled={isDisabled}
-                  className={`flex w-full items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
+                  aria-label={getButtonLabel(false, launchArtifactSource, null, t, largeFormat)}
+                  aria-busy={(isAutoGenerating || isDownloading) || undefined}
+                  className={`relative flex w-full items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
                 >
-                  {(isAutoGenerating || isDownloading) && (
-                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                  )}
-                  {getButtonLabel(false, launchArtifactSource, null, t, largeFormat)}
+                  <ButtonContent loading={isAutoGenerating || isDownloading}>
+                    {getButtonLabel(false, launchArtifactSource, null, t, largeFormat)}
+                  </ButtonContent>
                 </button>
               </WikiTooltip>
             </>

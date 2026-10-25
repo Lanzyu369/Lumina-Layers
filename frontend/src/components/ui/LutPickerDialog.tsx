@@ -266,16 +266,8 @@ export default function LutPickerDialog({
             {labels.title}
           </h2>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onRefresh}
-              disabled={refreshing || loading}
-              aria-label={labels.refreshTooltip}
-              title={labels.refreshTooltip}
-              className="action-control inline-flex h-8 w-8 items-center justify-center rounded-full"
-            >
-              <span className={cx("text-sm leading-none", refreshing && "animate-spin")} aria-hidden="true">⟳</span>
-            </button>
+            <Button size="icon" label={labels.refreshTooltip} onClick={onRefresh}
+              disabled={loading} loading={refreshing} icon={<span aria-hidden="true">⟳</span>} />
             <CloseButton label={labels.cancel} onClick={onCancel} />
           </div>
         </div>
