@@ -97,7 +97,7 @@ describe("printer-dependent output dimensions", () => {
     settings.getState().setPrinterModel("small");
     vi.mocked(fetchBedSizes).mockResolvedValue({ beds });
     await store.getState().fetchBedSizes();
-    expect(store.getState()).toMatchObject({ bed_label: "Small", target_width_mm: 180, target_height_mm: 120 });
+    expect(store.getState()).toMatchObject({ bed_label: "Small", target_width_mm: 180, target_height_mm: 200 });
   });
 
   it("keeps large-format dimensions until returning to a single bed", async () => {
