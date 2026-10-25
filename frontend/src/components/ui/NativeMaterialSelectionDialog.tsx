@@ -8,6 +8,7 @@ import {
 } from "../../stores/converter/nativeMaterialSelection";
 import { useSettingsStore } from "../../stores/settingsStore";
 import Button from "./Button";
+import CloseButton from "./CloseButton";
 import Dropdown from "./Dropdown";
 
 function MaterialSelectionContent({ selection, isEditing }: {
@@ -112,7 +113,7 @@ function MaterialSelectionContent({ selection, isEditing }: {
               {t(isEditing ? "native_material_edit_description" : "native_material_dialog_description")}
             </p>
           </div>
-          <Button label={cancelLabel} variant="secondary" size="sm" onClick={cancelSelection} />
+          <CloseButton label={t("native_material_close")} onClick={cancelSelection} />
         </header>
         <div className="panel-divider min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-y-contain border-t px-5 py-4">
           {isChecking && (
@@ -161,7 +162,6 @@ function MaterialSelectionContent({ selection, isEditing }: {
             const candidates = material.profiles.filter((profile) => profile.available);
             const chosen = profiles[material.name] ?? "";
             const automatic = !chosen && !isChecking && !selectionError ? material.selected_profile_name : null;
-            const resolved = chosen || automatic;
             const reportedIssue = selection.issues.find((issue) => issue.material_index === index);
             const issueCode = !isChecking && !selectionError ? reportedIssue?.code : null;
             const message = issueCode ? t(issueCode)
@@ -189,12 +189,8 @@ function MaterialSelectionContent({ selection, isEditing }: {
                   ]}
                   disabled={candidates.length === 0}
                 />
-                {message ? (
+                {message && (
                   <p className="status-banner text-sm" data-tone="warning" role="status">{message}</p>
-                ) : resolved && (
-                  <p className="break-words text-xs text-[var(--surface-text-muted)]">
-                    {t(chosen ? "native_material_selected" : "native_material_automatic").replace("{profile}", resolved)}
-                  </p>
                 )}
               </section>
             );

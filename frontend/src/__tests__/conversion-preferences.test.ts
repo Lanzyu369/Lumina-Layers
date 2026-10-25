@@ -124,6 +124,20 @@ describe("conversion preferences", () => {
   });
 
   it.each([90, 180, 270] as const)("keeps imported printing parameters when rotating the project's SVG by %i degrees", async (degrees) => {
+    const pendingLoads: Array<{ naturalWidth: number; naturalHeight: number; onload: (() => void) | null }> = [];
+    vi.stubGlobal("Image", class {
+      naturalWidth = 160;
+      naturalHeight = 100;
+      onload: (() => void) | null = null;
+      set src(_value: string) { pendingLoads.push(this); }
+    });
+    const finishImageLoad = (width: number, height: number) => {
+      expect(pendingLoads).toHaveLength(1);
+      const image = pendingLoads.shift()!;
+      image.naturalWidth = width;
+      image.naturalHeight = height;
+      image.onload!();
+    };
     const stop = bindConversionPreferences();
     try {
       useConverterStore.getState().setTargetWidthMm(225);
@@ -136,13 +150,17 @@ describe("conversion preferences", () => {
       ], "project.svg", { type: "image/svg+xml" });
       useConverterStore.getState().importRecipeState({ target_width_mm: 93, target_height_mm: 58.125,
         structure_mode: StructureMode.SINGLE_SIDED, base_spacer_thick: 3, spacer_thick: 3 }, source);
+      finishImageLoad(160, 100);
 
       await useConverterStore.getState().rotateImageForExport(degrees);
+      const swapsAxes = degrees !== 180;
+      finishImageLoad(swapsAxes ? 100 : 160, swapsAxes ? 160 : 100);
 
       const rotated = useConverterStore.getState();
       expect(rotated.imageFile).not.toBe(source);
       expect(await rotated.imageFile!.text()).toContain(`rotate(${degrees})`);
-      expect(rotated).toMatchObject({ target_width_mm: 93, target_height_mm: 58.125,
+      expect(rotated).toMatchObject({ target_width_mm: swapsAxes ? 58.125 : 93,
+        target_height_mm: swapsAxes ? 93 : 58.125,
         structure_mode: StructureMode.SINGLE_SIDED, base_spacer_thick: 3, spacer_thick: 3,
         conversionParameterContext: "project", error: null });
       expect(useSettingsStore.getState().conversionPreferences).toEqual(remembered);
@@ -150,13 +168,50 @@ describe("conversion preferences", () => {
       // A second edit still belongs to this project; a newly selected file does not,
       // even if its filename and bytes match the imported source.
       await rotated.rotateImageForExport(90);
-      expect(useConverterStore.getState()).toMatchObject({ target_width_mm: 93,
+      finishImageLoad(swapsAxes ? 160 : 100, swapsAxes ? 100 : 160);
+      expect(useConverterStore.getState()).toMatchObject({ target_width_mm: swapsAxes ? 93 : 58.125,
+        target_height_mm: swapsAxes ? 58.125 : 93,
         structure_mode: StructureMode.SINGLE_SIDED, base_spacer_thick: 3, conversionParameterContext: "project" });
       useConverterStore.getState().setImageFile(new File([await source.text()], source.name, { type: source.type }));
+      finishImageLoad(160, 100);
       expect(useConverterStore.getState()).toMatchObject({ target_width_mm: 225,
         structure_mode: StructureMode.DOUBLE_SIDED, base_spacer_thick: 1.2, conversionParameterContext: "defaults" });
       expect(useSettingsStore.getState().conversionPreferences.selectedPresetId).toBe(remembered.selectedPresetId);
     } finally { stop(); }
+  });
+
+  it.each([
+    [160, 100, 93, 58.125],
+    [60, 200, 60.5, 201.6666667],
+  ])("preserves exact project dimensions through four loaded quarter turns (%i × %i pixels)", async (pixelWidth, pixelHeight, width, height) => {
+    const pendingLoads: Array<{ naturalWidth: number; naturalHeight: number; onload: (() => void) | null }> = [];
+    vi.stubGlobal("Image", class {
+      naturalWidth = pixelWidth;
+      naturalHeight = pixelHeight;
+      onload: (() => void) | null = null;
+      set src(_value: string) { pendingLoads.push(this); }
+    });
+    const source = new File([
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${pixelWidth} ${pixelHeight}"><rect width="30" height="50"/></svg>`,
+    ], "precise.svg", { type: "image/svg+xml" });
+    useConverterStore.getState().importRecipeState({ target_width_mm: width, target_height_mm: height }, source);
+    pendingLoads.shift()!.onload!();
+    await useConverterStore.getState().rotateImageForExport(180);
+    pendingLoads.shift()!.onload!();
+    expect(useConverterStore.getState()).toMatchObject({ target_width_mm: width, target_height_mm: height });
+    for (let turn = 1; turn <= 4; turn += 1) {
+      await useConverterStore.getState().rotateImageForExport(90);
+      expect(pendingLoads).toHaveLength(1);
+      const image = pendingLoads.shift()!;
+      image.naturalWidth = turn % 2 ? pixelHeight : pixelWidth;
+      image.naturalHeight = turn % 2 ? pixelWidth : pixelHeight;
+      image.onload!();
+      expect(useConverterStore.getState()).toMatchObject({
+        target_width_mm: turn % 2 ? height : width,
+        target_height_mm: turn % 2 ? width : height,
+        conversionParameterContext: "project",
+      });
+    }
   });
 
   it("remembers the final long edge regardless of the manually edited dimension", async () => {
@@ -192,6 +247,23 @@ describe("conversion preferences", () => {
       expect(useConverterStore.getState()).toMatchObject({
         target_width_mm: 150, target_height_mm: 75,
       });
+    } finally { stop(); }
+  });
+
+  it("keeps a remembered height as the exact long edge when a new landscape image has a rounded short edge", async () => {
+    const stop = bindConversionPreferences();
+    try {
+      useConverterStore.getState().setTargetHeightMm(225);
+      vi.stubGlobal("Image", class {
+        naturalWidth = 160;
+        naturalHeight = 100;
+        onload: (() => void) | null = null;
+        set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+      });
+      useConverterStore.getState().setImageFile(new File(["image"], "wide.png", { type: "image/png" }));
+      await Promise.resolve();
+      expect(useConverterStore.getState()).toMatchObject({ target_width_mm: 225, target_height_mm: 141 });
+      expect(useSettingsStore.getState().conversionPreferences.last?.size_mm).toBe(225);
     } finally { stop(); }
   });
 
