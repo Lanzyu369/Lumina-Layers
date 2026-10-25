@@ -1,4 +1,6 @@
+import TransientBanner from "./ui/TransientBanner";
 import { LibraryIdentity, LibraryFields } from "./ui/LibraryDetails";
+import CloudLibraryPreview from "./ui/CloudLibraryPreview";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { apiErrorToVisibleMessage } from "../api/client";
@@ -14,6 +16,7 @@ import type {
 } from "../api/types";
 import { useI18n } from "../i18n/context";
 import Button from "./ui/Button";
+import { StatusBanner } from "./ui/panelPrimitives";
 
 const CLOUD_LUT_PAGE_SIZE = 100;
 
@@ -240,9 +243,14 @@ export default function LutCloudSyncPanel() {
   const catalogTotalCount = catalog?.total ?? catalogLoadedCount;
   const hasMoreCatalogEntries = status?.configured === true && catalogLoadedCount < catalogTotalCount;
 
+  // Complete the lightweight catalog before presenting search as complete.
   useEffect(() => {
+    if ( hasMoreCatalogEntries && !isLoading && !isLoadingMore && !error) void loadMoreCatalog();
+  }, [hasMoreCatalogEntries, isLoading, isLoadingMore, error, loadMoreCatalog]);
 
+  return <CloudLibraryPreview resetKey={searchQuery} busy={isLoading}
     toolbar={<><input type="search" aria-label={t("lut_sync_search_placeholder")} placeholder={t("lut_sync_search_placeholder")} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} className="min-w-48 flex-1 rounded-lg bg-slate-100 px-4 py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-slate-800" /><span className="text-xs text-slate-500">{t("cloud_library_results")} · {filteredItems.length}</span><Button label={t("lut_sync_refresh_btn")} variant="secondary" loading={isRefreshing} onClick={() => void refreshCatalog()} /></>}
+    notices={<>{notice && <StatusBanner tone="warning">{notice}</StatusBanner>}{error && <StatusBanner tone="error">{error}</StatusBanner>}<TransientBanner message={success} onDismiss={() => setSuccess(null)} /><TransientBanner tone="info" autoDismiss={false} message={hasMoreCatalogEntries ? t("cloud_library_loading_index") : null} action={<Button label={t("lut_sync_load_more_btn")} variant="secondary" loading={isLoadingMore} onClick={() => void loadMoreCatalog()} />} /></>}
     items={filteredItems.map((entry) => {
       const display = normalizeRecord(entry.display);
       const name = readDisplayString(display, ["name", "display_name", "lut_name", "title"]) ?? entry.local_path ?? entry.lut_id;

@@ -79,6 +79,7 @@ describe("LutCloudSyncPanel", () => {
     });
   });
 
+  it("opens details without installing and keeps search available without comparison tabs", async () => {
     render(<LutCloudSyncPanel />);
     const card = await screen.findByRole("button", { name: /Official CMYW LUT/ });
     fireEvent.click(card);
@@ -89,6 +90,7 @@ describe("LutCloudSyncPanel", () => {
     expect(card).toHaveFocus();
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "BW LUT" } });
     expect(screen.queryByRole("button", { name: /Official CMYW LUT/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("searchbox")).toHaveValue("BW LUT");
     expect(screen.getByRole("searchbox")).toHaveValue("BW LUT");
   });
 
@@ -114,6 +116,9 @@ describe("LutCloudSyncPanel", () => {
 
     render(<LutCloudSyncPanel />);
 
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(await screen.findByText(/尚未配置云端 LUT 库|not configured/i)).toHaveTextContent(/尚未配置云端 LUT 库|not configured/i);
+    expect(screen.getByText(/没有匹配的云端 LUT|No matching cloud LUTs/i)).toHaveTextContent(/没有匹配的云端 LUT|No matching cloud LUTs/i);
     expect(fetchCloudLutRegistryCatalog).not.toHaveBeenCalled();
   });
 
@@ -123,11 +128,14 @@ describe("LutCloudSyncPanel", () => {
     expect(await screen.findByText("Official CMYW LUT")).toBeInTheDocument();
     expect(screen.queryByText("community")).not.toBeInTheDocument();
 
+    fireEvent.change(screen.getByRole("searchbox"), {
       target: { value: "CMYW" },
     });
 
     await waitFor(() => {
+      expect(screen.getAllByRole("article")).toHaveLength(1);
     });
+    const card = screen.getByRole("article");
     expect(within(card).getByText("Official CMYW LUT")).toBeInTheDocument();
     expect(within(card).getByText("4-Color (CMYW)")).toBeInTheDocument();
     expect(within(card).queryByText("Official/CMYW.json")).not.toBeInTheDocument();
@@ -142,6 +150,7 @@ describe("LutCloudSyncPanel", () => {
         }),
       );
     });
+    expect(await screen.findByText(/LUT 已下载并安装到本地|downloaded and installed/i)).toHaveTextContent(
       /LUT 已下载并安装到本地|downloaded and installed/i,
     );
   });
@@ -178,7 +187,13 @@ describe("LutCloudSyncPanel", () => {
 
     render(<LutCloudSyncPanel />);
 
+    const card = await screen.findByRole("article");
     expect(within(card).getByText("Readable LUT")).toBeInTheDocument();
+    expect(card).toHaveTextContent(/已安装|installed/i);
+    expect(within(card).queryByRole("button", { name: /下载到本地|download/i })).not.toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: /Readable LUT/ }));
+    expect(screen.getByText("Cloud/Actual/Readable LUT.json")).toBeInTheDocument();
+    expect(screen.queryByText("Official/Test/Readable LUT.json")).not.toBeInTheDocument();
     expect(installCloudLut).not.toHaveBeenCalled();
   });
 });
