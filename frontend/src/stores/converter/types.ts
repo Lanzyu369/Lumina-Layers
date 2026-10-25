@@ -1,3 +1,4 @@
+import type { PresetNameError, SavePresetResult } from "../conversionPreferences";
 import type { ApiRequestOptions } from "../../api/client";
 import type {
   AutoHeightMode,
@@ -7,7 +8,6 @@ import type {
   BedSizeItem,
   ColorMode,
   ColorReplacementItem,
-  CoatingMaterialReference,
   DynamicMaterialRecipe,
   ExportMaterialSelection,
   FridgeMagnetItem,
@@ -149,6 +149,8 @@ export interface ConverterState {
   imageFile: File | null;
   imagePreviewUrl: string | null;
   aspectRatio: number | null;
+  preferredSizeAxis: "width" | "height";
+  conversionParameterContext: "defaults" | "restoring" | "project";
   workshopSource: WorkshopRecipeSource | null;
 
   // 模型覆面
@@ -253,7 +255,6 @@ export interface ConverterState {
   // 涂层
   enable_coating: boolean;
   coating_height_mm: number;
-  coatingMaterial: CoatingMaterialReference | null;
 
   // 大画幅
   largeFormatEnabled: boolean;
@@ -480,6 +481,12 @@ export interface ConverterState {
 // ========== Actions Interface ==========
 
 export interface ConverterActions {
+  restoreConversionDefaults: () => void;
+  applyConversionPreset: (id: string | null) => boolean;
+  saveConversionPreset: (name: string) => SavePresetResult;
+  updateConversionPreset: (id: string) => boolean;
+  renameConversionPreset: (id: string, name: string) => PresetNameError | "missing-preset" | null;
+  deleteConversionPreset: (id: string) => void;
   // 图片
   setImageFile: (file: File | null) => void;
   rotateImageForExport: (degrees: ImageRotationDegrees) => Promise<void>;
@@ -557,7 +564,6 @@ export interface ConverterActions {
   setWireHeightMm: (height: number) => void;
   setEnableCoating: (enabled: boolean) => void;
   setCoatingHeightMm: (height: number) => void;
-  setCoatingMaterial: (material: CoatingMaterialReference | null) => void;
 
   // 大画幅
   setLargeFormatEnabled: (enabled: boolean) => void;

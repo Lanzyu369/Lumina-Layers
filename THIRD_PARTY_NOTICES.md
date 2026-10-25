@@ -66,7 +66,7 @@ keeps its LGPL terms and modification notice in
 
 Installed `lumina-svg-core`, FatCat and native writer packages carry their
 own licenses and source notices; the legacy local source module is not the
-installed `lumina-svg-core==0.3.3` distribution.
+installed `lumina-svg-core==0.3.4` distribution.
 
 ## HDR environment
 

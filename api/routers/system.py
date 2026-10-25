@@ -1002,6 +1002,8 @@ def save_settings(settings: UserSettings) -> SaveSettingsResponse:
     """
     try:
         settings_payload = settings.model_dump()
+        if "conversion_preferences" not in settings.model_fields_set:
+            settings_payload.pop("conversion_preferences", None)
         stored_payload: dict[str, object] = {}
         try:
             if SETTINGS_FILE.exists():

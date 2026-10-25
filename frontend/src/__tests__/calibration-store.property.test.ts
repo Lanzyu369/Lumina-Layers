@@ -357,6 +357,7 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
       previewImageUrl: null,
       modelUrl: null,
       statusMessage: null,
+      warnings: [],
       manifestUrl: null,
       singleStageJobs: [],
     });
@@ -629,5 +630,79 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
     expect(
       notificationMocks.showBrowserCompletionNotification,
     ).not.toHaveBeenCalled();
+  });
+
+  it("keeps a warned download's warning through a pending and failed retry", async () => {
+    mockCalibrationGenerate.mockResolvedValueOnce({
+      status: "ok",
+      message: "kit",
+      download_url: "/api/files/kit.zip",
+      preview_url: null,
+      layer_urls: null,
+      warnings: ["wipe_tower_manual_adjustment_required"],
+    });
+    await useCalibrationStore.getState().submitLegacyGenerate();
+
+    let rejectRetry!: (error: Error) => void;
+    mockCalibrationGenerate.mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        rejectRetry = reject;
+      }),
+    );
+    const retryRequest = useCalibrationStore.getState().submitLegacyGenerate();
+    expect(useCalibrationStore.getState()).toMatchObject({
+      isLoading: true,
+      downloadUrl: "/api/files/kit.zip",
+      warnings: ["wipe_tower_manual_adjustment_required"],
+    });
+
+    rejectRetry(new Error("legacy failed"));
+    await retryRequest;
+
+    expect(useCalibrationStore.getState()).toMatchObject({
+      isLoading: false,
+      downloadUrl: "/api/files/kit.zip",
+      warnings: ["wipe_tower_manual_adjustment_required"],
+    });
+    expect(useCalibrationStore.getState().error).not.toBeNull();
+  });
+
+  it("replaces warnings only with the next generated result", async () => {
+    useCalibrationStore.setState({
+      downloadUrl: "/api/files/kit.zip",
+      warnings: ["wipe_tower_manual_adjustment_required"],
+    });
+    mockCalibrationGenerate.mockResolvedValueOnce({
+      status: "ok",
+      message: "board",
+      download_url: "/api/files/board.3mf",
+      preview_url: null,
+      layer_urls: null,
+    });
+
+    await useCalibrationStore.getState().submitLegacyGenerate();
+
+    expect(useCalibrationStore.getState()).toMatchObject({
+      downloadUrl: "/api/files/board.3mf",
+      warnings: [],
+    });
+  });
+
+  it("drops placement warnings when generated outputs are invalidated", () => {
+    useCalibrationStore.setState({
+      downloadUrl: "/api/files/kit.zip",
+      warnings: ["wipe_tower_manual_adjustment_required"],
+    });
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "OrcaSlicer:bbl:bambu-lab-p1s",
+        "smooth-pei-plate",
+      );
+
+    expect(useCalibrationStore.getState()).toMatchObject({
+      downloadUrl: null,
+      warnings: [],
+    });
   });
 });

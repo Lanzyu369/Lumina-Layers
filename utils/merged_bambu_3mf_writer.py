@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid
 import xml.etree.ElementTree as ET
 import zipfile
@@ -270,32 +271,36 @@ def _qname_prod(attr: str) -> str:
 
 
 def _parse_transform_matrix(transform_str: str) -> list[float]:
-    """Parse a 3MF 3x4 row-major transform string into 12 floats.
+    """Parse the first three columns of a 3MF row-vector affine matrix.
 
     3MF transform format: m00 m01 m02 m10 m11 m12 m20 m21 m22 tx ty tz
-    Returns identity [1,0,0, 0,1,0, 0,0,1, 0,0,0] if empty or invalid.
+    An absent or blank transform means identity; malformed values cannot
+    describe a reliable source footprint.
     """
     if not transform_str or not transform_str.strip():
         return [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
     parts = transform_str.strip().split()
     if len(parts) != 12:
-        return [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        raise MergedWriteError("Source component transform must contain 12 numbers")
     try:
-        return [float(p) for p in parts]
-    except ValueError:
-        return [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        values = [float(p) for p in parts]
+    except ValueError as exc:
+        raise MergedWriteError("Source component transform contains a non-numeric value") from exc
+    if not all(math.isfinite(value) for value in values):
+        raise MergedWriteError("Source component transform must contain finite values")
+    return values
 
 
 def _apply_transform_xyz(
     matrix: list[float], vx: float, vy: float, vz: float
 ) -> tuple[float, float, float]:
-    """Apply a 3x4 row-major affine transform and return all coordinates."""
+    """Apply a 3MF row-vector affine transform and return all coordinates."""
 
     m = matrix
     return (
-        m[0] * vx + m[1] * vy + m[2] * vz + m[9],
-        m[3] * vx + m[4] * vy + m[5] * vz + m[10],
-        m[6] * vx + m[7] * vy + m[8] * vz + m[11],
+        m[0] * vx + m[3] * vy + m[6] * vz + m[9],
+        m[1] * vx + m[4] * vy + m[7] * vz + m[10],
+        m[2] * vx + m[5] * vy + m[8] * vz + m[11],
     )
 
 
@@ -518,16 +523,16 @@ def _parse_source_assembly(
                     if tz > max_z:
                         max_z = tz
             if (
-                min_x == float("inf")
-                or min_y == float("inf")
-                or max_x == float("-inf")
-                or max_y == float("-inf")
-                or min_z == float("inf")
-                or max_z == float("-inf")
+                not all(math.isfinite(value) for value in (
+                    min_x, min_y, max_x, max_y, min_z, max_z,
+                ))
+                or max_x <= min_x
+                or max_y <= min_y
+                or not math.isfinite(max_x - min_x)
+                or not math.isfinite(max_y - min_y)
             ):
                 raise MergedWriteError(
-                    f"MergedItem[{item_idx}].source_3mf_path has no vertices to "
-                    "compute XY bbox"
+                    f"MergedItem[{item_idx}].source_3mf_path has no finite positive XY footprint"
                 )
 
             metadata_parts = {
@@ -582,6 +587,25 @@ def _parse_source_assembly(
         raise MergedWriteError(
             f"MergedItem[{item_idx}].source_3mf_path has invalid XML: {exc}"
         ) from exc
+
+
+def read_merge_source_info(
+    source_3mf_path: str | Path, *, metadata_target: MetadataTarget | None = None,
+) -> tuple[tuple[float, float], list[dict[str, Any]]]:
+    """Read batch footprint and material identities from the merge source.
+
+    Include every exported component under its component transform, matching
+    the merger's minimum-corner placement. The original build placement is
+    replaced during merge and therefore does not affect this footprint.
+    """
+    path = Path(source_3mf_path)
+    assembly = _parse_source_assembly(
+        0, MergedItem(path.name, path, (), 0.0, 0.0), metadata_target=metadata_target,
+    )
+    return (
+        (assembly.max_x - assembly.min_x, assembly.max_y - assembly.min_y),
+        assembly.source_metadata["slots"],
+    )
 
 
 def _parse_xml_bytes(payload: bytes) -> ET.Element:

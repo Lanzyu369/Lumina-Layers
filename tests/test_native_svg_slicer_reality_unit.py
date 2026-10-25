@@ -8,6 +8,8 @@ import subprocess
 import sys
 import zipfile
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "verify_native_svg_slicer_outputs.py"
@@ -135,6 +137,91 @@ def test_toolpath_metrics_keeps_absolute_e_global_across_tool_changes() -> None:
     assert metrics["positive_extrusion_tool_ids"] == [0, 1]
 
 
+def test_coverage_probe_rejects_an_empty_interior_despite_material_extrusion() -> None:
+    from scripts.verify_native_svg_slicer_outputs import _toolpath_metrics
+
+    probe = {"x_mm": 5, "y_mm": 5, "z_mm": 0.08, "max_distance_mm": 0.12}
+    wall_only = (
+        b"G90\nM83\nG1 X0 Y0 Z0.08\n; FEATURE: Outer wall\n"
+        b"G1 X10 Y0 E1\nG1 X10 Y10 E1\nG1 X0 Y10 E1\nG1 X0 Y0 E1\n"
+    )
+    missing = _toolpath_metrics(wall_only, coverage_probes=[probe])
+    filled = _toolpath_metrics(
+        wall_only + b"; FEATURE: Internal solid infill\nG1 X0 Y5\nG1 X10 Y5 E1\n",
+        coverage_probes=[probe],
+    )
+
+    assert missing["extrusion_move_count"] > 0
+    assert missing["coverage"][0]["covered"] is False
+    assert missing["coverage"][0]["nearest_mm"] == pytest.approx(5)
+    assert filled["coverage"][0]["covered"] is True
+
+
+def test_coverage_probe_requires_the_requested_layer_and_material() -> None:
+    from scripts.verify_native_svg_slicer_outputs import _toolpath_metrics
+
+    probe = {
+        "x_mm": 5, "y_mm": 5, "z_mm": 0.16,
+        "max_distance_mm": 0.12, "tool_id": 1,
+    }
+    wrong = (
+        b"G90\nM83\nG1 X0 Y5 Z0.08\n; FEATURE: Internal solid infill\n"
+        b"T1\nG1 X10 E1\nG1 X0 Z0.16\nT0\nG1 X10 E1\n"
+        b"; FEATURE: Prime tower\nT1\nG1 X0 E1\n"
+    )
+    assert not _toolpath_metrics(wrong, coverage_probes=[probe])["coverage"][0]["covered"]
+    right = wrong + b"; FEATURE: Internal solid infill\nG1 X10 E1\n"
+    assert _toolpath_metrics(right, coverage_probes=[probe])["coverage"][0]["covered"]
+
+
+@pytest.mark.parametrize("command,y", [(b"G2", 1.0), (b"G3", -1.0)])
+def test_coverage_probe_measures_arcs_instead_of_their_chords(
+    command: bytes, y: float,
+) -> None:
+    from scripts.verify_native_svg_slicer_outputs import _toolpath_metrics
+
+    metrics = _toolpath_metrics(
+        b"G90\nM83\nG1 X-1 Y0 Z0.08\n; FEATURE: Outer wall\n"
+        + command + b" X1 Y0 I1 J0 E1\n",
+        coverage_probes=[
+            {"x_mm": 0, "y_mm": y, "z_mm": 0.08, "max_distance_mm": 0.01},
+            {"x_mm": 0, "y_mm": 0, "z_mm": 0.08, "max_distance_mm": 0.01},
+        ],
+    )
+
+    assert [item["covered"] for item in metrics["coverage"]] == [True, False]
+
+
+def test_coverage_probe_tracks_relative_z_and_full_circle_extrusion() -> None:
+    from scripts.verify_native_svg_slicer_outputs import _toolpath_metrics
+
+    metrics = _toolpath_metrics(
+        b"G90\nM83\nG1 X-1 Y0 Z0.08\nG91\nG1 Z0.08\n"
+        b"; FEATURE: Outer wall\nG2 I1 J0 E1\n",
+        coverage_probes=[
+            {"x_mm": 0, "y_mm": 1, "z_mm": z, "max_distance_mm": 0.01}
+            for z in (0.08, 0.16)
+        ],
+    )
+
+    assert metrics["extrusion_move_count"] == 1
+    assert [item["covered"] for item in metrics["coverage"]] == [False, True]
+
+
+def test_coverage_probe_rejects_a_move_between_layers() -> None:
+    from scripts.verify_native_svg_slicer_outputs import _toolpath_metrics
+
+    metrics = _toolpath_metrics(
+        b"G90\nM83\nG1 X0 Y0 Z0.08\n; FEATURE: Outer wall\n"
+        b"G1 X10 Y0 Z0.16 E1\n",
+        coverage_probes=[
+            {"x_mm": 5, "y_mm": 0, "z_mm": 0.16, "max_distance_mm": 0.01},
+        ],
+    )
+
+    assert metrics["coverage"][0]["covered"] is False
+
+
 def test_slicer_command_treats_allow_newer_file_as_a_flag(
     tmp_path: Path,
 ) -> None:
@@ -242,6 +329,38 @@ def test_slicer_validation_requires_positive_extrusion_for_every_material(
     assert result["status"] == "failed"
     assert result["reason"] == "toolpath_missing_material_extrusion"
     assert result["runs"][0]["missing_expected_tool_ids"] == [1]
+
+
+def test_slicer_validation_fails_when_a_printable_region_has_no_toolpath(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from scripts import verify_native_svg_slicer_outputs as reality
+
+    project = tmp_path / "fixture.3mf"
+    _write_minimal_3mf(project)
+    executable = tmp_path / "slicer"
+    executable.touch()
+
+    def fake_run_command(command, *, timeout_seconds, cwd=None):
+        if "--help" in command:
+            return 0, "BambuStudio-test:\n", "", 0.01
+        (cwd / "plate_1.gcode").write_text(
+            "G90\nM83\nG1 X0 Y0 Z0.08\n; FEATURE: Outer wall\nG1 X10 E1\n",
+            encoding="utf-8",
+        )
+        return 0, "", "", 0.01
+
+    monkeypatch.setattr(reality, "_run_command", fake_run_command)
+    result = reality._validate_slicer(
+        "BambuStudio", executable, project, tmp_path / "toolpaths",
+        timeout_seconds=10,
+        coverage_probes=[
+            {"x_mm": 5, "y_mm": 5, "z_mm": 0.08, "max_distance_mm": 0.12},
+        ],
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "toolpath_missing_region_extrusion"
 
 
 def test_cli_reports_missing_slicers_as_unavailable_not_passed(

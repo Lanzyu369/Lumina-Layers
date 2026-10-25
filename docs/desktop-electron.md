@@ -19,9 +19,9 @@ Windows ARM、32 位或 free-threaded Python 尚无完整应用所需的 wheel �
 
 3MF 导出链路使用两个独立依赖：
 
-- 元数据 SDK：`fatcat-metadata==0.1.1`，Python 导入名为 `fatcat_metadata`。
+- 元数据 SDK：`fatcat-metadata==0.1.2`，Python 导入名为 `fatcat_metadata`。
   requirements 自动从
-  [PyPI 0.1.1](https://pypi.org/project/fatcat-metadata/0.1.1/) 选择预编译包。
+  [PyPI 0.1.2](https://pypi.org/project/fatcat-metadata/0.1.2/) 选择预编译包。
   Lumina 使用公共 SDK，不再应用 FatCat 补丁或添加 `+lumina.1` 版本后缀。
 - 写包库：`neroued-3mf==0.4.0+fatcat.production.1`，由
   [公开 fork 的 GitHub Release](https://github.com/MOVIBALE/neroued_3mf/releases/tag/fatcat-production-1)
@@ -44,10 +44,10 @@ python -m pip install -r requirements.txt
 已有实验环境含旧版 `lumina-3mf-metadata-cpp` 或本地同版本构建时，建议重新创建
 虚拟环境，避免共享包文件或旧依赖混入；这不是首次安装步骤。
 
-如果之前安装过版本同为 `0.1.1` 的审核候选包，需替换成正式 PyPI 构建：
+如果之前安装过版本同为 `0.1.2` 的审核候选包，需替换成正式 PyPI 构建：
 
 ```bash
-python -m pip install --force-reinstall --no-cache-dir --only-binary=:all: fatcat-metadata==0.1.1
+python -m pip install --force-reinstall --no-cache-dir --only-binary=:all: fatcat-metadata==0.1.2
 ```
 
 ### 维护者从源码构建
@@ -55,8 +55,8 @@ python -m pip install --force-reinstall --no-cache-dir --only-binary=:all: fatca
 来源提交、仓库和版本由 `scripts/fatcat_packaging_contract.py`
 统一维护。FatCat 来自公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata)，固定
-完整提交 `86a199c20e0277b519e1acbca6ea0d9a5ec5fbb1`。构建脚本从其根目录
-的 `pyproject.toml` 构建 `0.1.1` wheel，无需进入 `cpp/`，不会修改 SDK 源码。
+完整提交 `acdf8abdf00560759ecdf660eb080bb2083fd5bb`。构建脚本从其根目录
+的 `pyproject.toml` 构建 `0.1.2` wheel，无需进入 `cpp/`，不会修改 SDK 源码。
 以下仅供维护者准备发行包或进行原生开发，普通源码运行
 跳过本节。它需要 Git、CMake 和 C++20 编译器（FatCat 本身使用 C++17）。
 
@@ -67,7 +67,7 @@ Lumina 不再保存或应用 writer 补丁。上游合并并正式发布后，�
 
 ```powershell
 git clone https://github.com/MOVIBALE/fatcat-metadata ..\fatcat-metadata
-git -C ..\fatcat-metadata checkout 86a199c20e0277b519e1acbca6ea0d9a5ec5fbb1
+git -C ..\fatcat-metadata checkout acdf8abdf00560759ecdf660eb080bb2083fd5bb
 git clone https://github.com/MOVIBALE/neroued_3mf.git ..\neroued-3mf
 git -C ..\neroued-3mf checkout a6043434d6cd9a2a76553ffdcdf0dda081d9b19c
 
@@ -86,7 +86,7 @@ python scripts/build_3mf_native_wheels.py `
 生成目录仅受控更新原生 wheel，其他文件保留。完成后再安装
 `requirements.txt` 中的其余应用依赖。
 
-SVG 运行时固定使用独立项目发布的 `lumina-svg-core==0.3.3`（AGPLv3）。
+SVG 运行时固定使用独立项目发布的 `lumina-svg-core==0.3.4`（AGPLv3）。
 `requirements-native-svg.txt` 会从公开 PyPI 选择匹配 Python、系统和架构的安装包。
 支持 Python 3.12～3.14；Linux x86-64 要求 glibc 2.28+，Mac 的 Python 3.12/3.13
 安装包要求 macOS 12+，3.14 要求 macOS 14+。完整 Lumina 应用仍要求 macOS 14+，

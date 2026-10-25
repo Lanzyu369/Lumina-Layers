@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - exercised through import isolation
         return lambda function: function
 
 from core.mesh_export_parts import MeshExportPartRange, set_mesh_export_part_ranges
+from core.layered_z import map_doubled_layer_z, validate_layer_z_edges
 
 
 _CUBOID_FACE_TEMPLATE = np.asarray(
@@ -301,6 +302,17 @@ class _LatticeFloat32Audit:
         self.source_contact_normalized_edge_count += (
             other.source_contact_normalized_edge_count
         )
+
+    def exact_coordinates(self, vertices: np.ndarray) -> np.ndarray:
+        """Recover audited compact coordinates before mapping a physical Z schedule."""
+        exact = np.rint(vertices.astype(np.float64) * 2).astype(np.int64)
+        if self._unsafe_float32_coordinates:
+            bits = np.ascontiguousarray(vertices).view(np.uint32)
+            unsafe = np.any(np.abs(exact) >= self._MAX_EXACT_DOUBLED_COORDINATE, axis=1)
+            for index in np.flatnonzero(unsafe):
+                key = tuple(int(value) for value in bits[index])
+                exact[index] = self._unsafe_float32_coordinates.get(key, tuple(exact[index]))
+        return exact
 
 
 class _DiagonalContactNormalizationRequired(ValueError):
@@ -1670,6 +1682,7 @@ def _shifted_slices(
 def _count_source_contacts(
     selected: np.ndarray,
     component_labels: np.ndarray,
+    layer_widths: np.ndarray | None = None,
 ) -> tuple[int, int]:
     """Count edge/point contacts between distinct six-connected components."""
 
@@ -1689,12 +1702,53 @@ def _count_source_contacts(
                 source, target = _shifted_slices(selected.shape, offset)
                 touching = selected[source] & selected[target]
                 touching &= component_labels[source] != component_labels[target]
-                pair_count = int(np.count_nonzero(touching))
+                if layer_widths is not None and dz == 0:
+                    counts = np.count_nonzero(touching, axis=(1, 2))
+                    pair_count = sum(int(count) * int(width) for count, width in zip(counts, layer_widths))
+                else:
+                    pair_count = int(np.count_nonzero(touching))
                 if nonzero_axes == 2:
                     edge_pairs += pair_count
                 else:
                     point_pairs += pair_count
+    if layer_widths is not None:
+        # Consecutive physical layers inside a repeated plane are absent from
+        # the compact array. Their diagonal contacts still belong to the source.
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                nonzero_axes = 1 + int(dy != 0) + int(dx != 0)
+                if nonzero_axes not in {2, 3}:
+                    continue
+                if abs(dy) >= selected.shape[1] or abs(dx) >= selected.shape[2]:
+                    continue
+                source, target = _shifted_slices(selected.shape, (0, dy, dx))
+                touching = selected[source] & selected[target]
+                touching &= component_labels[source] != component_labels[target]
+                counts = np.count_nonzero(touching, axis=(1, 2))
+                pairs = sum(int(count) * (int(width) - 1) for count, width in zip(counts, layer_widths))
+                if nonzero_axes == 2:
+                    edge_pairs += pairs
+                else:
+                    point_pairs += pairs
     return edge_pairs, point_pairs
+
+
+def _weighted_exposed_face_count(selected: np.ndarray, widths: np.ndarray) -> int:
+    """Count physical unit faces without expanding repeated planes."""
+    xy_counts = (
+        np.count_nonzero(selected[:, :, 0], axis=1)
+        + np.count_nonzero(selected[:, :, -1], axis=1)
+        + np.count_nonzero(selected[:, 0, :], axis=1)
+        + np.count_nonzero(selected[:, -1, :], axis=1)
+        + np.count_nonzero(selected[:, :, 1:] != selected[:, :, :-1], axis=(1, 2))
+        + np.count_nonzero(selected[:, 1:, :] != selected[:, :-1, :], axis=(1, 2))
+    )
+    return (
+        sum(int(count) * int(width) for count, width in zip(xy_counts, widths))
+        + int(np.count_nonzero(selected[0]))
+        + int(np.count_nonzero(selected[-1]))
+        + int(np.count_nonzero(selected[1:] != selected[:-1]))
+    )
 
 
 def build_labeled_surface_mesh(
@@ -1703,6 +1757,7 @@ def build_labeled_surface_mesh(
     material_id: int,
     height_px: int,
     policy: LayeredMeshPolicy | None = None,
+    z_edges: np.ndarray | None = None,
 ) -> trimesh.Trimesh | None:
     """Build one exact closed material surface from a Z/Y/X label volume.
     从 Z/Y/X 标签体构建一个精确闭合的材料表面。
@@ -1714,6 +1769,9 @@ def build_labeled_surface_mesh(
         height_px: Source image height used for the Y-axis flip.
             用于翻转 Y 轴的源图高度。
         policy: Optional validation policy. 可选的验证策略。
+        z_edges: Optional Z+1 strictly increasing integer layer boundaries,
+            starting at zero. Each label plane fills its complete interval;
+            omitted boundaries give the original dense unit-layer behavior.
 
     Returns:
         A closed indexed mesh, or ``None`` when the material is absent.
@@ -1723,12 +1781,24 @@ def build_labeled_surface_mesh(
     volume = np.asarray(labels)
     if volume.ndim != 3:
         raise ValueError("labels must have shape (Z, Y, X)")
+    physical_z_edges = (
+        validate_layer_z_edges(z_edges, volume.shape[0]) if z_edges is not None else None
+    )
+    layer_widths = np.diff(physical_z_edges) if physical_z_edges is not None else None
     if int(height_px) != height_px or int(height_px) < volume.shape[1]:
         raise ValueError("height_px must be an integer covering the label rows")
     selected = volume == material_id
     voxel_count = int(np.count_nonzero(selected))
     if voxel_count == 0:
         return None
+    logical_voxel_count = (
+        sum(int(count) * int(width) for count, width in zip(
+            np.count_nonzero(selected, axis=(1, 2)), layer_widths,
+        )) if layer_widths is not None else voxel_count
+    )
+    logical_exposed_count = (
+        _weighted_exposed_face_count(selected, layer_widths) if layer_widths is not None else None
+    )
     component_labels, component_count = ndimage.label(
         selected,
         structure=ndimage.generate_binary_structure(3, 1),
@@ -1736,6 +1806,7 @@ def build_labeled_surface_mesh(
     source_edge_contacts, source_point_contacts = _count_source_contacts(
         selected,
         component_labels,
+        layer_widths,
     )
     effective_policy = policy or LayeredMeshPolicy()
     lattice_audit = _LatticeFloat32Audit()
@@ -2035,6 +2106,17 @@ def build_labeled_surface_mesh(
     vertex_chunks.clear()
     face_chunks.clear()
 
+    if physical_z_edges is not None:
+        # Component templates and all connectivity operations stay in the same
+        # compact index domain. Map only after their global positions are known.
+        exact_coordinates = lattice_audit.exact_coordinates(lattice_vertices)
+        exact_coordinates[:, 2] = map_doubled_layer_z(exact_coordinates[:, 2], physical_z_edges)
+        lattice_vertices = exact_coordinates.astype(np.float32) * np.float32(0.5)
+        _LatticeFloat32Audit().observe(exact_coordinates, lattice_vertices)
+        del exact_coordinates
+        if effective_policy.validate_output:
+            _validate_component_arrays(lattice_vertices, lattice_faces, expected_volume=logical_voxel_count)
+
     lattice_float32_bytes = int(lattice_vertices.nbytes + lattice_faces.nbytes)
     lattice_vertex_count = len(lattice_vertices)
     lattice_face_count = len(lattice_faces)
@@ -2048,9 +2130,9 @@ def build_labeled_surface_mesh(
     materialized_bytes = int(mesh.vertices.nbytes + mesh.faces.nbytes)
 
     stats = LayeredMeshStats(
-        source_voxel_count=voxel_count,
+        source_voxel_count=logical_voxel_count,
         component_count=int(component_count),
-        exposed_unit_face_count=exposed_count,
+        exposed_unit_face_count=(logical_exposed_count if logical_exposed_count is not None else exposed_count),
         merged_patch_count=merged_patch_count,
         component_chunk_count=component_chunk_count,
         peak_component_patch_count=peak_component_patch_count,

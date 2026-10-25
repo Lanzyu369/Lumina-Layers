@@ -4,6 +4,37 @@
  * Contains all zh/en translation key-value pairs
  */
 export const translations: Record<string, Record<"zh" | "en", string>> = {
+  conversion_preset_inline_label: { zh: "预设", en: "Preset" },
+  conversion_preset_project: { zh: "当前项目参数", en: "Current project settings" },
+  conversion_preset_invalid_name: { zh: "请输入 1–40 个字符的名称", en: "Enter a name with 1–40 characters" },
+  conversion_preset_missing: { zh: "此预设已不存在，请重新选择", en: "This preset no longer exists. Please select another." },
+  conversion_preset_last: { zh: "上次使用", en: "Last used" },
+  conversion_preset_save: { zh: "保存为预设", en: "Save as preset" },
+  conversion_preset_modified: { zh: "已修改", en: "Modified" },
+  conversion_preset_update: { zh: "更新预设", en: "Update preset" },
+  conversion_preset_dirty_hint: { zh: "本次修改不会覆盖原预设", en: "Changes do not overwrite the saved preset" },
+  conversion_preset_title: { zh: "保存为参数预设", en: "Save parameter preset" },
+  conversion_preset_description: { zh: "给这套设置起个名字，下次一键套用。", en: "Name these settings to reuse them next time." },
+  conversion_preset_name: { zh: "预设名称", en: "Preset name" },
+  conversion_preset_name_hint: { zh: "例如：日常单面板画", en: "e.g. Everyday single-sided art" },
+  conversion_preset_duplicate: { zh: "已有同名预设，请换一个名称", en: "A preset with this name already exists" },
+  conversion_preset_scope: { zh: "保存来源类型、结构、尺寸、底板、叠层及涂层参数；不包含图片和局部编辑。", en: "Saves source type, structure, size, backing, layers and coating; excludes images and local edits." },
+  conversion_preset_cancel: { zh: "取消", en: "Cancel" },
+  conversion_preset_confirm: { zh: "保存预设", en: "Save preset" },
+  conversion_preset_material: { zh: "耗材档案", en: "Material archive" },
+  conversion_preset_lut: { zh: "传统 LUT", en: "Traditional LUT" },
+  conversion_preset_single: { zh: "单面", en: "Single-sided" },
+  conversion_preset_double: { zh: "双面", en: "Double-sided" },
+  conversion_preset_width: { zh: "宽", en: "Width" },
+  conversion_preset_height: { zh: "高", en: "Height" },
+  conversion_preset_rename: { zh: "重命名当前预设", en: "Rename current preset" },
+  conversion_preset_delete: { zh: "删除当前预设", en: "Delete current preset" },
+  conversion_preset_delete_hint: { zh: "删除“{name}”？当前正在使用的参数会保留。", en: "Delete “{name}”? Your current parameters will be kept." },
+  conversion_preset_layers: { zh: "层", en: "layers" },
+  conversion_preset_dynamic: { zh: "动态最多", en: "Up to" },
+  conversion_preset_fixed: { zh: "固定", en: "Fixed" },
+  conversion_preset_coating_on: { zh: "涂层开启", en: "Coating on" },
+  conversion_preset_coating_off: { zh: "涂层关闭", en: "Coating off" },
   recipe_export_wait_edits: {
     zh: "编辑或选区仍在提交，请等待完成或同步编辑状态后再保存。",
     en: "An edit or selection is still being committed. Wait for it to finish or synchronize the editor before saving.",
@@ -2561,6 +2592,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "拼图模式开启时，大画幅模式会被禁用。",
     en: "Large Format is disabled while puzzle mode is enabled.",
   },
+  model_surface_large_format_disabled_hint: {
+    zh: "模型贴图开启时，大画幅模式会被禁用。",
+    en: "Large Format is disabled while model texture is enabled.",
+  },
+  large_format_model_surface_conflict: {
+    zh: "大画幅模式不支持模型贴图：切片只会按平面图片和普通尺寸生成，不包含上传的模型。请关闭大画幅模式或模型贴图后再生成。",
+    en: "Large Format does not support model texture: tiles would be cut from the flat image at the ordinary size, without the uploaded model. Turn off Large Format or model texture, then generate again.",
+  },
   puzzle_loop_disabled_hint: {
     zh: "拼图模式开启时，挂件环会被禁用。",
     en: "Keychain Loop is disabled while puzzle mode is enabled.",
@@ -4913,8 +4952,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Source Type",
   },
   basic_source_version_hint: {
-    zh: "选择配色数据从哪里来：\n• 传统 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 反推LUT：由品牌耗材数据推算出来，不需要自己打印色卡。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。",
-    en: "Choose where the color data comes from:\n• Legacy LUT: data measured from actually printed color charts — most reliable.\n• Inferred LUT: computed from brand filament data, no printed chart needed.\n• Material Archive: freely combine materials you created in Material Extraction.",
+    zh: "选择配色数据从哪里来：\n• 传统 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。",
+    en: "Choose where the color data comes from:\n• Legacy LUT: data measured from actually printed color charts — most reliable.\n• Material Archive: freely combine materials you created in Material Extraction.",
   },
   basic_source_version_legacy: {
     zh: "传统 LUT",
@@ -5959,21 +5998,13 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   adv_backing_output_separate: { zh: "独立分盘工程（ZIP）", en: "Independent plate projects (ZIP)" },
   adv_backing_output_hint: { zh: "保留原尺寸，模型和背板各输出一个 3MF。解压后分别打开切片，检查模型、底边（brim）和擦料塔的位置。", en: "Keeps the original size and writes one 3MF each for the model and backing. Unzip and slice each project separately, checking the model, brim and wipe tower positions." },
   adv_backing_output_unavailable: { zh: "独立背板工程用于单面、无浮雕的单模型导出。当前模式请使用同一工程或现有分块输出。", en: "Independent backing projects support a single-sided model without relief. Use the same project or the existing tile workflow for this mode." },
-  coating_material: { zh: "涂层耗材", en: "Coating material" },
-  coating_material_choose: { zh: "请选择实际使用的耗材", en: "Choose the actual filament" },
-  coating_material_palette: { zh: "当前模型耗材", en: "Current model materials" },
-  coating_material_archive: { zh: "独立耗材档案", en: "Independent material archive" },
-  coating_material_retry: { zh: "重试", en: "Retry" },
-  coating_material_load_failed: { zh: "耗材档案加载失败，已有选择保留。", en: "Could not load material archives. Your existing selection is retained." },
-  coating_material_hint: { zh: "涂层使用你选择的实际耗材。生成前会检查原生耗材预设和板型兼容性。", en: "The coating uses your selected filament. Native presets and build-plate compatibility are checked before generation." },
-  coating_material_mixed: { zh: "涂层与模型包含不同材料类型。请确认它们适合共同打印；将保留各自原生温度和流量，不自动替换材料。", en: "The coating and model use different material types. Confirm they can print together; each retains its native temperature and flow settings." },
   coating_enable: {
     zh: "启用透明镀层",
     en: "Enable Transparent Coating",
   },
   coating_enable_hint: {
-    zh: "在作品表面增加一层可用透明耗材打印的保护层。",
-    en: "Adds a surface layer intended to be printed with transparent filament.",
+    zh: "在作品表面增加透明耗材保护层。材质跟随模型耗材，混合材质默认使用 PLA。",
+    en: "Adds a protective layer for transparent filament. Follows the model material type; mixed types default to PLA.",
   },
   coating_height: {
     zh: "透明镀层高度",
@@ -8035,6 +8066,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_import_lut_missing: {
     zh: "LUT 未找到，请手动选择兼容的 LUT",
     en: "LUT not found, please select a compatible LUT manually",
+  },
+  recipe_import_predictive_lut_unavailable: {
+    zh: "此项目使用当前暂不可用的反推 LUT。请改用传统 LUT 或耗材档案。",
+    en: "This project uses an inferred LUT, which is currently unavailable. Use a legacy LUT or material archive instead.",
   },
   recipe_import_lut_degraded: {
     zh: "原 LUT 记录未找到，已按名称与颜色模式匹配，请确认选中了预期 LUT。",

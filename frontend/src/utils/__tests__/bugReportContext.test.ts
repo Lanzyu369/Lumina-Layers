@@ -389,16 +389,17 @@ describe("collectBugReportContext", () => {
     expect(context.material_backing_material_dir_name).toBe("brand/white");
   });
 
-  it("includes an independent coating archive in reproducible source attachments", () => {
-    useConverterStore.setState({ source_version: "legacy", enable_coating: true,
-      coatingMaterial: { source: "material_archive", key: "brand/clear-petg" } });
+  it("captures automatic coating with its source materials and thickness", () => {
+    useConverterStore.setState({ source_version: "material", enable_coating: true,
+      coating_height_mm: 0.12, selectedMaterialDirNames: ["brand/red", "brand/white"],
+      materialBackingMaterialDirName: "brand/white" });
     useWidgetStore.setState({ activeTab: "converter" });
 
     const context = collectBugReportContext();
 
-    expect(context.source_material_dir_names).toContain("brand/clear-petg");
-    expect((context.advanced_params as AdvancedParamsFull).coating?.coating_material).toEqual({
-      source: "material_archive", key: "brand/clear-petg",
+    expect(context.source_material_dir_names).toEqual(["brand/red", "brand/white"]);
+    expect((context.advanced_params as AdvancedParamsFull).coating).toEqual({
+      enable_coating: true, coating_height_mm: 0.12,
     });
   });
 

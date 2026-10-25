@@ -114,7 +114,7 @@ import {
 import { lutErrorToVisibleMessage } from "../lutErrorMessages";
 import { registerPrinterBedLabelSynchronizer } from "../printerBedLabelSync";
 import { useSettingsStore } from "../settingsStore";
-import { loadCoatingMaterial, persistCoatingMaterial } from "./coatingMaterial";
+import { createConversionPresetActions } from "./conversionPresetActions";
 import {
   newestEditorContentRevision
 } from "./editorRevision";
@@ -122,7 +122,7 @@ import {
   buildCurrentVisibleColorRemapMap,buildSourceChangeProjectColorState,chooseLastSelectedColor,clonePortableProjectColorState,cloneRecipeOverrides,cloneRemapHistory,cloneReplacementRegions,colorRemapFromReplacementRegions,createAdjustmentSnapshot,editorCommitResultStateFromResponse,EMPTY_LUT_MATCH_STATE,getPreviewBaseUrl,hasAdjustmentState,historyFlagsFromResponse,INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,matchesColorHighlightSnapshot,normalizeHexNoHash,normalizeReplacementRegionsFromHistory,selectionModeForTool,selectionStateFromDocument,selectionToolForLegacyMode,toggleHexInSet,
 } from "./editorState";
 import {
-  createGenerationActions,getElapsedMsSince,getErrorType,invalidateGenerationRequests,notifyCompletion,
+  CONVERTER_ERROR_KEYS,createGenerationActions,getElapsedMsSince,getErrorType,invalidateGenerationRequests,notifyCompletion,
 } from "./generationActions";
 import {
   buildLutCatalogIndex,
@@ -1767,6 +1767,8 @@ export const DEFAULT_STATE: ConverterState = {
   imageFile: null,
   imagePreviewUrl: null,
   aspectRatio: null,
+  preferredSizeAxis: "width",
+  conversionParameterContext: "defaults",
   workshopSource: null,
   modelSurfaceEnabled: false,
   modelSurfaceFile: null,
@@ -1850,7 +1852,6 @@ export const DEFAULT_STATE: ConverterState = {
   wire_height_mm: 0.4,
   enable_coating: false,
   coating_height_mm: 0.08,
-  coatingMaterial: loadCoatingMaterial(),
   largeFormatEnabled: false,
   tileWidthMm: 250,
   tileHeightMm: 250,
@@ -2062,6 +2063,12 @@ function _cancelPreviewWork(): void {
 
 // ========== Store ==========
 
+function restoreConversionDefaultsForNewSource(): void {
+  const current = useConverterStore.getState();
+  if (current.conversionParameterContext !== "project") return;
+  current.restoreConversionDefaults();
+}
+
 export const useConverterStore = create<ConverterState & ConverterActions>()(
   subscribeWithSelector((set, _get) => ({
     ...DEFAULT_STATE,
@@ -2073,9 +2080,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       refreshConfirmedEditorContentRevision,
     }),
     ...createDerivedPreviewActions(set, _get),
+    ...createConversionPresetActions(set, _get),
 
     // --- 图片 ---
     setImageFile: (file: File | null) => {
+      const currentFile = _get().imageFile;
+      // Rotations and other derived images still belong to the current project.
+      // Restore daily defaults only when the underlying source is replaced or cleared.
+      if (!file || !currentFile || resolveSourceFile(file) !== resolveSourceFile(currentFile)) {
+        restoreConversionDefaultsForNewSource();
+      }
       _cancelPreviewWork();
 
       // Revoke previous blob URL to avoid memory leaks
@@ -2200,6 +2214,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     loadVectorizedSvgIntoConverter: (file: File) => {
+      restoreConversionDefaultsForNewSource();
       _cancelPreviewWork();
 
       const currentState = _get();
@@ -2261,6 +2276,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       targetHeightMm,
       source,
     }) => {
+      restoreConversionDefaultsForNewSource();
       _cancelPreviewWork();
 
       const currentState = _get();
@@ -3071,6 +3087,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             )
           : state.fridge_magnets;
         return {
+          preferredSizeAxis: "width",
           ...buildSvgHoleCompensationResizeState(state, dimensions),
           ...dimensions,
           fridge_magnets: fridgeMagnets,
@@ -3093,6 +3110,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             }
           : { target_height_mm: clamped };
         return {
+          preferredSizeAxis: "height",
           ...buildSvgHoleCompensationResizeState(state, dimensions),
           ...dimensions,
           fridge_magnets:
@@ -3618,12 +3636,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     setCoatingHeightMm: (height: number) => {
       invalidateGeneratedArtifacts({ preservePreviews: true });
       set({ coating_height_mm: clampValue(height, 0.04, 0.12),
-        threemfDiskPath: null, downloadUrl: null });
-    },
-    setCoatingMaterial: (coatingMaterial) => {
-      invalidateGeneratedArtifacts({ preservePreviews: true });
-      persistCoatingMaterial(coatingMaterial);
-      set({ coatingMaterial, nativeMaterialSelection: null, nativeMaterialSelectionError: null,
         threemfDiskPath: null, downloadUrl: null });
     },
 
@@ -7427,6 +7439,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     addBatchFiles: (files: File[]) => {
       const valid = files.filter((f) => isValidImageType(f.type, f.name));
       if (valid.length === 0) return;
+      restoreConversionDefaultsForNewSource();
       set((state) => ({
         batchFiles: [...state.batchFiles, ...valid],
         workshopSource: null,
@@ -7975,6 +7988,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     submitFullPipeline: async () => {
       const state = _get();
 
+      // Refuse the unsupported pair before starting a preview that generation
+      // would reject anyway.
+      if (state.largeFormatEnabled && state.modelSurfaceEnabled) {
+        set({ error: CONVERTER_ERROR_KEYS.largeFormatModelSurfaceConflict });
+        return null;
+      }
+
       // 步骤 1：如果没有 sessionId，先执行预览
       if (!state.sessionId) {
         await _get().submitPreview();
@@ -8161,7 +8181,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       // 调色数据必须在 setImageFile 的同步重置之后再写回。
       const prevEnableCrop = _get().enableCrop;
       const restoredWorkshopSource = partial.workshopSource ?? null;
-      set({ enableCrop: false });
+      set({ enableCrop: false, conversionParameterContext: "restoring" });
       _get().setImageFile(imageFile);
 
       const baseState = _get();
@@ -8179,6 +8199,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         ...partial,
         modelBounds: null,
         ...fridgeMagnetState,
+        conversionParameterContext: "project",
         engraveBackLabels: false,
         enableCrop: prevEnableCrop,
       });
@@ -8200,7 +8221,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         workshopSource: restoredWorkshopSource,
       });
       persistSvgHoleCompensationSettings(svgHoleCompensationOptions(_get()));
-      persistCoatingMaterial(_get().coatingMaterial);
 
       // Restore the optional heightmap after all project state is in place.
       if (heightmapFile) {

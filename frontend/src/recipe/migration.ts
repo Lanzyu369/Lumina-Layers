@@ -9,7 +9,6 @@
 
 import type { LuminaRecipe } from "./types";
 import { DEFAULT_CONVERTER_RECIPE_PUZZLE, RECIPE_FORMAT, RECIPE_SCHEMA_VERSION } from "./types";
-import { readCoatingMaterialReference } from "../stores/converter/coatingMaterial";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -31,13 +30,9 @@ function validateConverterShape(recipe: Record<string, unknown>, version: number
     throw new Error("Invalid recipe: malformed puzzle section");
   }
   const base = converter.base as Record<string, unknown>;
-  const coating = converter.coating as Record<string, unknown>;
   const geometry = converter.geometry as Record<string, unknown>;
   if (geometry.backing_output !== undefined && geometry.backing_output !== "same_project" && geometry.backing_output !== "separate_project") {
     throw new Error("Invalid recipe: backing output mode");
-  }
-  if (coating.coating_material != null && !readCoatingMaterialReference(coating.coating_material)) {
-    throw new Error("Invalid recipe: coating material selection");
   }
   const device = converter.device as Record<string, unknown>;
   if (device.native_filament_profiles !== undefined && (

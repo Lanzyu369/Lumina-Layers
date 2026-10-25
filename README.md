@@ -105,6 +105,7 @@ These are physical prints made by Lumina users; colour counts follow the makers'
 | Reproduce colours and image detail | Choose high-fidelity, pixel, or SVG vector mode to suit the image. Crop, handle transparency, or vectorise a bitmap, then compare the colour result with the original and inspect it in 3D. |
 | Fix a colour you do not like | Select colours or a local region, replace colours, change recipes, and adjust gradients. Undo a change, or save a JSON project or PNG share card and carry on another day. |
 | Use your own filaments | Print and photograph gradient cards, then organise profiles and palettes in the material library. Fixed colour boards and existing LUT presets are still there. |
+| Reuse your conversion settings | Save the source type, filament combination, size, structure, layers, and coating settings as a preset for next time. Images and local edits belong in a JSON project or PNG share card. |
 | Make a keychain, fridge magnet, or similar piece | Add loops, magnet cavities, outlines, or transparent coating; choose single-sided, double-sided, relief, or cloisonné construction. Which options work together depends on the mode. |
 | Put artwork on an existing model | Open model-surface mode, select a planar face, and adjust the image's position, size, and angle before generating. |
 | Make a puzzle or a larger print | Use puzzle, large-format tiling, or batch conversion, arrange work for the selected printer bed, and export the projects. |
@@ -117,7 +118,7 @@ The interface has Chinese and English, plus light and dark themes. Use the previ
 1. **Prepare material profiles.** Import profiles that match the filaments you will use, or print and photograph gradient cards, then extract and save profiles in Material Extraction.
 2. **Choose your filament combination.** Set Source Type to Material Archive, select the filaments for this print, and set the number of colour layers and layer height.
 3. **Import an image or SVG.** Set its physical size and modelling mode, then create a preview.
-4. **Edit the result.** Compare it with the original, adjust local colours, recipes, and structure, and explicitly select a coating material if needed. Save a JSON project or PNG share card to continue later.
+4. **Edit the result.** Compare it with the original and adjust local colours, recipes, and structure. To add a transparent coating, enable it and set its thickness. Save a JSON project or PNG share card to continue later.
 5. **Select a printer and generate.** Choose the slicer, device, nozzle, and build plate in Settings, then download the 3MF or multi-plate ZIP.
 6. **Check it in the slicer.** Confirm filament slots, temperatures, layer height, wipe tower, and bed limits before slicing and printing.
 
@@ -208,7 +209,7 @@ Open the frontend address printed by the launcher, normally `http://localhost:41
 
 Source installs do not connect to an online material library by default. Local material profiles work offline. To connect a Registry you host or are authorized to use, configure its service URL separately; see the [Registry connection guide](docs/material-registry-connection.md).
 
-Requirements automatically install the native SVG, 3MF, and material-metadata dependencies. Ordinary source use needs no separate SDK checkout, local wheelhouse, internal commit checkout, or C++ compilation. If no matching wheel is found, check Python, OS, and architecture against the table above. See the [native dependency and desktop guide](docs/desktop-electron.md) for details.
+Requirements pin `lumina-svg-core==0.3.4` and `fatcat-metadata==0.1.2` and automatically install the native SVG, 3MF, and material-metadata packages. Ordinary source use needs no separate SDK checkout, local wheelhouse, internal commit checkout, or C++ compilation. If no matching wheel is found, check Python, OS, and architecture against the table above. The [SVG distribution guide](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.4/docs/DISTRIBUTIONS.md) describes that library's wheels; the complete app still requires the platforms listed above. See the [native dependency and desktop guide](docs/desktop-electron.md) for details.
 
 ### Optional: desktop window
 
@@ -223,7 +224,8 @@ The desktop window starts its own Python backend and frontend, so do not also ru
 
 ## One more look before printing
 
-- Check that the materials and layer height match your profile or preset. Transparent coating can use a palette material or a separate material profile; pay attention to compatibility warnings when mixing materials.
+- Check that the materials and layer height match your profile or preset. Transparent coating follows the model's material type; mixed or unknown types default to PLA. Confirm the actual transparent filament, temperatures, and compatibility warnings in the slicer before printing.
+- Model surface overlay currently cannot be exported together with large-format tiling; choose one of the two workflows.
 - If a large model's wipe tower or brim will not fit, Lumina keeps the warning and lets you download the project. You still need to arrange it in the slicer; a downloaded file has not necessarily been placed or sliced successfully.
 - Prusa export currently uses the **PrusaSlicer 3.0.0-alpha12** preview format. Check compatibility before using another version. Details are in [3MF export](docs/3mf-metadata-export.md).
 - Save a JSON project or PNG share card to continue editing later, and keep the original image, presets, and material profiles for important projects.

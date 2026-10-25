@@ -12,7 +12,7 @@ Unless a file or module carries a separate license, Lumina-Layers project-owned 
 
 Copyright remains with the respective authors and copyright holders. Existing contributor credits and third-party copyright and license notices must be retained.
 
-- The legacy source module under `native/lumina-svg-core` retains its independent Apache-2.0 license and package metadata. The installed runtime dependency `lumina-svg-core==0.3.3` is a separate AGPL-3.0-only release. Each distribution retains its own third-party licenses and notices.
+- The legacy source module under `native/lumina-svg-core` retains its independent Apache-2.0 license and package metadata. The installed runtime dependency `lumina-svg-core==0.3.4` is a separate AGPL-3.0-only release. Each distribution retains its own third-party licenses and notices.
 - GEOS retains its LGPL-2.1-or-later terms and modified-library notice. Other dependencies, SDKs, bundled assets and materials with separate terms retain those terms.
 - A commercial authorization covers only rights the development team is authorized to grant; it does not waive third-party obligations.
 
@@ -36,7 +36,7 @@ The AGPL-3.0-only licensing change is recorded by a new commit for Lumina Studio
 
 版权归各作者及实际版权人所有，应保留现有贡献者署名和第三方版权、许可证声明。
 
-- `native/lumina-svg-core` 中的旧源码模块保留独立的 Apache-2.0 许可证及包元数据；实际安装的运行依赖 `lumina-svg-core==0.3.3` 是独立的 AGPL-3.0-only 发行。两者各自的第三方许可证和声明继续适用。
+- `native/lumina-svg-core` 中的旧源码模块保留独立的 Apache-2.0 许可证及包元数据；实际安装的运行依赖 `lumina-svg-core==0.3.4` 是独立的 AGPL-3.0-only 发行。两者各自的第三方许可证和声明继续适用。
 - GEOS 保留 LGPL-2.1-or-later 条款及修改版声明。其他依赖、SDK、附带资源和材料如有独立条款，继续适用其原条款。
 - 商业授权仅覆盖开发组有权授予的权利，不豁免第三方义务。
 
