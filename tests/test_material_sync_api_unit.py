@@ -3213,6 +3213,7 @@ def test_material_sync_status_lists_installed_package_and_local_presence(
         "local_exists": True,
         "material_file_exists": True,
         "available_revisions": [],
+        "revision_history": [],
     }
 
 

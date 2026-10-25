@@ -127,6 +127,7 @@ interface StateOverrides {
 function buildVectorNoOutlineState(overrides: StateOverrides): ConverterState {
   return {
     ...DEFAULT_STATE,
+    source_version: "legacy",
     modeling_mode: ModelingMode.VECTOR,
     enable_outline: false,
     outline_width: overrides.outline_width,

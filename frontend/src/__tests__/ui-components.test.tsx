@@ -80,14 +80,16 @@ describe("Button", () => {
     expect(screen.getByText("Current")).toHaveClass("leading-none");
   });
 
-  it("shows an absolutely positioned spinner while keeping the label centered", () => {
+  it("centers the loading spinner while preserving the label footprint and accessible name", () => {
     render(<Button label="Current" onClick={() => {}} loading size="sm" />);
 
     const button = screen.getByRole("button", { name: "Current" });
-    const spinner = button.querySelector('[aria-hidden="true"]');
+    const spinner = button.querySelector('.animate-spin');
 
-    expect(spinner).toHaveClass("absolute");
-    expect(spinner).toHaveClass("animate-spin");
+    expect(spinner?.parentElement).toHaveClass("absolute", "inset-0", "items-center", "justify-center");
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByText("Current").closest('.invisible')).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByText("Current")).toHaveClass("whitespace-nowrap");
     expect(screen.getByText("Current")).toHaveClass("leading-none");
   });
