@@ -76,6 +76,9 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "尚未确认项目局部编辑的恢复结果，原项目数据已保留，请重新预览。",
     en: "The restored project edits could not be confirmed. Your project data is preserved; run preview again.",
   },
+  native_material_edit_button: { zh: "耗材配置…", en: "Filament settings…" },
+  native_material_edit_title: { zh: "耗材配置", en: "Filament settings" },
+  native_material_close: { zh: "关闭", en: "Close" },
   native_material_edit_description: {
     zh: "为每种材料选择切片软件中的耗材预设和兼容打印板。保存后用于下次生成，不会立即生成文件。",
     en: "Choose a slicer filament preset for each material and a compatible build plate. These choices will be saved for the next generation without generating a file now.",
