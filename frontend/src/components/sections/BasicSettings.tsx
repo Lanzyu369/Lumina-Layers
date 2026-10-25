@@ -1373,6 +1373,7 @@ export default function BasicSettings() {
                 max={dimensionLimits.width}
                 inputMax={dimInputMax}
                 step={dimensionSliderStep(target_width_mm)}
+                displayDecimals={1}
                 unit="mm"
                 onChange={setTargetWidthMm}
               />
@@ -1387,6 +1388,7 @@ export default function BasicSettings() {
                 max={dimensionLimits.height}
                 inputMax={dimInputMax}
                 step={dimensionSliderStep(target_height_mm)}
+                displayDecimals={1}
                 unit="mm"
                 onChange={setTargetHeightMm}
               />

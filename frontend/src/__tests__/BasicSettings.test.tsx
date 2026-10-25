@@ -352,26 +352,43 @@ describe("BasicSettings", () => {
     expect(useConverterStore.getState().target_width_mm).toBe(500);
   });
 
-  it("shows exact fractional workshop dimensions without changing integer defaults", () => {
+  it("shows one decimal place without rounding the stored dimensions on focus or confirmation", () => {
     useConverterStore.setState({
-      target_width_mm: 20.8,
-      target_height_mm: 62.4,
+      target_width_mm: 58.125,
+      target_height_mm: 201.6666667,
     });
 
     render(<BasicSettings />);
 
     expect(
       screen.getByRole("slider", { name: "宽度" }),
-    ).toHaveAttribute("step", "0.1");
+    ).toHaveAttribute("step", "0.001");
     expect(
       screen.getByRole("textbox", { name: "宽度 value" }),
-    ).toHaveValue("20.8");
+    ).toHaveValue("58.1");
     expect(
       screen.getByRole("slider", { name: "高度" }),
-    ).toHaveAttribute("step", "0.1");
+    ).toHaveAttribute("step", "0.001");
     expect(
       screen.getByRole("textbox", { name: "高度 value" }),
-    ).toHaveValue("62.4");
+    ).toHaveValue("201.7");
+
+    const widthInput = screen.getByRole("textbox", { name: "宽度 value" });
+    const heightInput = screen.getByRole("textbox", { name: "高度 value" });
+    fireEvent.focus(widthInput);
+    fireEvent.blur(widthInput);
+    fireEvent.focus(heightInput);
+    fireEvent.keyDown(heightInput, { key: "Enter" });
+    fireEvent.blur(heightInput);
+    expect(useConverterStore.getState()).toMatchObject({
+      target_width_mm: 58.125,
+      target_height_mm: 201.6666667,
+    });
+
+    fireEvent.focus(widthInput);
+    fireEvent.change(widthInput, { target: { value: "58.2" } });
+    fireEvent.blur(widthInput);
+    expect(useConverterStore.getState().target_width_mm).toBe(58.2);
 
     act(() => {
       useConverterStore.setState({
@@ -385,7 +402,7 @@ describe("BasicSettings", () => {
     ).toHaveAttribute("step", "1");
     expect(
       screen.getByRole("textbox", { name: "宽度 value" }),
-    ).toHaveValue("80");
+    ).toHaveValue("80.0");
   });
 
   it("keeps large-format manual dimensions above the everyday slider range", () => {
@@ -409,7 +426,7 @@ describe("BasicSettings", () => {
     fireEvent.blur(widthInput);
 
     expect(useConverterStore.getState().target_width_mm).toBe(30000);
-    expect(widthInput).toHaveValue("30000");
+    expect(widthInput).toHaveValue("30000.0");
   });
 
   it("offers a preview-only cut outline toggle in large-format mode", () => {

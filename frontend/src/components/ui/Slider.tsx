@@ -82,6 +82,9 @@ export default function Slider(props: SliderProps) {
 
   const commitValue = useCallback(
     (text: string) => {
+      // Focusing or confirming the displayed value must not round the stored
+      // value when the field shows fewer decimal places than the source.
+      if (text === formatValue(value, step, displayDecimals)) return;
       const num = parseFloat(text);
       if (!Number.isFinite(num)) {
         // 无效输入，恢复为当前值
