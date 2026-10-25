@@ -266,6 +266,8 @@ export default function LutPickerDialog({
             {labels.title}
           </h2>
           <div className="flex items-center gap-2">
+            <Button size="icon" label={labels.refreshTooltip} onClick={onRefresh}
+              disabled={loading} loading={refreshing} icon={<span aria-hidden="true">⟳</span>} />
           </div>
         </div>
 

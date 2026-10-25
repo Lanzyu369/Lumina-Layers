@@ -1,3 +1,4 @@
+import ButtonContent from "./ButtonContent";
 import type { ReactNode } from "react";
 import { cx } from "./panelPrimitives";
 
@@ -78,6 +79,8 @@ export default function Button({
       onClick={onClick}
       disabled={isDisabled}
       title={title ?? (icon ? label : undefined)}
+      aria-label={icon || loading ? label : undefined}
+      aria-busy={loading || undefined}
       aria-pressed={isGhost ? active : undefined}
       data-active={isGhost && active ? "true" : undefined}
       data-tone={tone}
@@ -89,6 +92,7 @@ export default function Button({
         className
       )}
     >
+      <ButtonContent loading={loading}>
       {icon ? (
         <span className="inline-flex items-center justify-center" aria-hidden="true">
           {icon}
@@ -103,6 +107,7 @@ export default function Button({
           <span className="min-w-0 truncate whitespace-nowrap leading-none" translate="no">{label}</span>
         </span>
       )}
+      </ButtonContent>
     </button>
   );
 }

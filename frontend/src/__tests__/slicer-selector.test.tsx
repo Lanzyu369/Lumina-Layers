@@ -193,6 +193,7 @@ describe("SlicerSelector settings linkage", () => {
     ).toBeInTheDocument();
   });
 
+  it("centers launch progress and hides the original logo and label", () => {
     useSlicerStore.setState({ isLaunching: true });
 
     render(
@@ -209,6 +210,10 @@ describe("SlicerSelector settings linkage", () => {
     const openButton = screen.getByRole("button", {
       name: "在 OrcaSlicer 中打开",
     });
+    expect(openButton).toHaveAttribute("aria-busy", "true");
+    expect(openButton.querySelectorAll(".animate-spin")).toHaveLength(1);
+    expect(openButton.querySelector(".animate-spin")?.parentElement).toHaveClass("absolute", "inset-0", "justify-center");
+    expect(within(openButton).getByTestId("slicer-logo-image").closest(".invisible")).toHaveAttribute("aria-hidden", "true");
   });
 
   it("does not fall back to Bambu Studio when the settings slicer is missing", async () => {
