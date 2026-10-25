@@ -19,16 +19,20 @@ let bounds: { left: number; top: number; width: number; height: number };
 let disconnect: ReturnType<typeof vi.fn>;
 let sceneAvatars: { x: number; y: number; width: number; height: number }[];
 let paintedNames: WeakSet<HTMLCanvasElement>;
+let nicknameTextures: WeakMap<HTMLCanvasElement, string>;
+let sceneNames: { name: string; opacity: number }[];
 
 function runFrame(time = 16) {
   const pending = [...frames.values()]; frames.clear();
   sceneAvatars = [];
+  sceneNames = [];
   act(() => pending.forEach(callback => callback(time)));
 }
 
 beforeEach(() => {
   frames = new Map(); frameId = 0; observed = [];
   sceneAvatars = []; paintedNames = new WeakSet();
+  nicknameTextures = new WeakMap(); sceneNames = [];
   bounds = { left: 120, top: 90, width: 900, height: 640 };
   disconnect = vi.fn();
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
@@ -55,20 +59,27 @@ beforeEach(() => {
     getContext(contextId: '2d'): CanvasRenderingContext2D | null;
   };
   vi.spyOn(canvas2dPrototype, 'getContext').mockImplementation(function (this: HTMLCanvasElement) {
-    return new Proxy({
+    const context: Record<string, unknown> = {
     canvas: this,
     font: '11px sans-serif',
+    globalAlpha: 1,
     measureText(text: string) { return { width: Array.from(text).length * 8 }; },
-    fillText: () => { paintedNames.add(this); },
+    fillText: (text: string) => {
+      paintedNames.add(this);
+      nicknameTextures.set(this, (nicknameTextures.get(this) ?? '') + text);
+    },
     drawImage: (source: CanvasImageSource, x: number, y: number, width: number, height: number) => {
-      if (this.dataset.credits === 'scene' && source instanceof HTMLCanvasElement && !paintedNames.has(source)) {
-        sceneAvatars.push({ x: x + width / 2, y: y + height / 2, width, height });
+      if (this.dataset.credits === 'scene' && source instanceof HTMLCanvasElement) {
+        const name = nicknameTextures.get(source);
+        if (name) sceneNames.push({ name, opacity: Number(context.globalAlpha) });
+        else if (!paintedNames.has(source)) sceneAvatars.push({ x: x + width / 2, y: y + height / 2, width, height });
       }
     },
     createLinearGradient: () => ({ addColorStop: noop }),
     createRadialGradient: () => ({ addColorStop: noop }),
     createConicGradient: () => ({ addColorStop: noop }),
-  }, { get(target, key) { return Reflect.get(target, key) ?? noop; } }) as unknown as CanvasRenderingContext2D;
+    };
+    return new Proxy(context, { get(target, key) { return Reflect.get(target, key) ?? noop; } }) as unknown as CanvasRenderingContext2D;
   });
   Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
 });
@@ -198,6 +209,42 @@ describe('credits garden', () => {
     expect(screen.getByRole('option').querySelector('b')).toBeNull();
     fireEvent.submit(screen.getByRole('search'));
     expect(screen.getByRole('status').textContent).toContain(name);
+  });
+
+  it('keeps a search-selected account when its visible bubble has already begun an ambient swap', () => {
+    let seed = 20261026;
+    vi.spyOn(Math, 'random').mockImplementation(() => {
+      seed = (seed + 0x6d2b79f5) >>> 0;
+      let n = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      n = (n + Math.imul(n ^ (n >>> 7), 61 | n)) ^ n;
+      return ((n ^ (n >>> 14)) >>> 0) / 4294967296;
+    });
+    const common: CreditsCatalog = { ...catalog, records: Array.from({ length: 400 }, (_, i) => ({
+      id: String(i), name: `成员${i}`, source: `平台${i}`, tier: 0, dev: false, brand: false,
+    })) };
+    const { container } = render(<CreditsGarden catalog={common} />);
+    let fadingName: string | undefined;
+    let previous = new Map<string, number>();
+    let frame = 0;
+    // Observe an actual fully visible nickname starting to fade, rather than
+    // inject a swap or expose engine state solely for the test.
+    for (; frame < 900 && !fadingName; frame++) {
+      runFrame((frame + 1) * 17);
+      if (frame > 200) fadingName = sceneNames.find(({ name, opacity }) => (previous.get(name) ?? 0) >= .999 && opacity < .99 && opacity > .5)?.name;
+      previous = new Map(sceneNames.map(({ name, opacity }) => [name, opacity]));
+    }
+    expect(fadingName).toBeDefined();
+    const selected = common.records.find(record => record.name === fadingName)!;
+    const input = screen.getByRole('combobox');
+    fireEvent.input(input, { target: { value: selected.name } });
+    fireEvent.submit(screen.getByRole('search'));
+    for (let end = frame + 120; frame < end; frame++) runFrame((frame + 1) * 17);
+    expect(container.querySelector('[data-credits="card"]')).toHaveClass('on');
+    expect(container.querySelector('[data-credits="cardName"]')?.textContent).toBe(selected.name);
+    expect(container.querySelector('[data-credits="cardMeta"]')?.textContent).toContain(selected.source);
+    expect(input).toHaveValue(selected.name);
+    expect(screen.getByRole('status').textContent).toContain(selected.name);
+    expect(sceneNames.find(({ name }) => name === selected.name)?.opacity).toBe(1);
   });
 
   it('cancels animation and input listeners on disposal, including StrictMode remounts', () => {

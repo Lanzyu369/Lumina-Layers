@@ -1340,6 +1340,8 @@ function setSpot(p) {
     b = spawnFromEdge(p, rand() * TAU);
   }
   if (b.state === 'gone') { b.state = 'live'; b.x = b.hx; b.y = b.hy; b.r = 0.01; }
+  // Search takes ownership of the current identity, including an in-flight swap.
+  b.swap = null; b.vis = 1;
   b.recoverUntil = 0;
   S.spot = b; S.spotT = S.now;
   b.born = 0;
