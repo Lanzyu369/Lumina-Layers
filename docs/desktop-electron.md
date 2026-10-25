@@ -86,7 +86,7 @@ python scripts/build_3mf_native_wheels.py `
 生成目录仅受控更新原生 wheel，其他文件保留。完成后再安装
 `requirements.txt` 中的其余应用依赖。
 
-SVG 运行时固定使用独立项目发布的 `lumina-svg-core==0.3.3`（AGPLv3）。
+SVG 运行时固定使用独立项目发布的 `lumina-svg-core==0.3.4`（AGPLv3）。
 `requirements-native-svg.txt` 会从公开 PyPI 选择匹配 Python、系统和架构的安装包。
 支持 Python 3.12～3.14；Linux x86-64 要求 glibc 2.28+，Mac 的 Python 3.12/3.13
 安装包要求 macOS 12+，3.14 要求 macOS 14+。完整 Lumina 应用仍要求 macOS 14+，

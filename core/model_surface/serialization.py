@@ -46,6 +46,7 @@ def surface_footprint_from_payload(payload: dict) -> SurfaceFootprint:
         bounds_height_mm=height,
         area_mm2=area,
         hole_count=int(payload.get("hole_count", len(holes))),
+        face_indices=tuple(payload.get("face_indices", ())),
     )
 
 

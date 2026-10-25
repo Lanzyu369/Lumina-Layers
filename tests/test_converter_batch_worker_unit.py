@@ -39,7 +39,6 @@ import trimesh
 from PIL import Image
 
 from api.workers.converter_workers import (
-    _batch_compute_xy_bbox_mm,
     worker_batch_convert_item,
 )
 from config import MODELS_DIR, OUTPUT_DIR, TEMP_DIR
@@ -223,10 +222,7 @@ def test_automatic_coating_type_survives_real_export(tmp_path, monkeypatch, sour
 
 
 def _make_test_image(tmp_dir: str) -> Path:
-    """Write a tiny PNG that the worker can use to compute xy_bbox_mm.
-
-    在 ``tmp_dir`` 下写一张极小 PNG，worker 用它计算 xy_bbox_mm。
-    """
+    """Write a source PNG whose size deliberately differs from the export."""
     img = Image.new("RGB", (40, 30), (200, 100, 50))
     fd, path = tempfile.mkstemp(prefix="batch_worker_unit_image_", suffix=".png", dir=tmp_dir)
     os.close(fd)
@@ -277,66 +273,6 @@ def _make_real_glb(out_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Test
 # ---------------------------------------------------------------------------
-
-
-def test_batch_compute_xy_bbox_ignores_transparent_padding(tmp_path) -> None:
-    """Transparent image padding must not inflate batch layout spacing.
-
-    透明留白不应放大批量排布间距；否则用户设置的 2mm 间距在预览和切片
-    软件里会看起来明显偏大。
-    """
-    image = Image.new("RGBA", (100, 50), (0, 0, 0, 0))
-    for x in range(20, 80):
-        for y in range(10, 30):
-            image.putpixel((x, y), (255, 0, 0, 255))
-    image_path = tmp_path / "transparent-padding.png"
-    image.save(image_path)
-
-    width_mm, depth_mm = _batch_compute_xy_bbox_mm(
-        str(image_path),
-        target_width_mm=50.0,
-    )
-
-    assert width_mm == 30.0
-    assert depth_mm == 10.0
-
-
-def test_batch_compute_xy_bbox_supports_svg_alpha_bbox(tmp_path) -> None:
-    """SVG inputs should not fail batch layout footprint calculation.
-
-    批量 SVG 不应在排布占位尺寸计算阶段被 PIL 误判为无法打开。
-    """
-    svg_path = tmp_path / "sprite.svg"
-    svg_path.write_text(
-        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" '
-        'viewBox="0 0 20 10"><rect x="5" y="2" width="10" height="4" '
-        'fill="#ff0000"/></svg>',
-        encoding="utf-8",
-    )
-    raster = np.zeros((10, 20, 4), dtype=np.uint8)
-    raster[2:6, 5:15, 3] = 255
-
-    with patch(
-        "core.pipeline.processing_ops.svg_rasterizer.rasterize_svg",
-        return_value=raster,
-    ) as rasterize_svg_mock:
-        width_mm, depth_mm = _batch_compute_xy_bbox_mm(
-            str(svg_path),
-            target_width_mm=40.0,
-            svg_pixels_per_mm=3.0,
-        )
-
-    assert width_mm == 20.0
-    assert depth_mm == 8.0
-    rasterize_svg_mock.assert_called_once_with(
-        svg_path=str(svg_path),
-        target_width_mm=40.0,
-        pixels_per_mm=3.0,
-        crop_to_content=False,
-        _min_quality_px=1,
-        _max_longest_px=2048,
-        _cache_result=False,
-    )
 
 
 @pytest.fixture

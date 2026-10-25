@@ -21,6 +21,7 @@ import { listGradientCardMaterials } from "../../api/extractor";
 import { reconcileDirectoryNames } from "../../utils/materialDirectoryMigration";
 import UnifiedUploader from "../ui/UnifiedUploader";
 import Button from "../ui/Button";
+import ConversionPresets from "./ConversionPresets";
 import Checkbox from "../ui/Checkbox";
 import Dropdown from "../ui/Dropdown";
 import Slider from "../ui/Slider";
@@ -1131,6 +1132,8 @@ export default function BasicSettings() {
           isLoading={isCropping || isLoading}
         />
       </Block>
+
+      <ConversionPresets />
 
       <Block label={t("basic_group_color_source")} tutorial="color-source">
         <RadioGroup

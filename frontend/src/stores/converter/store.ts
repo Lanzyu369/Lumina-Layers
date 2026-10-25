@@ -115,6 +115,7 @@ import { lutErrorToVisibleMessage } from "../lutErrorMessages";
 import { registerPrinterBedLabelSynchronizer } from "../printerBedLabelSync";
 import { useSettingsStore } from "../settingsStore";
 import { fitTargetDimensions, getTargetDimensionLimits } from "./dimensions";
+import { createConversionPresetActions } from "./conversionPresetActions";
 import {
   newestEditorContentRevision
 } from "./editorRevision";
@@ -1661,10 +1662,20 @@ function buildImageAspectRatioState(state: ConverterState, ratio: number): Parti
   // An imported project already supplies explicit dimensions before its image loads.
   if (state.aspectRatio !== null) return { aspectRatio: ratio };
   const longestEdge = Math.max(state.target_width_mm, state.target_height_mm);
-  const dimensions = fitTargetDimensions({
-    target_width_mm: ratio >= 1 ? longestEdge : Math.max(10, Math.round(longestEdge * ratio)),
-    target_height_mm: ratio >= 1 ? Math.max(10, Math.round(longestEdge / ratio)) : longestEdge,
-  }, state, useSettingsStore.getState().printerModel);
+  // Remembered presets keep the user's chosen size axis; without preferences,
+  // preserve the existing longest-edge sizing for a newly opened image.
+  const remembered = state.conversionParameterContext === "defaults"
+    ? useSettingsStore.getState().conversionPreferences.last
+    : null;
+  const requested = remembered
+    ? remembered.size_axis === "height"
+      ? { target_width_mm: Math.max(10, Math.round(remembered.size_mm * ratio)), target_height_mm: remembered.size_mm }
+      : { target_width_mm: remembered.size_mm, target_height_mm: Math.max(10, Math.round(remembered.size_mm / ratio)) }
+    : {
+        target_width_mm: ratio >= 1 ? longestEdge : Math.max(10, Math.round(longestEdge * ratio)),
+        target_height_mm: ratio >= 1 ? Math.max(10, Math.round(longestEdge / ratio)) : longestEdge,
+      };
+  const dimensions = fitTargetDimensions(requested, state, useSettingsStore.getState().printerModel);
   return {
     aspectRatio: ratio,
     ...dimensions,
@@ -1843,6 +1854,8 @@ export const DEFAULT_STATE: ConverterState = {
   imageFile: null,
   imagePreviewUrl: null,
   aspectRatio: null,
+  preferredSizeAxis: "width",
+  conversionParameterContext: "defaults",
   workshopSource: null,
   modelSurfaceEnabled: false,
   modelSurfaceFile: null,
@@ -2136,6 +2149,12 @@ function _cancelPreviewWork(): void {
 
 // ========== Store ==========
 
+function restoreConversionDefaultsForNewSource(): void {
+  const current = useConverterStore.getState();
+  if (current.conversionParameterContext !== "project") return;
+  current.restoreConversionDefaults();
+}
+
 export const useConverterStore = create<ConverterState & ConverterActions>()(
   subscribeWithSelector((set, _get) => ({
     ...DEFAULT_STATE,
@@ -2147,9 +2166,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       refreshConfirmedEditorContentRevision,
     }),
     ...createDerivedPreviewActions(set, _get),
+    ...createConversionPresetActions(set, _get),
 
     // --- 图片 ---
     setImageFile: (file: File | null) => {
+      const currentFile = _get().imageFile;
+      // Rotations and other derived images still belong to the current project.
+      // Restore daily defaults only when the underlying source is replaced or cleared.
+      if (!file || !currentFile || resolveSourceFile(file) !== resolveSourceFile(currentFile)) {
+        restoreConversionDefaultsForNewSource();
+      }
       _cancelPreviewWork();
 
       // Revoke previous blob URL to avoid memory leaks
@@ -2274,6 +2300,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     loadVectorizedSvgIntoConverter: (file: File) => {
+      restoreConversionDefaultsForNewSource();
       _cancelPreviewWork();
 
       const currentState = _get();
@@ -2335,6 +2362,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       targetHeightMm,
       source,
     }) => {
+      restoreConversionDefaultsForNewSource();
       _cancelPreviewWork();
 
       const currentState = _get();
@@ -3108,6 +3136,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             )
           : state.fridge_magnets;
         return {
+          preferredSizeAxis: "width",
           ...buildSvgHoleCompensationResizeState(state, dimensions),
           ...dimensions,
           fridge_magnets: fridgeMagnets,
@@ -3132,6 +3161,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             }
           : { target_height_mm: clamped };
         return {
+          preferredSizeAxis: "height",
           ...buildSvgHoleCompensationResizeState(state, dimensions),
           ...dimensions,
           fridge_magnets:
@@ -7478,6 +7508,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     addBatchFiles: (files: File[]) => {
       const valid = files.filter((f) => isValidImageType(f.type, f.name));
       if (valid.length === 0) return;
+      restoreConversionDefaultsForNewSource();
       set((state) => ({
         batchFiles: [...state.batchFiles, ...valid],
         workshopSource: null,
@@ -8219,7 +8250,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       // 调色数据必须在 setImageFile 的同步重置之后再写回。
       const prevEnableCrop = _get().enableCrop;
       const restoredWorkshopSource = partial.workshopSource ?? null;
-      set({ enableCrop: false });
+      set({ enableCrop: false, conversionParameterContext: "restoring" });
       _get().setImageFile(imageFile);
 
       const baseState = _get();
@@ -8238,6 +8269,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         aspectRatio: nextState.target_width_mm / nextState.target_height_mm,
         modelBounds: null,
         ...fridgeMagnetState,
+        conversionParameterContext: "project",
         engraveBackLabels: false,
         enableCrop: prevEnableCrop,
       });

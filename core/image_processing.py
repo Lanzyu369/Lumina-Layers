@@ -502,7 +502,11 @@ class LuminaImageProcessor:
                 "SVG filters disabled",
                 extra={"event": "svg_filters_disabled", "blur_kernel": blur_kernel, "smooth_sigma": smooth_sigma},
             )
-            target_w, target_h, pixel_scale = img.size[0], img.size[1], 1.0 / svg_pixels_per_mm
+            target_w, target_h = img.size[0], img.size[1]
+            # The rasterizer alpha-crops canvas margins; map the cropped width to
+            # the requested width like the preview GLB and preview-reuse paths.
+            # 光栅化会裁掉画布边距；与预览 GLB 及预览复用路径一致，按裁后宽度映射到目标宽度。
+            pixel_scale = float(target_width_mm) / float(max(1, target_w))
         else:
             img = Image.open(image_path).convert("RGBA")
             self._log_image_info(img, image_path)

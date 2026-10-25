@@ -17,6 +17,7 @@ import { useHeaderNavFit } from "./hooks/useHeaderNavFit";
 import { useDocumentThemeClass } from "./hooks/useDocumentThemeClass";
 import { useOutsideInteraction } from "./hooks/useOutsideInteraction";
 import { useSharedSettingsPersistence } from "./hooks/useSharedSettingsPersistence";
+import { useConversionPreferences } from "./hooks/useConversionPreferences";
 import Scene3D from "./components/Scene3D";
 import ExtractorCanvas from "./components/ExtractorCanvas";
 import LoadingSpinner from "./components/LoadingSpinner";
@@ -242,6 +243,7 @@ function AppContent({ connected }: { connected: boolean | null }) {
   useElectronGeneratedFileDirectorySync();
   useSharedSettingsPersistence();
   useDocumentThemeClass();
+  useConversionPreferences();
   const workspace = useWorkspaceMode();
   const reproMode = useReproMode();
   const headerNavAlignment = useSettingsStore((s) => s.headerNavAlignment);

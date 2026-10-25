@@ -9,6 +9,7 @@ interface DropdownOption {
   label: string;
   value: string;
   leading?: ReactNode;
+  description?: string;
 }
 
 interface DropdownOptionGroup {
@@ -25,6 +26,7 @@ interface DropdownProps {
   disabled?: boolean;
   placeholder?: string;
   labelAccessory?: ReactNode;
+  variant?: "field" | "inline";
   /** Optional hint text; renders a HelpDot after the label (ignored if labelAccessory is set). */
   tooltip?: string;
   /** Optional matching article in the public Lumina Wiki. */
@@ -40,6 +42,7 @@ export default function Dropdown({
   disabled = false,
   placeholder,
   labelAccessory,
+  variant = "field",
   tooltip,
   wikiPath,
 }: DropdownProps) {
@@ -50,6 +53,7 @@ export default function Dropdown({
   const menuRef = useRef<HTMLDivElement>(null);
   const listboxId = useId();
   const isGroupedMode = groupedOptions !== undefined;
+  const isInline = variant === "inline";
   const optionGroups = useMemo(() => {
     const groups = groupedOptions !== undefined
       ? groupedOptions.filter((group) => group.options.length > 0)
@@ -85,7 +89,7 @@ export default function Dropdown({
     const maxMenuHeight = 288; // max-h-72 = 18rem = 288px
     // 估算实际菜单高度：每项约 44px（py-2.5 + leading-6），分组标题约 32px。
     // 选项少时远小于 maxMenuHeight，避免仅因未到 288px 就误判向上展开。
-    const ITEM_HEIGHT = 44;
+    const ITEM_HEIGHT = flatOptions.some(option => option.description) ? 80 : 44;
     const GROUP_HEADER_HEIGHT = 32;
     const MENU_PADDING = 16;
     const estimatedMenuHeight = Math.min(
@@ -96,7 +100,7 @@ export default function Dropdown({
     );
     // 菜单宽度贴合触发器，避免在窄侧栏里被强制撑到最小宽度而溢出卡片边界。
     const maxWidth = window.innerWidth - viewportPadding * 2;
-    const nextWidth = Math.min(rect.width, maxWidth);
+    const nextWidth = Math.min(isInline ? Math.max(rect.width, 280) : rect.width, maxWidth);
     const nextLeft = Math.min(
       Math.max(rect.left, viewportPadding),
       window.innerWidth - viewportPadding - nextWidth,
@@ -114,7 +118,7 @@ export default function Dropdown({
       left: nextLeft,
       width: nextWidth,
     });
-  }, [flatOptions.length, visibleHeaderCount]);
+  }, [flatOptions, visibleHeaderCount, isInline]);
 
   useEffect(() => {
     if (!open) return;
@@ -212,14 +216,14 @@ export default function Dropdown({
 
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      {labelAccessory || tooltip ? (
+      {!isInline && (labelAccessory || tooltip ? (
         <div className="flex items-center gap-2">
           <label className={workstationFieldLabelClass}>{label}</label>
           {labelAccessory ?? <HelpDot title={label} description={tooltip ?? ""} wikiPath={wikiPath} ariaLabel={tooltip} />}
         </div>
       ) : (
         <label className={workstationFieldLabelClass}>{label}</label>
-      )}
+      ))}
       <button
         ref={triggerRef}
         type="button"
@@ -234,8 +238,11 @@ export default function Dropdown({
         onKeyDown={handleKeyDown}
         onBlur={() => setOpen(false)}
         className={cx(
-          workstationInputClass,
-          "flex w-full min-w-0 items-center justify-between gap-3 overflow-hidden py-2 text-left",
+          isInline
+            ? "min-h-8 rounded-md px-1 py-1 text-xs text-slate-600 outline-none transition-colors hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:text-slate-300 dark:hover:bg-slate-800/60"
+            : workstationInputClass,
+          "flex w-full min-w-0 items-center justify-between overflow-hidden text-left",
+          isInline ? "gap-1.5" : "gap-3 py-2",
           showPlaceholder && "text-slate-400 dark:text-slate-500",
         )}
       >
@@ -244,7 +251,8 @@ export default function Dropdown({
             {selectedOption.leading}
           </span>
         )}
-        <span className="block min-w-0 flex-1 truncate text-sm leading-6">{triggerLabel}</span>
+        {isInline && <span className="shrink-0 text-slate-400 dark:text-slate-500">{label}:</span>}
+        <span className={cx("block min-w-0 flex-1 truncate leading-6", isInline ? "text-xs" : "text-sm")}>{triggerLabel}</span>
         <span
           aria-hidden="true"
           className={cx(
@@ -307,7 +315,10 @@ export default function Dropdown({
                           {opt.leading}
                         </span>
                       )}
-                      <span className="min-w-0 flex-1 break-all">{opt.label}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block break-all">{opt.label}</span>
+                        {opt.description && <span className="mt-1 block text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">{opt.description}</span>}
+                      </span>
                     </button>
                   );
                 })}

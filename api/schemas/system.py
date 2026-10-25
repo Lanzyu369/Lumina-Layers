@@ -1,7 +1,7 @@
 """Lumina Studio API system schemas."""
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, StrictBool
 
@@ -115,6 +115,7 @@ class UserSettings(BaseModel):
     auto_replace_gradient_banding: StrictBool = False
     generated_file_directory: str = Field(default="", max_length=1024)
     header_nav_alignment: Literal["center", "left"] = "center"
+    conversion_preferences: dict[str, Any] | None = None
 
 
 class UserSettingsResponse(BaseModel):

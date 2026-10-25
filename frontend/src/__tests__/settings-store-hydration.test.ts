@@ -23,10 +23,10 @@ vi.mock("../stores/generatedArtifactInvalidation", () => ({
 }));
 
 vi.mock("../api/converter", () => ({
-  fetchExportMaterialSelection: vi.fn(),
   fetchLutList: vi.fn(),
   convertPreview: vi.fn(),
   convertGenerate: vi.fn(),
+  fetchExportMaterialSelection: vi.fn().mockResolvedValue({ ready: true, materials: [], build_plates: [], issues: [] }),
   convertGenerateLargeFormat: vi.fn(),
   convertGeneratePuzzle: vi.fn(),
   convertPuzzleLayoutPreview: vi.fn(),

@@ -40,11 +40,10 @@ export default function PreviewHoverInspector({
       data-testid={dataTestId}
     >
       <div
-        className="w-[248px] rounded-xl border p-2 shadow-xl backdrop-blur-sm"
+        className="w-[248px] rounded-xl border p-2 text-slate-900 shadow-xl backdrop-blur-sm dark:text-slate-100"
         style={{
           borderColor: "var(--surface-outline)",
           background: "var(--surface-panel-strong)",
-          color: "var(--surface-text)",
         }}
       >
         {showMagnifier && (

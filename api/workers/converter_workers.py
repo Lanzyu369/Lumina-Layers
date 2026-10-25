@@ -856,171 +856,6 @@ def worker_generate_preview(
     return result
 
 
-def _batch_compute_svg_xy_bbox_mm(
-    image_path: str,
-    target_width_mm: float,
-    svg_pixels_per_mm: float,
-) -> tuple[float, float]:
-    """Compute batch footprint for SVG inputs without using PIL.
-    不通过 PIL 读取 SVG，避免批量 SVG 在占位尺寸计算阶段失败。
-    """
-    import re
-    import xml.etree.ElementTree as ET
-
-    import numpy as np
-
-    def _from_canvas_size(width_px: int, height_px: int, alpha_bbox=None) -> tuple[float, float]:
-        if width_px <= 0 or height_px <= 0:
-            raise ValueError(
-                f"Invalid SVG raster dimensions {width_px}x{height_px} for {image_path}"
-            )
-        if alpha_bbox is None:
-            bbox_w_px = width_px
-            bbox_h_px = height_px
-        else:
-            left, upper, right, lower = alpha_bbox
-            bbox_w_px = max(1, int(right) - int(left))
-            bbox_h_px = max(1, int(lower) - int(upper))
-        px_to_mm = float(target_width_mm) / float(width_px)
-        return (
-            round(bbox_w_px * px_to_mm, 6),
-            round(bbox_h_px * px_to_mm, 6),
-        )
-
-    try:
-        from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
-
-        canvas = rasterize_svg(
-            svg_path=image_path,
-            target_width_mm=float(target_width_mm),
-            pixels_per_mm=float(svg_pixels_per_mm),
-            crop_to_content=False,
-            _min_quality_px=1,
-            _max_longest_px=2048,
-            _cache_result=False,
-        )
-        arr = np.asarray(canvas)
-        if arr.ndim < 2:
-            raise ValueError("SVG rasterizer returned a non-image array")
-        height_px, width_px = int(arr.shape[0]), int(arr.shape[1])
-        alpha_bbox = None
-        if arr.ndim == 3 and arr.shape[2] >= 4:
-            alpha_mask = arr[:, :, 3] > 0
-            if np.any(alpha_mask):
-                ys, xs = np.where(alpha_mask)
-                alpha_bbox = (
-                    int(xs.min()),
-                    int(ys.min()),
-                    int(xs.max()) + 1,
-                    int(ys.max()) + 1,
-                )
-        return _from_canvas_size(width_px, height_px, alpha_bbox)
-    except (OSError, ValueError, RuntimeError, TimeoutError, ImportError, ET.ParseError):
-        pass
-
-    def _parse_svg_length(raw: str | None) -> float | None:
-        if raw is None:
-            return None
-        match = re.match(r"^\s*([0-9]*\.?[0-9]+)", str(raw))
-        if not match:
-            return None
-        value = float(match.group(1))
-        return value if value > 0 else None
-
-    try:
-        root = ET.parse(image_path).getroot()
-        view_box = root.attrib.get("viewBox") or root.attrib.get("viewbox")
-        if view_box:
-            parts = [float(part) for part in re.split(r"[\s,]+", view_box.strip()) if part]
-            if len(parts) == 4 and parts[2] > 0 and parts[3] > 0:
-                return (
-                    round(float(target_width_mm), 6),
-                    round(float(target_width_mm) * parts[3] / parts[2], 6),
-                )
-        width = _parse_svg_length(root.attrib.get("width"))
-        height = _parse_svg_length(root.attrib.get("height"))
-        if width and height:
-            return (
-                round(float(target_width_mm), 6),
-                round(float(target_width_mm) * height / width, 6),
-            )
-    except (OSError, ValueError, ET.ParseError):
-        pass
-
-    # Last-resort deterministic square footprint. This keeps the batch
-    # request successful even when an SVG parser/rasterizer cannot provide
-    # dimensions; the user can still reposition in the slicer.
-    fallback = round(float(target_width_mm), 6)
-    return fallback, fallback
-
-
-def _batch_compute_xy_bbox_mm(
-    image_path: str,
-    target_width_mm: float,
-    svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
-) -> tuple[float, float]:
-    """Compute the occupied XY footprint in mm from an input image.
-    根据输入图中实际有内容的区域推算 XY 占位包围盒（毫米）。
-
-    Transparent padding must not count as model width/depth. Batch layout
-    uses this value to place models with a small physical gap, so measuring
-    the full source canvas would make sprite-like PNGs appear far apart.
-    When an image has no transparent pixels, the full canvas is used.
-
-    透明留白不应计入模型宽深。批量排布会用该值控制物理间距；如果把整张
-    画布都算进去，带透明边距的 PNG 看起来会被隔得很远。没有透明区域时，
-    仍按整张画布计算。
-
-    Args:
-        image_path: Path to the input image file. (输入图像文件路径)
-        target_width_mm: Target physical width in mm. (目标物理宽度，毫米)
-
-    Returns:
-        tuple[float, float]: ``(width_mm, depth_mm)`` rounded to 6 decimals.
-            The scale is based on the full source canvas width matching
-            ``target_width_mm``; the measured footprint is the non-transparent
-            alpha bbox under that scale.
-            (``(width_mm, depth_mm)``，按整张源图宽度映射到目标宽度后的
-            非透明区域尺寸，保留 6 位小数)
-    """
-    import os
-
-    from PIL import Image
-
-    if os.path.splitext(image_path)[1].lower() in {".svg", ".svgz"}:
-        return _batch_compute_svg_xy_bbox_mm(
-            image_path,
-            target_width_mm,
-            svg_pixels_per_mm,
-        )
-
-    with Image.open(image_path) as image:
-        img_w = int(image.width)
-        img_h = int(image.height)
-        alpha_bbox = image.convert("RGBA").getchannel("A").getbbox()
-    if img_w <= 0 or img_h <= 0:
-        raise ValueError(
-            f"Invalid image dimensions {img_w}x{img_h} for {image_path}"
-        )
-
-    if alpha_bbox is None:
-        bbox_w_px = img_w
-        bbox_h_px = img_h
-    else:
-        left, upper, right, lower = alpha_bbox
-        bbox_w_px = max(1, right - left)
-        bbox_h_px = max(1, lower - upper)
-
-    px_to_mm = float(target_width_mm) / img_w
-    width_mm = round(bbox_w_px * px_to_mm, 6)
-    depth_mm = round(bbox_h_px * px_to_mm, 6)
-    if width_mm <= 0:
-        width_mm = round(float(target_width_mm), 6)
-    if depth_mm <= 0:
-        depth_mm = round(float(target_width_mm), 6)
-    return width_mm, depth_mm
-
-
 def _batch_extract_slots_from_3mf(
     threemf_path: str,
     target: "MetadataTarget | SourceMaterialTarget | None" = None,
@@ -1169,7 +1004,7 @@ def worker_batch_convert_item(
               consumed by the parent process during merged export.
             - ``xy_bbox_mm`` (tuple[float, float]): ``(width_mm, depth_mm)``
               footprint, scalar copy of ``sidecar.xy_bbox_mm``.
-            - ``status_msg`` (str): Status message from the converter.
+            - ``status_msg`` (str): Conversion status or artifact inspection error.
             (5 个 key；前 3 个为落盘文件路径或 ``None``，``xy_bbox_mm``
             为 ``(width_mm, depth_mm)`` 标量，``status_msg`` 沿用旧含义)
     """
@@ -1256,6 +1091,64 @@ def worker_batch_convert_item(
             "status_msg": status_msg,
         }
 
+    # Use the same exported components as the merger. Re-measuring the input
+    # can disagree with cropped SVG scale or omit auxiliary geometry.
+    from api.structured_logging import get_logger
+    from utils.fatcat_metadata import select_metadata_target
+    from utils.merged_bambu_3mf_writer import read_merge_source_info
+
+    try:
+        slot_target = select_metadata_target(
+            slicer=slicer,
+            printer_id=printer_id,
+            nozzle_size=nozzle_size,
+            device_profile_id=device_profile_id,
+            build_plate_id=build_plate_id,
+        )
+        (width_mm, depth_mm), slots = read_merge_source_info(
+            threemf_path, metadata_target=slot_target,
+        )
+    except Exception as exc:
+        # Artifact inspection is a worker boundary: an unknown footprint
+        # cannot be laid out safely. Release only this conversion's outputs.
+        log = get_logger(__name__)
+        log.warning(
+            "Cannot inspect the exported batch model footprint",
+            extra={
+                "event": "worker_batch_footprint_failed",
+                "image_name": os.path.basename(image_path),
+                "path": threemf_path,
+                "artifact_prefix": artifact_prefix,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        for path in (threemf_path, glb_path):
+            if not path:
+                continue
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_error:
+                log.warning(
+                    "Cannot remove a failed batch item's artifact",
+                    extra={
+                        "event": "worker_batch_artifact_cleanup_failed",
+                        "path": path,
+                        "artifact_prefix": artifact_prefix,
+                        "error_type": type(cleanup_error).__name__,
+                        "error_message": str(cleanup_error),
+                    },
+                )
+        return {
+            "threemf_path": None,
+            "preview_glb_path": None,
+            "metadata_sidecar_path": None,
+            "xy_bbox_mm": (0.0, 0.0),
+            "status_msg": "Cannot read the exported batch model footprint. Retry conversion.",
+        }
+
     source_filename = os.path.basename(image_path) or "input.png"
     base_stem, _ = os.path.splitext(source_filename)
     if not base_stem:
@@ -1301,24 +1194,7 @@ def worker_batch_convert_item(
         shutil.move(glb_path, target_glb_path)
         final_glb_path = target_glb_path
 
-    # Build the sidecar from the moved 3MF + occupied image footprint.
-    # FatCat reads source slots; Lumina computes the image footprint.
-    # FatCat 读取源槽位，Lumina 计算输入图实际占位。
-    width_mm, depth_mm = _batch_compute_xy_bbox_mm(
-        image_path,
-        target_width_mm,
-        svg_pixels_per_mm=svg_pixels_per_mm,
-    )
-    from utils.fatcat_metadata import select_metadata_target
-
-    slot_target = select_metadata_target(
-        slicer=slicer,
-        printer_id=printer_id,
-        nozzle_size=nozzle_size,
-        device_profile_id=device_profile_id,
-        build_plate_id=build_plate_id,
-    )
-    slots = _batch_extract_slots_from_3mf(target_3mf_path, target=slot_target)
+    # Geometry and slots were read together from this exported 3MF.
     sidecar_payload = {
         "schema_version": 1,
         "source_filename": source_filename,

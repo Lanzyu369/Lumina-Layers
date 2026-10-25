@@ -10,8 +10,7 @@ import { prepareImport } from "../recipe/importFlow";
 import { parseRecipeFile, restoreConverterRecipe } from "../recipe/importRecipe";
 import { embedRecipeInPng } from "../recipe/pngMetadata";
 import { createLegacyRecipeV1 } from "./fixtures/legacyRecipeV1";
-import type { LuminaRecipe } from "../recipe/types";
-import { RECIPE_SCHEMA_VERSION } from "../recipe/types";
+import { RECIPE_SCHEMA_VERSION, type LuminaRecipe } from "../recipe/types";
 
 const FORMATS = [
   { name: "heightmap.png", mime: "image/png" },
@@ -71,7 +70,7 @@ describe("share card heightmap import", () => {
 
   for (const version of [1, 3, 4]) {
     for (const container of ["json", "png"]) {
-      it.each(FORMATS)(`preserves $name bytes through v${version} ${container} import and current-schema re-export`, async ({ name, mime }) => {
+      it.each(FORMATS)(`preserves $name bytes through v${version} ${container} import and current-version re-export`, async ({ name, mime }) => {
         const heightmap = fixtureFile(name, mime);
         const expectedBytes = new Uint8Array(await heightmap.arrayBuffer());
         const post = vi.spyOn(apiClient, "post").mockImplementation(async (url, data, options) => {

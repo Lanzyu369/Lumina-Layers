@@ -7,6 +7,7 @@ import {
   type Custom3mfTemplate,
 } from "../api/system";
 import type { UserSettings } from "../api/types";
+import { normalizeConversionPreferences, type ConversionPreferences } from "./conversionPreferences";
 import {
   invalidateGeneratedArtifacts,
   invalidatePreviewArtifacts,
@@ -80,6 +81,7 @@ export function isHeaderNavAlignment(
 }
 
 export interface SettingsState {
+  conversionPreferences: ConversionPreferences;
   language: "zh" | "en";
   theme: "light" | "dark";
   lastLutName: string;
@@ -160,6 +162,7 @@ export interface SettingsState {
 // ========== Actions Interface ==========
 
 export interface SettingsActions {
+  setConversionPreferences: (preferences: ConversionPreferences) => void;
   setLanguage: (lang: "zh" | "en") => void;
   setTheme: (theme: "light" | "dark") => void;
   setLastLutName: (name: string) => void;
@@ -202,6 +205,7 @@ export interface SettingsActions {
 // ========== Default State ==========
 
 export const DEFAULT_SETTINGS: SettingsState = {
+  conversionPreferences: { last: null, presets: [] },
   language: "zh",
   theme: "light",
   lastLutName: "",
@@ -342,6 +346,11 @@ export function deriveBackendDeviceSettingsPatch(
   persistedSnapshot: PersistedSettingsSnapshot | null,
 ): Partial<SettingsState> {
   const patch: Partial<SettingsState> = {};
+  if (!hasOwnSetting(persistedSnapshot, "conversionPreferences") &&
+      !current.conversionPreferences.last && current.conversionPreferences.presets.length === 0 &&
+      settings.conversion_preferences) {
+    patch.conversionPreferences = normalizeConversionPreferences(settings.conversion_preferences);
+  }
 
   const setScalarIfFresh = <Key extends keyof SettingsState>(
     key: Key,
@@ -619,6 +628,8 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
     (set, get) => ({
       ...DEFAULT_SETTINGS,
 
+      setConversionPreferences: (preferences) => set({ conversionPreferences: normalizeConversionPreferences(preferences) }),
+
       setLanguage: (lang: "zh" | "en") => set({ language: lang }),
 
       setTheme: (theme: "light" | "dark") => set({ theme }),
@@ -883,6 +894,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         const state = get();
         try {
           await saveSettings({
+            conversion_preferences: state.conversionPreferences,
             language: state.language,
             theme: state.theme,
             last_lut: state.lastLutName,
@@ -944,6 +956,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         return {
           ...currentState,
           ...persistedSettings,
+          conversionPreferences: normalizeConversionPreferences(persistedSettings.conversionPreferences),
           materialDeltaE00Tolerance: normalizeMaterialDeltaE00Tolerance(
             persistedSettings.materialDeltaE00Tolerance ??
               currentState.materialDeltaE00Tolerance,
