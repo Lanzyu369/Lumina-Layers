@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
-**Goal:** Open the approved interactive credits garden from PR #668's header menu, read the real Cloudflare catalog and avatars, and start the application for local review.
+**Goal:** Open the approved interactive credits garden from PR #668's About page, read the real Cloudflare catalog and avatars, and start the application for local review.
 
 **Architecture:** Keep the existing header/navigation from PR #668. A lazy credits dialog owns loading and close/focus behavior; a catalog client owns remote JSON verification and the last successful IndexedDB snapshot; the canvas garden owns presentation and physical interaction. Reuse the approved prototype physics and avatar caching without shipping its roster or images in the app.
 
@@ -12,7 +12,7 @@
 
 ## Scope and source
 
-- Base: PR #668 head `a9deb313989e14f83af9edabafe432961f257d16`, local branch `MIn/feat/cloudflare-credits`.
+- Base: PR #668, initially `a9deb313989e14f83af9edabafe432961f257d16`, synchronized to `51ea3121b793f7d8955f5eab04d7239d20139ae0`; local branch `MIn/feat/cloudflare-credits`.
 - Data: `https://lumina-studio-credits.pages.dev/manifest.json`; resolve hosted avatars against `assets_base` relative to this manifest.
 - Approved interactions: `.scratch/credits-bubble/lumina-credits.html` and `avatar-cache.js`.
 - No bundled names, avatars, financial data, credentials, or generated data scripts.
@@ -42,10 +42,10 @@
 
 ## Task 3: Application entry and dialog
 
-**Files:** `frontend/src/components/HeaderMenu.tsx`, its test, `frontend/src/App.tsx`, `frontend/src/credits/CreditsDialog.tsx`, its test, `frontend/src/i18n/translations.ts`.
+**Files:** `frontend/src/components/HeaderMenu.tsx`, its test, `frontend/src/App.tsx`, `frontend/src/credits/AboutDialog.tsx`, its test, `frontend/src/i18n/translations.ts`.
 
 - [x] Add a failing menu test proving the labelled credits action calls the callback and closes the menu.
-- [x] Add the optional `onOpenCredits` menu callback using `HeaderMenuItem`. App supplies it and lazily opens the credits dialog.
+- [x] Add the optional `onOpenAbout` menu callback using `HeaderMenuItem`. App supplies it and lazily opens About, from which Credits is accessible.
 - [x] Reuse `useDialogFocusTrap` and the shared close control. Show translated loading/error/retry states; show the cached catalog if the network fails after a previous successful visit.
 - [x] Suspend the background workspace rendering while credits is open, preserving the existing Zustand/session state. On close restore the previous workspace and focus to the menu trigger.
 - [x] Add Chinese and English keys for menu, title, load/error/retry, search/status, source and motion/effect controls.
@@ -60,3 +60,10 @@
 - [x] Keep only the preview processes needed for the user's explicit request, record stop commands, and stop other owned helpers.
 
 **Completion evidence:** the real app on the PR #668 base opens the approved bubble garden using the live Cloudflare dataset, tests/build pass, and the running preview is available to the user. Do not claim packaged Electron or long-term network reliability was verified.
+
+## Follow-up: About entry (2026-10-26)
+
+- [x] Move the menu entry to About, with Credits as a child page in the existing full-screen shell; reuse its focus and window-control spacing.
+- [x] Fetch the public catalog only after entering Credits. Returning restores focus to its About button; closing About restores the workspace.
+- [x] Route the native macOS About command to the same page, retaining the native fallback before renderer readiness. Use the host version with the web package version as fallback.
+- [x] Add navigation, lazy loading and native-menu regression coverage before implementation; retain the existing bubble renderer and cache without duplication.

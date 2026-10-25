@@ -1,6 +1,11 @@
 # Credits
 
-The header's **More options → Credits** action lazily opens `CreditsDialog`.
+The header's **More options → About Lumina Studio → Credits** action lazily opens
+`AboutDialog`. The native macOS About menu opens the same page; before renderer
+readiness it retains the system About fallback. The About page shows the native
+app version (web package version as fallback), official site and GitHub links.
+Credits opens within the same dialog and returns to About with focus restored.
+The public catalog is fetched only on entering Credits, not on opening About.
 The view uses the layout, shared controls, MiSans font and theme tokens from
 PR #668. The current workspace stays mounted but inert and hidden; its 3D
 canvas pauses until the credits view closes.
@@ -31,5 +36,5 @@ retains native device-pixel resolution. UI strings live in `translations.ts`.
 Focused checks from the repository root:
 
 ```sh
-python3 scripts/run_vitest.py run src/credits/catalog.test.ts src/credits/CreditsDialog.test.tsx src/credits/CreditsGarden.test.tsx src/credits/avatar-cache.test.ts src/components/__tests__/HeaderMenu.test.tsx src/__tests__/App.test.tsx src/__tests__/Scene3D.test.tsx
+python3 scripts/run_vitest.py run src/credits/catalog.test.ts src/credits/AboutDialog.test.tsx src/credits/CreditsGarden.test.tsx src/credits/avatar-cache.test.ts src/components/__tests__/HeaderMenu.test.tsx src/__tests__/App.test.tsx src/__tests__/Scene3D.test.tsx src/__tests__/application-menu.test.tsx
 ```

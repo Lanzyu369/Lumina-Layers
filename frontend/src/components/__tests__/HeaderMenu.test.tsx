@@ -100,12 +100,13 @@ describe("HeaderMenu", () => {
     await expectClosed();
   });
 
-  it("opens credits from a labelled row and closes the menu", async () => {
-    const onOpenCredits = vi.fn();
-    renderMenu({ onOpenCredits });
+  it("opens About instead of a top-level Credits row and closes the menu", async () => {
+    const onOpenAbout = vi.fn();
+    renderMenu({ onOpenAbout });
     fireEvent.click(trigger());
-    fireEvent.click(screen.getByRole("button", { name: "致谢" }));
-    expect(onOpenCredits).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "致谢" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关于 Lumina Studio" }));
+    expect(onOpenAbout).toHaveBeenCalledTimes(1);
     await expectClosed();
   });
 

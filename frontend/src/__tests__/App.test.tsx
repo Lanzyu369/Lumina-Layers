@@ -69,7 +69,17 @@ vi.mock("../hooks/useWorkspaceMode", () => ({
 vi.mock("../components/Scene3D", () => ({ default: ({ suspended }: { suspended?: boolean }) => <div data-testid="scene-stub" data-suspended={String(suspended ?? false)} /> }));
 vi.mock("../components/SettingsPanel", () => ({ default: () => null }));
 vi.mock("../components/VectorizerPanel", () => ({ default: () => <input aria-label="Vector draft" defaultValue="" /> }));
-vi.mock("../credits/CreditsDialog", () => ({ default: ({ onClose }: { onClose: () => void }) => <div role="dialog"><button onClick={onClose}>Close credits</button></div> }));
+const menuCommands = vi.hoisted(() => new Map<string, () => void>());
+vi.mock("../integrations/applicationMenu", () => ({
+  useApplicationMenuLanguage: vi.fn(),
+  useApplicationMenuCommand: (command: string, handler: () => void) => { menuCommands.set(command, handler); },
+}));
+vi.mock("../credits/AboutDialog", () => ({ default: ({ page, onNavigate, onClose }: {
+  page: "about" | "credits"; onNavigate: (page: "about" | "credits") => void; onClose: () => void;
+}) => <div role="dialog" aria-label={page === "about" ? "关于 Lumina Studio" : "致谢"}>
+  {page === "about" && <button onClick={() => onNavigate("credits")}>致谢</button>}
+  <button onClick={page === "credits" ? () => onNavigate("about") : onClose}>{page === "credits" ? "返回关于" : "Close about"}</button>
+</div> }));
 vi.mock("../components/ThemeToggle", () => ({ ThemeToggle: () => null }));
 vi.mock("../components/BugReportButton", () => ({ BugReportButton: () => null }));
 vi.mock("../components/BugReportModal", () => ({
@@ -105,6 +115,7 @@ function openHeaderMenu() {
 describe("App component", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    menuCommands.clear();
     // Unrelated workspace checks start after the backend readiness gate opens.
     vi.mocked(apiClient.get).mockResolvedValue({
       data: { status: "ok", version: "2.0", uptime_seconds: 100 },
@@ -251,11 +262,13 @@ describe("App component", () => {
     const draft = await screen.findByLabelText("Vector draft");
     fireEvent.change(draft, { target: { value: "unsaved artwork" } });
     openHeaderMenu();
+    fireEvent.click(screen.getByRole("button", { name: "关于 Lumina Studio" }));
+    await screen.findByRole("dialog", { name: "关于 Lumina Studio" });
     fireEvent.click(screen.getByRole("button", { name: "致谢" }));
-    await screen.findByRole("dialog");
     expect(screen.getByLabelText("Vector draft")).toBe(draft);
     expect(draft.closest("main")).toHaveAttribute("inert");
-    fireEvent.click(screen.getByRole("button", { name: "Close credits" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回关于" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close about" }));
     expect(screen.getByLabelText("Vector draft")).toBe(draft);
     expect(draft).toHaveValue("unsaved artwork");
     expect(draft.closest("main")).not.toHaveAttribute("inert");
@@ -265,11 +278,29 @@ describe("App component", () => {
     render(<App />);
     const scene = await screen.findByTestId("scene-stub");
     openHeaderMenu();
-    fireEvent.click(screen.getByRole("button", { name: "致谢" }));
-    await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "关于 Lumina Studio" }));
+    await screen.findByRole("dialog", { name: "关于 Lumina Studio" });
     expect(screen.getByTestId("scene-stub")).toBe(scene);
     expect(scene).toHaveAttribute("data-suspended", "true");
-    fireEvent.click(screen.getByRole("button", { name: "Close credits" }));
+    document.body.setAttribute("tabindex", "-1");
+    document.body.focus();
+    document.body.removeAttribute("tabindex");
+    fireEvent.click(screen.getByRole("button", { name: "致谢" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回关于" }));
+    expect(scene).toHaveAttribute("data-suspended", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Close about" }));
     expect(scene).toHaveAttribute("data-suspended", "false");
+    expect(screen.getByTestId("header-menu-button")).toHaveFocus();
+  });
+
+  it("routes the native About command to the same page even while viewing credits", async () => {
+    render(<App />);
+    await screen.findByText("Lumina Studio 2");
+    act(() => menuCommands.get("about")!());
+    await screen.findByRole("dialog", { name: "关于 Lumina Studio" });
+    fireEvent.click(screen.getByRole("button", { name: "致谢" }));
+    expect(screen.getByRole("dialog", { name: "致谢" })).toBeInTheDocument();
+    act(() => menuCommands.get("about")!());
+    expect(screen.getByRole("dialog", { name: "关于 Lumina Studio" })).toBeInTheDocument();
   });
 });

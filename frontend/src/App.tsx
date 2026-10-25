@@ -78,7 +78,7 @@ import {
 import LutDetailsPanel from "./components/LutDetailsPanel";
 
 const HEALTH_RECHECK_MS = 5_000;
-const CreditsDialog = lazy(() => import("./credits/CreditsDialog"));
+const AboutDialog = lazy(() => import("./credits/AboutDialog"));
 
 /* ---------- Error Boundary ---------- */
 
@@ -295,8 +295,23 @@ function AppContent({ connected }: { connected: boolean | null }) {
 
   const [announcementReady, setAnnouncementReady] = useState(false);
   const [bugReportOpen, setBugReportOpen] = useState(false);
-  const [creditsOpen, setCreditsOpen] = useState(false);
-  const closeCredits = useCallback(() => setCreditsOpen(false), []);
+  const [infoPage, setInfoPage] = useState<"about" | "credits" | null>(null);
+  const infoOpen = infoPage !== null;
+  const restoreInfoFocus = useRef<(() => void) | null>(null);
+  const openAbout = useCallback((restoreFocus?: () => void) => {
+    if (!restoreInfoFocus.current) {
+      const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      restoreInfoFocus.current = restoreFocus ?? (() => previous?.isConnected && previous.focus({ preventScroll: true }));
+    }
+    setInfoPage("about");
+  }, []);
+  const closeAbout = useCallback(() => setInfoPage(null), []);
+  useEffect(() => {
+    if (infoOpen) return;
+    restoreInfoFocus.current?.();
+    restoreInfoFocus.current = null;
+  }, [infoOpen]);
+  useApplicationMenuCommand("about", openAbout);
   const [bugReportPreset, setBugReportPreset] = useState("");
   const errorTicketPrompt = useErrorTicketPromptStore((s) => s.pending);
   const dismissErrorTicketPrompt = useErrorTicketPromptStore((s) => s.dismiss);
@@ -414,8 +429,8 @@ function AppContent({ connected }: { connected: boolean | null }) {
     <div className="flex h-screen flex-col overflow-hidden bg-slate-200 text-slate-900 dark:bg-slate-950 dark:text-white">
       <header
         ref={headerRef}
-        inert={creditsOpen}
-        aria-hidden={creditsOpen || undefined}
+        inert={infoOpen}
+        aria-hidden={infoOpen || undefined}
         style={electronAPI?.platform === "darwin" ? {
           paddingLeft: "calc(env(titlebar-area-x, 80px) + 12px)",
         } : electronAPI?.platform === "win32" ? {
@@ -472,7 +487,7 @@ function AppContent({ connected }: { connected: boolean | null }) {
             backendStatus={connected === null ? "checking" : connected ? "ok" : "fail"}
             reproTicketId={reproMode.enabled ? reproMode.ticketId : null}
             onReportBug={() => openBugReport("")}
-            onOpenCredits={() => setCreditsOpen(true)}
+            onOpenAbout={openAbout}
           />
         </div>
 
@@ -493,8 +508,8 @@ function AppContent({ connected }: { connected: boolean | null }) {
         </div>
       </header>
 
-      <main inert={creditsOpen} aria-hidden={creditsOpen || undefined}
-        style={{ visibility: creditsOpen ? "hidden" : undefined }}
+      <main inert={infoOpen} aria-hidden={infoOpen || undefined}
+        style={{ visibility: infoOpen ? "hidden" : undefined }}
         className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
         {hasSubTabs(activeTab) && (
           <div
@@ -532,7 +547,7 @@ function AppContent({ connected }: { connected: boolean | null }) {
                 }
               >
                 <Suspense fallback={<LoadingSpinner />}>
-                  <Scene3D deferInitialization={deferredConverterEntry !== null} suspended={creditsOpen} />
+                  <Scene3D deferInitialization={deferredConverterEntry !== null} suspended={infoOpen} />
                 </Suspense>
               </SceneErrorBoundary>
             </WidgetWorkspace>
@@ -570,9 +585,9 @@ function AppContent({ connected }: { connected: boolean | null }) {
         {activeTab === 'settings' && <SettingsPanel />}
         </div>
       </main>
-      {creditsOpen && <Suspense fallback={<LoadingSpinner />}><CreditsDialog onClose={closeCredits} /></Suspense>}
+      {infoPage && <Suspense fallback={<LoadingSpinner />}><AboutDialog page={infoPage} onNavigate={setInfoPage} onClose={closeAbout} /></Suspense>}
       <AnnouncementDialog
-        open={!creditsOpen && announcementReady && announcement.visible}
+        open={!infoOpen && announcementReady && announcement.visible}
         entries={announcement.entries}
         entry={announcement.entry}
         onClose={announcement.close}
@@ -598,7 +613,7 @@ function AppContent({ connected }: { connected: boolean | null }) {
       {/* Beginner tutorial: offered once after the release announcement is
           gone, and never during bug-report reproduction sessions. */}
       <TutorialHost
-        canAutoOffer={!creditsOpen && announcementReady && !announcement.visible && !reproMode.enabled}
+        canAutoOffer={!infoOpen && announcementReady && !announcement.visible && !reproMode.enabled}
       />
       {/* Extractor ColorChecker calibration popup. Mounted at the app root so
           it appears regardless of whether the extractor is opened as the

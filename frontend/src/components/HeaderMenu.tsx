@@ -20,7 +20,7 @@ interface HeaderMenuProps {
   /** Ticket being reproduced; null outside reproduction mode. */
   reproTicketId: string | null;
   onReportBug: () => void;
-  onOpenCredits?: () => void;
+  onOpenAbout?: (restoreFocus: () => void) => void;
 }
 
 interface StatusView {
@@ -77,7 +77,7 @@ function resolveTriggerAlert(
  * unreachable or reproduction mode), so problems stay visible while closed.
  * 只有后端不可达或处于复现模式时，菜单按钮才显示提示点，菜单收起时问题依然可见。
  */
-export function HeaderMenu({ backendStatus, reproTicketId, onReportBug, onOpenCredits }: HeaderMenuProps) {
+export function HeaderMenu({ backendStatus, reproTicketId, onReportBug, onOpenAbout }: HeaderMenuProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -159,10 +159,10 @@ export function HeaderMenu({ backendStatus, reproTicketId, onReportBug, onOpenCr
           <HeaderMenuPanel id={panelId} onItemSelected={() => close(true)}>
             <ThemeToggle />
             <TutorialLauncherButton />
-            {onOpenCredits && (
-              <HeaderMenuItem label={t("credits_title")} onSelect={onOpenCredits}
+            {onOpenAbout && (
+              <HeaderMenuItem label={t("desktop_menu_about")} onSelect={() => onOpenAbout(() => triggerRef.current?.focus({ preventScroll: true }))}
                 icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z" />
+                  <circle cx="12" cy="12" r="9" /><path strokeLinecap="round" d="M12 11v6m0-10v.01" />
                 </svg>} />
             )}
             <BugReportButton onClick={onReportBug} />
