@@ -302,7 +302,7 @@ describe("virtual build plate texture", () => {
     const layout = computeBedTextureLayout(256, 256);
 
     expect(layout.branding).toMatchObject({
-      wordmark: "lumina",
+      wordmark: "Lumina",
       dimensionLabel: "256 × 256 mm",
     });
     expect(layout.branding.baselinePx).toBe(layout.branding.dimensionBaselinePx);

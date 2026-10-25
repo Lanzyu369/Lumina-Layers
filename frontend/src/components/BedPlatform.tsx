@@ -15,7 +15,10 @@ import {
   stageBedTextureReplacement,
 } from "./bedPlatformTexture";
 import {
+  BED_BODY_MATERIAL_INDEX,
+  BED_SURFACE_MATERIAL_INDEX,
   computeBedPreviewCameraPose,
+  createBedPlatformMesh,
   createFallbackBedGeometry,
   loadNativeBedGeometrySource,
   prepareNativeBedGeometry,
@@ -197,12 +200,7 @@ export default function BedPlatform({
     const geo = nativeBedGeometry
       ? nativeBedGeometry.clone()
       : createFallbackBedGeometry(bedDims.w, bedDims.h);
-    const mat = new THREE.MeshStandardMaterial({
-      roughness: 0.68,
-      metalness: 0.12,
-      side: THREE.DoubleSide,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = createBedPlatformMesh(geo);
     mesh.name = "scene-build-plate";
     mesh.userData.bedGeometrySource = nativeBedGeometry
       ? "slicer-native"
@@ -214,7 +212,8 @@ export default function BedPlatform({
   useLayoutEffect(() => {
     onReadyChange?.(false);
     let active = true;
-    const material = bedMesh.material as THREE.MeshStandardMaterial;
+    const material = bedMesh.material[BED_SURFACE_MATERIAL_INDEX];
+    bedMesh.material[BED_BODY_MATERIAL_INDEX].color.set(bedColors.bedBase);
     bedMesh.userData.gridVisible = gridVisible;
     const request = createBedTextureRequest({
       widthMm: bedDims.w,

@@ -279,7 +279,7 @@ export function computeBedTextureLayout(
       borderWidthPx: BED_SURFACE_BORDER_WIDTH_PX,
     },
     branding: {
-      wordmark: "lumina",
+      wordmark: "Lumina",
       dimensionLabel: `${widthMm} × ${heightMm} mm`,
       baselinePx: brandingBaselinePx,
       dimensionBaselinePx:
