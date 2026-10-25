@@ -108,6 +108,7 @@ from core.vector_large_format import (
     format_large_format_tile_label,
     inspect_svg_large_format_support,
     normalize_large_format_source_basename,
+    resolve_large_format_axis_count,
     resolve_large_format_grid_shape,
 )
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
@@ -3040,6 +3041,7 @@ def _validated_large_format_axis_boundaries(
 ) -> tuple[list[int], list[int]]:
     """Project every physical tile boundary onto source and cache grids."""
 
+    tile_count = resolve_large_format_axis_count(total_mm, tile_mm)
     physical_boundaries_mm = [
         min(index * tile_mm, total_mm)
         for index in range(tile_count + 1)
@@ -3555,6 +3557,12 @@ async def _generate_large_format_raster(
 
     px_per_mm_x = px_w / total_width_mm if px_w else 0.0
     px_per_mm_y = px_h / total_height_mm if px_h else 0.0
+    cols, rows = resolve_large_format_grid_shape(
+        total_width_mm=total_width_mm,
+        total_height_mm=total_height_mm,
+        tile_width_mm=tile_width_mm,
+        tile_height_mm=tile_height_mm,
+    )
     source_x_boundaries: list[int] | None = None
     source_y_boundaries: list[int] | None = None
     cache_x_boundaries: list[int] | None = None
