@@ -39,6 +39,49 @@ describe("conversion preset controls", () => {
     expect(useSettingsStore.getState().conversionPreferences.presets).toHaveLength(1);
   });
 
+  it("explains long-edge sizing without the redundant naming subtitle", () => {
+    useConverterStore.setState({ target_width_mm: 150, target_height_mm: 100, preferredSizeAxis: "height" });
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "保存为预设" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.queryByText("给这套设置起个名字，下次一键套用。")).not.toBeInTheDocument();
+    expect(dialog.getByText(/长边 150 mm/)).toBeInTheDocument();
+    expect(dialog.getByText(/尺寸记录长边/)).toBeInTheDocument();
+  });
+
+  it("starts optional groups unchecked on every save and only saves selected groups", () => {
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "保存为预设" }));
+    for (const name of ["高级设置", "外轮廓设置", "透明镀层设置"]) {
+      expect(screen.getByRole("checkbox", { name })).not.toBeChecked();
+    }
+    expect(within(screen.getByRole("dialog")).queryByText(/涂层关闭/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "透明镀层设置" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "预设名称" }), { target: { value: "镀层预设" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存预设" }));
+    const saved = useSettingsStore.getState().conversionPreferences.presets[0].parameters;
+    expect(saved).toHaveProperty("enable_coating", false);
+    expect(saved).not.toHaveProperty("enable_outline");
+    expect(saved).not.toHaveProperty("enable_cleanup");
+    act(() => useConverterStore.getState().setEnableOutline(true));
+    expect(screen.queryByText("已修改")).not.toBeInTheDocument();
+    act(() => useConverterStore.getState().setEnableCoating(true));
+    expect(screen.getByText("已修改")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存为预设" }));
+    expect(screen.getByRole("checkbox", { name: "透明镀层设置" })).not.toBeChecked();
+  });
+
+  it.each([true, false])("shows material layer height with dynamic mode %s", dynamic => {
+    useConverterStore.setState({ source_version: "material", materialLayerHeightMm: 0.08,
+      materialDynamicLayerCountEnabled: dynamic, materialMinLayerCount: 4, materialMaxLayerCount: 10,
+      materialLayerCount: 8 });
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "保存为预设" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByText(/层高 0.08 mm/)).toBeInTheDocument();
+    expect(dialog.getByText(dynamic ? /动态 4–10 层/ : /固定 8 层/)).toBeInTheDocument();
+  });
+
   it("updates a selected preset only when the user explicitly requests it", () => {
     seed(); show(); select(/^常用板画/);
     act(() => useConverterStore.getState().setTargetWidthMm(180));

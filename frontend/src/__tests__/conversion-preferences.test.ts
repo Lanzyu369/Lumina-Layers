@@ -118,12 +118,12 @@ describe("conversion preferences", () => {
     } finally { stop(); }
   });
 
-  it("uses the last manually edited dimension as the size rule for new images", async () => {
+  it("remembers the final long edge regardless of the manually edited dimension", async () => {
     const stop = bindConversionPreferences();
     useConverterStore.setState({ aspectRatio: 2 });
     useConverterStore.getState().setTargetHeightMm(100);
     const saved = useSettingsStore.getState().conversionPreferences.last!;
-    expect(saved).toMatchObject({ size_axis: "height", size_mm: 100 });
+    expect(saved).toMatchObject({ size_axis: "long_edge", size_mm: 200 });
     vi.stubGlobal("Image", class {
       naturalWidth = 100;
       naturalHeight = 200;
@@ -132,11 +132,11 @@ describe("conversion preferences", () => {
     });
     useConverterStore.getState().setImageFile(new File(["image"], "new.png", { type: "image/png" }));
     await Promise.resolve();
-    expect(useConverterStore.getState()).toMatchObject({ target_height_mm: 100, target_width_mm: 50 });
+    expect(useConverterStore.getState()).toMatchObject({ target_height_mm: 200, target_width_mm: 100 });
     stop();
   });
 
-  it("fits the remembered size axis to the printer bed when a new image changes aspect ratio", async () => {
+  it("keeps the remembered long edge when a new image changes orientation", async () => {
     const stop = bindConversionPreferences();
     try {
       useConverterStore.getState().setTargetHeightMm(150);
@@ -149,9 +149,77 @@ describe("conversion preferences", () => {
       useConverterStore.getState().setImageFile(new File(["image"], "wide.png", { type: "image/png" }));
       await Promise.resolve();
       expect(useConverterStore.getState()).toMatchObject({
-        target_width_mm: 256, target_height_mm: 128, preferredSizeAxis: "height",
+        target_width_mm: 150, target_height_mm: 75,
       });
     } finally { stop(); }
+  });
+
+  it.each([
+    [1.5, 150, 100], [2 / 3, 100, 150], [1, 150, 150],
+  ])("applies the same long edge at aspect ratio %s", (ratio, width, height) => {
+    const parameters = { ...captureConversionParameters(useConverterStore.getState()), size_mm: 150 };
+    useConverterStore.setState({ aspectRatio: ratio });
+    applyConversionParameters(useConverterStore.getState, parameters);
+    expect(useConverterStore.getState()).toMatchObject({ target_width_mm: width, target_height_mm: height });
+  });
+
+  it("captures identical sizes independently of the last edited axis", () => {
+    useConverterStore.setState({ aspectRatio: 1.5 });
+    useConverterStore.getState().setTargetWidthMm(150);
+    const fromWidth = captureConversionParameters(useConverterStore.getState());
+    useConverterStore.getState().setTargetHeightMm(100);
+    expect(captureConversionParameters(useConverterStore.getState())).toEqual(fromWidth);
+  });
+
+  it.each(["width", "height"])("migrates old %s presets without losing their saved value", axis => {
+    const old = { ...captureConversionParameters(useConverterStore.getState()), size_axis: axis, size_mm: 180 };
+    const restored = normalizeConversionPreferences({ last: old, presets: [{ id: "old", name: "Old", parameters: old }] });
+    expect(restored.last).toMatchObject({ size_axis: "long_edge", size_mm: 180 });
+    expect(restored.presets[0].parameters).toEqual(restored.last);
+  });
+
+  it("constrains a preset's long edge to the bed while preserving image proportions", () => {
+    const parameters = { ...captureConversionParameters(useConverterStore.getState()), size_mm: 400 };
+    useConverterStore.setState({ aspectRatio: 2 });
+    applyConversionParameters(useConverterStore.getState, parameters);
+    expect(useConverterStore.getState()).toMatchObject({ target_width_mm: 256, target_height_mm: 128 });
+  });
+
+  it("excludes optional settings by default and preserves them when applying or updating", () => {
+    useConverterStore.setState({ enable_cleanup: false, enable_outline: true, outline_width: 3,
+      enable_coating: true, coating_height_mm: 0.12 });
+    const saved = useConverterStore.getState().saveConversionPreset("Base only");
+    if (!("id" in saved)) throw new Error("Save failed");
+    const parameters = useSettingsStore.getState().conversionPreferences.presets[0].parameters;
+    for (const key of ["enable_cleanup", "enable_outline", "outline_width", "enable_coating", "coating_height_mm"]) {
+      expect(parameters).not.toHaveProperty(key);
+    }
+    useConverterStore.setState({ enable_cleanup: true, enable_outline: false, outline_width: 5,
+      enable_coating: false, coating_height_mm: 0.04 });
+    useConverterStore.getState().applyConversionPreset(saved.id);
+    expect(useConverterStore.getState()).toMatchObject({ enable_cleanup: true, enable_outline: false,
+      outline_width: 5, enable_coating: false, coating_height_mm: 0.04 });
+    useConverterStore.getState().updateConversionPreset(saved.id);
+    expect(useSettingsStore.getState().conversionPreferences.presets[0].parameters).not.toHaveProperty("enable_coating");
+  });
+
+  it.each(["advanced", "outline", "coating"] as const)("round-trips only the selected %s group", group => {
+    useConverterStore.setState({ enable_cleanup: false, chroma_gate: 12, enable_outline: true,
+      outline_width: 3, enable_coating: true, coating_height_mm: 0.12 });
+    const result = useConverterStore.getState().saveConversionPreset("Selected", {
+      advanced: group === "advanced", outline: group === "outline", coating: group === "coating",
+    });
+    if (!("id" in result)) throw new Error("Save failed");
+    const restored = normalizeConversionPreferences(JSON.parse(JSON.stringify(useSettingsStore.getState().conversionPreferences)));
+    useSettingsStore.getState().setConversionPreferences(restored);
+    useConverterStore.setState({ enable_cleanup: true, chroma_gate: 20, enable_outline: false,
+      outline_width: 5, enable_coating: false, coating_height_mm: 0.04 });
+    useConverterStore.getState().applyConversionPreset(result.id);
+    expect(useConverterStore.getState()).toMatchObject({
+      enable_cleanup: group !== "advanced", chroma_gate: group === "advanced" ? 12 : 20,
+      enable_outline: group === "outline", outline_width: group === "outline" ? 3 : 5,
+      enable_coating: group === "coating", coating_height_mm: group === "coating" ? 0.12 : 0.04,
+    });
   });
 
   it("keeps factory inputs when the first action is importing someone else's project", () => {

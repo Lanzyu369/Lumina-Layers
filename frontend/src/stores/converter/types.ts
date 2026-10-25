@@ -1,4 +1,4 @@
-import type { PresetNameError, SavePresetResult } from "../conversionPreferences";
+import type { PresetNameError, SavePresetResult, PresetOptions } from "../conversionPreferences";
 import type { ApiRequestOptions } from "../../api/client";
 import type {
   AutoHeightMode,
@@ -483,7 +483,7 @@ export interface ConverterState {
 export interface ConverterActions {
   restoreConversionDefaults: () => void;
   applyConversionPreset: (id: string | null) => boolean;
-  saveConversionPreset: (name: string) => SavePresetResult;
+  saveConversionPreset: (name: string, options?: PresetOptions) => SavePresetResult;
   updateConversionPreset: (id: string) => boolean;
   renameConversionPreset: (id: string, name: string) => PresetNameError | "missing-preset" | null;
   deleteConversionPreset: (id: string) => void;

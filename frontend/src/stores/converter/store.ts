@@ -1661,20 +1661,14 @@ function buildImageAspectRatioState(state: ConverterState, ratio: number): Parti
   if (!Number.isFinite(ratio) || ratio <= 0) return {};
   // An imported project already supplies explicit dimensions before its image loads.
   if (state.aspectRatio !== null) return { aspectRatio: ratio };
-  const longestEdge = Math.max(state.target_width_mm, state.target_height_mm);
-  // Remembered presets keep the user's chosen size axis; without preferences,
-  // preserve the existing longest-edge sizing for a newly opened image.
   const remembered = state.conversionParameterContext === "defaults"
     ? useSettingsStore.getState().conversionPreferences.last
     : null;
-  const requested = remembered
-    ? remembered.size_axis === "height"
-      ? { target_width_mm: Math.max(10, Math.round(remembered.size_mm * ratio)), target_height_mm: remembered.size_mm }
-      : { target_width_mm: remembered.size_mm, target_height_mm: Math.max(10, Math.round(remembered.size_mm / ratio)) }
-    : {
-        target_width_mm: ratio >= 1 ? longestEdge : Math.max(10, Math.round(longestEdge * ratio)),
-        target_height_mm: ratio >= 1 ? Math.max(10, Math.round(longestEdge / ratio)) : longestEdge,
-      };
+  const longestEdge = remembered?.size_mm ?? Math.max(state.target_width_mm, state.target_height_mm);
+  const requested = {
+    target_width_mm: ratio >= 1 ? longestEdge : Math.max(10, Math.round(longestEdge * ratio)),
+    target_height_mm: ratio >= 1 ? Math.max(10, Math.round(longestEdge / ratio)) : longestEdge,
+  };
   const dimensions = fitTargetDimensions(requested, state, useSettingsStore.getState().printerModel);
   return {
     aspectRatio: ratio,
