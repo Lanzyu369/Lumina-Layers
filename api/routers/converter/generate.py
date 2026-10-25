@@ -4568,6 +4568,7 @@ async def convert_batch(
     images: list[UploadFile] = File(..., description="批量图像"),
     source_kind: str = Form("legacy_single", description="源类型: legacy_single | legacy_multi | native_bundle"),
     lut_name: str | None = Form(None, description="LUT 名称"),
+    lut_names: list[str] | str | None = Form(None, description="经典 LUT 名称列表"),
     material_type: str | None = Form(None, description="原生材料类型"),
     vendor: str | None = Form(None, description="原生厂商"),
     db_names: list[str] | str | None = Form(None, description="原生 DB 名称列表"),
@@ -4692,7 +4693,9 @@ async def convert_batch(
         build_plate_id=build_plate_id,
     )
     # Resolve color source (main thread). Batch must mirror the single-image
+    # preview/generate source selection contract: classic LUT, native
     # reverse-LUT bundle, or material archives.
+    # 解析颜色来源；批量模式应与单图预览/生成一致支持经典 LUT、反推 LUT
     # 和耗材档案。
     material_source = _validate_material_source(material_source)
     image_count = len(images)

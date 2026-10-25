@@ -15,6 +15,8 @@ export interface AnnouncementEntry {
 }
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
+  {
+    title: { zh: "Lumina Layers — 10 月更新速览", en: "Lumina Layers — October updates" },
   },
   {
     version: "2026-10-21",

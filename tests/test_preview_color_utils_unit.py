@@ -3,6 +3,7 @@
 
 ``core.pipeline.preview_color_utils`` 的回归测试：
 覆盖 native bundle 调色板在 hex_color 缺省时的颜色解析，
+确保不会因 UI ``color_mode`` 陈旧而串色（例如用户从经典 CMYW LUT
 切到反推 LUT 时，六色调色板被错误解析成 CMYW 四色导致 3MF
 ``filament_colour`` 出现重复/错位）。
 """
@@ -63,6 +64,7 @@ class TestBuildPalettePreviewColors:
     def test_six_color_rybwgk_palette_under_stale_cmyw_color_conf(self) -> None:
         """Native ColorDB palette with canonical names must produce DISTINCT,
         canonical colors even when the caller passes a stale CMYW color_conf
+        (reproduces the bug where switching 经典 CMYW LUT → 反推 LUT kept
         ``color_mode='4-Color (CMYW)'`` and polluted the 3MF ``filament_colour``).
         """
         palette = _six_color_rybwgk_palette()

@@ -391,6 +391,7 @@ def convert_image_to_3d(
         material_backing_material_index: Optional selected-material index used
             as the backing color when ``material_source`` is
             ``"material_archive"``. Native and legacy LUT flows ignore it.
+            (耗材档案模式下作为底板颜色的已选耗材索引；经典 LUT 与反推 LUT
             流程会忽略该值)
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to 3MF export.
