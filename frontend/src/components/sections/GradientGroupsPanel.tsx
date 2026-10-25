@@ -605,6 +605,12 @@ function RequantizeDialog({
         data-testid="requantize-dialog"
       >
         <div className="flex flex-col gap-1">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+              {t("gradient_groups_requantize_dialog_title")}
+            </h3>
+            <CloseButton label={t("common_close")} onClick={onClose} />
+          </div>
           <p className="text-[11px] leading-tight text-slate-500 dark:text-slate-400">
             {t("gradient_groups_requantize_dialog_description")
               .replace("{count}", String(regionCount))

@@ -971,6 +971,15 @@ export default function MaterialPickerDialog({
             }}
             onMouseDown={(event) => event.stopPropagation()}
           >
+            <div className="flex items-start justify-between gap-3">
+              <h3
+                id={confirmTitleId}
+                className="text-lg font-semibold text-slate-900 dark:text-slate-50"
+              >
+                {t("basic_material_picker_mixed_confirm_title")}
+              </h3>
+              <CloseButton label={t("common_close")} onClick={() => setShowMixedConfirmation(false)} />
+            </div>
             <p
               id={confirmDescriptionId}
               className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300"

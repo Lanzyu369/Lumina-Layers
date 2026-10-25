@@ -1,4 +1,5 @@
 import CloseButton from "./CloseButton";
+import { useI18n } from "../../i18n/context";
 import {
   useEffect,
   useId,
@@ -104,6 +105,7 @@ export default function LutPickerDialog({
   refreshing = false,
   labels,
 }: LutPickerDialogProps) {
+  const { t } = useI18n();
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -268,6 +270,7 @@ export default function LutPickerDialog({
           <div className="flex items-center gap-2">
             <Button size="icon" label={labels.refreshTooltip} onClick={onRefresh}
               disabled={loading} loading={refreshing} icon={<span aria-hidden="true">⟳</span>} />
+            <CloseButton label={t("common_close")} onClick={onCancel} />
           </div>
         </div>
 

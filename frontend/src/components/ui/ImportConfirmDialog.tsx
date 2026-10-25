@@ -54,6 +54,7 @@ export default function ImportConfirmDialog({
           <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100">
             {t("recipe_import_title")}
           </h2>
+          <CloseButton label={t("common_close")} onClick={onCancel} />
         </div>
 
         {/* Body */}

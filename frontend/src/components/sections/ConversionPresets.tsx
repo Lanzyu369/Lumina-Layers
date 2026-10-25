@@ -8,6 +8,7 @@ import { StructureMode } from "../../api/types";
 import { useI18n } from "../../i18n/context";
 import Dropdown from "../ui/Dropdown";
 import Button from "../ui/Button";
+import CloseButton from "../ui/CloseButton";
 import Checkbox from "../ui/Checkbox";
 import { workstationInputClass } from "../ui/panelPrimitives";
 
@@ -106,6 +107,10 @@ export default function ConversionPresets() {
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="conversion-preset-title"
         className="max-h-[90vh] overflow-y-auto w-full max-w-md rounded-2xl border p-6 shadow-2xl"
         style={{ background: "var(--surface-panel-strong)", borderColor: "var(--surface-outline)" }}>
+        <div className="flex items-start justify-between gap-3">
+          <h2 id="conversion-preset-title" className="text-base font-semibold text-slate-800 dark:text-slate-100">{t(dialogMode === "save" ? "conversion_preset_title" : dialogMode === "rename" ? "conversion_preset_rename" : "conversion_preset_delete")}</h2>
+          <CloseButton label={t("common_close")} onClick={closeDialog} />
+        </div>
         {dialogMode === "delete" && <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{t("conversion_preset_delete_hint").replace("{name}", active?.name ?? "")}</p>}
         <form className="mt-6" onSubmit={e => {
           e.preventDefault();

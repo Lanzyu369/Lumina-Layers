@@ -1027,6 +1027,12 @@ function MaterialLibraryEditDialog({
         }}
       >
         <div>
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
+              {t("mat_gradient_library_edit_title")}
+            </h3>
+            <CloseButton label={t("common_close")} onClick={onCancel} disabled={pending} />
+          </div>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             {tRuntime("mat_gradient_library_edit_desc", {
               directoryName: item.directory_name,
