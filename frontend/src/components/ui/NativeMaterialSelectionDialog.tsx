@@ -189,6 +189,7 @@ function MaterialSelectionContent({ selection, isEditing }: {
                   ]}
                   disabled={candidates.length === 0}
                 />
+                {message && (
                   <p className="status-banner text-sm" data-tone="warning" role="status">{message}</p>
                 )}
               </section>
