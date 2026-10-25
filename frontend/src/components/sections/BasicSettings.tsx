@@ -1126,6 +1126,7 @@ export default function BasicSettings() {
         />
       </Block>
 
+      <ConversionPresets />
 
         <RadioGroup
           label={t("basic_source_version_label")}

@@ -131,6 +131,22 @@ describe("conversion preferences", () => {
     stop();
   });
 
+    const stop = bindConversionPreferences();
+    try {
+      useConverterStore.getState().setTargetHeightMm(150);
+      vi.stubGlobal("Image", class {
+        naturalWidth = 200;
+        naturalHeight = 100;
+        onload: (() => void) | null = null;
+        set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+      });
+      useConverterStore.getState().setImageFile(new File(["image"], "wide.png", { type: "image/png" }));
+      await Promise.resolve();
+      expect(useConverterStore.getState()).toMatchObject({
+      });
+    } finally { stop(); }
+  });
+
   it("keeps factory inputs when the first action is importing someone else's project", () => {
     const stop = bindConversionPreferences();
     useConverterStore.getState().importRecipeState({ target_width_mm: 93 },

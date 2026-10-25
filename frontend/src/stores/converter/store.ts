@@ -1661,6 +1661,10 @@ function buildImageAspectRatioState(state: ConverterState, ratio: number): Parti
   if (!Number.isFinite(ratio) || ratio <= 0) return {};
   // An imported project already supplies explicit dimensions before its image loads.
   if (state.aspectRatio !== null) return { aspectRatio: ratio };
+  const remembered = state.conversionParameterContext === "defaults"
+    ? useSettingsStore.getState().conversionPreferences.last
+    : null;
+  const dimensions = fitTargetDimensions(requested, state, useSettingsStore.getState().printerModel);
   return {
     aspectRatio: ratio,
     ...dimensions,
