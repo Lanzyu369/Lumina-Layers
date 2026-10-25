@@ -73,6 +73,7 @@ const LUT_COLORS: LutColorEntry[] = [
 function resetStore() {
   _clearClientLogBufferForTests();
   useConverterStore.setState({
+    source_version: 'legacy',
     palette: [],
     selectedColor: null,
     colorRemapMap: {},
