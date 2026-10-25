@@ -1,6 +1,6 @@
 # Lumina 耗材服务器连接说明
 
-本文说明如何让 Lumina Studio 连接当前云端耗材 Registry。普通使用者只需要只读同步；上传、审批和私有频道访问属于维护者操作。当前部署状态、LUT 云库数量和维护交接流程见 [Lumina 云端耗材与 LUT Registry 交接文档](cloud-registry-handoff.md)。
+本文说明如何让 Lumina Studio 连接自建或已获授权的耗材 Registry。源码安装默认不配置云端服务，本地耗材档案可离线使用。上传、审批和频道权限由服务部署方管理；相关集成说明见 [耗材与 LUT Registry 运维参考](cloud-registry-handoff.md)。
 
 ## 与 LUT 云库的关系
 
@@ -13,28 +13,30 @@ Lumina 的云端资料库分成两条并列能力：
 
 ## 服务地址
 
-当前 Registry 地址：
+源码不附带官方耗材库的服务地址或访问凭证。下面是不可用的示例地址，连接前请替换为你自行部署或已获授权的 Registry：
 
 ```text
-http://154.17.28.23/api/material-registry/v1
+https://registry.example.invalid/api/material-registry/v1
 ```
 
-当前公开频道：
+频道示例：
 
 ```text
 official,community
 ```
 
-`official` 和 `community` 是公开只读频道，不需要 token。`team`、上传和审批需要开发者 token。
+可见频道和认证要求以部署方配置为准。频道名为 `official` 或 `community` 不代表可以匿名访问；服务要求认证时，应配置 `LUMINA_MATERIAL_REGISTRY_TOKEN`。官方在线耗材库的访问授权不随源码提供。
 
 `/materials/catalog`、`/packages/upload` 等路径由独立 Material Registry 服务提供；Lumina Studio 主应用只配置连接和同步，不在主应用仓库内实现这些服务端路由。
 
 ## 普通使用者配置
 
-在运行 Lumina Studio 的环境中设置：
+仅在需要连接自己的 Registry 时设置。保持 `LUMINA_MATERIAL_REGISTRY_URL` 为空，手动和自动云端刷新都不会启用。
+
+以下地址必须替换成实际获授权的服务地址：
 
 ```powershell
-$env:LUMINA_MATERIAL_REGISTRY_URL = "http://154.17.28.23/api/material-registry/v1"
+$env:LUMINA_MATERIAL_REGISTRY_URL = "https://registry.example.invalid/api/material-registry/v1"
 $env:LUMINA_MATERIAL_REGISTRY_CHANNELS = "official,community"
 ```
 
@@ -92,14 +94,14 @@ validator 自身。只有当前摘要仍与保存值一致时才发送 `If-None-
 用浏览器或命令行打开：
 
 ```text
-http://154.17.28.23/api/material-registry/v1/materials/catalog?channel=official&channel=community&limit=1
+https://registry.example.invalid/api/material-registry/v1/materials/catalog?channel=official&channel=community&limit=1
 ```
 
 PowerShell 验证：
 
 ```powershell
 Invoke-RestMethod `
-  "http://154.17.28.23/api/material-registry/v1/materials/catalog?channel=official&channel=community&limit=1"
+  "https://registry.example.invalid/api/material-registry/v1/materials/catalog?channel=official&channel=community&limit=1"
 ```
 
 正常响应应包含：
@@ -109,14 +111,14 @@ Invoke-RestMethod `
   "schema_version": "1.0",
   "channels": ["official", "community"],
   "count": 1,
-  "total_count": 181,
+  "total_count": 1,
   "materials": [
     {
       "material_id": "example-material",
       "name": "Example PLA White",
       "vendor": "Example Vendor",
       "channel": "official",
-      "package_url": "http://154.17.28.23/api/material-registry/v1/packages/example-material.zip"
+      "package_url": "https://registry.example.invalid/api/material-registry/v1/packages/example-material.zip"
     }
   ]
 }
@@ -129,7 +131,7 @@ Invoke-RestMethod `
 上传接口：
 
 ```text
-POST http://154.17.28.23/api/material-registry/v1/packages/upload
+POST https://registry.example.invalid/api/material-registry/v1/packages/upload
 ```
 
 独立 Registry 服务使用 Bearer token，不再使用旧版主应用的 official password header。
@@ -180,4 +182,4 @@ Lumina 客户端要求 catalog URL 和 package URL 是同一个 origin，并拒�
 
 ### HTTPS
 
-当前公开连接方式以本文“服务地址”小节为准。HTTPS、域名、反向代理和证书等部署细节由部署方在私有运维文档中维护，公开文档只记录普通连接者需要使用的地址和客户端配置。
+远端 Registry 应使用 HTTPS。实际域名、反向代理、证书和访问凭证由部署方提供并在私有运维文档中维护；本文只保留示例地址和通用客户端配置。

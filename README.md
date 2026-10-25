@@ -206,6 +206,8 @@ python start_all.py
 
 Open the frontend address printed by the launcher, normally `http://localhost:4174`. The backend uses port `8000` by default. Follow the launcher's prompt to stop it.
 
+Source installs do not connect to an online material library by default. Local material profiles work offline. To connect a Registry you host or are authorized to use, configure its service URL separately; see the [Registry connection guide](docs/material-registry-connection.md).
+
 Requirements automatically install the native SVG, 3MF, and material-metadata dependencies. Ordinary source use needs no separate SDK checkout, local wheelhouse, internal commit checkout, or C++ compilation. If no matching wheel is found, check Python, OS, and architecture against the table above. See the [native dependency and desktop guide](docs/desktop-electron.md) for details.
 
 ### Optional: desktop window
@@ -232,7 +234,7 @@ The [project Wiki](https://wiki.luminastudio.com.cn/) contains guides and update
 
 Share a print or ask for help through the QQ and Discord links above. For a software problem, the built-in feedback tool helps us reproduce it: include what you did, the version, and relevant files. Reports are saved under local `feedback/` before submission to the official service. To keep them on your device, set `LUMINA_FEEDBACK_SERVER_URL=off` in `.env.local`. See [.env.example](.env.example) and [bug report details](docs/bug-report-reproducibility.md).
 
-Lumina Studio is a non-profit open-source community project. If it has helped you and you would like to keep the work going, you can support it on Afdian or Patreon. Support goes towards development, testing, documentation, packaging, and community maintenance; software features do not depend on a sponsorship tier. The [sponsors page](https://www.luminastudio.com.cn/sponsors) lists supporters and material-brand adaptation information.
+Lumina Studio is a non-profit open-source community project. If it has helped you and you would like to keep the work going, you can support it on Afdian or Patreon. Support goes towards development, testing, documentation, packaging, and community maintenance. The [sponsors page](https://www.luminastudio.com.cn/sponsors) lists supporters and material-brand adaptation information.
 
 ## License and commercial use
 

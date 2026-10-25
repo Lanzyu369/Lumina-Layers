@@ -206,6 +206,8 @@ python start_all.py
 
 打开启动器显示的前端地址，默认是 `http://localhost:4174`；后端默认使用 `8000` 端口。退出时按启动器提示操作。
 
+源码运行默认不连接在线耗材库，本地耗材档案可离线使用。连接自建或已获授权的云库时，需要另外配置服务地址，见 [Registry 连接说明](docs/material-registry-connection.md)。
+
 SVG、3MF 和材料元数据用到的原生依赖会一起装好，不用再克隆 SDK、找本地 wheelhouse、检出内部提交或编译 C++。如果安装时找不到匹配的 wheel，先核对上面的 Python、系统和架构要求。排障可看 [原生依赖与桌面运行指南](docs/desktop-electron.md)。
 
 ### 可选：桌面窗口
@@ -232,7 +234,7 @@ pnpm --dir electron start
 
 有作品想晒、有问题想聊，欢迎来上面的 QQ 或 Discord。遇到软件问题，尽量用内置反馈功能，把怎么操作的、用的版本和相关素材一起带上，这样我们更容易复现。报告会先存到本地 `feedback/`，再提交官方反馈服务；如果只想留在本机，在 `.env.local` 中设置 `LUMINA_FEEDBACK_SERVER_URL=off` 即可。配置模板见 [.env.example](.env.example)，报告内容见 [问题反馈说明](docs/bug-report-reproducibility.md)。
 
-Lumina Studio 是非营利性开源社区项目。如果这个工具帮到了你，也愿意支持我们继续做下去，可以通过爱发电或 Patreon 赞助。支持会用在开发、测试、文档、打包和社区维护上，软件功能不会按赞助档位区分。支持名单和品牌适配情况见 [赞助与支持页面](https://www.luminastudio.com.cn/sponsors)。
+Lumina Studio 是非营利性开源社区项目。如果这个工具帮到了你，也愿意支持我们继续做下去，可以通过爱发电或 Patreon 赞助。支持会用在开发、测试、文档、打包和社区维护上。支持名单和品牌适配情况见 [赞助与支持页面](https://www.luminastudio.com.cn/sponsors)。
 
 ## 许可与商业使用
 
