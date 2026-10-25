@@ -302,11 +302,10 @@ export default function ActionBar() {
             <Button
               label={t("native_material_edit_button")}
               variant="secondary"
-              size="sm"
               onClick={() => void openNativeMaterialSelection()}
               disabled={!hasPreview || !sourceSelection.isReady || isLoading || isGenerating || batchLoading || replacePreviewLoading || contentCommitStatus === "unknown"}
               loading={nativeMaterialSelectionLoading}
-              className="justify-self-start"
+              className="w-full min-h-9 px-4 py-2"
             />
             {hasPreview && (
               <>

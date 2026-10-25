@@ -162,7 +162,6 @@ function MaterialSelectionContent({ selection, isEditing }: {
             const candidates = material.profiles.filter((profile) => profile.available);
             const chosen = profiles[material.name] ?? "";
             const automatic = !chosen && !isChecking && !selectionError ? material.selected_profile_name : null;
-            const resolved = chosen || automatic;
             const reportedIssue = selection.issues.find((issue) => issue.material_index === index);
             const issueCode = !isChecking && !selectionError ? reportedIssue?.code : null;
             const message = issueCode ? t(issueCode)
@@ -190,12 +189,8 @@ function MaterialSelectionContent({ selection, isEditing }: {
                   ]}
                   disabled={candidates.length === 0}
                 />
-                {message ? (
+                {message && (
                   <p className="status-banner text-sm" data-tone="warning" role="status">{message}</p>
-                ) : resolved && (
-                  <p className="break-words text-xs text-[var(--surface-text-muted)]">
-                    {t(chosen ? "native_material_selected" : "native_material_automatic").replace("{profile}", resolved)}
-                  </p>
                 )}
               </section>
             );
