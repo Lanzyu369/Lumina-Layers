@@ -1,3 +1,4 @@
+import CloseButton from "./CloseButton";
 import { useEffect } from "react";
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
@@ -87,17 +88,10 @@ export default function AnnouncementDialog({
               {anchorEntry.version}
             </span>
           </div>
-          <button
-            type="button"
-            className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
-            onClick={onClose}
-            aria-label={t("announcement_close")}
-          >
-            ✕
-          </button>
+          <CloseButton label={t("announcement_close")} onClick={onClose} />
         </div>
 
-        <div className="max-h-[70vh] flex-1 overflow-y-auto px-5 py-4">
+        <div className="max-h-[70vh] flex-1 overflow-y-auto overscroll-y-contain px-5 py-4">
           {resolvedEntries.map((currentEntry, entryIndex) => (
             <article
               key={currentEntry.version}
@@ -155,7 +149,7 @@ export default function AnnouncementDialog({
           />
           <Button
             label={t("announcement_mark_read")}
-            variant="primary"
+            variant="secondary"
             onClick={onDismissVersion}
             className="px-4"
           />

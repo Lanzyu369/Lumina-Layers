@@ -1,5 +1,6 @@
 import type { BatchResponse } from "../../api/types";
 import { useI18n } from "../../i18n/context";
+import { cx, StatusBanner, wellPadClass } from "./panelPrimitives";
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
 import { isUnsafeVisibleErrorText } from "../../utils/visibleErrorText";
 
@@ -45,17 +46,17 @@ export default function BatchResultSummary({ result }: BatchResultSummaryProps) 
   const failedItems = result.results.filter((r) => r.status === "failed");
 
   return (
-    <div className="flex flex-col gap-3 rounded-md bg-slate-800 p-3 text-sm">
+    <div className={cx(wellPadClass, "flex flex-col gap-3 text-sm")}>
       {/* Summary stats */}
-      <p className="text-slate-300">
+      <p className="text-slate-600 dark:text-slate-300">
         {t("batch_success")}{" "}
-        <span className="font-medium text-green-400">{successCount}</span>
+        <span className="font-medium text-green-700 dark:text-green-400">{successCount}</span>
         {" / "}{t("batch_total")}{" "}
-        <span className="font-medium text-slate-200">{total}</span>
+        <span className="font-medium text-slate-800 dark:text-slate-200">{total}</span>
         {failedCount > 0 && (
           <>
             {"，"}{t("batch_failed")}{" "}
-            <span className="font-medium text-red-400">{failedCount}</span>
+            <span className="font-medium text-red-700 dark:text-red-400">{failedCount}</span>
           </>
         )}
       </p>
@@ -90,30 +91,28 @@ export default function BatchResultSummary({ result }: BatchResultSummaryProps) 
       {result.warnings?.map((w) => {
         if (w.code === "plate-overflow") {
           return (
-            <p key={w.code} role="status" className="text-xs text-amber-400">
+            <StatusBanner key={w.code} role="status" tone="warning">
               {t("batch.warnings.plateOverflow.body")}
-            </p>
+            </StatusBanner>
           );
         }
         if (w.code === "preview-limited") {
           return (
-            <p key={w.code} role="status" className="text-xs text-amber-400">
+            <StatusBanner key={w.code} role="status" tone="warning">
               {t("batch.warnings.previewLimited.body")}
-            </p>
+            </StatusBanner>
           );
         }
         if (w.code === "wipe_tower_manual_adjustment_required") {
           return (
-            <div
+            <StatusBanner
               key={w.code}
               role="alert"
-              className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"
+              tone="warning"
+              title={t("batch.warnings.wipeTowerManual.title")}
             >
-              <p className="font-medium">
-                {t("batch.warnings.wipeTowerManual.title")}
-              </p>
-              <p>{t("batch.warnings.wipeTowerManual.body")}</p>
-            </div>
+              {t("batch.warnings.wipeTowerManual.body")}
+            </StatusBanner>
           );
         }
         return null;
@@ -122,8 +121,8 @@ export default function BatchResultSummary({ result }: BatchResultSummaryProps) 
       {/* Failed items list */}
       {failedItems.length > 0 && (
         <div className="flex flex-col gap-1">
-          <p className="text-xs font-medium text-red-400">{t("batch_failed_files")}</p>
-          <ul className="flex flex-col gap-1" aria-label={t("batch_failed_list_label")}>
+          <p className="text-xs font-medium text-red-700 dark:text-red-400">{t("batch_failed_files")}</p>
+          <ul className="flex flex-col" aria-label={t("batch_failed_list_label")}>
             {failedItems.map((item, index) => {
               const visibleError = visibleBatchItemError(
                 item.error,
@@ -132,11 +131,11 @@ export default function BatchResultSummary({ result }: BatchResultSummaryProps) 
               return (
                 <li
                   key={`${item.filename}-${index}`}
-                  className="rounded bg-red-900/20 px-2 py-1 text-xs text-slate-300"
+                  className="border-t border-[color:var(--surface-divider)] px-2 py-1.5 text-xs text-slate-600 first:border-t-0 dark:text-slate-300"
                 >
                   <span className="font-medium">{item.filename}</span>
                   {visibleError && (
-                    <span className="text-red-300"> — {visibleError}</span>
+                    <span className="text-red-700 dark:text-red-300"> — {visibleError}</span>
                   )}
                 </li>
               );

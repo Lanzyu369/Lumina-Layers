@@ -401,7 +401,7 @@ export default function ExtractorCanvas() {
     return (
       <div
         data-testid="extractor-results"
-        className="relative flex h-full min-h-0 flex-1 flex-col gap-5 overflow-auto px-3 py-3 sm:px-5 sm:py-4 xl:px-7"
+        className="relative flex h-full min-h-0 flex-1 flex-col gap-5 overflow-auto overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4 xl:px-7"
       >
         {/* 色卡 + LUT 预览：左右并排，等宽 */}
         <div className="flex h-full min-h-0 w-full flex-col gap-6 2xl:flex-row">
@@ -514,7 +514,7 @@ export default function ExtractorCanvas() {
         <button
           data-testid="rotate-image-btn"
           onClick={rotateImage}
-          className="rounded-full border border-slate-200/80 bg-slate-50 px-3 py-1 text-sm text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+          className="action-control rounded-full border px-3 py-1 text-sm transition-colors"
         >
           {t("ext_rotate_btn")}
         </button>
@@ -578,7 +578,7 @@ function ManualFixPopover({
   return (
     <div
       data-testid="manual-fix-popup"
-      className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/96 px-4 py-3 shadow-lg dark:border-slate-700/80 dark:bg-slate-900/96"
+      className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-slate-100/96 px-4 py-3 shadow-lg dark:border-slate-700/80 dark:bg-slate-900/96"
     >
       <span className="text-sm text-slate-700 dark:text-slate-300">
         {t("ext_canvas_row")} {cell.cell.display_row} / {t("ext_canvas_col")} {cell.cell.display_col}
@@ -597,13 +597,13 @@ function ManualFixPopover({
         data-testid="fix-submit-button"
         onClick={handleSubmit}
         disabled={loading}
-        className="rounded-full bg-blue-600 px-3 py-1.5 text-sm text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+        className="action-control action-control-primary rounded-lg px-3 py-1.5 text-sm"
       >
         {loading ? t("ext_canvas_fixing") : t("ext_canvas_confirm_fix")}
       </button>
       <button
         onClick={onCancel}
-        className="rounded-full border border-slate-200/80 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+        className="rounded-full border border-slate-200/80 bg-slate-100 px-3 py-1.5 text-sm text-slate-700 transition-colors hover:bg-slate-200 dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
       >
         {t("ext_canvas_cancel")}
       </button>

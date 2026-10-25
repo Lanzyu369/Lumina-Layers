@@ -114,6 +114,7 @@ class UserSettings(BaseModel):
     material_delta_e00_tolerance: float = Field(default=0.5, ge=0.0, le=5.0)
     auto_replace_gradient_banding: StrictBool = False
     generated_file_directory: str = Field(default="", max_length=1024)
+    header_nav_alignment: Literal["center", "left"] = "center"
     conversion_preferences: dict[str, Any] | None = None
 
 

@@ -108,6 +108,7 @@ from core.vector_large_format import (
     format_large_format_tile_label,
     inspect_svg_large_format_support,
     normalize_large_format_source_basename,
+    resolve_large_format_axis_count,
     resolve_large_format_grid_shape,
 )
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
@@ -3040,7 +3041,7 @@ def _validated_large_format_axis_boundaries(
 ) -> tuple[list[int], list[int]]:
     """Project every physical tile boundary onto source and cache grids."""
 
-    tile_count = max(1, math.ceil(total_mm / tile_mm))
+    tile_count = resolve_large_format_axis_count(total_mm, tile_mm)
     physical_boundaries_mm = [
         min(index * tile_mm, total_mm)
         for index in range(tile_count + 1)
@@ -3556,8 +3557,12 @@ async def _generate_large_format_raster(
 
     px_per_mm_x = px_w / total_width_mm if px_w else 0.0
     px_per_mm_y = px_h / total_height_mm if px_h else 0.0
-    cols = max(1, math.ceil(total_width_mm / tile_width_mm))
-    rows = max(1, math.ceil(total_height_mm / tile_height_mm))
+    cols, rows = resolve_large_format_grid_shape(
+        total_width_mm=total_width_mm,
+        total_height_mm=total_height_mm,
+        tile_width_mm=tile_width_mm,
+        tile_height_mm=tile_height_mm,
+    )
     source_x_boundaries: list[int] | None = None
     source_y_boundaries: list[int] | None = None
     cache_x_boundaries: list[int] | None = None
@@ -4571,7 +4576,7 @@ async def convert_batch(
     images: list[UploadFile] = File(..., description="批量图像"),
     source_kind: str = Form("legacy_single", description="源类型: legacy_single | legacy_multi | native_bundle"),
     lut_name: str | None = Form(None, description="LUT 名称"),
-    lut_names: list[str] | str | None = Form(None, description="传统 LUT 名称列表"),
+    lut_names: list[str] | str | None = Form(None, description="经典 LUT 名称列表"),
     material_type: str | None = Form(None, description="原生材料类型"),
     vendor: str | None = Form(None, description="原生厂商"),
     db_names: list[str] | str | None = Form(None, description="原生 DB 名称列表"),
@@ -4696,9 +4701,9 @@ async def convert_batch(
         build_plate_id=build_plate_id,
     )
     # Resolve color source (main thread). Batch must mirror the single-image
-    # preview/generate source selection contract: traditional LUT, native
+    # preview/generate source selection contract: classic LUT, native
     # reverse-LUT bundle, or material archives.
-    # 解析颜色来源；批量模式应与单图预览/生成一致支持传统 LUT、反推 LUT
+    # 解析颜色来源；批量模式应与单图预览/生成一致支持经典 LUT、反推 LUT
     # 和耗材档案。
     material_source = _validate_material_source(material_source)
     image_count = len(images)

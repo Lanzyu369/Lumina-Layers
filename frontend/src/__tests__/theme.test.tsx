@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { useEffect } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { renderHook, act } from "@testing-library/react";
 import { ThemeToggle } from "../components/ThemeToggle";
+import { useDocumentThemeClass } from "../hooks/useDocumentThemeClass";
 import { useThemeConfig } from "../hooks/useThemeConfig";
 import { THEME_CONFIG } from "../components/themeConfig";
 import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
@@ -18,31 +20,70 @@ beforeEach(() => {
 // ========== ThemeToggle Component Tests ==========
 
 describe("ThemeToggle", () => {
-  it("renders moon icon in light mode", () => {
+  it("shows dark mode as an unpressed menu item in light mode", () => {
     useSettingsStore.setState({ theme: "light" });
     render(<ThemeToggle />);
+
+    const item = screen.getByRole("button", { name: "深色模式" });
+    expect(item).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByTestId("theme-icon-moon")).toBeInTheDocument();
     // DESIGN.md forbids native ``title`` tooltips on header controls.
     // DESIGN.md 禁止顶栏控件使用原生 ``title`` 提示。
-    expect(
-      screen.getByRole("button", { name: "切换主题" }),
-    ).not.toHaveAttribute("title");
+    expect(item).not.toHaveAttribute("title");
   });
 
-  it("renders sun icon in dark mode", () => {
+  it("shows dark mode as pressed in dark mode", () => {
     useSettingsStore.setState({ theme: "dark" });
     render(<ThemeToggle />);
-    expect(screen.getByTestId("theme-icon-sun")).toBeInTheDocument();
+
+    expect(screen.getByRole("button", { name: "深色模式" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   it("toggles theme from light to dark on click", () => {
     useSettingsStore.setState({ theme: "light" });
     render(<ThemeToggle />);
 
-    const button = screen.getByRole("button", { name: "切换主题" });
-    fireEvent.click(button);
+    fireEvent.click(screen.getByRole("button", { name: "深色模式" }));
 
     expect(useSettingsStore.getState().theme).toBe("dark");
+  });
+});
+
+// ========== useDocumentThemeClass Hook Tests ==========
+
+describe("useDocumentThemeClass", () => {
+  it("mirrors the stored theme onto the root element", () => {
+    useSettingsStore.setState({ theme: "dark" });
+    renderHook(() => useDocumentThemeClass());
+    expect(document.documentElement).toHaveClass("dark");
+
+    act(() => {
+      useSettingsStore.getState().setTheme("light");
+    });
+
+    expect(document.documentElement).not.toHaveClass("dark");
+  });
+
+  it("sets the class before children's effects read it on mount", () => {
+    useSettingsStore.setState({ theme: "dark" });
+    const seenByChild: boolean[] = [];
+    function ReadsThemeOnMount() {
+      useEffect(() => {
+        seenByChild.push(document.documentElement.classList.contains("dark"));
+      }, []);
+      return null;
+    }
+    function Root() {
+      useDocumentThemeClass();
+      return <ReadsThemeOnMount />;
+    }
+
+    render(<Root />);
+
+    expect(seenByChild).toEqual([true]);
   });
 });
 

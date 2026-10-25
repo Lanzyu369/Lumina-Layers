@@ -24,6 +24,7 @@ import {
   type CanvasPreviewRenderingQuality,
 } from "./canvasPreviewUtils"
 import { useI18n } from "../../i18n/context"
+import { wheelZoomDelta, wheelZoomFactor } from "../../utils/wheelZoom"
 import {
   useSpacePanModifier,
   type SpacePanDeactivateReason,
@@ -506,10 +507,12 @@ export default function CanvasPreviewSurface({
       x: event.clientX - rect.left,
       y: event.clientY - rect.top,
     }
+    if (!Number.isFinite(event.deltaY) || event.deltaY === 0) {
+      return
+    }
+    const deltaPixels = wheelZoomDelta(event.deltaY, event.deltaMode, rect.height)
     const nextScale = clampCanvasPreviewScale(
-      wheelZoomStepMultiplier
-        ? scale * (event.deltaY < 0 ? wheelZoomStepMultiplier : 1 / wheelZoomStepMultiplier)
-        : scale * (1 - event.deltaY * wheelZoomSensitivity),
+      scale * wheelZoomFactor(deltaPixels, wheelZoomStepMultiplier ?? Math.exp(100 * wheelZoomSensitivity)),
       minScale,
       maxScale,
     )
@@ -871,12 +874,7 @@ export default function CanvasPreviewSurface({
           type="button"
           onClick={resetZoom}
           disabled={interactionsDisabled}
-          className="absolute right-2 top-2 rounded border px-2 py-1 text-xs transition-opacity hover:opacity-90 disabled:opacity-60"
-          style={{
-            borderColor: "var(--surface-outline)",
-            background: "color-mix(in srgb, var(--surface-panel-strong) 88%, transparent)",
-            color: "var(--surface-text-muted)",
-          }}
+          className="action-control absolute right-2 top-2 rounded border px-2 py-1 text-xs transition-opacity"
         >
           {resetLabel}
         </button>

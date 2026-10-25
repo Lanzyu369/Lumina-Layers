@@ -87,7 +87,6 @@ vi.mock("../components/FiveColorQueryPanel", () => ({ default: () => null }));
 vi.mock("../components/SettingsPanel", () => ({ default: () => null }));
 vi.mock("../components/VectorizerPanel", () => ({ default: () => null }));
 vi.mock("../components/LoadingSpinner", () => ({ default: () => null }));
-vi.mock("../components/LanguageToggle", () => ({ LanguageToggle: () => null }));
 vi.mock("../components/ThemeToggle", () => ({ ThemeToggle: () => null }));
 vi.mock("../components/BugReportButton", () => ({ BugReportButton: () => null }));
 vi.mock("../components/BugReportModal", () => ({ BugReportModal: () => null }));
@@ -104,7 +103,7 @@ vi.mock("../components/widget/SubTabBar", () => ({ default: () => null }));
 import App from "../App";
 import apiClient from "../api/client";
 
-describe("Feature: frontend-scaffold, Property 2: 非 'ok' 状态显示失败徽章", () => {
+describe("Startup health readiness", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     cleanup();
@@ -114,9 +113,9 @@ describe("Feature: frontend-scaffold, Property 2: 非 'ok' 状态显示失败徽
 
   /**
    * Validates: Requirements 5.3
-   * For any non-"ok" status string, the App should render a red (fail) badge.
+   * An unhealthy first response keeps initialization behind the startup screen.
    */
-  it("renders red badge for any non-ok status", async () => {
+  it("keeps the startup screen for any non-ok initial status", async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.string().filter((s) => s !== "ok"),
@@ -131,14 +130,12 @@ describe("Feature: frontend-scaffold, Property 2: 非 'ok' 状态显示失败徽
           });
 
           render(<App />);
-
           await waitFor(() => {
-            expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
+            expect(apiClient.get).toHaveBeenCalledWith("/health", expect.objectContaining({ signal: expect.any(AbortSignal) }));
           });
-
-          expect(
-            screen.queryByTestId("health-badge-ok")
-          ).not.toBeInTheDocument();
+          expect(screen.getByRole("status")).toHaveTextContent("app_starting");
+          expect(screen.queryByTestId("header-menu-button")).not.toBeInTheDocument();
+          expect(screen.queryByTestId("health-badge-ok")).not.toBeInTheDocument();
         }
       ),
       { numRuns: 20 }

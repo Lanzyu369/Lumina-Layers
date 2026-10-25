@@ -10,6 +10,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WidgetId } from '../types/widget';
 import { DEFAULT_LAYOUT, useWidgetStore } from '../stores/widgetStore';
+import { COLLAPSED_HEIGHT, STACK_GAP } from '../utils/widgetUtils';
 
 vi.mock('../components/widget/WidgetPanel', async () => {
   const { useWidgetStore: useStore } = await import('../stores/widgetStore');
@@ -138,5 +139,51 @@ describe('WidgetWorkspace right dock alignment', () => {
       await new Promise((resolve) => setTimeout(resolve, 80));
     });
     expect(rightPanelLocalLeft('action-bar')).toBe(0);
+  });
+
+  it('updates sibling targets in the collapse commit, including a rapid reversal', () => {
+    render(<WidgetWorkspace />);
+
+    act(() => useWidgetStore.getState().toggleCollapse('action-bar'));
+    expect(useWidgetStore.getState().widgets['advanced-settings'].position.y)
+      .toBe(STACK_GAP + COLLAPSED_HEIGHT + STACK_GAP);
+
+    act(() => useWidgetStore.getState().toggleCollapse('action-bar'));
+    expect(useWidgetStore.getState().widgets['advanced-settings'].position.y)
+      .toBe(STACK_GAP + DEFAULT_LAYOUT['action-bar'].expandedHeight + STACK_GAP);
+  });
+
+  it('restacks after a widget is removed from and returned to a dock', async () => {
+    render(<WidgetWorkspace />);
+
+    act(() => useWidgetStore.getState().toggleVisible('action-bar'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('panel-action-bar')).not.toBeInTheDocument();
+      expect(useWidgetStore.getState().widgets['advanced-settings'].position.y).toBe(STACK_GAP);
+    });
+
+    act(() => useWidgetStore.getState().toggleVisible('action-bar'));
+    await waitFor(() => {
+      expect(screen.getByTestId('panel-action-bar')).toBeInTheDocument();
+      expect(useWidgetStore.getState().widgets['advanced-settings'].position.y)
+        .toBe(STACK_GAP + DEFAULT_LAYOUT['action-bar'].expandedHeight + STACK_GAP);
+    });
+  });
+
+  it('uses the observed panel height when no expanded height is cached', async () => {
+    useWidgetStore.getState().setExpandedHeight('action-bar', 0);
+    render(<WidgetWorkspace />);
+    const actionPanel = screen.getByTestId('panel-action-bar');
+    Object.defineProperty(actionPanel, 'offsetHeight', { configurable: true, value: 640 });
+
+    act(() => {
+      const record = observers.find(({ targets }) => targets.includes(actionPanel))!;
+      record.callback([{ target: actionPanel } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+    });
+
+    await waitFor(() => {
+      expect(useWidgetStore.getState().widgets['advanced-settings'].position.y)
+        .toBe(STACK_GAP + 640 + STACK_GAP);
+    });
   });
 });

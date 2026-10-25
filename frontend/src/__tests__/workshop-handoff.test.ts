@@ -122,7 +122,11 @@ describe("sandbox Workshop PNG handoff", () => {
     );
   });
 
-  it("validates a square-grid handoff and preserves the print library", async () => {
+  it.each([
+    [StructureMode.SINGLE_SIDED, 1.44],
+    [StructureMode.DOUBLE_SIDED, 1.04],
+  ])("validates a %s square-grid handoff and preserves total thickness and the print library", async (structureMode, backingThickness) => {
+    useConverterStore.setState({ structure_mode: structureMode });
     const before = useConverterStore.getState();
     const input = sdkHandoff({
       colorLibraryId: buildWorkshopColorLibrary()?.id ?? null,
@@ -141,8 +145,9 @@ describe("sandbox Workshop PNG handoff", () => {
     });
     expect(after.target_width_mm).toBe(5.2);
     expect(after.target_height_mm).toBe(2.6);
-    expect(after.base_spacer_thick).toBe(1.04);
-    expect(after.spacer_thick).toBe(1.04);
+    expect(after.structure_mode).toBe(structureMode);
+    expect(after.base_spacer_thick).toBe(backingThickness);
+    expect(after.spacer_thick).toBe(backingThickness);
     expect(after.workshopSource).toEqual(SDK_SOURCE);
     expect(after.source_version).toBe(before.source_version);
     expect(after.lut_name).toBe(before.lut_name);

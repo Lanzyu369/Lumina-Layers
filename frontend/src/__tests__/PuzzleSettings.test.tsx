@@ -34,7 +34,7 @@ describe("PuzzleSettings", () => {
     render(<PuzzleSettings />);
 
     expect(
-      screen.getByRole("checkbox", { name: "启用拼图模式" }),
+      screen.getByRole("switch", { name: "启用拼图模式" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("combobox", { name: "拼图风格" }),

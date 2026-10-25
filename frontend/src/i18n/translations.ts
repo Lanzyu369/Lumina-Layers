@@ -4,6 +4,40 @@
  * Contains all zh/en translation key-value pairs
  */
 export const translations: Record<string, Record<"zh" | "en", string>> = {
+  common_close: { zh: "关闭", en: "Close" },
+  cloud_library_update: { zh: "更新", en: "Update" },
+  cloud_library_results: { zh: "匹配结果", en: "Matching results" },
+  cloud_library_loading_index: { zh: "正在加载完整目录，搜索结果尚不完整…", en: "Loading the full catalog; search results are not complete yet…" },
+  desktop_menu_about: { zh: "关于 Lumina Studio", en: "About Lumina Studio" },
+  desktop_menu_settings: { zh: "设置…", en: "Settings…" },
+  desktop_menu_services: { zh: "服务", en: "Services" },
+  desktop_menu_hide: { zh: "隐藏 Lumina Studio", en: "Hide Lumina Studio" },
+  desktop_menu_hideOthers: { zh: "隐藏其他", en: "Hide Others" },
+  desktop_menu_unhide: { zh: "显示全部", en: "Show All" },
+  desktop_menu_quit: { zh: "退出 Lumina Studio", en: "Quit Lumina Studio" },
+  desktop_menu_file: { zh: "文件", en: "File" },
+  desktop_menu_import: { zh: "导入图片 / SVG / 分享卡…", en: "Import image / SVG / share card…" },
+  desktop_menu_export: { zh: "保存已生成文件…", en: "Save generated file…" },
+  desktop_menu_close: { zh: "关闭窗口", en: "Close Window" },
+  desktop_menu_edit: { zh: "编辑", en: "Edit" },
+  desktop_menu_undo: { zh: "撤销文本编辑", en: "Undo Text Edit" },
+  desktop_menu_redo: { zh: "重做文本编辑", en: "Redo Text Edit" },
+  desktop_menu_cut: { zh: "剪切", en: "Cut" },
+  desktop_menu_copy: { zh: "复制", en: "Copy" },
+  desktop_menu_paste: { zh: "粘贴", en: "Paste" },
+  desktop_menu_selectAll: { zh: "全选", en: "Select All" },
+  desktop_menu_view: { zh: "显示", en: "View" },
+  desktop_menu_zoomIn: { zh: "放大界面", en: "Zoom In" },
+  desktop_menu_zoomOut: { zh: "缩小界面", en: "Zoom Out" },
+  desktop_menu_resetZoom: { zh: "实际大小（100%）", en: "Actual Size (100%)" },
+  desktop_menu_togglefullscreen: { zh: "切换全屏", en: "Toggle Full Screen" },
+  desktop_menu_window: { zh: "窗口", en: "Window" },
+  desktop_menu_minimize: { zh: "最小化", en: "Minimize" },
+  desktop_menu_zoom: { zh: "缩放窗口", en: "Zoom Window" },
+  desktop_menu_front: { zh: "前置全部窗口", en: "Bring All to Front" },
+  desktop_menu_help: { zh: "帮助", en: "Help" },
+  desktop_menu_docs: { zh: "Lumina Studio 使用文档", en: "Lumina Studio Documentation" },
+  desktop_menu_report: { zh: "反馈问题…", en: "Report a Problem…" },
   conversion_preset_inline_label: { zh: "预设", en: "Preset" },
   conversion_preset_project: { zh: "当前项目参数", en: "Current project settings" },
   conversion_preset_invalid_name: { zh: "请输入 1–40 个字符的名称", en: "Enter a name with 1–40 characters" },
@@ -14,24 +48,24 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   conversion_preset_update: { zh: "更新预设", en: "Update preset" },
   conversion_preset_dirty_hint: { zh: "本次修改不会覆盖原预设", en: "Changes do not overwrite the saved preset" },
   conversion_preset_title: { zh: "保存为参数预设", en: "Save parameter preset" },
-  conversion_preset_description: { zh: "给这套设置起个名字，下次一键套用。", en: "Name these settings to reuse them next time." },
   conversion_preset_name: { zh: "预设名称", en: "Preset name" },
   conversion_preset_name_hint: { zh: "例如：日常单面板画", en: "e.g. Everyday single-sided art" },
   conversion_preset_duplicate: { zh: "已有同名预设，请换一个名称", en: "A preset with this name already exists" },
-  conversion_preset_scope: { zh: "保存来源类型、结构、尺寸、底板、叠层及涂层参数；不包含图片和局部编辑。", en: "Saves source type, structure, size, backing, layers and coating; excludes images and local edits." },
+  conversion_preset_long_edge: { zh: "长边", en: "Long edge" },
+  conversion_preset_include: { zh: "保存内容", en: "Settings to save" },
+  conversion_preset_scope: { zh: "尺寸记录长边；未勾选的设置在应用时保持当前值。", en: "Size records the long edge. Unchecked settings keep their current values when applying the preset." },
   conversion_preset_cancel: { zh: "取消", en: "Cancel" },
   conversion_preset_confirm: { zh: "保存预设", en: "Save preset" },
   conversion_preset_material: { zh: "耗材档案", en: "Material archive" },
-  conversion_preset_lut: { zh: "传统 LUT", en: "Traditional LUT" },
+  conversion_preset_lut: { zh: "经典 LUT", en: "Classic LUT" },
   conversion_preset_single: { zh: "单面", en: "Single-sided" },
   conversion_preset_double: { zh: "双面", en: "Double-sided" },
-  conversion_preset_width: { zh: "宽", en: "Width" },
-  conversion_preset_height: { zh: "高", en: "Height" },
   conversion_preset_rename: { zh: "重命名当前预设", en: "Rename current preset" },
   conversion_preset_delete: { zh: "删除当前预设", en: "Delete current preset" },
   conversion_preset_delete_hint: { zh: "删除“{name}”？当前正在使用的参数会保留。", en: "Delete “{name}”? Your current parameters will be kept." },
+  conversion_preset_layer_height: { zh: "层高", en: "Layer height" },
   conversion_preset_layers: { zh: "层", en: "layers" },
-  conversion_preset_dynamic: { zh: "动态最多", en: "Up to" },
+  conversion_preset_dynamic: { zh: "动态", en: "Dynamic" },
   conversion_preset_fixed: { zh: "固定", en: "Fixed" },
   conversion_preset_coating_on: { zh: "涂层开启", en: "Coating on" },
   conversion_preset_coating_off: { zh: "涂层关闭", en: "Coating off" },
@@ -43,8 +77,9 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "尚未确认项目局部编辑的恢复结果，原项目数据已保留，请重新预览。",
     en: "The restored project edits could not be confirmed. Your project data is preserved; run preview again.",
   },
-  native_material_edit_button: { zh: "打印耗材…", en: "Print filaments…" },
-  native_material_edit_title: { zh: "打印耗材", en: "Print filaments" },
+  native_material_edit_button: { zh: "耗材配置…", en: "Filament settings…" },
+  native_material_edit_title: { zh: "耗材配置", en: "Filament settings" },
+  native_material_close: { zh: "关闭", en: "Close" },
   native_material_edit_description: {
     zh: "为每种材料选择切片软件中的耗材预设和兼容打印板。保存后用于下次生成，不会立即生成文件。",
     en: "Choose a slicer filament preset for each material and a compatible build plate. These choices will be saved for the next generation without generating a file now.",
@@ -114,6 +149,27 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   app_panel_controls: {
     zh: "面板控件",
     en: "Panel Controls",
+  },
+  header_menu_label: {
+    zh: "更多选项",
+    en: "More options",
+  },
+  // Name of the language the toggle switches to, written in that language.
+  header_menu_language_target: {
+    zh: "English",
+    en: "中文",
+  },
+  header_menu_dark_mode: {
+    zh: "深色模式",
+    en: "Dark mode",
+  },
+  header_menu_repro_mode: {
+    zh: "复现模式",
+    en: "Reproduction mode",
+  },
+  header_menu_repro_mode_ticket: {
+    zh: "复现模式 · {{ticket}}",
+    en: "Reproduction mode · {{ticket}}",
   },
   bug_report_button_label: {
     zh: "反馈问题",
@@ -2231,8 +2287,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Five-Color",
   },
   "widget.basicSettings": {
-    zh: "基础设置",
-    en: "Basic Settings",
+    zh: "图像导入和基础设置",
+    en: "Image Import and Basic Settings",
   },
   "widget.modelSurfaceSettings": {
     zh: "模型贴图",
@@ -2928,6 +2984,30 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "常规",
     en: "General",
   },
+  "settings.language_label": {
+    zh: "界面语言 / Language",
+    en: "Language / 界面语言",
+  },
+  "settings.language_zh": {
+    zh: "简体中文",
+    en: "简体中文",
+  },
+  "settings.language_en": {
+    zh: "English",
+    en: "English",
+  },
+  "settings.interface_scale_label": {
+    zh: "界面缩放",
+    en: "Interface scale",
+  },
+  "settings.interface_scale_description": {
+    zh: "界面的排版尺寸固定，不随屏幕分辨率或系统缩放变化：100% 时各种屏幕上的面板占比一致。想更大或更小再逐档调整，也可以按 Ctrl 加号或减号切换，Ctrl 0 回到 100%（Mac 上用 Command 键）。",
+    en: "The layout has one fixed size and does not follow the screen resolution or the system scaling: at 100% the panels take the same share of the screen everywhere. Pick a larger or smaller step if you want, or press Ctrl with plus or minus; Ctrl+0 returns to 100% (use Command on a Mac).",
+  },
+  "settings.interface_scale_failed": {
+    zh: "无法读取或更改界面缩放，请重启软件后重试。",
+    en: "The interface scale could not be read or changed. Restart the app and try again.",
+  },
   "settings.category_general_desc": {
     zh: "通知、导出与界面体验偏好",
     en: "Notifications, exports, and interface preferences",
@@ -3040,6 +3120,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "加载过程中显示轻松的提示语。",
     en: "Show lighthearted messages while a task is loading.",
   },
+  "settings.header_nav_alignment_heading": {
+    zh: "顶部导航对齐",
+    en: "Top navigation alignment",
+  },
+  "settings.header_nav_alignment_description": {
+    zh: "选择主导航和子导航的位置。居中：两行导航共用一条中线，空间足够时就是窗口中线；居左：主导航紧跟标题，子导航与主导航第一项左对齐。窗口变窄时会先收起顶部标题文字、只保留标志，给导航腾出空间；标志和右侧按钮之间仍放不下时，主导航才移到下一行。",
+    en: "Choose where the main and sub navigation sit. Centered keeps both rows on one shared centre line, which is the middle of the window whenever there is room. Left places the main tabs right after the title and lines the sub tabs up with the first main tab. As the window narrows, the title text is hidden first so only the logo remains; the main tabs move to the next row only when they no longer fit between the logo and the buttons on the right.",
+  },
+  "settings.header_nav_alignment_label": {
+    zh: "对齐方式",
+    en: "Alignment",
+  },
+  "settings.header_nav_alignment_center": {
+    zh: "居中",
+    en: "Centered",
+  },
+  "settings.header_nav_alignment_left": {
+    zh: "居左",
+    en: "Left",
+  },
   "settings.preserve_upload_filename_heading": {
     zh: "导出 3MF 时沿用上传文件名",
     en: "Use uploaded filename for 3MF exports",
@@ -3085,8 +3185,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Clear backend temporary files and cached data",
   },
   "settings.cache_summary": {
-    zh: "快速回收后端临时文件，适合在长时间使用后整理空间。",
-    en: "Reclaim backend temporary files after longer sessions to tidy up storage.",
+    zh: "清除转换过程中产生的临时文件和缓存数据，回收存储空间。",
+    en: "Remove temporary files and cached data created during conversion to reclaim storage space.",
   },
   "settings.cache_cleared": {
     zh: "缓存已清除",
@@ -3327,6 +3427,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.template_excluded": {
     zh: "支持图像、矢量、材料档案、大幅分块和模型覆面导出。批量、拼图、校准和色块生成请先选择内置配置。",
     en: "Supports image, vector, material-archive, large-format and model-surface exports. Select built-in settings for batch, puzzle, calibration and swatch generation.",
+  },
+  "settings.template_active_scope_hint": {
+    zh: "当前已选自定义模板；批量、拼图、校准和色块生成需先切回内置配置。",
+    en: "A custom template is selected. Switch to built-in settings before batch, puzzle, calibration or swatch generation.",
   },
   "settings.template_missing_option": {
     zh: "所选模板在本机不可用",
@@ -4815,6 +4919,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== Basic Settings ====================
+  basic_crop_image: {
+    zh: "裁切与旋转",
+    en: "Crop & Rotate",
+  },
   basic_crop_after_upload: {
     zh: "上传后裁剪",
     en: "Crop After Upload",
@@ -4839,17 +4947,13 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "图像旋转失败",
     en: "Failed to rotate image",
   },
-  basic_lut_label: {
-    zh: "LUT",
-    en: "LUT",
-  },
   basic_lut_manufacturer_label: {
-    zh: "LUT 品牌",
-    en: "LUT Brand",
+    zh: "选择LUT",
+    en: "Select LUT",
   },
   basic_lut_manufacturer_placeholder: {
-    zh: "选择 LUT 品牌",
-    en: "Select a LUT brand",
+    zh: "选择 LUT 数据库…",
+    en: "Choose a LUT database…",
   },
   basic_lut_unlabeled_brand: {
     zh: "个人",
@@ -4866,10 +4970,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_lut_no_brand_hint: {
     zh: "请先选择 LUT 品牌",
     en: "Pick a LUT brand first",
-  },
-  basic_lut_multi_select: {
-    zh: "同组多选 LUT",
-    en: "Multi-select LUTs in this group",
   },
   basic_lut_selected_count: {
     zh: "已选",
@@ -4948,16 +5048,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Color Mode",
   },
   basic_source_version_label: {
-    zh: "来源类型",
-    en: "Source Type",
+    zh: "色彩数据来源",
+    en: "Color Data Source",
   },
   basic_source_version_hint: {
-    zh: "选择配色数据从哪里来：\n• 传统 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。",
-    en: "Choose where the color data comes from:\n• Legacy LUT: data measured from actually printed color charts — most reliable.\n• Material Archive: freely combine materials you created in Material Extraction.",
+    zh: "选择配色数据从哪里来：\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。\n• 经典 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。",
+    en: "Choose where the color data comes from:\n• Material Archive: freely combine materials you created in Material Extraction.\n• Classic LUT: data measured from actually printed color charts — most reliable.",
   },
   basic_source_version_legacy: {
-    zh: "传统 LUT",
-    en: "Legacy LUT",
+    zh: "经典 LUT",
+    en: "Classic LUT",
   },
   basic_source_version_native: {
     zh: "\u53cd\u63a8LUT",
@@ -5018,10 +5118,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_material_dynamic_range_hint: {
     zh: "动态模式会在设定范围内自动加载并评估候选；单一层数的穷举缓存入口暂不显示。",
     en: "Dynamic mode automatically loads and evaluates candidates across the configured range; the single-layer-count cache control is hidden.",
-  },
-  basic_material_dynamic_range_status: {
-    zh: "动态叠层模式已启用，单一层数的缓存入口已隐藏。",
-    en: "Dynamic-layer mode is enabled; the single-layer-count cache control is hidden.",
   },
   basic_material_layer_height_label: {
     zh: "\u5c42\u9ad8",
@@ -5531,6 +5627,62 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "未选择数据库",
     en: "No databases selected",
   },
+  basic_lut_picker_open: {
+    zh: "选择 LUT 数据库…",
+    en: "Choose LUT databases…",
+  },
+  basic_lut_picker_change: {
+    zh: "更换",
+    en: "Change",
+  },
+  basic_lut_picker_selection_summary: {
+    zh: "已选 {count} 个 LUT",
+    en: "{count} LUTs selected",
+  },
+  basic_lut_picker_more_selected: {
+    zh: "另 {count} 个",
+    en: "+{count} more",
+  },
+  basic_lut_picker_title: {
+    zh: "选择 LUT",
+    en: "Choose LUT",
+  },
+  basic_lut_picker_search_placeholder: {
+    zh: "搜索 LUT…",
+    en: "Search LUTs…",
+  },
+  basic_lut_picker_all_groups: {
+    zh: "全部色彩模式",
+    en: "All color modes",
+  },
+  basic_lut_picker_no_match: {
+    zh: "未找到匹配的 LUT",
+    en: "No matching LUTs",
+  },
+  basic_lut_picker_deselect_all: {
+    zh: "清空选择",
+    en: "Deselect all",
+  },
+  basic_lut_picker_confirm: {
+    zh: "确认",
+    en: "Confirm",
+  },
+  basic_lut_picker_cancel: {
+    zh: "取消",
+    en: "Cancel",
+  },
+  basic_native_db_picker_title: {
+    zh: "选择数据库",
+    en: "Choose Databases",
+  },
+  basic_native_db_picker_search_placeholder: {
+    zh: "搜索数据库…",
+    en: "Search databases…",
+  },
+  basic_native_db_picker_no_match: {
+    zh: "未找到匹配的数据库",
+    en: "No matching databases",
+  },
   basic_native_mode_label: {
     zh: "动态层模式",
     en: "Layer Mode",
@@ -5599,10 +5751,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "留空则使用运行时默认值。",
     en: "Leave blank to use runtime defaults.",
   },
-  basic_dynamic_layers_legacy_hint: {
-    zh: "当前为旧 LUT，不支持动态层数或自定义配方。",
-    en: "This legacy LUT does not support dynamic layers or custom recipes.",
-  },
   basic_width: {
     zh: "宽度",
     en: "Width",
@@ -5620,24 +5768,24 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Printed output height (in mm). Must be within the printer's effective print area.",
   },
   basic_thickness: {
-    zh: "厚度",
-    en: "Thickness",
+    zh: "底板厚度",
+    en: "Base plate thickness",
   },
   basic_thickness_hint: {
     zh: "底板的厚度（毫米）。底板越厚成品越结实，但打印时间和耗材用量也会增加。滑块每格对应一层打印层。",
     en: "Thickness of the base plate (mm). A thicker base is sturdier but takes more time and material to print. Each slider step equals one print layer.",
   },
   basic_backing_infill_density: {
-    zh: "背板填充率",
-    en: "Backing Infill",
+    zh: "底板填充率",
+    en: "Base plate infill",
   },
   basic_backing_infill_density_hint: {
     zh: "控制深层背板的填充率，平面拼图也可使用。靠近观赏面的保护区域始终保持 100% 实心；浮雕模式固定为 100%。",
     en: "Controls infill in the deeper backing, including flat puzzles. The protected zone next to the viewing surface always stays 100% solid; relief mode stays at 100%.",
   },
   basic_structure_mode: {
-    zh: "结构模式",
-    en: "Structure Mode",
+    zh: "单面/双面打印",
+    en: "Single/Double-sided Printing",
   },
   basic_structure_mode_hint: {
     zh: "决定成品的正反面结构：\n• 双面：正反两面都呈现画面，适合挂件、灯片等两面都会被看到的场景。\n• 单面：只有正面有画面，背面是平整底板，打印更快、更省耗材。",
@@ -5647,13 +5795,65 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "建模模式",
     en: "Modeling Mode",
   },
+  basic_group_input: {
+    zh: "导入",
+    en: "Import",
+  },
+  basic_group_color_source: {
+    zh: "颜色设置",
+    en: "Color Settings",
+  },
+  basic_group_output_size: {
+    zh: "输出尺寸",
+    en: "Output Size",
+  },
+  basic_group_build: {
+    zh: "结构与质感",
+    en: "Structure",
+  },
+  basic_block_size_and_base_plate: {
+    zh: "尺寸和底板",
+    en: "Size and base plate",
+  },
+  basic_block_structure: {
+    zh: "结构",
+    en: "Structure",
+  },
+  basic_block_modeling: {
+    zh: "建模",
+    en: "Modeling",
+  },
+  basic_backing_infill_disabled_model_surface: {
+    zh: "模型覆面开启时由模型本身决定背衬，填充率不可调整。",
+    en: "Model surface mode derives the backing from the model, so infill is not adjustable.",
+  },
+  basic_backing_infill_disabled_relief: {
+    zh: "浮雕模式固定使用 100% 实心填充，填充率不可调整。",
+    en: "Relief mode always uses 100% solid infill, so this is not adjustable.",
+  },
+  basic_structure_mode_disabled_model_surface: {
+    zh: "模型覆面只生成单面结构，无法切换结构模式。",
+    en: "Model surface mode only produces a single-sided structure.",
+  },
+  basic_structure_mode_disabled_relief: {
+    zh: "浮雕模式只支持单面结构，无法切换结构模式。",
+    en: "Relief mode only supports a single-sided structure.",
+  },
+  basic_structure_mode_disabled_fridge_magnet: {
+    zh: "冰箱贴模式只生成单面结构，无法切换结构模式。",
+    en: "Fridge magnet mode only produces a single-sided structure.",
+  },
+  basic_structure_mode_five_color_hint: {
+    zh: "5 色扩展模式只支持单面结构。",
+    en: "5-color extended mode only supports a single-sided structure.",
+  },
   basic_modeling_mode_hint: {
-    zh: "决定图片如何变成 3D 模型：\n• 高保真：忠实还原照片细节，适合绝大多数图片（推荐）。\n• 像素艺术：保留方块像素感，适合像素画、马赛克风格。\n• 矢量模式：生成平滑的曲线轮廓，适合 Logo、图标等颜色分明的图形。\n• 验证色卡：生成用于校准颜色的标准色卡，仅在测试耗材颜色时使用。",
-    en: "Controls how the image becomes a 3D model:\n• High-Fidelity: faithfully reproduces photo detail — recommended for most images.\n• Pixel Art: keeps the blocky pixel look — for pixel art and mosaic styles.\n• Vector: smooth curved outlines — for logos, icons, and flat-color artwork.\n• Color Card: generates a calibration color chart — only for testing filament colors.",
+    zh: "决定图片如何变成 3D 模型：\n• 高保真（位图）：忠实还原照片细节，适合绝大多数图片（推荐）。\n• 像素艺术：保留方块像素感，适合像素画、马赛克风格。\n• 矢量图：生成平滑的曲线轮廓，适合 Logo、图标等颜色分明的图形。\n• 验证色卡：生成用于校准颜色的标准色卡，仅在测试耗材颜色时使用。",
+    en: "Controls how the image becomes a 3D model:\n• High-Fidelity (Bitmap): faithfully reproduces photo detail — recommended for most images.\n• Pixel Art: keeps the blocky pixel look — for pixel art and mosaic styles.\n• Vector Image: smooth curved outlines — for logos, icons, and flat-color artwork.\n• Color Card: generates a calibration color chart — only for testing filament colors.",
   },
   basic_image_format_error: {
-    zh: "仅支持 JPG/PNG/SVG/WebP/HEIC 格式",
-    en: "Only JPG/PNG/SVG/WebP/HEIC formats are supported",
+    zh: "仅支持 JPG/JFIF/PNG/SVG/WebP/HEIC 格式",
+    en: "Only JPG/JFIF/PNG/SVG/WebP/HEIC formats are supported",
   },
   svg_hole_compensation: {
     zh: "SVG 小洞补偿",
@@ -5774,16 +5974,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== Modeling Mode Options ====================
   "modeling_mode.high-fidelity": {
-    zh: "高保真",
-    en: "High-Fidelity",
+    zh: "高保真（位图）",
+    en: "High-Fidelity (Bitmap)",
   },
   "modeling_mode.pixel": {
     zh: "像素艺术",
     en: "Pixel Art",
   },
   "modeling_mode.vector": {
-    zh: "矢量模式",
-    en: "Vector",
+    zh: "矢量图",
+    en: "Vector Image",
   },
   "modeling_mode.color-card": {
     zh: "验证色卡",
@@ -5844,8 +6044,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Precise Color Matching (Experimental)",
   },
   adv_precise_color_matching_hint: {
-    zh: "配色时只使用打印机真正能打出来的颜色，减少成品和屏幕预览之间的色差。处理会稍慢一些，仅在传统 LUT 模式下有效。",
-    en: "Restricts color matching to colors your printer can actually produce, reducing the gap between the print and the on-screen preview. Slightly slower; only effective in Legacy LUT mode.",
+    zh: "配色时只使用打印机真正能打出来的颜色，减少成品和屏幕预览之间的色差。处理会稍慢一些，仅在经典 LUT 模式下有效。",
+    en: "Restricts color matching to colors your printer can actually produce, reducing the gap between the print and the on-screen preview. Slightly slower; only effective in Classic LUT mode.",
   },
   adv_hue_protection_disabled_hint: {
     zh: "高精度匹配开启时，色相保护已被接管，无需手动启用。",
@@ -6878,8 +7078,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== Unified Uploader ====================
   upload_unified_hint: {
-    zh: "拖拽图片或 Lumina 项目文件（图片支持多选）",
-    en: "Drop images or a Lumina project file (images support multi-select)",
+    zh: "拖拽图片或 Lumina 项目文件",
+    en: "Drop images or a Lumina project file",
+  },
+  upload_unified_multiselect_hint: {
+    zh: "（图片支持多选）",
+    en: "(images support multi-select)",
   },
   upload_tap_to_change: {
     zh: "点击更换或追加",
@@ -7010,8 +7214,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Detecting slicers...",
   },
   slicer_not_detected: {
-    zh: "未检测到切片软件",
-    en: "No slicers detected",
+    zh: "未检测到切片软件，仍可下载 3MF 文件。",
+    en: "No slicer detected. You can still download the 3MF file.",
   },
   slicer_toggle_list: {
     zh: "切换切片软件列表",
@@ -7026,14 +7230,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Current export format targets {expected}, but the action bar is set to {actual}",
   },
   slicer_preferred_missing: {
-    zh: "当前导出格式为 {name}，但本机未检测到对应切片软件",
-    en: "Current export format targets {name}, but the matching slicer is not detected on this device",
+    zh: "未检测到 {name}，仍可下载 3MF 文件后手动打开。",
+    en: "{name} was not detected. You can still download the 3MF file and open it manually.",
   },
 
   // ==================== Crop Modal ====================
   crop_modal_title: {
-    zh: "裁剪图片",
-    en: "Crop Image",
+    zh: "裁切与旋转",
+    en: "Crop & Rotate",
+  },
+  crop_modal_rotate_left: {
+    zh: "向左旋转 90°",
+    en: "Rotate left 90°",
+  },
+  crop_modal_rotate_right: {
+    zh: "向右旋转 90°",
+    en: "Rotate right 90°",
+  },
+  crop_modal_svg_rotation_only: {
+    zh: "SVG 图片支持旋转，保留原始矢量内容。",
+    en: "SVG images support rotation while preserving their vector content.",
   },
   crop_modal_close: {
     zh: "关闭",
@@ -7052,12 +7268,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Free",
   },
   crop_modal_use_original: {
-    zh: "使用原图",
-    en: "Use Original",
+    zh: "取消",
+    en: "Cancel",
   },
   crop_modal_confirm: {
-    zh: "确认裁剪",
-    en: "Confirm Crop",
+    zh: "应用更改",
+    en: "Apply Changes",
   },
 
   // ==================== Five Color Query Panel ====================
@@ -7324,6 +7540,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   five_color_selected: {
     zh: "已选颜色 {n}: {name}",
     en: "Selected color {n}: {name}",
+  },
+  five_color_viewing_face: {
+    zh: "观赏面",
+    en: "Viewing Face",
+  },
+  five_color_bottom_face: {
+    zh: "底面",
+    en: "Bottom",
   },
   five_color_slot_empty: {
     zh: "颜色槽 {n}: 空",
@@ -7725,14 +7949,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "Y 轴",
     en: "Y",
   },
-  action_generate_model_title: {
-    zh: "生成 3D 模型",
-    en: "Generate 3D Model",
-  },
-  action_generate_model_desc: {
-    zh: "根据当前图像和 LUT 生成可打印的 3MF 模型文件。",
-    en: "Generate a printable 3MF model from current image and LUT.",
-  },
   action_zoom_icon: {
     zh: "缩放",
     en: "Zoom",
@@ -8068,8 +8284,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "LUT not found, please select a compatible LUT manually",
   },
   recipe_import_predictive_lut_unavailable: {
-    zh: "此项目使用当前暂不可用的反推 LUT。请改用传统 LUT 或耗材档案。",
-    en: "This project uses an inferred LUT, which is currently unavailable. Use a legacy LUT or material archive instead.",
+    zh: "此项目使用当前暂不可用的反推 LUT。请改用经典 LUT 或耗材档案。",
+    en: "This project uses an inferred LUT, which is currently unavailable. Use a classic LUT or material archive instead.",
   },
   recipe_import_lut_degraded: {
     zh: "原 LUT 记录未找到，已按名称与颜色模式匹配，请确认选中了预期 LUT。",
@@ -8745,12 +8961,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Please read these instructions before printing to ensure smooth operation later.",
   },
   mat_gradient_generate_notice_dual_print: {
-    zh: "注意：每种测试耗材需要打印两张梯度卡（一张白底，一张黑底）。无论你使用本地生成还是下载线上模型，都必须在这里点击生成并下载配置文件包（ZIP），后续「提取梯度卡」步骤会用到它。",
-    en: "Note: Each test material requires printing two gradient cards (one on a white base, one on a black base). Whether you generate them locally or download the online models, you must generate and download the configuration package (ZIP) here, as it is required for the 'Extract Gradient Card' step later.",
+    zh: "每种耗材需要打印两张梯度卡：白底、黑底各一张。",
+    en: "Each material requires printing two gradient cards: one with a white base and one with a black base.",
+  },
+  mat_gradient_generate_notice_config: {
+    zh: "请按打印层高生成并保存配置文件包（ZIP），提取梯度卡时需要导入。使用在线模型也需要此配置包。",
+    en: "Generate and save the configuration ZIP for your print layer height. Import it when extracting gradient cards, including cards printed from online models.",
   },
   mat_gradient_generate_notice_online_model: {
-    zh: "线上模型与本地生成的模型完全相同。如果你通过 MakerWorld 下载在线模型，可以为 Lumina 团队提供积分支持，积分将用于社区抽奖福利。",
-    en: "The online models are identical to the locally generated ones. Downloading via MakerWorld provides points to the Lumina team, which will be used for community giveaways.",
+    zh: "也可从 MakerWorld 下载模型，请确认模型层高与所选层高一致。下载获得的积分将用于 Lumina 社区抽奖。",
+    en: "Models are also available on MakerWorld. Check that the model layer height matches your selection. Download points support Lumina community giveaways.",
+  },
+  mat_gradient_model_open_error: {
+    zh: "无法打开模型页面，请重试或复制链接到浏览器中打开。",
+    en: "Could not open the model page. Try again or copy the link into your browser.",
   },
   mat_gradient_generate_online_model_link: {
     zh: "梯度卡在线模型",
@@ -9326,8 +9550,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Import LUT File",
   },
   lut_library_search_placeholder: {
-    zh: "搜索名称、厂商、路径、颜色模式",
-    en: "Search name, maker, path, or color mode",
+    zh: "搜索名称、品牌、类型、颜色模式…",
+    en: "Search names, brands, types, color modes…",
   },
   lut_library_loading: {
     zh: "正在加载本地 LUT...",
@@ -9653,9 +9877,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "本地文件缺失",
     en: "Local files missing",
   },
+  mat_sync_history_hint: { zh: "按本地安装时间查看版本，选择要恢复的版本。", en: "Versions are listed by local installation date. Select a version to restore." },
+  mat_sync_history_unknown_date: { zh: "日期未知", en: "Date unknown" },
+  mat_sync_history_current: { zh: "当前使用", en: "Current" },
+  mat_sync_history_previous: { zh: "历史版本", en: "Previous version" },
+  mat_sync_history_empty: { zh: "暂无可恢复的本地历史版本", en: "No local history available to restore" },
+  mat_sync_history_close: { zh: "关闭", en: "Close" },
+  mat_sync_history_restore: { zh: "恢复所选版本", en: "Restore selected version" },
   mat_sync_local_section_title: {
-    zh: "本地版本记录",
-    en: "Local Revision History",
+    zh: "本地历史版本",
+    en: "Local Version History",
   },
   mat_sync_local_section_hint: {
     zh: "更新耗材后会保留旧版本；如果新版本效果不理想，可以一键回滚。",
@@ -9906,9 +10137,34 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Fit Error",
   },
   mat_gradient_library_layer_height_label: {
-    zh: "层高",
-    en: "Layer Height",
+    zh: "采集层高",
+    en: "Calibration Layer Height",
   },
+  mat_gradient_library_details: {
+    zh: "详细信息",
+    en: "Details",
+  },
+  mat_gradient_library_type_missing: { zh: "类型未填写", en: "Type not specified" },
+  mat_gradient_library_calibration: { zh: "标定信息", en: "Calibration" },
+  mat_gradient_library_usage: { zh: "使用记录", en: "Usage" },
+  mat_gradient_library_files: { zh: "文件信息", en: "File information" },
+  mat_gradient_library_browse_summary: { zh: "耗材库 · {count} 个耗材", en: "Material library · {count} materials" },
+  mat_gradient_library_selection_start: { zh: "选择耗材", en: "Select materials" },
+  mat_gradient_library_collapse_all: { zh: "全部收起", en: "Collapse all" },
+  mat_gradient_library_expand_all: { zh: "全部展开", en: "Expand all" },
+  library_pin_hint: { zh: "每次进入仓库时自动展开", en: "Expand automatically whenever you open the library" },
+  lut_library_inventory_summary: { zh: "{count}个 LUT · {brands}个品牌", en: "{count} LUTs · {brands} brands" },
+  lut_library_analyze_btn: { zh: "查看完整 LUT 分析", en: "Open full LUT analysis" },
+  mat_gradient_library_search: { zh: "搜索耗材名称、品牌、类型…", en: "Search materials, brands, types…" },
+  mat_gradient_library_inventory_summary: { zh: "{count}种耗材 · {brands}个品牌", en: "{count} materials · {brands} brands" },
+  mat_gradient_library_search_empty: { zh: "没有找到匹配的耗材，试试其他关键词。", en: "No matching materials. Try another search." },
+  mat_gradient_library_reorder_hint: { zh: "拖拽调整品牌顺序，也可用上下方向键调整", en: "Drag to reorder brands, or use the up and down arrow keys" },
+  mat_gradient_library_brand_count: { zh: "{count}种", en: "{count} types" },
+  mat_gradient_library_pin_brand: { zh: "固定展开 {brand}", en: "Pin {brand} open" },
+  mat_gradient_library_unpin_brand: { zh: "取消固定 {brand}", en: "Unpin {brand}" },
+  mat_gradient_library_pin_hint: { zh: "每次进入耗材库时自动展开", en: "Expand automatically whenever you open the library" },
+  mat_gradient_library_unpin_hint: { zh: "取消默认展开", en: "Stop expanding by default" },
+  mat_gradient_library_selection_done: { zh: "完成选择", en: "Done selecting" },
   mat_gradient_library_edit_btn: {
     zh: "编辑信息",
     en: "Edit Details",
@@ -10162,16 +10418,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Extraction Warnings",
   },
   cal_workflow_legacy: {
-    zh: "传统 LUT",
-    en: "Legacy LUT",
+    zh: "经典 LUT",
+    en: "Classic LUT",
   },
   cal_workflow_single_stage: {
     zh: "梯度卡",
     en: "Gradient Card",
   },
   ext_workflow_legacy: {
-    zh: "传统 LUT",
-    en: "Legacy LUT",
+    zh: "经典 LUT",
+    en: "Classic LUT",
   },
   ext_workflow_single_stage: {
     zh: "梯度卡",
@@ -10387,8 +10643,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Lumina Studio turns an ordinary picture into a multi-color 3D print file (3MF): a few filaments are stacked in thin layers to reproduce rich colors.\n\nThis quick tour takes about a minute and walks you through the basic path from a picture to a print file.",
   },
   tutorial_welcome_note: {
-    zh: "引导只做讲解，不需要真的上传图片或生成模型。之后可以随时点击右上角的书本图标重新查看。",
-    en: "The tour only explains things. You don't need to upload or generate anything, and you can replay it any time from the book icon at the top right.",
+    zh: "引导只做讲解，不需要真的上传图片或生成模型。之后可以随时打开右上角的菜单（三条横线图标），选择“新手引导”重新查看。",
+    en: "The tour only explains things. You don't need to upload or generate anything, and you can replay it any time from the menu (the three-line icon) at the top right by choosing Beginner tour.",
   },
   tutorial_welcome_start: {
     zh: "开始引导",
@@ -10463,16 +10719,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Step 2: Choose a color source",
   },
   tutorial_step_source_body: {
-    zh: "多色打印的原理是：几种耗材按不同顺序和层数叠在一起，透出不同的颜色。软件需要知道「你的打印机和耗材能叠出哪些颜色」，才能为图片的每个颜色找到最接近的叠法。\n\n「颜色来源」就是这份颜色数据从哪里来。一共有三种方式，接下来逐一介绍。",
-    en: "Multi-color printing works by stacking a few filaments in different orders and layer counts, so light passing through them shows different colors. The software needs to know which colors your printer and filaments can actually produce, so it can find the closest stack for every color in your picture.\n\nThe color source is where that color data comes from. There are three options, explained next.",
+    zh: "多色打印的原理是：几种耗材按不同顺序和层数叠在一起，透出不同的颜色。软件需要知道「你的打印机和耗材能叠出哪些颜色」，才能为图片的每个颜色找到最接近的叠法。\n\n「颜色来源」就是这份颜色数据从哪里来。有耗材档案和经典 LUT 两种方式，接下来按这个顺序介绍。",
+    en: "Multi-color printing works by stacking a few filaments in different orders and layer counts, so light passing through them shows different colors. The software needs to know which colors your printer and filaments can actually produce, so it can find the closest stack for every color in your picture.\n\nThe color source is where that color data comes from. There are two options: Material Archive and Classic LUT, explained in that order next.",
   },
   tutorial_step_legacy_title: {
-    zh: "传统 LUT：实拍色卡",
-    en: "Legacy LUT: photographed color chart",
+    zh: "经典 LUT：实拍色卡",
+    en: "Classic LUT: photographed color chart",
   },
   tutorial_step_legacy_body: {
-    zh: "LUT 是一张颜色对照表，记录了「每一种叠法打出来是什么颜色」。\n传统 LUT 是最传统的做法：用你的打印机和耗材打印一块包含大量叠色组合的校准板，实拍照片后由软件逐格提取颜色。转换时，图片的每个颜色都去表里找最接近的一格，再按那一格的叠法打印。",
-    en: "A LUT (lookup table) records what color each layer stack prints as.\nLegacy LUT is the traditional approach: you print a calibration board full of stack combinations on your own printer and filaments, photograph it, and the software reads the color of every patch. During conversion, each color in your picture is matched to the closest patch and printed with that patch's stack.",
+    zh: "LUT 是一张颜色对照表，记录了「每一种叠法打出来是什么颜色」。\n经典 LUT 是最传统的做法：用你的打印机和耗材打印一块包含大量叠色组合的校准板，实拍照片后由软件逐格提取颜色。转换时，图片的每个颜色都去表里找最接近的一格，再按那一格的叠法打印。",
+    en: "A LUT (lookup table) records what color each layer stack prints as.\nClassic LUT is the traditional approach: you print a calibration board full of stack combinations on your own printer and filaments, photograph it, and the software reads the color of every patch. During conversion, each color in your picture is matched to the closest patch and printed with that patch's stack.",
   },
   tutorial_step_legacy_need: {
     zh: "打印一块校准板并拍照提取（在「LUT管理」里完成）。校准板色块很多，打印时间较长。也可以直接选用列表里现成的 LUT。",
@@ -10493,34 +10749,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   tutorial_flow_legacy_table: {
     zh: "得到颜色对照表",
     en: "Get a color lookup table",
-  },
-  tutorial_step_inferred_title: {
-    zh: "反推LUT：用品牌实测数据推算",
-    en: "Inferred LUT: predicted from brand measurements",
-  },
-  tutorial_step_inferred_body: {
-    zh: "软件内置了部分耗材品牌的颜色数据库，里面是已经实际打印并测量过的大量叠色结果，同时附带一个由这些实测数据反推出来的颜色预测模型。\n转换时，软件先在实测数据里为每个颜色找最接近的叠法，并自动换算到你选的层数和层高；开启「模型辅助匹配」后，实测数据里找不到足够接近的颜色时，再改用模型预测的叠法补上。",
-    en: "The software ships with color databases for some filament brands. They hold many stack colors that were actually printed and measured, plus a color prediction model inferred from those measurements.\nDuring conversion, each color is first matched against the measured data, converted automatically to the layer count and layer height you choose. With Model-Assisted Matching on, colors the measured data can't match closely enough are filled in with stacks predicted by the model.",
-  },
-  tutorial_step_inferred_need: {
-    zh: "不需要打印任何东西，只要选择耗材品牌、数据库和层数；实际使用的耗材要和所选品牌一致。",
-    en: "Nothing to print. Just choose a filament brand, database and layer count, and use filaments that match the chosen brand.",
-  },
-  tutorial_step_inferred_fit: {
-    zh: "使用支持列表里品牌耗材、想马上开始的用户。数据来自参考打印的实测，和你手上的耗材、机器可能有少量差异。",
-    en: "Getting started right away with a brand on the supported list. The data comes from reference prints, so it may differ slightly from your own spools and printer.",
-  },
-  tutorial_flow_inferred_database: {
-    zh: "品牌实测颜色数据库",
-    en: "Measured brand color database",
-  },
-  tutorial_flow_inferred_predict: {
-    zh: "反推出颜色预测模型",
-    en: "Infer a color prediction model",
-  },
-  tutorial_flow_inferred_table: {
-    zh: "按层数层高匹配叠色",
-    en: "Match stacks for your layer settings",
   },
   tutorial_step_material_title: {
     zh: "耗材档案：每卷耗材单独建档",
@@ -10610,20 +10838,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "也可以平移，适合触控板",
     en: "Also pans, handy on a trackpad",
   },
-  tutorial_step_generate_title: {
-    zh: "第五步：生成打印文件",
-    en: "Step 5: Generate the print file",
+  tutorial_step_output_title: {
+    zh: "第五步：下载或打开切片软件",
+    en: "Step 5: Download or open in slicer",
   },
-  tutorial_step_generate_body: {
-    zh: "预览满意后，点击「生成」得到 3MF 打印文件。把它导入切片软件，确认每个耗材槽位对应的颜色正确，就可以开始打印了。",
-    en: "When the preview looks right, click Generate to get a 3MF print file. Open it in your slicer, check that each filament slot has the right color, and start printing.",
+  tutorial_step_output_body: {
+    zh: "预览满意后，直接下载 3MF 或打开切片软件，系统会自动生成所需的打印文件。在切片软件中确认每个耗材槽位对应的颜色正确，就可以开始打印了。",
+    en: "When the preview looks right, download the 3MF or open it in your slicer. The print file is generated automatically. In your slicer, check that each filament slot has the right color before printing.",
   },
   tutorial_step_help_title: {
     zh: "遇到问题时",
     en: "When you need help",
   },
   tutorial_step_help_body: {
-    zh: "设置项旁边的问号图标可以查看说明和在线文档；右上角的反馈按钮可以把问题发给开发者。\n想再看一遍这份引导，随时点击这个书本图标。祝打印顺利！",
-    en: "The question-mark icons next to settings show explanations and link to the online docs, and the feedback button at the top right sends problems to the developers.\nTo see this tour again, click this book icon any time. Happy printing!",
+    zh: "设置项旁边的问号图标可以查看说明和在线文档；右上角这个菜单里的“反馈问题”可以把问题发给开发者。\n想再看一遍这份引导，随时打开这个菜单选择“新手引导”。祝打印顺利！",
+    en: "The question-mark icons next to settings show explanations and link to the online docs, and Report a bug in this menu at the top right sends problems to the developers.\nTo see this tour again, open this menu and choose Beginner tour any time. Happy printing!",
   },
 };

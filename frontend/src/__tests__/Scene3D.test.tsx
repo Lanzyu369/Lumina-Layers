@@ -3,6 +3,12 @@ import { render, screen, act, fireEvent } from "@testing-library/react";
 import * as THREE from "three";
 import { MOUSE } from "three";
 import { useConverterStore } from "../stores/converter";
+import { useSettingsStore } from "../stores/settingsStore";
+import {
+  captureSceneTransitionSnapshot,
+  clearSceneTransitionSnapshot,
+  getSceneTransitionKey,
+} from "../components/sceneTransitionSnapshot";
 
 // Mock i18n — return key as-is
 vi.mock("../i18n/context", () => ({
@@ -220,6 +226,7 @@ vi.mock("@react-three/fiber", () => ({
     return selector ? selector(state) : state;
   },
   useFrame: vi.fn(),
+  addAfterEffect: vi.fn(() => () => {}),
 }));
 
 // Must import Scene3D after mocks are set up
@@ -251,6 +258,7 @@ describe("Scene3D", () => {
     } finally { Object.assign(window, { electronAPI: undefined }); }
   });
 beforeEach(() => {
+    clearSceneTransitionSnapshot();
     capturedCanvasProps = {};
     capturedOrbitControlsProps = {};
     capturedInteractiveViewerProps = null;
@@ -309,6 +317,83 @@ beforeEach(() => {
         modelSurfaceSelection: null,
         modelSurfaceFootprint: null,
       });
+  });
+
+  describe("static frame on tab return", () => {
+    function seedSnapshot() {
+      const settings = useSettingsStore.getState();
+      const key = getSceneTransitionKey(useConverterStore.getState(), [
+        settings.theme, settings.deviceProfileId, settings.buildPlateId,
+        settings.slicerSoftware, null,
+      ]);
+      const canvas = document.createElement("canvas");
+      Object.defineProperties(canvas, {
+        clientWidth: { value: 800 }, clientHeight: { value: 600 },
+      });
+      captureSceneTransitionSnapshot(key, canvas, new THREE.PerspectiveCamera(), {
+        target: new THREE.Vector3(), minDistance: 1, maxDistance: 1000, update: () => {},
+      });
+    }
+
+    it("keeps the static frame without a WebGL canvas until navigation completes", () => {
+      const context = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+        (() => ({ drawImage: vi.fn() })) as unknown as HTMLCanvasElement["getContext"],
+      );
+      const bounds = vi.spyOn(HTMLDivElement.prototype, "getBoundingClientRect")
+        .mockReturnValue({ width: 800, height: 600 } as DOMRect);
+      try {
+        seedSnapshot();
+        const { rerender, unmount } = render(<Scene3D deferInitialization />);
+        expect(screen.getByTestId("scene3d-transition-snapshot")).toBeInTheDocument();
+        expect(screen.queryByTestId("mock-canvas")).toBeNull();
+        rerender(<Scene3D />);
+        expect(screen.getByTestId("mock-canvas")).toBeInTheDocument();
+        expect(screen.getByTestId("scene3d-transition-snapshot")).toBeInTheDocument();
+        unmount();
+      } finally {
+        context.mockRestore();
+        bounds.mockRestore();
+      }
+    });
+
+    it("shows saved pixels while rebuilding and drops them immediately when artwork changes", () => {
+      const context = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+        (() => ({ drawImage: vi.fn() })) as unknown as HTMLCanvasElement["getContext"],
+      );
+      const bounds = vi.spyOn(HTMLDivElement.prototype, "getBoundingClientRect")
+        .mockReturnValue({ width: 800, height: 600 } as DOMRect);
+      try {
+        seedSnapshot();
+        const { unmount } = render(<Scene3D />);
+        expect(screen.getByTestId("scene3d-transition-snapshot")).toBeInTheDocument();
+        expect(capturedCanvasProps.style).toEqual({ visibility: "hidden" });
+        act(() => { useConverterStore.setState({ previewGlbUrl: "/different.glb" }); });
+        expect(screen.queryByTestId("scene3d-transition-snapshot")).toBeNull();
+        expect(capturedCanvasProps.style).toBeUndefined();
+        unmount();
+      } finally {
+        context.mockRestore();
+        bounds.mockRestore();
+      }
+    });
+
+    it("discards the static frame after the viewport changes size on another page", () => {
+      const context = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+        (() => ({ drawImage: vi.fn() })) as unknown as HTMLCanvasElement["getContext"],
+      );
+      const bounds = vi.spyOn(HTMLDivElement.prototype, "getBoundingClientRect")
+        .mockReturnValue({ width: 1000, height: 600 } as DOMRect);
+      try {
+        seedSnapshot();
+        const { unmount } = render(<Scene3D />);
+        expect(screen.queryByTestId("scene3d-transition-snapshot")).toBeNull();
+        expect(capturedCanvasProps.style).toBeUndefined();
+        unmount();
+      } finally {
+        context.mockRestore();
+        bounds.mockRestore();
+      }
+    });
   });
 
   describe("preview camera sizing", () => {
@@ -397,7 +482,7 @@ beforeEach(() => {
 
       expect(screen.queryByTestId("scene3d-performance-panel")).not.toBeInTheDocument();
 
-      expect(screen.getByTestId("scene3d-performance-toggle").parentElement).toHaveStyle({
+      expect(screen.getByTestId("scene3d-performance-toggle").closest("div")).toHaveStyle({
         top: "12px",
       });
 

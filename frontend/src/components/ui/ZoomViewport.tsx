@@ -1,4 +1,5 @@
 import { useRef, useEffect, type MouseEvent, type ReactNode } from "react";
+import { wheelZoomDelta } from "../../utils/wheelZoom";
 
 interface ZoomViewportProps {
   src?: string;
@@ -35,10 +36,11 @@ export default function ZoomViewport({
     if (!el) return;
     const handler = (e: WheelEvent) => {
       e.preventDefault();
+      e.stopPropagation();
       const rect = el.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
-      zoomRef.current(mouseX, mouseY, e.deltaY);
+      zoomRef.current(mouseX, mouseY, wheelZoomDelta(e.deltaY, e.deltaMode, rect.height));
     };
     el.addEventListener("wheel", handler, { passive: false });
     return () => el.removeEventListener("wheel", handler);
@@ -52,7 +54,7 @@ export default function ZoomViewport({
   return (
     <div
       ref={containerRef}
-      className="relative w-full overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 cursor-grab active:cursor-grabbing select-none"
+      className="relative w-full overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 cursor-grab active:cursor-grabbing select-none"
       style={{ height }}
       {...mouseHandlers}
     >

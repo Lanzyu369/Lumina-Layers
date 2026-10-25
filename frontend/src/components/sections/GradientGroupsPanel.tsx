@@ -1,10 +1,12 @@
+import CloseButton from "../ui/CloseButton";
 import { memo, useCallback, useState, type ChangeEvent } from "react";
 import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useI18n } from "../../i18n/context";
 import {
+  StatusBanner,
+  cardDividerClass,
   cx,
-  workstationInsetCardClass,
 } from "../ui/panelPrimitives";
 import type {
   GradientGroupItem,
@@ -259,32 +261,17 @@ export default function GradientGroupsPanel() {
 
   if (loading) {
     return (
-      <div
-        className={cx(
-          workstationInsetCardClass,
-          "flex flex-col gap-1 px-3 py-2",
-        )}
-      >
-        <p className="text-[clamp(0.6rem,0.75vw,0.65rem)] text-slate-500 dark:text-slate-400">
-          {t("gradient_groups_loading")}
-        </p>
-      </div>
+      <p className="text-[clamp(0.6rem,0.75vw,0.65rem)] text-slate-500 dark:text-slate-400">
+        {t("gradient_groups_loading")}
+      </p>
     );
   }
 
   if (error) {
     return (
-      <div
-        role="alert"
-        className={cx(
-          workstationInsetCardClass,
-          "flex flex-col gap-1 border-rose-400/50 bg-rose-500/10 px-3 py-2 dark:border-rose-600/50",
-        )}
-      >
-        <p className="text-[clamp(0.6rem,0.75vw,0.65rem)] text-rose-600 dark:text-rose-300">
-          {t("gradient_groups_error").replace("{message}", error)}
-        </p>
-      </div>
+      <StatusBanner role="alert" tone="error">
+        {t("gradient_groups_error").replace("{message}", error)}
+      </StatusBanner>
     );
   }
 
@@ -296,10 +283,7 @@ export default function GradientGroupsPanel() {
   }
 
   return (
-    <div
-      className={cx(workstationInsetCardClass, "flex flex-col gap-2 p-3")}
-      data-testid="gradient-groups-panel"
-    >
+    <div className="flex flex-col gap-2" data-testid="gradient-groups-panel">
       <header className="flex flex-wrap items-start justify-between gap-2">
         <div className="flex min-w-0 flex-col gap-0.5">
           <h4 className="text-[clamp(0.7rem,0.85vw,0.75rem)] font-semibold text-slate-700 dark:text-slate-200">
@@ -331,7 +315,7 @@ export default function GradientGroupsPanel() {
                 ? t("gradient_groups_batch_requantize_empty")
                 : undefined
             }
-            className="rounded-full bg-purple-600 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-50"
+            className="action-control rounded-full px-2.5 py-1 text-[10px] font-medium"
             data-testid="gradient-groups-batch-requantize"
           >
             {t("gradient_groups_batch_requantize").replace(
@@ -345,7 +329,7 @@ export default function GradientGroupsPanel() {
               void applyAutoGradientReplace();
             }}
             disabled={replacePreviewLoading}
-            className="rounded-full bg-emerald-600 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+            className="action-control action-control-primary rounded-lg px-2.5 py-1 text-[10px] font-medium"
           >
             {t("gradient_groups_apply_now")}
           </button>
@@ -353,10 +337,12 @@ export default function GradientGroupsPanel() {
       </header>
 
       {autoReplaceEnabled && (
-        <p className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-700 dark:text-emerald-300">
+        <StatusBanner tone="success">
           {t("gradient_groups_auto_banner")}
-        </p>
+        </StatusBanner>
       )}
+
+      <div className={cardDividerClass} aria-hidden="true" />
 
       <ul className="flex max-h-[220px] flex-col gap-1.5 overflow-y-auto pr-1">
         {groups.map((group) => (
@@ -500,13 +486,7 @@ function HighlightPreviewDialog({
           <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
             {title}
           </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full bg-slate-700 px-3 py-1 text-xs font-medium text-slate-50 transition-colors hover:bg-slate-600 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-slate-50"
-          >
-            {t("gradient_groups_view_highlight_close")}
-          </button>
+          <CloseButton label={t("gradient_groups_view_highlight_close")} onClick={onClose} />
         </div>
         <div
           className="flex min-h-[320px] flex-1 items-center justify-center overflow-hidden rounded-lg"
@@ -625,9 +605,12 @@ function RequantizeDialog({
         data-testid="requantize-dialog"
       >
         <div className="flex flex-col gap-1">
-          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-            {t("gradient_groups_requantize_dialog_title")}
-          </h3>
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+              {t("gradient_groups_requantize_dialog_title")}
+            </h3>
+            <CloseButton label={t("common_close")} onClick={onClose} />
+          </div>
           <p className="text-[11px] leading-tight text-slate-500 dark:text-slate-400">
             {t("gradient_groups_requantize_dialog_description")
               .replace("{count}", String(regionCount))
@@ -680,7 +663,7 @@ function RequantizeDialog({
             type="button"
             onClick={onSubmit}
             disabled={submitting}
-            className="rounded-full bg-purple-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-60"
+            className="action-control action-control-primary rounded-lg px-3 py-1 text-xs font-medium"
             data-testid="requantize-dialog-submit"
           >
             {submitting
@@ -805,10 +788,8 @@ const GradientGroupRow = memo(function GradientGroupRow({
   return (
     <li
       className={cx(
-        "flex flex-col gap-1 rounded-xl border px-2 py-1.5 transition-colors",
-        allSelected
-          ? "border-blue-500/80 bg-blue-500/10"
-          : "border-slate-200/60 bg-slate-100/60 dark:border-slate-700/60 dark:bg-slate-900/50",
+        "flex flex-col gap-1 border-t border-[color:var(--surface-divider)] px-2 py-1.5 transition-colors first:border-t-0",
+        allSelected && "bg-blue-500/10",
       )}
     >
       <div className="flex items-center justify-between gap-2">
@@ -831,13 +812,8 @@ const GradientGroupRow = memo(function GradientGroupRow({
             type="button"
             onClick={handleSelectGroup}
             disabled={disabled}
-            className={cx(
-              "rounded-full px-2.5 py-0.5 text-[10px] font-medium transition-colors",
-              allSelected
-                ? "bg-blue-600 text-white hover:bg-blue-500"
-                : "bg-slate-800 text-white hover:bg-slate-700 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-slate-50",
-              "disabled:cursor-not-allowed disabled:opacity-60",
-            )}
+            aria-pressed={allSelected}
+            className="ghost-control rounded-lg px-2.5 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200"
           >
             {t("gradient_groups_select_group")}
           </button>
@@ -845,7 +821,7 @@ const GradientGroupRow = memo(function GradientGroupRow({
             type="button"
             onClick={handleFlattenGroup}
             disabled={disabled}
-            className="rounded-full bg-emerald-600 px-2.5 py-0.5 text-[10px] font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+            className="action-control rounded-full px-2.5 py-0.5 text-[10px] font-medium"
           >
             {t("gradient_groups_flatten_group")}
           </button>
@@ -854,7 +830,7 @@ const GradientGroupRow = memo(function GradientGroupRow({
               type="button"
               onClick={handleFlattenSelected}
               disabled={disabled}
-              className="rounded-full bg-indigo-600 px-2.5 py-0.5 text-[10px] font-medium text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+              className="action-control rounded-full px-2.5 py-0.5 text-[10px] font-medium"
               data-testid={`merge-flatten-${group.group_index}`}
             >
               {t("gradient_groups_merge_flatten").replace(
@@ -1000,7 +976,7 @@ const GradientRegionRow = memo(function GradientRegionRow({
       className={cx(
         "flex items-center justify-between gap-2 rounded-lg px-2 py-1 transition-colors",
         regionSelected
-          ? "bg-blue-500/15 ring-1 ring-blue-500/50"
+          ? "bg-blue-500/15"
           : "bg-slate-200/50 dark:bg-slate-800/50",
       )}
     >
@@ -1035,13 +1011,8 @@ const GradientRegionRow = memo(function GradientRegionRow({
           type="button"
           onClick={handleSelect}
           disabled={disabled}
-          className={cx(
-            "rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors",
-            regionSelected
-              ? "bg-blue-600 text-white hover:bg-blue-500"
-              : "bg-slate-700 text-white hover:bg-slate-600 dark:bg-slate-300 dark:text-slate-900 dark:hover:bg-slate-50",
-            "disabled:cursor-not-allowed disabled:opacity-60",
-          )}
+          aria-pressed={regionSelected}
+          className="ghost-control rounded-lg px-2 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200"
         >
           {t("gradient_groups_select_region")}
         </button>
@@ -1049,7 +1020,7 @@ const GradientRegionRow = memo(function GradientRegionRow({
           type="button"
           onClick={handleFlatten}
           disabled={disabled}
-          className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+          className="action-control rounded-full px-2 py-0.5 text-[10px] font-medium"
         >
           {t("gradient_groups_flatten_region")}
         </button>
@@ -1063,7 +1034,7 @@ const GradientRegionRow = memo(function GradientRegionRow({
           type="button"
           onClick={handleOpenRequantize}
           disabled={disabled}
-          className="rounded-full bg-purple-600 px-2 py-0.5 text-[10px] font-medium text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-60"
+          className="action-control rounded-full px-2 py-0.5 text-[10px] font-medium"
           data-testid={`requantize-region-${groupIndex}-${region.region_index}`}
         >
           {t("gradient_groups_requantize_region")}
@@ -1103,7 +1074,7 @@ function HighlightEyeButton({
       disabled={disabled}
       aria-label={ariaLabel}
       title={ariaLabel}
-      className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-slate-700 transition-colors hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
+      className="action-control flex h-5 w-5 items-center justify-center rounded-full transition-colors"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"

@@ -69,7 +69,6 @@ vi.mock("../hooks/useWorkspaceMode", () => ({
 vi.mock("../components/Scene3D", () => ({ default: () => null }));
 vi.mock("../components/SettingsPanel", () => ({ default: () => null }));
 vi.mock("../components/VectorizerPanel", () => ({ default: () => null }));
-vi.mock("../components/LanguageToggle", () => ({ LanguageToggle: () => null }));
 vi.mock("../components/ThemeToggle", () => ({ ThemeToggle: () => null }));
 vi.mock("../components/BugReportButton", () => ({ BugReportButton: () => null }));
 vi.mock("../components/BugReportModal", () => ({
@@ -95,6 +94,11 @@ import apiClient from "../api/client";
 import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
 import { useErrorTicketPromptStore } from "../stores/errorTicketPromptStore";
 import { translations } from "../i18n/translations";
+
+// Backend status lives inside the header's more-options menu.
+function openHeaderMenu() {
+  fireEvent.click(screen.getByTestId("header-menu-button"));
+}
 
 describe("App component", () => {
   beforeEach(() => {
@@ -138,10 +142,13 @@ describe("App component", () => {
     });
 
     render(<App />);
+    await screen.findByTestId("header-menu-button");
+    openHeaderMenu();
 
     await waitFor(() => {
       expect(screen.getByTestId("health-badge-ok")).toBeInTheDocument();
     });
+    expect(screen.queryByTestId("header-menu-alert")).not.toBeInTheDocument();
     expect(apiClient.get).toHaveBeenCalledWith("/health", {
       suppressClientLog: true,
       timeout: 4_000,
@@ -203,6 +210,7 @@ describe("App component", () => {
         timeout: 4_000,
         signal: expect.any(AbortSignal),
       });
+      openHeaderMenu();
       expect(screen.getByTestId("health-badge-ok")).toBeInTheDocument();
       expect(screen.queryByTestId("health-badge-fail")).not.toBeInTheDocument();
       const workspaceHeader = screen.getByText("Lumina Studio 2");

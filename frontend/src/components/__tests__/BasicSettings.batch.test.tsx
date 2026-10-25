@@ -64,14 +64,14 @@ describe("BasicSettings — auto batch mode (unified uploader)", () => {
   it("does NOT render a batch mode checkbox (removed)", () => {
     render(<BasicSettings />);
     expect(
-      screen.queryByRole("checkbox", { name: "批量模式" }),
+      screen.queryByRole("switch", { name: "批量模式" }),
     ).not.toBeInTheDocument();
   });
 
   it("shows UnifiedUploader upload hint when no image is selected", () => {
     render(<BasicSettings />);
     expect(
-      screen.getByText("拖拽图片或 Lumina 项目文件（图片支持多选）"),
+      screen.getByText("拖拽图片或 Lumina 项目文件"),
     ).toBeInTheDocument();
   });
 
@@ -84,7 +84,7 @@ describe("BasicSettings — auto batch mode (unified uploader)", () => {
     });
     render(<BasicSettings />);
     expect(
-      screen.getByRole("checkbox", { name: "上传后裁剪" }),
+      screen.getByRole("switch", { name: "上传后裁剪" }),
     ).toBeInTheDocument();
   });
 
@@ -176,7 +176,7 @@ describe("BasicSettings — auto batch mode (unified uploader)", () => {
     });
     render(<BasicSettings />);
     expect(
-      screen.queryByRole("checkbox", { name: "上传后裁剪" }),
+      screen.queryByRole("switch", { name: "上传后裁剪" }),
     ).not.toBeInTheDocument();
   });
 

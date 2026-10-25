@@ -3,6 +3,7 @@ import { useConverterStore } from '../converter';
 import { useWidgetStore } from '../widgetStore';
 import { ModelingMode } from '../../api/types';
 import { tRuntime } from '../../i18n/runtime';
+import { rotateImageFile } from '../../utils/imageRotation';
 import {
   collectBugReportContext,
   collectBugReportOriginalImage,
@@ -14,6 +15,11 @@ import {
  */
 
 // Mock cropImage API
+vi.mock('../../utils/imageRotation', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../utils/imageRotation')>(),
+  rotateImageFile: vi.fn(),
+}));
+
 vi.mock('../../api/converter', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/converter')>();
   return {
@@ -78,6 +84,29 @@ describe('submitCrop', () => {
     expect(state.aspectRatio).toBe(2); // 200/100
   });
 
+  it('完成裁剪后可以重新打开并继续裁剪当前图片', async () => {
+    mockCropImage.mockResolvedValue({
+      status: 'ok',
+      message: 'Cropped',
+      cropped_url: '/api/files/repeated-crop',
+      width: 200,
+      height: 100,
+    });
+    mockFetch.mockResolvedValue({
+      blob: () => Promise.resolve(new Blob(['img'], { type: 'image/png' })),
+    });
+    await useConverterStore.getState().submitCrop(0, 0, 200, 100);
+    const firstCrop = useConverterStore.getState().imageFile;
+
+    useConverterStore.getState().setCropModalOpen(true);
+    expect(useConverterStore.getState().cropModalOpen).toBe(true);
+    await useConverterStore.getState().submitCrop(10, 10, 100, 80);
+
+    expect(mockCropImage).toHaveBeenLastCalledWith(firstCrop, 10, 10, 100, 80);
+    expect(useConverterStore.getState().imageFile).not.toBe(firstCrop);
+    expect(useConverterStore.getState().cropModalOpen).toBe(false);
+  });
+
   it('RAW 裁剪后 Bug 报告仍附带用户选择的原始字节', async () => {
     const rawBytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0x52, 0x41, 0x57]);
     const rawFile = new File([rawBytes], 'camera.dng', {
@@ -121,6 +150,34 @@ describe('submitCrop', () => {
     expect(state.error).toBe(tRuntime('api_error_no_response'));
     expect(state.isCropping).toBe(false);
     expect(state.cropModalOpen).toBe(true); // stays open on failure
+  });
+
+  it('rotates the draft before cropping and publishes both changes together', async () => {
+    const original = useConverterStore.getState().imageFile;
+    const rotated = new File(['rotated'], 'rotated.png', { type: 'image/png' });
+    vi.mocked(rotateImageFile).mockResolvedValue(rotated);
+    mockCropImage.mockImplementation(async (file) => {
+      expect(file).toBe(rotated);
+      expect(useConverterStore.getState().imageFile).toBe(original);
+      return { status: 'ok', message: '', cropped_url: '/api/files/rotated-crop', width: 100, height: 200 };
+    });
+    mockFetch.mockResolvedValue({ blob: async () => new Blob(['result'], { type: 'image/png' }) });
+
+    await useConverterStore.getState().submitCrop(5, 10, 100, 200, 90);
+    expect(rotateImageFile).toHaveBeenCalledWith(original, 'blob:old-preview', 90);
+    expect(mockCropImage).toHaveBeenCalledWith(rotated, 5, 10, 100, 200);
+    expect(useConverterStore.getState().imageFile).not.toBe(original);
+    expect(useConverterStore.getState().aspectRatio).toBe(0.5);
+  });
+
+  it('keeps the original image when cropping the rotated draft fails', async () => {
+    const original = useConverterStore.getState().imageFile;
+    vi.mocked(rotateImageFile).mockResolvedValue(new File(['rotated'], 'rotated.png'));
+    mockCropImage.mockRejectedValue(new Error('Crop failed'));
+    await useConverterStore.getState().submitCrop(0, 0, 100, 100, 270);
+    expect(useConverterStore.getState().imageFile).toBe(original);
+    expect(useConverterStore.getState().imagePreviewUrl).toBe('blob:old-preview');
+    expect(useConverterStore.getState().cropModalOpen).toBe(true);
   });
 
   it('资源下载失败时不把错误响应当作裁剪图片', async () => {
@@ -340,6 +397,7 @@ describe('矢量化 SVG 导入', () => {
     expect(useConverterStore.getState().isLoading).toBe(true);
     expect(useConverterStore.getState().hasManualPreview).toBe(true);
 
+    await vi.waitFor(() => expect(resolvePreview).toBeTypeOf('function'));
     useConverterStore.getState().invalidatePreviewForAutoRefresh();
     resolvePreview({
       session_id: 'obsolete-session',

@@ -180,7 +180,7 @@ describe("ActionBar output entry with large format + model texture", () => {
       await renderActionBar();
 
       const output = outputButton(translations.slicer_generate_download_zip.zh);
-      expect(outputButton("生成")).toBeDisabled();
+      expect(screen.queryByRole("button", { name: "生成" })).not.toBeInTheDocument();
       expect(output).toBeDisabled();
       await click(output);
 

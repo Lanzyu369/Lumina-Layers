@@ -5,8 +5,9 @@ import Checkbox from "../ui/Checkbox";
 import Dropdown from "../ui/Dropdown";
 import Slider from "../ui/Slider";
 import {
+  StatusBanner,
   cx,
-  mutedSectionCardClass,
+  wellPadClass,
   workstationFieldLabelClass,
   workstationInputClass,
 } from "../ui/panelPrimitives";
@@ -163,11 +164,9 @@ export default function PuzzleSettings() {
       />
 
       {batchMode ? (
-        <div className={mutedSectionCardClass}>
-          <p className="text-xs text-slate-600 dark:text-slate-300">
-            {t("puzzle_batch_disabled_hint")}
-          </p>
-        </div>
+        <StatusBanner tone="info">
+          {t("puzzle_batch_disabled_hint")}
+        </StatusBanner>
       ) : null}
 
       {puzzleEnabled ? (
@@ -288,39 +287,34 @@ export default function PuzzleSettings() {
             </>
           ) : null}
 
-          <div className={mutedSectionCardClass}>
-            <div className="flex flex-col gap-2 text-sm text-slate-700 dark:text-slate-200">
-              <div className="flex items-center justify-between gap-3">
-                <span>{t("puzzle_summary_requested_grid")}</span>
-                <span className="font-mono">{requestedGridText}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span>{t("puzzle_summary_requested_piece_count")}</span>
-                <span className="font-mono">{requestedPieceCountText}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span>{t("puzzle_summary_grid")}</span>
-                <span className="font-mono">{resolvedGridText}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span>{t("puzzle_summary_piece_count")}</span>
-                <span className="font-mono">{resolvedPieceCountText}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span>{t("puzzle_summary_piece_size")}</span>
-                <span className="font-mono text-right">
-                  {resolvedPieceSizeText}
-                </span>
-              </div>
+          <div className={cx(wellPadClass, "flex flex-col gap-2 text-sm text-slate-700 dark:text-slate-200")}>
+            <div className="flex items-center justify-between gap-3">
+              <span>{t("puzzle_summary_requested_grid")}</span>
+              <span className="font-mono">{requestedGridText}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span>{t("puzzle_summary_requested_piece_count")}</span>
+              <span className="font-mono">{requestedPieceCountText}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span>{t("puzzle_summary_grid")}</span>
+              <span className="font-mono">{resolvedGridText}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span>{t("puzzle_summary_piece_count")}</span>
+              <span className="font-mono">{resolvedPieceCountText}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span>{t("puzzle_summary_piece_size")}</span>
+              <span className="font-mono text-right">
+                {resolvedPieceSizeText}
+              </span>
             </div>
           </div>
 
           {puzzleWarnings.length > 0 ? (
-            <div className={mutedSectionCardClass}>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-                {t("puzzle_warnings")}
-              </p>
-              <div className="flex flex-col gap-1 text-xs text-amber-700 dark:text-amber-300">
+            <StatusBanner tone="warning" title={t("puzzle_warnings")}>
+              <div className="flex flex-col gap-1">
                 {puzzleWarnings.map((warning, index) => (
                   <p key={`${warning}-${index}`}>
                     {warning === "wipe_tower_manual_adjustment_required"
@@ -329,7 +323,7 @@ export default function PuzzleSettings() {
                   </p>
                 ))}
               </div>
-            </div>
+            </StatusBanner>
           ) : null}
         </>
       ) : null}

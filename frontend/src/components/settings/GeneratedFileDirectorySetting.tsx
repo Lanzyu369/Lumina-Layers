@@ -42,10 +42,10 @@ export default function GeneratedFileDirectorySetting() {
   return (
     <div
       data-testid="settings-generated-file-directory-section"
-      className="flex flex-col gap-3 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+      className="flex flex-col gap-3 border-t panel-divider pt-5"
     >
       <div className="min-w-0">
-        <h3 className="flex items-center gap-1.5 text-base font-semibold text-slate-900 dark:text-slate-50">
+        <h3 className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
           <span>{t("settings.generated_file_directory_heading")}</span>
           <HelpDot
             title={t("settings.generated_file_directory_heading")}
@@ -55,7 +55,7 @@ export default function GeneratedFileDirectorySetting() {
       </div>
       <p
         data-testid="settings-generated-file-directory-value"
-        className="break-all rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-200"
+        className="panel-well break-all rounded-[10px] px-3 py-2.5 text-sm text-slate-700 dark:text-slate-200"
         title={directory || undefined}
       >
         {directory || t("settings.generated_file_directory_system_default")}

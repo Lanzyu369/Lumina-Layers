@@ -540,7 +540,7 @@ describe("ColorcheckerConfirmDialog", () => {
     fireEvent.pointerMove(window, { clientX: 30, clientY: 35 });
     fireEvent.pointerUp(window);
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /高级选项/ }));
+    fireEvent.click(screen.getByRole("switch", { name: /高级选项/ }));
     fireEvent.click(await screen.findByRole("combobox", { name: "校色算法" }));
     fireEvent.click(screen.getByRole("option", { name: "二阶 Root-Polynomial" }));
     fireEvent.click(screen.getByRole("button", { name: "执行校色" }));

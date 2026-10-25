@@ -12,7 +12,6 @@ import {
   resolveCatalogChannel,
   resolveCatalogDisplay,
   resolveCatalogFitError,
-  shortContentFingerprint,
   toHex,
   toRgbCss,
 } from "./catalogModel";
@@ -24,6 +23,7 @@ import type {
 interface MaterialCloudCatalogCardProps {
   entry: MaterialRegistryCatalogEntry;
   installState: CatalogInstallState;
+  localDirectory?: string | null;
   isInstalling: boolean;
   installDisabled: boolean;
   onInstall: (entry: MaterialRegistryCatalogEntry) => void;
@@ -80,6 +80,7 @@ function MetaItem({
 export default function MaterialCloudCatalogCard({
   entry,
   installState,
+  localDirectory,
   isInstalling,
   installDisabled,
   onInstall,
@@ -115,7 +116,7 @@ export default function MaterialCloudCatalogCard({
       );
     }
     const label = installState === "update_available"
-      ? tRuntime("mat_sync_update_btn", { revisionId: shortContentFingerprint(entry) })
+      ? t("cloud_library_update")
       : t("mat_sync_install_btn");
     return (
       <Button
@@ -171,12 +172,14 @@ export default function MaterialCloudCatalogCard({
               <span key={index} className="truncate">· {part}</span>
             ))}
           </p>
-          <p
-            className="mt-1 truncate font-mono text-[11px] text-slate-400 dark:text-slate-500"
-            title={entry.local_directory}
-          >
-            {entry.local_directory}
-          </p>
+          {localDirectory && (
+            <p
+              className="mt-1 truncate font-mono text-[11px] text-slate-400 dark:text-slate-500"
+              title={localDirectory}
+            >
+              {localDirectory}
+            </p>
+          )}
         </div>
       </header>
 
@@ -220,11 +223,6 @@ export default function MaterialCloudCatalogCard({
         </MetaItem>
         <MetaItem label={t("mat_sync_package_size_label")}>
           <span className="tabular-nums">{formatBytes(entry.package_bytes)}</span>
-        </MetaItem>
-        <MetaItem label={t("mat_sync_content_fingerprint_label")}>
-          <span className="block truncate font-mono text-xs" title={entry.content_hash}>
-            {shortContentFingerprint(entry)}
-          </span>
         </MetaItem>
       </dl>
 

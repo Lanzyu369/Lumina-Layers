@@ -1,8 +1,8 @@
 import { describe, it, beforeEach, expect } from "vitest";
 import * as fc from "fast-check";
+import { useSettingsStore } from "../stores/settingsStore";
 import {
   useConverterStore,
-  clampValue,
   isValidImageType,
 } from "../stores/converter";
 
@@ -10,8 +10,8 @@ import {
 
 /** Numeric field definitions: [setter name, state key, min, max] */
 const NUMERIC_FIELDS = [
-  ["setTargetWidthMm", "target_width_mm", 10, 400],
-  ["setTargetHeightMm", "target_height_mm", 10, 400],
+  ["setTargetWidthMm", "target_width_mm", 10, 256],
+  ["setTargetHeightMm", "target_height_mm", 10, 256],
   ["setSpacerThick", "spacer_thick", 0.2, 10],
   ["setQuantizeColors", "quantize_colors", 8, 256],
   ["setLoopWidth", "loop_width", 2, 10],
@@ -31,7 +31,10 @@ const ISOLATED_NUMERIC_FIELDS = NUMERIC_FIELDS.filter(
 
 /** Reset store to default state before each test */
 function resetStore(): void {
+  useSettingsStore.setState({ printerModel: "test-bed" });
   useConverterStore.setState({
+    bed_label: "Test bed",
+    bedSizes: [{ label: "Test bed", printer_id: "test-bed", width_mm: 256, height_mm: 256, is_default: true }],
     imageFile: null,
     imagePreviewUrl: null,
     aspectRatio: null,
@@ -182,7 +185,7 @@ describe("ConverterStore Property-Based Tests", () => {
 
   // **Validates: Requirements 4.1, 4.2**
   describe("Property 4: 宽高比联动一致性 (Aspect Ratio Linked Update)", () => {
-    it("setTargetWidthMm updates height = clamp(round(width / aspectRatio), 10, 400)", () => {
+    it("width edits fit both bed axes and preserve the ratio when the minimum size allows it", () => {
       fc.assert(
         fc.property(
           fc.double({ min: 0.1, max: 10.0, noNaN: true }),
@@ -194,24 +197,25 @@ describe("ConverterStore Property-Based Tests", () => {
             useConverterStore.getState().setTargetWidthMm(width);
 
             const state = useConverterStore.getState();
-            const clampedWidth = clampValue(width, 10, 400);
-            const expectedHeight = clampValue(
-              Math.round(clampedWidth / aspectRatio),
-              10,
-              400
-            );
-
-            return (
-              state.target_width_mm === clampedWidth &&
-              state.target_height_mm === expectedHeight
-            );
+            expect(state.target_width_mm).toBeGreaterThanOrEqual(10);
+            expect(state.target_width_mm).toBeLessThanOrEqual(256);
+            expect(state.target_height_mm).toBeGreaterThanOrEqual(10);
+            expect(state.target_height_mm).toBeLessThanOrEqual(256);
+            expect(state.target_width_mm).toBeLessThanOrEqual(Math.max(10, width));
+            const proportionalHeight = state.target_width_mm / aspectRatio;
+            if (proportionalHeight >= 10 && proportionalHeight <= 256) {
+              expect(Math.abs(state.target_height_mm - proportionalHeight)).toBeLessThanOrEqual(0.500001);
+            }
+            if (width >= 10 && width <= 256 && width / aspectRatio <= 256) {
+              expect(state.target_width_mm).toBe(width);
+            }
           }
         ),
         { numRuns: 100 }
       );
     });
 
-    it("setTargetHeightMm updates width = clamp(round(height * aspectRatio), 10, 400)", () => {
+    it("height edits fit both bed axes and preserve the ratio when the minimum size allows it", () => {
       fc.assert(
         fc.property(
           fc.double({ min: 0.1, max: 10.0, noNaN: true }),
@@ -223,17 +227,18 @@ describe("ConverterStore Property-Based Tests", () => {
             useConverterStore.getState().setTargetHeightMm(height);
 
             const state = useConverterStore.getState();
-            const clampedHeight = clampValue(height, 10, 400);
-            const expectedWidth = clampValue(
-              Math.round(clampedHeight * aspectRatio),
-              10,
-              400
-            );
-
-            return (
-              state.target_height_mm === clampedHeight &&
-              state.target_width_mm === expectedWidth
-            );
+            expect(state.target_width_mm).toBeGreaterThanOrEqual(10);
+            expect(state.target_width_mm).toBeLessThanOrEqual(256);
+            expect(state.target_height_mm).toBeGreaterThanOrEqual(10);
+            expect(state.target_height_mm).toBeLessThanOrEqual(256);
+            expect(state.target_height_mm).toBeLessThanOrEqual(Math.max(10, height));
+            const proportionalWidth = state.target_height_mm * aspectRatio;
+            if (proportionalWidth >= 10 && proportionalWidth <= 256) {
+              expect(Math.abs(state.target_width_mm - proportionalWidth)).toBeLessThanOrEqual(0.500001);
+            }
+            if (height >= 10 && height <= 256 && height * aspectRatio <= 256) {
+              expect(state.target_height_mm).toBe(height);
+            }
           }
         ),
         { numRuns: 100 }

@@ -133,6 +133,31 @@ describe("SettingsPanel information architecture", () => {
     });
   });
 
+  it("keeps SVG scope in help while preserving the editable value", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /转换与精度/ }));
+    const section = screen.getByTestId("settings-svg-raster-density-section");
+    expect(within(section).queryByText(translations["settings.svg_pixels_per_mm_scope"].zh)).not.toBeInTheDocument();
+    const slider = within(section).getByRole("slider", { name: "采样密度" });
+    const initialValue = slider.getAttribute("aria-valuenow") ?? slider.getAttribute("value");
+    fireEvent.click(within(section).getByRole("button", { name: /仅在.*高保真/ }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(translations["settings.svg_pixels_per_mm_tip"].zh);
+    expect(slider.getAttribute("aria-valuenow") ?? slider.getAttribute("value")).toBe(initialValue);
+  });
+
+  it("keeps cache explanations in help and displays the cleanup result inline", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /存储与维护/ }));
+    expect(screen.queryByText(translations["settings.clear_cache_desc"].zh)).not.toBeInTheDocument();
+    expect(screen.queryByText(translations["settings.cache_summary"].zh)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "缓存管理" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(translations["settings.cache_summary"].zh);
+    expect(systemApi.clearCache).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "清除缓存" }));
+    expect(await screen.findByText("已清除 0 个临时文件，释放 0.0 KB")).toBeInTheDocument();
+    expect(systemApi.clearCache).toHaveBeenCalledTimes(1);
+  });
+
   it("shows one settings category at a time", async () => {
     renderPanel();
 
@@ -142,6 +167,9 @@ describe("SettingsPanel information architecture", () => {
     });
 
     expect(deviceButton).toHaveAttribute("aria-current", "page");
+    // A settings category owns its scroll boundary. Chaining into the clipped
+    // app shell can latch a wheel sequence there, even after it reverses.
+    expect(screen.getByRole("region", { name: /打印与切片/ })).toHaveClass("overscroll-y-contain");
     expect(
       await screen.findByRole("heading", { name: "当前设备", level: 3 }),
     ).toBeInTheDocument();
@@ -163,9 +191,10 @@ describe("SettingsPanel information architecture", () => {
       within(navigation).getByRole("button", { name: /转换与精度/ }),
     );
     expect(screen.getByRole("region", { name: /转换与精度/ })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /转换与精度/ })).toHaveClass("overscroll-y-contain");
     expect(
-      screen.queryByRole("heading", { name: "转换与精度" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("heading", { name: "转换与精度", level: 2 }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", {
         name: "SVG 清晰度",
@@ -177,9 +206,10 @@ describe("SettingsPanel information architecture", () => {
       within(navigation).getByRole("button", { name: /存储与维护/ }),
     );
     expect(screen.getByRole("region", { name: /存储与维护/ })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /存储与维护/ })).toHaveClass("overscroll-y-contain");
     expect(
-      screen.queryByRole("heading", { name: "存储与维护" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("heading", { name: "存储与维护", level: 2 }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "缓存管理", level: 3 }),
     ).toBeInTheDocument();
@@ -329,6 +359,79 @@ describe("SettingsPanel information architecture", () => {
     ).toBe(
       "When enabled, a normal single-item export downloads “poster.png” as “poster.3mf”. It is off by default; batch, puzzle, and large-format exports keep their existing names.",
     );
+  });
+
+  it("leaves the interface scale to the browser's own zoom outside the desktop app", () => {
+    renderPanel();
+    const navigation = screen.getByRole("navigation", { name: "设置分类" });
+    fireEvent.click(within(navigation).getByRole("button", { name: /常规/ }));
+
+    expect(screen.getByTestId("settings-language-section")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("settings-interface-scale-section"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("selects and remembers the interface language under General", () => {
+    useSettingsStore.getState().setLanguage("en");
+    renderPanel();
+    const navigation = screen.getByRole("navigation", { name: "设置分类" });
+    fireEvent.click(within(navigation).getByRole("button", { name: /常规/ }));
+
+    const languagePicker = within(screen.getByTestId("settings-language-section"))
+      .getByRole("combobox", { name: "界面语言 / Language" });
+    expect(languagePicker).toHaveTextContent("English");
+    fireEvent.click(languagePicker);
+    fireEvent.click(screen.getByRole("option", { name: "简体中文" }));
+    expect(useSettingsStore.getState().language).toBe("zh");
+    expect(JSON.parse(localStorage.getItem("lumina-settings")!).state.language).toBe("zh");
+
+    fireEvent.click(languagePicker);
+    fireEvent.click(screen.getByRole("option", { name: "English" }));
+    expect(useSettingsStore.getState().language).toBe("en");
+    expect(JSON.parse(localStorage.getItem("lumina-settings")!).state.language).toBe("en");
+    fireEvent.click(within(navigation).getByRole("button", { name: /打印与切片/ }));
+    fireEvent.click(within(navigation).getByRole("button", { name: /常规/ }));
+    expect(within(screen.getByTestId("settings-language-section"))
+      .getByRole("combobox")).toHaveTextContent("English");
+  });
+
+  it("offers the centered or left top navigation choice under General", () => {
+    renderPanel();
+
+    const navigation = screen.getByRole("navigation", { name: "设置分类" });
+    fireEvent.click(
+      within(navigation).getByRole("button", { name: /常规/ }),
+    );
+
+    const alignmentSection = screen.getByTestId(
+      "settings-header-nav-alignment-section",
+    );
+    expect(
+      within(alignmentSection).getByRole("heading", {
+        name: "顶部导航对齐",
+        level: 3,
+      }),
+    ).toBeInTheDocument();
+    const centered = within(alignmentSection).getByRole("radio", { name: "居中" });
+    const left = within(alignmentSection).getByRole("radio", { name: "居左" });
+    expect(centered).toBeChecked();
+    expect(left).not.toBeChecked();
+
+    fireEvent.click(left);
+
+    expect(left).toBeChecked();
+    expect(useSettingsStore.getState().headerNavAlignment).toBe("left");
+  });
+
+  it("provides matching English copy for the top navigation choice", () => {
+    expect(translations["settings.header_nav_alignment_heading"].en).toBe(
+      "Top navigation alignment",
+    );
+    expect(translations["settings.header_nav_alignment_center"].en).toBe(
+      "Centered",
+    );
+    expect(translations["settings.header_nav_alignment_left"].en).toBe("Left");
   });
 
   it("keeps the machine registry out of the page until the chooser opens", async () => {

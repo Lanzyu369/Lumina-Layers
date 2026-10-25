@@ -3,7 +3,7 @@ import type {
   MaterialLayerBenefitScope,
 } from "../../api/types";
 import { useI18n } from "../../i18n/context";
-import { cx, workstationInsetCardClass } from "../ui/panelPrimitives";
+import { cx, groupHeaderClass, wellPadClass } from "../ui/panelPrimitives";
 
 interface MaterialLayerBenefitCurveProps {
   points: MaterialLayerBenefitPoint[];
@@ -25,11 +25,11 @@ export default function MaterialLayerBenefitCurve({
   const title = t("palette_dynamic_benefit_title");
   return (
     <section
-      className={cx(workstationInsetCardClass, "shrink-0 px-3 py-2.5")}
+      className={cx(wellPadClass, "shrink-0")}
       role="region"
       aria-label={title}
     >
-      <h3 className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+      <h3 className={groupHeaderClass}>
         {title}
       </h3>
       {scope === "automatic_pixels" && (
@@ -40,7 +40,7 @@ export default function MaterialLayerBenefitCurve({
           )}
         </p>
       )}
-      <ul className="mt-1.5 grid grid-cols-[repeat(auto-fit,minmax(8.5rem,1fr))] gap-1.5">
+      <ul className="mt-2 grid grid-cols-[repeat(auto-fit,minmax(8.5rem,1fr))] divide-x divide-[color:var(--surface-divider)]">
         {points.map((point, index) => {
           const layerText = t("palette_dynamic_benefit_layer").replace(
             "{count}",
@@ -62,7 +62,7 @@ export default function MaterialLayerBenefitCurve({
           return (
             <li
               key={`${point.max_effective_layer_count}-${index}`}
-              className="rounded-xl border border-slate-200/70 bg-[var(--surface-panel)] px-2 py-1.5 text-[10px] dark:border-slate-700/70"
+              className="px-2 py-1 text-[10px]"
             >
               <div className="font-semibold text-slate-700 dark:text-slate-200">
                 {layerText}

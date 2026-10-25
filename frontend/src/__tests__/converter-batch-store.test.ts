@@ -4,6 +4,7 @@ import { StructureMode, ColorMode, ModelingMode } from "../api/types";
 
 // Mock the converter API module
 vi.mock("../api/converter", () => ({
+  fetchExportMaterialSelection: vi.fn(async () => (await import("./fixtures/exportMaterialSelection")).READY_EXPORT_MATERIAL_SELECTION),
   convertBatch: vi.fn(),
   fetchLutList: vi.fn(),
   convertPreview: vi.fn(),
@@ -31,6 +32,7 @@ function resetStore(overrides: Record<string, unknown> = {}): void {
     batchLoading: false,
     batchResult: null,
     error: null,
+    source_version: "legacy",
     lut_name: "test-lut",
     target_width_mm: 60,
     spacer_thick: 1.2,

@@ -1,3 +1,4 @@
+import CloseButton from "./CloseButton";
 import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 
@@ -343,16 +344,7 @@ export default function LayerMaskViewerDialog({
               </button>
             </div>
 
-            <button
-              type="button"
-              className={iconButtonClass}
-              style={{ color: "var(--surface-text-muted)" }}
-              onClick={onClose}
-              aria-label={t("action_close_overlay")}
-              title={t("action_close_overlay")}
-            >
-              {t("action_close_icon")}
-            </button>
+            <CloseButton label={t("action_close_overlay")} onClick={onClose} />
           </div>
 
           <div className={`relative min-h-0 ${bodyHeightClass}`}>

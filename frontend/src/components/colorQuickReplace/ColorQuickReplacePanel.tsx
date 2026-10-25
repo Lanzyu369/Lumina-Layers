@@ -1,3 +1,4 @@
+import DisclosureChevron from "../ui/DisclosureChevron";
 /**
  * ColorQuickReplacePanel — quick recolor card in the Color Adjustment page.
  * 「颜色调整」页中的快速换色卡片。
@@ -18,7 +19,7 @@ import { normalizeReferenceHex, useSimilarRecipes } from "../../hooks/useSimilar
 import { useI18n } from "../../i18n/context";
 import { useConverterStore } from "../../stores/converter";
 import { useEyedropperStore } from "../../stores/eyedropperStore";
-import { StatusBanner, cardClass, cx, groupHeaderClass } from "../ui/panelPrimitives";
+import { StatusBanner, cardClass, cardDividerClass, cx, groupHeaderClass } from "../ui/panelPrimitives";
 import SimilarRecipeList from "./SimilarRecipeList";
 import TargetColorPanel from "./TargetColorPanel";
 import type { RecipeChannel } from "./recipeSuggestionUtils";
@@ -117,16 +118,17 @@ export default function ColorQuickReplacePanel() {
   const { eyedropperActive, toggleEyedropper } = useTargetEyedropper(handleTargetChange, expanded);
 
   return (
-    <section className={cx(cardClass, "flex flex-col gap-3 px-4 py-3")} data-testid="color-quick-replace-panel">
+    <section className={cx(cardClass, "color-tools-panel flex flex-col gap-3 px-4 py-3")} data-testid="color-quick-replace-panel">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">{t("quick_replace_title")}</h3>
         <button
           type="button"
           aria-expanded={expanded}
+          aria-label={t(expanded ? "quick_replace_collapse" : "quick_replace_expand")}
           onClick={() => setExpanded((value) => !value)}
           className="rounded-full px-2 py-0.5 text-[11px] text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
         >
-          {t(expanded ? "quick_replace_collapse" : "quick_replace_expand")}
+          <DisclosureChevron expanded={expanded} />
         </button>
       </div>
 
@@ -153,11 +155,10 @@ export default function ColorQuickReplacePanel() {
             onApplyNearest={handleApply}
             onApplyExact={replaceSelectionWithExactColor}
           />
-          <div className="panel-divider border-t" />
+          <div className={cardDividerClass} aria-hidden="true" />
           <section className="flex flex-col gap-2" aria-label={t("quick_replace_recipes_heading")}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h4 className={groupHeaderClass}>
-                <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                 {t("quick_replace_recipes_heading")}
               </h4>
               {recipeReference && (
@@ -267,11 +268,10 @@ function BasisToggle({
           disabled={option === "target" ? !targetAvailable : !selectionAvailable}
           onClick={() => onChange(option)}
           className={cx(
-            "rounded-full border px-2.5 py-1 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-45",
-            basis === option
-              ? "border-blue-300 bg-blue-500/12 text-blue-700 dark:border-blue-700 dark:bg-blue-500/16 dark:text-blue-300"
-              : "border-slate-200/80 bg-slate-100/70 text-slate-500 hover:border-slate-300 dark:border-slate-700/80 dark:bg-slate-900/60 dark:text-slate-400",
+            "ghost-control rounded-full px-2.5 py-1 text-[11px]",
+            basis === option ? "" : "text-slate-500 dark:text-slate-400",
           )}
+          data-active={basis === option ? "true" : undefined}
         >
           {t(option === "selection" ? "quick_replace_basis_selection" : "quick_replace_basis_target")}
         </button>
@@ -306,7 +306,7 @@ function ReferenceColorChooser({
             onClick={() => onPick(hex)}
             className={cx(
               "h-5 w-5 rounded-md border transition-transform hover:scale-110",
-              active === hex ? "border-amber-400 ring-2 ring-amber-400/40" : "border-slate-300/80 dark:border-slate-600/80",
+              active === hex ? "border-2 border-amber-500" : "border-slate-300/80 dark:border-slate-600/80",
             )}
             style={{ backgroundColor: hex }}
           />
@@ -349,7 +349,7 @@ function RecipeSuggestionBody({
   return (
     <>
       <p className="text-[11px] text-slate-500 dark:text-slate-400">{t("quick_replace_recipe_layers_hint")}</p>
-      <div className="dock-scrollbar max-h-72 overflow-y-auto pr-1">
+      <div className="dock-scrollbar max-h-72 overflow-y-auto overscroll-y-contain pr-1">
         <SimilarRecipeList items={items} channels={channels} canApply={canApply} busy={busy} onApply={onApply} />
       </div>
     </>
