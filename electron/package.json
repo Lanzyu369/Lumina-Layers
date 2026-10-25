@@ -10,7 +10,7 @@
     "test": "node --test __tests__/*.test.cjs"
   },
   "devDependencies": {
-    "electron": "^35.0.0"
+    "electron": "^44.9.3"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

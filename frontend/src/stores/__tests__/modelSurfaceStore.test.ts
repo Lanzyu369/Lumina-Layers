@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ColorMode, ModelingMode } from "../../api/types";
+import { readyMaterialSelection } from "../../__tests__/fixtures/nativeMaterialSelection";
 import {
   DEFAULT_STATE,
   useConverterStore,
@@ -7,6 +8,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   convertGenerate: vi.fn(),
+  fetchExportMaterialSelection: vi.fn(),
   convertPreview: vi.fn(),
   uploadModelSurface: vi.fn(),
   selectModelSurface: vi.fn(),
@@ -21,6 +23,7 @@ vi.mock("../../api/converter", async () => {
   return {
     ...actual,
     convertGenerate: mocks.convertGenerate,
+    fetchExportMaterialSelection: mocks.fetchExportMaterialSelection,
     convertPreview: mocks.convertPreview,
     uploadModelSurface: mocks.uploadModelSurface,
     selectModelSurface: mocks.selectModelSurface,
@@ -91,6 +94,7 @@ describe("model surface overlay store flow", () => {
   beforeEach(() => {
     resetStore();
     mocks.convertGenerate.mockReset();
+    mocks.fetchExportMaterialSelection.mockReset().mockResolvedValue(readyMaterialSelection());
     mocks.convertPreview.mockReset();
     mocks.uploadModelSurface.mockReset();
     mocks.selectModelSurface.mockReset();

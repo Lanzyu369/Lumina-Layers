@@ -35,6 +35,11 @@ vi.mock("../api/converter", () => ({
   getFileUrl: vi.fn((id: string) => `/api/files/${id}`),
 }));
 
+async function renderReadyApp() {
+  render(<App />);
+  await screen.findByTestId("health-badge-ok");
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   // Reset widget store to default layout before each test
@@ -47,8 +52,8 @@ describe("App Widget Toggles", () => {
     fireEvent.click(screen.getByTestId("panel-controls-toggle"));
   }
 
-  it("renders widget toggle buttons only for current tab (converter by default)", () => {
-    render(<App />);
+  it("renders widget toggle buttons only for current tab (converter by default)", async () => {
+    await renderReadyApp();
     openWidgetMenu();
 
     // Converter page widgets (default active tab) should be visible
@@ -62,8 +67,8 @@ describe("App Widget Toggles", () => {
     expect(screen.queryByTestId("widget-toggle-five-color")).not.toBeInTheDocument();
   });
 
-  it("shows the model texture panel toggle only under the Creative Center sub-tab", () => {
-    render(<App />);
+  it("shows the model texture panel toggle only under the Creative Center sub-tab", async () => {
+    await renderReadyApp();
 
     // Core sub-tab (核心设置) must not offer the model texture panel.
     // 核心设置子页签不得提供模型贴图面板。
@@ -81,8 +86,8 @@ describe("App Widget Toggles", () => {
     expect(modelSurfaceToggle.className).toContain("bg-blue-50");
   });
 
-  it("does not show widget toggles on LUT pages rendered as full panels", () => {
-    render(<App />);
+  it("does not show widget toggles on LUT pages rendered as full panels", async () => {
+    await renderReadyApp();
 
     fireEvent.click(screen.getByTestId("tab-lut-management"));
     openWidgetMenu();
@@ -95,7 +100,7 @@ describe("App Widget Toggles", () => {
   });
 
   it("opens Creative Workshop without exposing converter widget controls", async () => {
-    render(<App />);
+    await renderReadyApp();
     await screen.findByTestId("health-badge-ok");
 
     fireEvent.click(screen.getByTestId("tab-workshop"));
@@ -109,8 +114,8 @@ describe("App Widget Toggles", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("converter tab widgets are visible by default", () => {
-    render(<App />);
+  it("converter tab widgets are visible by default", async () => {
+    await renderReadyApp();
     openWidgetMenu();
 
     const basicToggle = screen.getByTestId("widget-toggle-basic-settings");
@@ -120,8 +125,8 @@ describe("App Widget Toggles", () => {
     expect(actionBarToggle.className).toContain("bg-blue-50");
   });
 
-  it("toggles widget visibility when toggle button is clicked", () => {
-    render(<App />);
+  it("toggles widget visibility when toggle button is clicked", async () => {
+    await renderReadyApp();
     openWidgetMenu();
 
     const basicToggle = screen.getByTestId("widget-toggle-basic-settings");
@@ -135,8 +140,8 @@ describe("App Widget Toggles", () => {
     expect(basicToggle.className).toContain("bg-transparent");
   });
 
-  it("toggles widget back to visible when clicked again", () => {
-    render(<App />);
+  it("toggles widget back to visible when clicked again", async () => {
+    await renderReadyApp();
     openWidgetMenu();
 
     const basicToggle = screen.getByTestId("widget-toggle-basic-settings");
@@ -150,8 +155,8 @@ describe("App Widget Toggles", () => {
     expect(basicToggle.className).toContain("bg-blue-50");
   });
 
-  it("renders reset layout button", () => {
-    render(<App />);
+  it("renders reset layout button", async () => {
+    await renderReadyApp();
     openWidgetMenu();
 
     const resetButton = screen.getByTestId("widget-reset-layout");

@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ColorMode, ModelingMode, StructureMode } from "../api/types";
 import type { PaletteEntry } from "../api/types";
+import { readyMaterialSelection } from "./fixtures/nativeMaterialSelection";
 
 const mocks = vi.hoisted(() => ({
   convertPreview: vi.fn(),
   convertGenerate: vi.fn(),
+  fetchExportMaterialSelection: vi.fn(),
   convertGenerateLargeFormat: vi.fn(),
   convertGeneratePuzzle: vi.fn(),
   replaceColorsBatch: vi.fn(),
@@ -22,6 +24,7 @@ vi.mock("../api/converter", async () => {
     ...actual,
     convertPreview: mocks.convertPreview,
     convertGenerate: mocks.convertGenerate,
+    fetchExportMaterialSelection: mocks.fetchExportMaterialSelection,
     convertGenerateLargeFormat: mocks.convertGenerateLargeFormat,
     convertGeneratePuzzle: mocks.convertGeneratePuzzle,
     replaceColorsBatch: mocks.replaceColorsBatch,
@@ -167,6 +170,7 @@ function baseReadyState() {
 describe("converter store relief generate flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.fetchExportMaterialSelection.mockResolvedValue(readyMaterialSelection());
     vi.resetModules();
     localStorage.removeItem("lumina-settings");
     Object.defineProperty(URL, "createObjectURL", {

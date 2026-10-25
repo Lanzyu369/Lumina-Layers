@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useConverterStore } from '../converter';
+import { DEFAULT_STATE, useConverterStore } from '../converter';
 import { useWidgetStore } from '../widgetStore';
 import { ModelingMode } from '../../api/types';
 import { tRuntime } from '../../i18n/runtime';
@@ -20,6 +20,19 @@ vi.mock('../../api/converter', async (importOriginal) => {
     ...actual,
     cropImage: vi.fn(),
     convertPreview: vi.fn(),
+    getEditorSelection: vi.fn().mockResolvedValue({
+      selection_revision: 0,
+      content_revision: 0,
+      editor_content_revision: 0,
+      selected_pixel_count: 0,
+      selected_component_count: 0,
+      selected_color_hexes: [],
+      region_ids: [],
+      components: [],
+      contours: [],
+      can_undo: false,
+      can_redo: false,
+    }),
   };
 });
 
@@ -39,6 +52,7 @@ globalThis.URL.revokeObjectURL = mockRevokeObjectURL;
 
 function resetStore(): void {
   useConverterStore.setState({
+    ...DEFAULT_STATE,
     imageFile: new File(['dummy'], 'test.png', { type: 'image/png' }),
     imagePreviewUrl: 'blob:old-preview',
     isCropping: false,
@@ -340,6 +354,9 @@ describe('矢量化 SVG 导入', () => {
     expect(useConverterStore.getState().isLoading).toBe(true);
     expect(useConverterStore.getState().hasManualPreview).toBe(true);
 
+    // A current session first crosses the editor checkpoint barrier. Cancel
+    // only after the preview request is in flight, as this test promises.
+    await vi.waitFor(() => expect(mockConvertPreview).toHaveBeenCalledOnce());
     useConverterStore.getState().invalidatePreviewForAutoRefresh();
     resolvePreview({
       session_id: 'obsolete-session',

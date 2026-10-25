@@ -24,6 +24,11 @@ vi.mock("../components/Scene3D", () => ({
 
 import apiClient from "../api/client";
 
+async function renderReadyApp() {
+  render(<App />);
+  await screen.findByTestId("health-badge-ok");
+}
+
 describe("Widget Workspace Layout", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -36,24 +41,24 @@ describe("Widget Workspace Layout", () => {
     useWidgetStore.getState().resetLayout();
   });
 
-  it('preserves "Lumina Studio 2" header', () => {
-    render(<App />);
+  it('preserves "Lumina Studio 2" header', async () => {
+    await renderReadyApp();
     expect(screen.getByText("Lumina Studio 2")).toBeInTheDocument();
   });
 
-  it("renders widget workspace with Scene3D", () => {
-    render(<App />);
+  it("renders widget workspace with Scene3D", async () => {
+    await renderReadyApp();
     expect(screen.getByTestId("scene3d-mock")).toBeInTheDocument();
   });
 
-  it("renders panel controls toggle button in header", () => {
-    render(<App />);
+  it("renders panel controls toggle button in header", async () => {
+    await renderReadyApp();
     // Widget toggles are now inside a dropdown menu
     expect(screen.getByTestId("panel-controls-toggle")).toBeInTheDocument();
   });
 
-  it("renders the full main-app top-level navigation", () => {
-    render(<App />);
+  it("renders the full main-app top-level navigation", async () => {
+    await renderReadyApp();
     expect(screen.getByTestId("tab-converter")).toBeInTheDocument();
     expect(screen.getByTestId("tab-lut-management")).toBeInTheDocument();
     expect(screen.getByTestId("tab-material-management")).toBeInTheDocument();
@@ -62,8 +67,8 @@ describe("Widget Workspace Layout", () => {
     expect(screen.getByTestId("tab-settings")).toBeInTheDocument();
   });
 
-  it("places Creative Workshop between Vectorizer and Settings", () => {
-    render(<App />);
+  it("places Creative Workshop between Vectorizer and Settings", async () => {
+    await renderReadyApp();
 
     const primaryTabs = screen
       .getAllByRole("button")
@@ -80,8 +85,8 @@ describe("Widget Workspace Layout", () => {
     ]);
   });
 
-  it("keeps the top-level navigation in the legacy centered header column", () => {
-    render(<App />);
+  it("keeps the top-level navigation in the legacy centered header column", async () => {
+    await renderReadyApp();
 
     const converterTab = screen.getByTestId("tab-converter");
     const nav = converterTab.closest("nav");
@@ -93,8 +98,8 @@ describe("Widget Workspace Layout", () => {
     expect(tabWrapper).not.toHaveClass("w-full");
   });
 
-  it("renders local LUT and material secondary tabs in the main app", () => {
-    render(<App />);
+  it("renders local LUT and material secondary tabs in the main app", async () => {
+    await renderReadyApp();
 
     fireEvent.click(screen.getByTestId("tab-lut-management"));
     expect(screen.getByTestId("subtab-lut-library")).toBeInTheDocument();

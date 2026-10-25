@@ -1,5 +1,5 @@
 ﻿import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { act, render, screen, cleanup } from "@testing-library/react";
 import fc from "fast-check";
 import type { ReactNode } from "react";
 
@@ -116,7 +116,7 @@ describe("Feature: frontend-scaffold, Property 2: 非 'ok' 状态显示失败徽
    * Validates: Requirements 5.3
    * For any non-"ok" status string, the App should render a red (fail) badge.
    */
-  it("renders red badge for any non-ok status", async () => {
+  it("renders a red badge for any non-ok status after the workspace connected", async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.string().filter((s) => s !== "ok"),
@@ -126,19 +126,24 @@ describe("Feature: frontend-scaffold, Property 2: 非 'ok' 状态显示失败徽
           // Restore default rejection for unmocked calls
           vi.mocked(apiClient.get).mockRejectedValue(new Error("unmocked"));
 
-          vi.mocked(apiClient.get).mockResolvedValueOnce({
-            data: { status, version: "2.0", uptime_seconds: 0 },
+          let healthStatus = "ok";
+          vi.mocked(apiClient.get).mockImplementation(async (url) => {
+            if (url !== "/health") throw new Error(`Unmocked request: ${url}`);
+            return { data: { status: healthStatus, version: "2.0", uptime_seconds: 0 } };
           });
+          vi.useFakeTimers();
+          try {
+            await act(async () => { render(<App />); });
+            expect(screen.getByTestId("health-badge-ok")).toBeInTheDocument();
 
-          render(<App />);
-
-          await waitFor(() => {
+            healthStatus = status;
+            await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
             expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
-          });
-
-          expect(
-            screen.queryByTestId("health-badge-ok")
-          ).not.toBeInTheDocument();
+            expect(screen.queryByTestId("health-badge-ok")).not.toBeInTheDocument();
+          } finally {
+            cleanup();
+            vi.useRealTimers();
+          }
         }
       ),
       { numRuns: 20 }
