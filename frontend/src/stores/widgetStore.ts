@@ -56,6 +56,7 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
 // ===== Converter sub-tab → Widget 映射 =====
 // 核心设置：只有基础设置、操作栏、高级设置 3 个面板，专注于 3MF 生成所需的主要参数。
 // 颜色调整：dock 中不显示任何 widget；改由 Color2DOverlay 全屏接管。
+// 高级功能：仅列出向用户开放的面板；掐丝珐琅保留数据兼容，但不提供 UI 入口。
 export const CONVERTER_SUB_TAB_WIDGET_MAP: Record<ConverterSubTabId, readonly WidgetId[]> = {
   core: ["basic-settings", "action-bar", "advanced-settings"],
   color: [],
@@ -149,6 +150,7 @@ export const DEFAULT_LAYOUT: Record<WidgetId, WidgetLayoutState> = {
     id: "cloisonne-settings",
     position: { x: 0, y: 0 },
     collapsed: true,
+    visible: false,
     snapEdge: "right",
     stackOrder: 5,
     expandedHeight: EXPANDED_HEIGHT,

@@ -5064,8 +5064,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Color Mode",
   },
   basic_source_version_label: {
+    zh: "色彩数据来源",
+    en: "Color Data Source",
   },
   basic_source_version_hint: {
+    zh: "选择配色数据从哪里来：\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。\n• 经典 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。",
+    en: "Choose where the color data comes from:\n• Material Archive: freely combine materials you created in Material Extraction.\n• Classic LUT: data measured from actually printed color charts — most reliable.",
   },
   basic_source_version_legacy: {
     zh: "经典 LUT",
@@ -10731,6 +10735,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Step 2: Choose a color source",
   },
   tutorial_step_source_body: {
+    zh: "多色打印的原理是：几种耗材按不同顺序和层数叠在一起，透出不同的颜色。软件需要知道「你的打印机和耗材能叠出哪些颜色」，才能为图片的每个颜色找到最接近的叠法。\n\n「颜色来源」就是这份颜色数据从哪里来。有耗材档案和经典 LUT 两种方式，接下来按这个顺序介绍。",
+    en: "Multi-color printing works by stacking a few filaments in different orders and layer counts, so light passing through them shows different colors. The software needs to know which colors your printer and filaments can actually produce, so it can find the closest stack for every color in your picture.\n\nThe color source is where that color data comes from. There are two options: Material Archive and Classic LUT, explained in that order next.",
   },
   tutorial_step_legacy_title: {
     zh: "经典 LUT：实拍色卡",

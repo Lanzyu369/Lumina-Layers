@@ -1867,6 +1867,7 @@ export const DEFAULT_STATE: ConverterState = {
   modelSurfaceError: null,
   modelSurfaceWarnings: [],
   sessionId: null,
+  source_version: "material",
   lut_name: DEFAULT_LUT_NAME,
   lut_names: normalizeLegacyLutNames([], DEFAULT_LUT_NAME),
   nativeBrandGroups: [],

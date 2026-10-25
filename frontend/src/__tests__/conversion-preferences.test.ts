@@ -17,6 +17,28 @@ describe("conversion preferences", () => {
   });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+  it("defaults to material archives when no preferences are saved", () => {
+    const stop = bindConversionPreferences();
+    try {
+      expect(useConverterStore.getState().source_version).toBe("material");
+    } finally { stop(); }
+  });
+
+  it.each(["legacy", "material"] as const)("restores a remembered %s source", async (source) => {
+    const stop = bindConversionPreferences();
+    useConverterStore.getState().setSourceVersion(source);
+    stop();
+    const stored = localStorage.getItem("lumina-settings")!;
+    useSettingsStore.setState({ ...DEFAULT_SETTINGS });
+    localStorage.setItem("lumina-settings", stored);
+    await useSettingsStore.persist.rehydrate();
+    useConverterStore.setState({ ...DEFAULT_STATE });
+    const stopAgain = bindConversionPreferences();
+    try {
+      expect(useConverterStore.getState().source_version).toBe(source);
+    } finally { stopAgain(); }
+  });
+
   it("restores saved inputs after reconnecting without persisting session data", async () => {
     const stop = bindConversionPreferences();
     useConverterStore.getState().setStructureMode(StructureMode.SINGLE_SIDED);
