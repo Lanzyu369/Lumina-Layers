@@ -1664,6 +1664,11 @@ function buildImageAspectRatioState(state: ConverterState, ratio: number): Parti
   const remembered = state.conversionParameterContext === "defaults"
     ? useSettingsStore.getState().conversionPreferences.last
     : null;
+  const longestEdge = remembered?.size_mm ?? Math.max(state.target_width_mm, state.target_height_mm);
+  const requested = {
+    target_width_mm: ratio >= 1 ? longestEdge : Math.max(10, Math.round(longestEdge * ratio)),
+    target_height_mm: ratio >= 1 ? Math.max(10, Math.round(longestEdge / ratio)) : longestEdge,
+  };
   const dimensions = fitTargetDimensions(requested, state, useSettingsStore.getState().printerModel);
   return {
     aspectRatio: ratio,

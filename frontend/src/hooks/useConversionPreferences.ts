@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
+import { captureConversionParameters, presetMatchesCurrent } from "../stores/conversionPreferences";
 
 export function bindConversionPreferences(): () => void {
   let adjustingImageSize = false;
@@ -9,6 +10,7 @@ export function bindConversionPreferences(): () => void {
     const current = useConverterStore.getState();
     const last = useSettingsStore.getState().conversionPreferences.last;
     if (!last || current.conversionParameterContext !== "defaults" || current.imageFile) return;
+    if (presetMatchesCurrent(last, captureConversionParameters(current))) return;
     current.restoreConversionDefaults();
   };
   restore();

@@ -1,5 +1,6 @@
 import type { StoreApi } from "zustand";
 import { useSettingsStore } from "../settingsStore";
+import { applyConversionParameters, captureConversionParameters, validatePresetName, selectPresetParameters, getPresetOptions, DEFAULT_PRESET_OPTIONS,
   type ConversionParameters, type ConversionPreferences } from "../conversionPreferences";
 import type { ConverterActions, ConverterState } from "./types";
 
@@ -39,14 +40,20 @@ export function createConversionPresetActions(set: StoreApi<Store>["setState"], 
       restore(parameters, id);
       return true;
     },
+    saveConversionPreset: (name, options = DEFAULT_PRESET_OPTIONS) => {
       const saved = preferences();
       const error = validatePresetName(name, saved.presets);
       if (error) return { error };
+      const preset = { id: crypto.randomUUID(), name: name.trim(), parameters: selectPresetParameters(captureConversionParameters(get()), options) };
+      save({ ...saved, last: captureConversionParameters(get()), selectedPresetId: preset.id, presets: [...saved.presets, preset] });
       set({ conversionParameterContext: "defaults" });
       return { id: preset.id };
     },
     updateConversionPreset: (id) => {
       const saved = preferences();
+      const existing = saved.presets.find(p => p.id === id);
+      if (!existing) return false;
+      const parameters = selectPresetParameters(captureConversionParameters(get()), getPresetOptions(existing.parameters));
       save({ ...saved, presets: saved.presets.map(p => p.id === id ? { ...p, parameters } : p) });
       return true;
     },
