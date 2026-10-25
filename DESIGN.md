@@ -413,6 +413,7 @@ Three primitives, three jobs:
 Grouping strength, weakest → strongest: **whitespace → group header → divider → well → card.** Reach for the weakest device that still reads. A divider with a small-caps header is almost always enough to separate two groups inside one card; promote to a well only when the inner content is itself a cluster of controls that needs a contained surface.
 分组强度由弱到强：**留白 → 组标题 → 分割线 → 凹槽 → 卡片**。优先用能读懂的最弱手段。卡内两个分组，"分割线 + 小标题"通常就够；只有当内部本身是一簇需要独立托底面的控件时，才升级成凹槽。
 
+图像转换的核心设置使用 `settingsGroupClass` 将导入、颜色设置（含色彩数据来源、LUT／耗材选择与量化颜色数）、尺寸和底板、单面/双面打印、建模模式分别放在连续的灰底分组中。分组使用 `--surface-well`、10px 圆角、12px 内边距和 16px 组间距，不再使用标题右侧横线；结构与建模直接使用单选组标题，避免重复标题。只有分组标题使用半粗字重；“色彩数据来源”等组选项标签沿用普通字段字重。组内滑块数值框使用 `--surface-card` 与灰底区分，深色主题沿用对应表面变量。
 
 #### Making dividers "一眼可辨" (visibility, per the original concern)
 
@@ -759,3 +760,7 @@ Depth is intentionally restrained. Apple favors tonal contrast, surface stepping
 - Distinct semantic status colors (error/warning/success) were not consistently visible in the extracted page set.
 - Some interaction micro-states vary by module and are not represented as universal system tokens.
 - A few retail modules expose context-specific typography overrides that do not appear across all five pages.
+
+颜色设置的来源专有区域不使用左侧竖线、缩进或嵌套底色；耗材与 LUT 选择、层高、层数和底板耗材保持同级，使用共享普通字段标签（14px medium），不额外增加“叠层设置”等中间标题。同组标签与选择器间距 8px、参数间距 12px，独立小组间距 20px。选项沿用共享单选／开关控件，不以导航选中样式表达。
+
+短暂成功反馈使用 `TransientBanner`：显示 5 秒，先用 200ms 渐隐，再用 250ms 收起高度与组间距，结束后移除，禁止直接卸载造成下方内容跳动。错误及需要持续处理的提示不自动消失。减少动态效果偏好下省略动画。按钮加载统一使用 `ButtonContent`：原文字和图标隐藏但保留尺寸，旋转指示在按钮正中；按钮禁用并保留可访问名称及 `aria-busy`。
