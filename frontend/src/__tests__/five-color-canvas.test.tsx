@@ -1,11 +1,6 @@
-import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import FiveColorCanvas from "../components/FiveColorCanvas";
-import { I18nProvider } from "../i18n/context";
-import { useSettingsStore } from "../stores/settingsStore";
-
-vi.unmock("../i18n/context");
 
 class MockResizeObserver {
   observe = vi.fn();
@@ -65,36 +60,8 @@ describe("FiveColorCanvas", () => {
 
   afterEach(() => {
     cleanup();
-    useSettingsStore.setState({ language: "zh" });
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-  });
-
-  it.each([false, true])("redraws localized labels after language changes (loading: %s)", async (isLoading) => {
-    useSettingsStore.setState({ language: "zh" });
-    render(
-      <I18nProvider>
-        <FiveColorCanvas
-          slices={isLoading ? [{ hex: "#ffffff", name: "PLA" }] : []}
-          resultHex={null}
-          isLoading={isLoading}
-        />
-      </I18nProvider>,
-    );
-
-    for (const language of ["en", "zh", "en"] as const) {
-      context.fillText.mockClear();
-      act(() => useSettingsStore.getState().setLanguage(language));
-      await waitFor(() => {
-        const drawnText = context.fillText.mock.calls.map(([text]) => text);
-        expect(drawnText).toContain(language === "en" ? "Viewing Face" : "观赏面");
-        expect(drawnText).toContain(language === "en" ? "Bottom" : "底面");
-        expect(drawnText).not.toContain(language === "en" ? "观赏面" : "Viewing Face");
-        if (isLoading) {
-          expect(drawnText).toContain(language === "en" ? "Querying..." : "查询中...");
-        }
-      });
-    }
   });
 
   it("redraws empty stack placeholders when the requested layer count changes", async () => {

@@ -903,7 +903,6 @@ async def convert_preview(
     image: UploadFile = File(..., description="输入图像"),
     source_kind: str = Form("legacy_single", description="源类型: legacy_single | legacy_multi | native_bundle"),
     lut_name: str | None = Form(None, description="LUT 名称"),
-    lut_names: list[str] | str | None = Form(None, description="经典 LUT 名称列表"),
     material_type: str | None = Form(None, description="原生材料类型"),
     vendor: str | None = Form(None, description="原生厂商"),
     db_names: list[str] | str | None = Form(None, description="原生 DB 名称列表"),

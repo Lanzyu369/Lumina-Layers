@@ -1,4 +1,3 @@
-import DisclosureChevron from "../ui/DisclosureChevron";
 import {
   useCallback,
   useEffect,
@@ -553,7 +552,6 @@ export function ModelSurfaceToolbar({
                 onUpdatePlacement?.({ inset_mm: value });
               }
             }}
-            className="h-6 w-14 rounded-lg border border-slate-200/80 bg-slate-100 px-1.5 text-right text-[11px] font-semibold text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700/80 dark:bg-slate-950/70 dark:text-slate-200"
           />
           <span aria-hidden="true">{t("common_unit_mm")}</span>
         </label>
@@ -697,11 +695,9 @@ export function ModelSurfaceToolbar({
                     title={toolbarLayout.collapsed
                       ? t("model_surface_toolbar_expand")
                       : t("model_surface_toolbar_collapse")}
-                    aria-expanded={!toolbarLayout.collapsed}
                     onClick={handleToggleToolbarCollapsed}
                     className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-slate-200/80 hover:text-slate-800 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
                   >
-                    <DisclosureChevron expanded={!toolbarLayout.collapsed} />
                   </button>
                 </WikiTooltip>
               </div>

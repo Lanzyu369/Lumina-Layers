@@ -3,7 +3,6 @@ import { useI18n } from "../../i18n/context";
 import { isShareCardFile } from "../../recipe/importFlow";
 import { ArrowPathIcon, PlusIcon } from "@heroicons/react/24/outline";
 import Button from "./Button";
-import { useApplicationMenuCommand } from "../../integrations/applicationMenu";
 
 const VISIBLE_BATCH_FILE_LIMIT = 40;
 interface UnifiedUploaderProps {
@@ -40,9 +39,6 @@ export default function UnifiedUploader({
   const inputRef = useRef<HTMLInputElement>(null);
   const addMoreInputRef = useRef<HTMLInputElement>(null);
   const acceptedFormats = onShareCardDetected ? `${accept},.json` : accept;
-  useApplicationMenuCommand('import', () => {
-    (isBatchMode ? addMoreInputRef.current : inputRef.current)?.click();
-  });
 
   /**
    * Check files for share cards before passing to normal handler.
@@ -278,14 +274,12 @@ export default function UnifiedUploader({
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <Button
             label={t("upload_replace_current")}
-            variant="secondary"
             size="sm"
             leadingIcon={<ArrowPathIcon className="size-4" />}
             onClick={handleClick}
           />
           <Button
             label={t("upload_add_more")}
-            variant="secondary"
             size="sm"
             leadingIcon={<PlusIcon className="size-4" />}
             onClick={handleAddMoreClick}

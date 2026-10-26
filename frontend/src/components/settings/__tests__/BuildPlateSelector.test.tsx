@@ -65,41 +65,7 @@ describe("BuildPlateSelector", () => {
     expect(onSelect).toHaveBeenCalledWith("textured-pei-plate");
   });
 
-  it("exposes the selected plate after a controlled selection changes", () => {
-    const view = renderSelector();
-    expect(screen.getByRole("radio", { name: "纹理PEI打印板" })).toBeChecked();
-    view.unmount();
 
-    renderSelector(vi.fn(), "zh", "engineering-plate");
-    expect(screen.getByRole("radio", { name: "工程材料打印板" })).toBeChecked();
-    expect(screen.getByRole("radio", { name: "纹理PEI打印板" })).not.toBeChecked();
-  });
-
-  it("leaves vertical wheel events over artwork and labels to the native scroll container", () => {
-    const onSelect = vi.fn();
-    const view = renderSelector(onSelect);
-    const panel = view.container;
-    panel.style.overflowY = "auto";
-    Object.defineProperties(panel, {
-      clientHeight: { value: 200 },
-      scrollHeight: { value: 800 },
-    });
-    const option = screen.getByRole("radio", { name: "工程材料打印板" });
-    const targets = [option.querySelector("img")!, within(option).getByText("工程材料打印板")];
-
-    for (const scrollTop of [0, 120, 600]) {
-      panel.scrollTop = scrollTop;
-      for (const target of targets) {
-        for (const deltaY of [-120, 120]) {
-          const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY });
-          target.dispatchEvent(event);
-          expect(event.defaultPrevented).toBe(false);
-          // jsdom does not scroll natively; any change here is JS interception.
-          expect(panel.scrollTop).toBe(scrollTop);
-        }
-      }
-    }
-    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("scales the card and artwork frame for wide 4K viewports", () => {

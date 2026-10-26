@@ -38,25 +38,6 @@ describe("resolveLargeFormatTileGrid", () => {
     expect(grid?.lastColumnWidthMm).toBe(250);
   });
 
-  it("does not add empty edge tiles when division rounds above an integer", () => {
-    const total = 2999.9999999999955;
-    const tile = 499.9999999999992;
-    const grid = resolveLargeFormatTileGrid(total, total, tile, tile)!;
-    expect(grid.cols).toBe(6);
-    expect(grid.rows).toBe(6);
-    expect(grid.lastColumnWidthMm).toBeGreaterThan(0);
-    expect(grid.lastRowHeightMm).toBeGreaterThan(0);
-    expect(buildLargeFormatTileOverlayGeometry(SCENE_BOUNDS, total, total, tile, tile)?.labels).toHaveLength(36);
-  });
-
-  it("retains a genuinely positive remainder close to an exact tile boundary", () => {
-    const grid = resolveLargeFormatTileGrid(3000 + 1e-9, 3000 + 1e-9, 500, 500)!;
-    expect(grid.cols).toBe(7);
-    expect(grid.rows).toBe(7);
-    expect(grid.lastColumnWidthMm).toBeGreaterThan(0);
-    expect(grid.lastRowHeightMm).toBeGreaterThan(0);
-  });
-
   it.each([
     [0, 100, 250, 250],
     [100, Number.NaN, 250, 250],

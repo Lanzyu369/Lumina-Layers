@@ -81,7 +81,6 @@ export default function CustomRecipeSidePanel({
   const canApplyHistory = regionIds.length > 0;
 
   return (
-    <div className="flex flex-col gap-3 overflow-hidden rounded-2xl border border-slate-200/80 bg-slate-100/70 p-3 dark:border-slate-700/70 dark:bg-slate-900/50">
       <div className="text-sm font-medium text-slate-700 dark:text-slate-200">
         {t("recipe_custom_history_title")}
       </div>
@@ -108,7 +107,6 @@ export default function CustomRecipeSidePanel({
                 data-testid={`recipe-history-row-${item.id}`}
                 onClick={() => onApplyHistory(item.id)}
                 disabled={!canApplyHistory}
-                className="flex flex-col gap-1 rounded-2xl border border-slate-200/80 bg-slate-100/70 p-2 text-left transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700/70 dark:bg-slate-900/40 dark:hover:bg-slate-900/70"
               >
                 <div className="flex items-center gap-2">
                   <span

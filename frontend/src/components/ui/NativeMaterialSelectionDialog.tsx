@@ -8,7 +8,6 @@ import {
 } from "../../stores/converter/nativeMaterialSelection";
 import { useSettingsStore } from "../../stores/settingsStore";
 import Button from "./Button";
-import CloseButton from "./CloseButton";
 import Dropdown from "./Dropdown";
 
 function MaterialSelectionContent({ selection, isEditing }: {
@@ -113,9 +112,7 @@ function MaterialSelectionContent({ selection, isEditing }: {
               {t(isEditing ? "native_material_edit_description" : "native_material_dialog_description")}
             </p>
           </div>
-          <CloseButton label={t("native_material_close")} onClick={cancelSelection} />
         </header>
-        <div className="panel-divider min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-y-contain border-t px-5 py-4">
           {isChecking && (
             <p className="status-banner text-sm" data-tone="info" role="status">
               {t("native_material_rechecking")}
@@ -189,7 +186,6 @@ function MaterialSelectionContent({ selection, isEditing }: {
                   ]}
                   disabled={candidates.length === 0}
                 />
-                {message && (
                   <p className="status-banner text-sm" data-tone="warning" role="status">{message}</p>
                 )}
               </section>
@@ -203,7 +199,6 @@ function MaterialSelectionContent({ selection, isEditing }: {
               label={t(isEditing ? "native_material_edit_save" : "native_material_apply")}
               disabled={!canApply}
               onClick={() => void applySelection(profiles, plateId)}
-              variant="primary"
             />
           )}
         </footer>

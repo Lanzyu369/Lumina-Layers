@@ -179,7 +179,6 @@ class BugReportContext(BaseModel):
     def _validate_lut_names(cls, value: Any) -> list[str]:
         """Bound legacy multi-LUT names captured for repro.
 
-        限制用于复现的经典多选 LUT 名称列表。
         """
 
         if value is None:

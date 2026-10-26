@@ -1478,7 +1478,6 @@ class TestS06VoxelBuilding:
         )
 
     def test_legacy_sources_keep_explicit_backing_color_id_for_backing_layers(self):
-        """经典 LUT 仍应沿用显式 backing_color_id，而不是 metadata.base_channel_idx。"""
         from core.pipeline.s06_voxel_building import run
 
         ctx = self._make_valid_ctx()

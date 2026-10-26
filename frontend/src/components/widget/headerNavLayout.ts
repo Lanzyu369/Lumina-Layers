@@ -45,9 +45,6 @@ export interface CenterLineClearance {
 export interface HeaderNavFit {
   /** Brand, primary tabs and tools share one row. 标题、主导航和工具按钮在同一行。 */
   singleRow: boolean;
-  centerOffsetPx?: number;
-  paddingLeft?: number;
-  paddingRight?: number;
   /** The brand title is shown next to the logo. 标志旁显示标题文字。 */
   showBrandTitle: boolean;
   /**
@@ -66,8 +63,6 @@ interface SingleRowCandidate {
   requiredWidth: number;
 }
 
-function centeredRowWidth(brandWidth: number, m: HeaderNavMeasurements, offset: number): number {
-  return m.primaryTabsWidth + 2 * (Math.max(brandWidth - offset, m.toolsWidth + offset) + m.columnGap);
 }
 
 function sideBySideRowWidth(brandWidth: number, m: HeaderNavMeasurements): number {
@@ -77,7 +72,6 @@ function sideBySideRowWidth(brandWidth: number, m: HeaderNavMeasurements): numbe
 function singleRowCandidates(
   alignment: HeaderNavAlignment,
   m: HeaderNavMeasurements,
-  offset: number,
 ): SingleRowCandidate[] {
   const fullBrandWidth = m.logoWidth + m.brandTitleWidth;
   const withTitle = { showBrandTitle: true, brandWidth: fullBrandWidth };
@@ -86,8 +80,6 @@ function singleRowCandidates(
     // Hiding the title only helps when the brand is the tighter side, so
     // tabs leave the axis with the title still shown before it collapses.
     return [
-      { ...withTitle, requiredWidth: centeredRowWidth(fullBrandWidth, m, offset) },
-      { ...logoOnly, requiredWidth: centeredRowWidth(m.logoWidth, m, offset) },
       { ...withTitle, requiredWidth: sideBySideRowWidth(fullBrandWidth, m) },
       { ...logoOnly, requiredWidth: sideBySideRowWidth(m.logoWidth, m) },
     ];
@@ -107,16 +99,11 @@ export function resolveHeaderNavFit(
   alignment: HeaderNavAlignment,
   measurements: HeaderNavMeasurements,
   paddingLeft: number,
-  paddingRight: number = paddingLeft,
 ): HeaderNavFit {
-  const centerOffsetPx = (paddingRight - paddingLeft) / 2;
-  const geometry = { centerOffsetPx, paddingLeft, paddingRight };
-  const candidate = singleRowCandidates(alignment, measurements, centerOffsetPx).find(
     ({ requiredWidth }) => measurements.availableWidth >= requiredWidth,
   );
   if (!candidate) {
     return {
-      ...geometry,
       singleRow: false,
       showBrandTitle: true,
       primaryTabsInsetPx: Math.round(paddingLeft),
@@ -127,7 +114,6 @@ export function resolveHeaderNavFit(
   const toolsSide = measurements.toolsWidth + measurements.columnGap;
   const halfTabs = measurements.primaryTabsWidth / 2;
   return {
-    ...geometry,
     singleRow: true,
     showBrandTitle: candidate.showBrandTitle,
     primaryTabsInsetPx: Math.round(paddingLeft + (alignment === "left" ? brandSide : 0)),
@@ -148,9 +134,7 @@ export function resolveHeaderNavFit(
 export function primaryTabsCellShift(fit: HeaderNavFit): string {
   const clearance = fit.centerLineClearance;
   if (!clearance) {
-    return `${fit.centerOffsetPx ?? 0}px`;
   }
-  return `${(clearance.toolsSidePx - clearance.brandSidePx) / 2 + (fit.centerOffsetPx ?? 0)}px`;
 }
 
 /**
@@ -164,9 +148,7 @@ export function primaryTabsCellShift(fit: HeaderNavFit): string {
 export function subTabsCenterShift(fit: HeaderNavFit): string {
   const clearance = fit.centerLineClearance;
   if (!clearance) {
-    return `${fit.centerOffsetPx ?? 0}px`;
   }
-  return `clamp(${clearance.brandSidePx}px - 50%, ${fit.centerOffsetPx ?? 0}px, 50% - ${clearance.toolsSidePx}px)`;
 }
 
 /** Brand, flexible primary-tab cell, tools. 标题、可伸缩的主导航格子、工具按钮。 */

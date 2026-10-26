@@ -1,5 +1,3 @@
-import CloseButton from "./CloseButton";
-import DisclosureChevron from "./DisclosureChevron";
 import {
   ChevronDownIcon,
   MagnifyingGlassIcon,
@@ -551,7 +549,6 @@ export default function MaterialPickerDialog({
             {formatMessage(t("basic_material_picker_profile_count"), {
               count: displayProfiles.length,
             })}
-            <DisclosureChevron expanded={expanded} />
           </button>
         </div>
 
@@ -698,7 +695,6 @@ export default function MaterialPickerDialog({
                 {t("basic_material_picker_dialog_subtitle")}
               </p>
             </div>
-            <CloseButton label={t("basic_material_picker_close")} onClick={onCancel} />
           </header>
 
           <div className="border-b border-slate-200/80 px-4 py-3 dark:border-slate-700/80 sm:px-6">
@@ -801,7 +797,6 @@ export default function MaterialPickerDialog({
               <p className="px-4 pb-2 pt-4 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
                 {t("basic_material_picker_brand_filter_label")}
               </p>
-              <div className="dock-scrollbar min-h-0 space-y-1 overflow-y-auto overscroll-y-contain px-2 pb-4">
                 {brandOptions.map((option) => {
                   const selected = brandKey === option.key;
                   return (
@@ -873,7 +868,6 @@ export default function MaterialPickerDialog({
                       <Button
                         label={t("basic_material_picker_retry")}
                         onClick={onRetry}
-                        variant="secondary"
                         size="sm"
                       />
                     )}
@@ -931,14 +925,12 @@ export default function MaterialPickerDialog({
                   label={t("basic_material_picker_deselect_all")}
                   onClick={() => setStaged([])}
                   disabled={staged.length === 0}
-                  variant="secondary"
                   size="sm"
                 />
                 <Button
                   label={t("basic_material_picker_done")}
                   onClick={handleDone}
                   size="sm"
-                  variant="primary"
                 />
               </div>
             </div>
@@ -971,15 +963,6 @@ export default function MaterialPickerDialog({
             }}
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <div className="flex items-start justify-between gap-3">
-              <h3
-                id={confirmTitleId}
-                className="text-lg font-semibold text-slate-900 dark:text-slate-50"
-              >
-                {t("basic_material_picker_mixed_confirm_title")}
-              </h3>
-              <CloseButton label={t("common_close")} onClick={() => setShowMixedConfirmation(false)} />
-            </div>
             <p
               id={confirmDescriptionId}
               className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300"
@@ -1001,7 +984,6 @@ export default function MaterialPickerDialog({
               <button
                 type="button"
                 onClick={() => onConfirm(staged)}
-                className="action-control action-control-primary min-h-9 rounded-lg px-4 text-sm font-semibold"
               >
                 {t("basic_material_picker_mixed_continue")}
               </button>

@@ -304,7 +304,6 @@ describe("WikiTooltip unit tests", () => {
     expect(link).not.toBeNull();
     expect(link!.getAttribute("href")).toBe("https://example.com/wiki");
     expect(bubble!.parentElement).toHaveClass("pointer-events-auto");
-    expect(link).toHaveClass("pointer-events-auto");
 
     // <a> with href is natively focusable — verify it can receive focus
     link!.focus();

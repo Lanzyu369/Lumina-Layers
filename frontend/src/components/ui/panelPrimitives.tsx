@@ -6,9 +6,7 @@ export function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
-// Page roots own the native scroll chain; nested lists can still chain into them.
 export const panelSurfaceClass =
-  "panel-surface h-full w-full overflow-auto overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4 lg:px-7 lg:py-5";
 
 export const centeredPanelClass =
   `${panelSurfaceClass}`;

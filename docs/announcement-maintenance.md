@@ -47,9 +47,6 @@ Add a new category only when no existing one fits, and introduce both zh and en 
 
 Audience is non-technical end users（普通消费者 / 打印玩家，基本不写代码，不了解本仓库的模块、术语、内部名词）. Every announcement item must read like a product changelog a friend would send, not like an engineering note.
 
-- Compare the previously released experience with the final experience being shipped. Commits and merged PRs are evidence of implementation, not evidence that users received a release.
-- Consolidate an unreleased development cycle into its final user-visible changes. Omit development-only comparison switches, abandoned designs, and fixes for regressions introduced and resolved within that same cycle. Do not present an existing capability as newly added merely because its controls moved.
-- When release provenance is uncertain, verify it before claiming that users previously experienced a bug or intermediate interface. Describe the supported final behavior without inventing a before/after history.
 - 一句话讲清楚用户看到什么变化，而不是代码改了什么
 - 禁止内部模块名（如 `FileRegistry`、`SessionStore`、`coordinator.py`、`S01` 等）、PR/Issue 号、commit hash、堆栈关键词
 - 禁止英文技术黑话（pipeline、hook、store、reducer、mock、stub、schema、endpoint 之类）；前端/后端/接口这种面向用户的词也尽量不用，必要时用"打开软件时""生成 3MF 时"这种使用场景语替换

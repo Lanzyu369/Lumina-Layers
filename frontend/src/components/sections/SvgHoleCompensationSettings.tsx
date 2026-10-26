@@ -24,9 +24,7 @@ export default function SvgHoleCompensationSettings() {
 
   return (
     <section className="flex flex-col gap-4 border-t panel-divider pt-5">
-      <div className="flex items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-1.5">
-          <h3 className="text-sm font-medium text-slate-700 dark:text-slate-200">
             {t("svg_hole_compensation")}
           </h3>
           <HelpDot

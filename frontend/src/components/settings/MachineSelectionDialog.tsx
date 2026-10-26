@@ -1,4 +1,3 @@
-import CloseButton from "../ui/CloseButton";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -151,14 +150,11 @@ export default function MachineSelectionDialog({
         aria-labelledby="machine-selection-dialog-title"
         aria-describedby="machine-selection-dialog-description"
         data-testid="machine-selection-dialog"
-        className="panel-card grid max-h-[90vh] w-full max-w-5xl grid-rows-[auto_auto_minmax(0,1fr)_auto] overflow-hidden rounded-2xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="flex items-start justify-between gap-4 border-b panel-divider px-4 py-4 sm:px-6">
           <div className="min-w-0">
             <h2
               id="machine-selection-dialog-title"
-              className="text-[15px] font-semibold text-slate-900 dark:text-slate-50"
             >
               {t("settings.machine_dialog_title")}
             </h2>
@@ -169,10 +165,8 @@ export default function MachineSelectionDialog({
               {t("settings.machine_dialog_description")}
             </p>
           </div>
-          <CloseButton label={t("settings.machine_dialog_close")} onClick={onClose} />
         </header>
 
-        <div className="grid gap-3 border-b panel-divider px-4 py-4 sm:grid-cols-[minmax(14rem,0.75fr)_minmax(18rem,1.25fr)] sm:px-6">
           <Dropdown
             label={t("settings.slicer_software")}
             value={slicerSoftware}
@@ -213,7 +207,6 @@ export default function MachineSelectionDialog({
               {t("settings.machine_options_loading")}
             </p>
           ) : groupedPrinters.length === 0 ? (
-            <div className="panel-well rounded-[10px] px-4 py-8 text-center">
               <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
                 {t("settings.machine_search_empty")}
               </p>
@@ -229,7 +222,6 @@ export default function MachineSelectionDialog({
                     <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                       {group.brand}
                     </h3>
-                    <span className="text-xs text-slate-500 dark:text-slate-400">
                       {group.printers.length}
                     </span>
                   </div>
@@ -248,10 +240,7 @@ export default function MachineSelectionDialog({
                         <div
                           key={printer.id}
                           className={cx(
-                            "group rounded-[10px] p-3 transition-colors duration-200",
                             isSelected
-                              ? "bg-blue-500/10 dark:bg-blue-400/10"
-                              : "panel-well hover:bg-[var(--nav-chip-hover)]",
                           )}
                         >
                           <button
@@ -260,14 +249,12 @@ export default function MachineSelectionDialog({
                             data-testid={`machine-adapter-card-${printer.id}`}
                             onClick={() => onPrinterChange(printer.id)}
                             disabled={printersLoading}
-                            className="grid min-h-[7.25rem] w-full grid-cols-[5.5rem_minmax(0,1fr)] gap-3 rounded-lg text-left transition-opacity focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
                           >
                             <span
                               className={cx(
                                 "flex aspect-square w-[5.5rem] items-center justify-center overflow-hidden",
                                 thumbnailUrl
                                   ? "rounded-none bg-transparent"
-                                  : "rounded-lg bg-[var(--surface-card)]",
                               )}
                             >
                               {thumbnailUrl ? (
@@ -305,7 +292,6 @@ export default function MachineSelectionDialog({
                               </span>
                             </span>
                           </button>
-                          <div className="mt-3 flex flex-wrap gap-2 border-t panel-divider pt-3">
                             {nozzleOptions.map((size) => {
                               const isNozzleSelected =
                                 isSelected && size === nozzleSize;
@@ -321,10 +307,7 @@ export default function MachineSelectionDialog({
                                   }
                                   disabled={printersLoading}
                                   className={cx(
-                                    "ghost-control min-h-11 rounded-lg px-3 text-xs font-medium",
                                     isNozzleSelected
-                                      ? "text-blue-700 dark:text-blue-200"
-                                      : "text-slate-600 dark:text-slate-300",
                                   )}
                                 >
                                   {size} {t("common_unit_mm")}
@@ -342,7 +325,6 @@ export default function MachineSelectionDialog({
           )}
         </div>
 
-        <footer className="flex justify-end border-t panel-divider px-4 py-3 sm:px-6">
           <Button
             label={t("settings.machine_dialog_done")}
             onClick={onClose}

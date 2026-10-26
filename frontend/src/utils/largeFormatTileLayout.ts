@@ -51,12 +51,6 @@ function isPositiveFinite(value: number): boolean {
   return Number.isFinite(value) && value > 0;
 }
 
-function resolveTileAxisCount(totalMm: number, tileMm: number): number {
-  const count = Math.max(1, Math.ceil(totalMm / tileMm));
-  // Mirror the exporter's endpoint check; do not discard positive remainders.
-  return count > 1 && (count - 1) * tileMm >= totalMm ? count - 1 : count;
-}
-
 /**
  * Resolve the tile grid for a large-format request.
  * 计算大画幅请求的分块网格。
@@ -85,8 +79,6 @@ export function resolveLargeFormatTileGrid(
   ) {
     return null;
   }
-  const cols = resolveTileAxisCount(totalWidthMm, tileWidthMm);
-  const rows = resolveTileAxisCount(totalHeightMm, tileHeightMm);
   return {
     cols,
     rows,

@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { cx, workstationFieldLabelClass, workstationInputClass } from "./panelPrimitives";
 import HelpDot from "./HelpDot";
 import type { WikiDocPath } from "../../utils/wikiDocs";
-import { bindVerticalWheelScrollChain } from "../../utils/wheelScrollChain";
 
 interface DropdownOption {
   label: string;
@@ -123,7 +122,6 @@ export default function Dropdown({
   useEffect(() => {
     if (!open) return;
     updateMenuPos();
-    const unbindWheel = bindVerticalWheelScrollChain(menuRef.current, triggerRef.current);
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
       if (
@@ -137,7 +135,6 @@ export default function Dropdown({
     window.addEventListener("resize", updateMenuPos);
     window.addEventListener("scroll", updateMenuPos, true);
     return () => {
-      unbindWheel();
       document.removeEventListener("mousedown", handleClickOutside);
       window.removeEventListener("resize", updateMenuPos);
       window.removeEventListener("scroll", updateMenuPos, true);

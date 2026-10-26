@@ -1,6 +1,3 @@
-import TransientBanner from "./ui/TransientBanner";
-import { LibraryIdentity, LibraryFields } from "./ui/LibraryDetails";
-import CloudLibraryPreview from "./ui/CloudLibraryPreview";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { apiErrorToVisibleMessage } from "../api/client";
@@ -16,7 +13,6 @@ import type {
 } from "../api/types";
 import { useI18n } from "../i18n/context";
 import Button from "./ui/Button";
-import { StatusBanner } from "./ui/panelPrimitives";
 
 const CLOUD_LUT_PAGE_SIZE = 100;
 
@@ -96,11 +92,6 @@ const resolveCatalogInstallState = (
   }
   return "not_installed";
 };
-
-const resolveLocalPath = (entry: CloudLutRegistryCatalogItem): string | null =>
-  resolveCatalogInstallState(entry) === "not_installed"
-    ? null
-    : entry.installed_path || entry.local_match_path || null;
 
 const mergeCatalogPage = (
   current: CloudLutRegistryCatalogResponse | null,
@@ -242,35 +233,5 @@ export default function LutCloudSyncPanel() {
   const catalogLoadedCount = catalog?.items.length ?? 0;
   const catalogTotalCount = catalog?.total ?? catalogLoadedCount;
   const hasMoreCatalogEntries = status?.configured === true && catalogLoadedCount < catalogTotalCount;
-
-  // Complete the lightweight catalog before presenting search as complete.
-  useEffect(() => {
-    if ( hasMoreCatalogEntries && !isLoading && !isLoadingMore && !error) void loadMoreCatalog();
-  }, [hasMoreCatalogEntries, isLoading, isLoadingMore, error, loadMoreCatalog]);
-
-  return <CloudLibraryPreview resetKey={searchQuery} busy={isLoading}
-    toolbar={<><input type="search" aria-label={t("lut_sync_search_placeholder")} placeholder={t("lut_sync_search_placeholder")} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} className="min-w-48 flex-1 rounded-lg bg-slate-100 px-4 py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-slate-800" /><span className="text-xs text-slate-500">{t("cloud_library_results")} · {filteredItems.length}</span><Button label={t("lut_sync_refresh_btn")} variant="secondary" loading={isRefreshing} onClick={() => void refreshCatalog()} /></>}
-    notices={<>{notice && <StatusBanner tone="warning">{notice}</StatusBanner>}{error && <StatusBanner tone="error">{error}</StatusBanner>}<TransientBanner message={success} onDismiss={() => setSuccess(null)} /><TransientBanner tone="info" autoDismiss={false} message={hasMoreCatalogEntries ? t("cloud_library_loading_index") : null} action={<Button label={t("lut_sync_load_more_btn")} variant="secondary" loading={isLoadingMore} onClick={() => void loadMoreCatalog()} />} /></>}
-    items={filteredItems.map((entry) => {
-      const display = normalizeRecord(entry.display);
-      const name = readDisplayString(display, ["name", "display_name", "lut_name", "title"]) ?? entry.local_path ?? entry.lut_id;
-      const maker = readDisplayString(display, ["manufacturer", "brand", "vendor"]) ?? t("lut_sync_unknown");
-      const mode = readCompatibilityString(normalizeRecord(entry.compatibility), ["color_mode", "mode", "profile"]) ?? t("lut_sync_unknown");
-      const state = resolveCatalogInstallState(entry);
-      const key = catalogItemKey(entry);
-      const action = state === "not_installed" ? <Button label={t("lut_sync_install_btn")} variant="secondary" loading={pendingInstall === key} disabled={pendingInstall !== null} onClick={() => void handleInstall(entry)} /> : undefined;
-      return {key, name, subtitle: maker, metric: mode, state: t(`lut_sync_catalog_state_${state}`), action,
-        detail: <div className="grid gap-5">
-          <LibraryIdentity name={name} subtitle={[maker, readDisplayString(display, ["material_type", "material"])].filter(Boolean).join(" · ")} />
-          <LibraryFields rows={[{ label: t("lut_library_color_mode_label"), value: mode }]} />
-          <LibraryFields rows={[
-            { label: t("lut_sync_catalog_state_label"), value: t(`lut_sync_catalog_state_${state}`) },
-            ...(entry.channel ? [{ label: t("mat_sync_channel_label"), value: ["official", "community", "team"].includes(entry.channel) ? t(`mat_sync_channel_${entry.channel}`) : entry.channel }] : []),
-            { label: t("lut_sync_package_size_label"), value: formatBytes(Number(entry.package_bytes)) },
-            ...(resolveLocalPath(entry) ? [{ label: t("lut_sync_local_path_label"), value: resolveLocalPath(entry), multiline: true }] : []),
-          ]} />
-          {action}
-        </div>};
-    })} />;
 
 }

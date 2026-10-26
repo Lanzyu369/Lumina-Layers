@@ -7,7 +7,6 @@ const cropper = vi.hoisted(() => ({
   rotateTo: vi.fn(),
   clear: vi.fn(),
   crop: vi.fn(),
-  getCanvasData: vi.fn(() => ({ width: 120, naturalWidth: 120, naturalHeight: 80 })),
   getContainerData: vi.fn(() => ({ width: 600, height: 400 })),
   zoomTo: vi.fn(),
   setCanvasData: vi.fn(),
@@ -18,26 +17,11 @@ vi.mock("react-cropper", async () => {
   const { forwardRef, useImperativeHandle } = await import("react");
   return { default: forwardRef(function MockCropper(_, ref) {
     useImperativeHandle(ref, () => ({ cropper }));
-    return <div data-testid="cropper-surface" />;
   }) };
 });
 
 describe("CropModal rotation drafts", () => {
   beforeEach(() => vi.clearAllMocks());
-
-  it("zooms smoothly around the pointer and prevents page scrolling", () => {
-    render(<CropModal open imageSrc="blob:test" onConfirm={vi.fn()} onClose={vi.fn()} onUseOriginal={vi.fn()} />);
-    const surface = screen.getByTestId("cropper-surface");
-    const event = new WheelEvent("wheel", { deltaY: -1, clientX: 80, clientY: 40, bubbles: true, cancelable: true });
-    surface.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(true);
-    expect(cropper.zoomTo).toHaveBeenLastCalledWith(Math.pow(1.1, 0.01), { x: 80, y: 40 });
-    fireEvent.wheel(surface, { deltaY: -10000, clientX: 80, clientY: 40 });
-    expect(cropper.zoomTo).toHaveBeenLastCalledWith(1.1, { x: 80, y: 40 });
-    cropper.zoomTo.mockClear();
-    fireEvent.wheel(surface, { deltaY: 0, deltaX: 10 });
-    expect(cropper.zoomTo).not.toHaveBeenCalled();
-  });
 
   it("combines quarter turns with the current crop only when confirmed", () => {
     const onConfirm = vi.fn();

@@ -1,5 +1,3 @@
-import CloseButton from "../components/ui/CloseButton";
-import DisclosureSummary from "../components/ui/DisclosureSummary";
 import {
   Fragment,
   useEffect,
@@ -238,9 +236,7 @@ export function ModuleDetails({
           <h2 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
             {t("workshop.manager.details")}
           </h2>
-          <CloseButton label={t("workshop.manager.close")} onClick={onClose} />
         </div>
-        <div className="min-h-0 flex-1 overflow-auto overscroll-y-contain pr-1">
           {failed ? (
             <StatusBanner tone="error">
               {t("workshop.manager.detailsError")}
@@ -266,9 +262,7 @@ export function ModuleDetails({
                 </div>
               ) : null}
               <details className="rounded-2xl border border-[color:var(--surface-outline)] p-4">
-                <DisclosureSummary className="cursor-pointer text-sm font-semibold text-slate-900 dark:text-slate-50">
                   {t("workshop.manager.license")}
-                </DisclosureSummary>
                 <pre className="mt-3 overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-600 dark:text-slate-300">
                   {details.license_text}
                 </pre>

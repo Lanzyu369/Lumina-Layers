@@ -42,10 +42,8 @@ export default function GeneratedFileDirectorySetting() {
   return (
     <div
       data-testid="settings-generated-file-directory-section"
-      className="flex flex-col gap-3 border-t panel-divider pt-5"
     >
       <div className="min-w-0">
-        <h3 className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
           <span>{t("settings.generated_file_directory_heading")}</span>
           <HelpDot
             title={t("settings.generated_file_directory_heading")}
@@ -55,7 +53,6 @@ export default function GeneratedFileDirectorySetting() {
       </div>
       <p
         data-testid="settings-generated-file-directory-value"
-        className="panel-well break-all rounded-[10px] px-3 py-2.5 text-sm text-slate-700 dark:text-slate-200"
         title={directory || undefined}
       >
         {directory || t("settings.generated_file_directory_system_default")}
@@ -63,7 +60,6 @@ export default function GeneratedFileDirectorySetting() {
       <div className="flex flex-wrap gap-2">
         <Button
           label={t("settings.generated_file_directory_choose")}
-          variant="secondary"
           size="sm"
           onClick={() => void handleChoose()}
           disabled={picking}
@@ -71,7 +67,6 @@ export default function GeneratedFileDirectorySetting() {
         />
         <Button
           label={t("settings.generated_file_directory_reset")}
-          variant="secondary"
           size="sm"
           onClick={() => setDirectory("")}
           disabled={picking || !directory}

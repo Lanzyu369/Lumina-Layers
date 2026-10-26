@@ -244,7 +244,6 @@ export default function ActionBar() {
       {batchMode ? (
         <>
           {!canBatchSubmit && (
-            <p className="text-xs text-slate-500 dark:text-slate-400">
               {t(batchUploadHintKey)}
             </p>
           )}
@@ -269,7 +268,6 @@ export default function ActionBar() {
                 <span>{t("action_sync_editor_commit_hint")}</span>
                 <Button
                   label={t("action_sync_editor_commit")}
-                  variant="secondary"
                   onClick={() => void reconcileUnknownContentCommit()}
                   disabled={replacePreviewLoading || isGenerating}
                   className="w-full"
@@ -278,7 +276,6 @@ export default function ActionBar() {
             </StatusBanner>
           )}
           {!canSubmit && (
-            <p className="text-xs text-slate-500 dark:text-slate-400">
               {singleSubmitHintKey ? t(singleSubmitHintKey) : null}
             </p>
           )}
@@ -301,11 +298,9 @@ export default function ActionBar() {
             )}
             <Button
               label={t("native_material_edit_button")}
-              variant="secondary"
               onClick={() => void openNativeMaterialSelection()}
               disabled={!hasPreview || !sourceSelection.isReady || isLoading || isGenerating || batchLoading || replacePreviewLoading || contentCommitStatus === "unknown"}
               loading={nativeMaterialSelectionLoading}
-              className="w-full min-h-9 px-4 py-2"
             />
             {hasPreview && (
               <>
@@ -313,7 +308,6 @@ export default function ActionBar() {
                 <div className="flex gap-2">
                   <Button
                     label={isExporting ? t("recipe_export_loading") : t("recipe_export_btn")}
-                    variant="secondary"
                     onClick={() => {
                       setIsExporting(true)
                       setExportError(null)
@@ -332,7 +326,6 @@ export default function ActionBar() {
                   />
                   <Button
                     label={t("recipe_export_sidecar_btn")}
-                    variant="secondary"
                     onClick={() => {
                       setIsExporting(true)
                       setExportError(null)

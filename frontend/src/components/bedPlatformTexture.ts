@@ -233,13 +233,10 @@ export function computeBedTextureLayout(
     22,
     Math.max(12, Math.round(shorterTextureEdgePx * 0.042)),
   );
-  const watermarkHeightPx = slicerLogoSizePx;
   const watermarkWidthPx = Math.round(
     watermarkHeightPx * LUMINA_MARK_ASPECT_RATIO,
   );
   const brandingBaselinePx =
-    textureHeightPx - cornerBrandingBottomInsetPx - slicerLogoSizePx / 2 + fontSizePx * 0.35;
-  const wordmarkCenterPx = cornerBrandingInsetPx + watermarkWidthPx + 8 + fontSizePx * 1.65;
   const fineGridDashPeriodPx =
     BED_FINE_GRID_DASH_PX + BED_FINE_GRID_GAP_PX;
   const fineGridClearJunctionPhasePx =
@@ -279,23 +276,17 @@ export function computeBedTextureLayout(
       borderWidthPx: BED_SURFACE_BORDER_WIDTH_PX,
     },
     branding: {
-      wordmark: "Lumina",
       dimensionLabel: `${widthMm} × ${heightMm} mm`,
       baselinePx: brandingBaselinePx,
       dimensionBaselinePx:
-        brandingBaselinePx,
-      slicerLogoXpx: textureWidthPx - cornerBrandingInsetPx - slicerLogoSizePx,
       slicerLogoYpx:
         textureHeightPx -
         cornerBrandingBottomInsetPx -
         slicerLogoSizePx,
       slicerLogoSizePx,
-      watermarkXpx: cornerBrandingInsetPx,
-      watermarkYpx: textureHeightPx - cornerBrandingBottomInsetPx - watermarkHeightPx,
       watermarkWidthPx,
       watermarkHeightPx,
       wordmarkCenterPx,
-      dimensionRightPx: textureWidthPx - cornerBrandingInsetPx - slicerLogoSizePx - 12,
       fontSizePx,
     },
     gridBoundsPx: {
@@ -421,7 +412,6 @@ function buildSvgBranding(
 
   if (luminaMarkDataUrl) {
     elements.push(
-      `<image href="${escapeSvgText(luminaMarkDataUrl)}" x="${branding.watermarkXpx}" y="${branding.watermarkYpx}" width="${branding.watermarkWidthPx}" height="${branding.watermarkHeightPx}" opacity="0.65"/>`,
     );
   }
 
@@ -439,12 +429,10 @@ function buildSvgBranding(
         ? branding.slicerLogoSizePx / aspect
         : branding.slicerLogoSizePx;
     elements.push(
-      `<image href="${escapeSvgText(slicerLogoDataUrl)}" x="${branding.slicerLogoXpx}" y="${branding.slicerLogoYpx + (branding.slicerLogoSizePx - logoHeight) / 2}" width="${logoWidth}" height="${logoHeight}" opacity="0.55"/>`,
     );
   }
 
   const escapedBrandColor = escapeSvgText(brandColor);
-  const textStyle = `fill="${escapedBrandColor}" opacity="0.72" font-family="MiSans,sans-serif" font-size="${branding.fontSizePx}" font-weight="500"`;
   elements.push(
     `<text x="${branding.wordmarkCenterPx}" y="${branding.baselinePx}" text-anchor="middle" ${textStyle}>${escapeSvgText(branding.wordmark)}</text>`,
     `<text x="${branding.dimensionRightPx}" y="${branding.dimensionBaselinePx}" text-anchor="end" ${textStyle}>${escapeSvgText(branding.dimensionLabel)}</text>`,
@@ -481,8 +469,6 @@ export function buildBedTextureSvg({
     `<svg xmlns="http://www.w3.org/2000/svg" width="${raster.rasterWidthPx}" height="${raster.rasterHeightPx}" viewBox="0 0 ${logicalWidthPx} ${logicalHeightPx}" shape-rendering="geometricPrecision" text-rendering="geometricPrecision">`,
     `<rect width="${logicalWidthPx}" height="${logicalHeightPx}" fill="${escapeSvgText(colors.bedBase)}"/>`,
     `<rect x="${insetPx}" y="${insetPx}" width="${innerWidthPx}" height="${innerHeightPx}" rx="${innerRadiusPx}" fill="${escapeSvgText(colors.bedInner)}"/>`,
-    `<defs><mask id="bed-grid-branding"><rect width="${logicalWidthPx}" height="${logicalHeightPx}" fill="white"/><rect x="${layout.gridBoundsPx.left}" y="${layout.branding.watermarkYpx - 8}" width="${layout.gridBoundsPx.right - layout.gridBoundsPx.left}" height="${layout.branding.watermarkHeightPx + 16}" fill="black"/></mask></defs>`,
-    `<g mask="url(#bed-grid-branding)">${grid}</g>`,
     `<rect x="${insetPx}" y="${insetPx}" width="${innerWidthPx}" height="${innerHeightPx}" rx="${innerRadiusPx}" fill="none" stroke="${escapeSvgText(colors.bedBorder)}" stroke-width="${borderWidthPx}"/>`,
     buildSvgBranding(
       layout,

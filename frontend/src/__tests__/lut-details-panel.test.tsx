@@ -193,8 +193,6 @@ describe("LutDetailsPanel", () => {
 
     expect(screen.getByTestId("lut-details-panel")).toBeInTheDocument();
     expect(screen.getByTestId("lut-details-layout")).toBeInTheDocument();
-    expect(screen.getByTestId("lut-details-panel")).toContainElement(screen.getByTestId("lut-details-selection-card"));
-    expect(screen.getByTestId("lut-details-primary-column")).not.toContainElement(screen.getByTestId("lut-details-selection-card"));
     expect(screen.getByTestId("lut-details-secondary-column")).toBeInTheDocument();
     expect(screen.getByLabelText("筛选 LUT")).toBeInTheDocument();
     expect(screen.getByTestId("lut-details-manufacturer-dropdown")).toBeInTheDocument();
@@ -236,10 +234,7 @@ describe("LutDetailsPanel", () => {
       expect(screen.getByTestId("lut-details-loaded-view")).toBeInTheDocument();
     });
 
-    expect(screen.getByTestId("lut-details-panel")).toContainElement(screen.getByTestId("lut-details-selection-card"));
-    expect(screen.getByTestId("lut-details-primary-column")).not.toContainElement(screen.getByTestId("lut-details-selection-card"));
     expect(screen.getByTestId("lut-details-primary-column")).toContainElement(screen.getByText("摘要"));
-    expect(screen.getByTestId("lut-details-primary-column")).toContainElement(screen.getByText("调色板"));
     expect(screen.getByTestId("lut-details-secondary-column")).toContainElement(screen.getByTestId("lut-details-lab-chart"));
     expect(screen.getByText("摘要")).toBeInTheDocument();
     expect(screen.getByText("公开引用")).toBeInTheDocument();

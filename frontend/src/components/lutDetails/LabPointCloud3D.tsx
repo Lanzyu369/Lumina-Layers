@@ -1,5 +1,4 @@
 import { Canvas } from "@react-three/fiber";
-import PreviewOrbitControls from "../ui/PreviewOrbitControls";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
@@ -555,7 +554,6 @@ export default function LabPointCloud3D({
                 ) : null}
               </>
             ) : null}
-            <PreviewOrbitControls
               enablePan={false}
               enableDamping
               target={displayBounds.center}

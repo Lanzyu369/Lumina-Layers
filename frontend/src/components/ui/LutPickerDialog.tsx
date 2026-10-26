@@ -1,5 +1,3 @@
-import CloseButton from "./CloseButton";
-import { useI18n } from "../../i18n/context";
 import {
   useEffect,
   useId,
@@ -105,7 +103,6 @@ export default function LutPickerDialog({
   refreshing = false,
   labels,
 }: LutPickerDialogProps) {
-  const { t } = useI18n();
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -268,9 +265,6 @@ export default function LutPickerDialog({
             {labels.title}
           </h2>
           <div className="flex items-center gap-2">
-            <Button size="icon" label={labels.refreshTooltip} onClick={onRefresh}
-              disabled={loading} loading={refreshing} icon={<span aria-hidden="true">⟳</span>} />
-            <CloseButton label={t("common_close")} onClick={onCancel} />
           </div>
         </div>
 
@@ -279,7 +273,6 @@ export default function LutPickerDialog({
           {/* Brand sidebar */}
           <aside
             data-testid="lut-picker-brand-sidebar"
-            className="dock-scrollbar flex w-44 shrink-0 flex-col gap-1 overflow-y-auto overscroll-y-contain border-r p-3"
             style={{ borderColor: "var(--surface-outline)" }}
           >
             <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
@@ -317,7 +310,6 @@ export default function LutPickerDialog({
               <button
                 type="button"
                 onClick={onUploadClick}
-                className="action-control w-full rounded-lg px-2.5 py-1.5 text-left text-sm"
               >
                 {labels.upload}
               </button>
@@ -485,14 +477,12 @@ export default function LutPickerDialog({
               label={labels.deselectAll}
               onClick={() => setStaged([])}
               disabled={staged.length === 0}
-              variant="secondary"
               size="sm"
             />
             <Button
               label={labels.confirm}
               onClick={() => onConfirm(staged)}
               size="sm"
-              variant="primary"
             />
           </div>
         </div>

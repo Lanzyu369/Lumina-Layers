@@ -395,18 +395,6 @@ def get_material_sync_status(*, materials_dir: str | None = None) -> dict[str, A
             "updated_at": raw_entry.get("updated_at"),
             "local_exists": local_exists,
             "material_file_exists": material_file_exists,
-            "revision_history": [
-                {
-                    "revision_id": str(revision_id),
-                    "installed_at": revision_entry.get("installed_at"),
-                }
-                for revision_id, revision_entry in (
-                    revision_map.get(material_id, {})
-                    if isinstance(revision_map.get(material_id), dict)
-                    else {}
-                ).items()
-                if isinstance(revision_entry, dict)
-            ],
             "available_revisions": sorted(
                 str(revision_id)
                 for revision_id in (

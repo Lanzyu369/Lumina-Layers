@@ -1,4 +1,3 @@
-import CloseButton from "./CloseButton";
 import "cropperjs/dist/cropper.css";
 
 import { useState, useRef, useEffect, useCallback } from "react";
@@ -10,7 +9,6 @@ import { useI18n } from "../../i18n/context";
 import type { ImageRotationDegrees } from "../../utils/imageRotation";
 import Button from "./Button";
 import { compactFieldClass, cx } from "./panelPrimitives";
-import { wheelZoomDelta, wheelZoomFactor } from "../../utils/wheelZoom";
 
 // ========== Types ==========
 
@@ -62,7 +60,6 @@ export function CropModal({
 }: CropModalProps) {
   const { t } = useI18n();
   const cropperRef = useRef<ReactCropperElement>(null);
-  const cropAreaRef = useRef<HTMLDivElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
@@ -140,28 +137,6 @@ export function CropModal({
   }, [open, onClose]);
 
   // ---------- Cropper callbacks ----------
-
-  useEffect(() => {
-    const area = cropAreaRef.current;
-    if (!open || !area) return;
-    const handleWheel = (event: WheelEvent) => {
-      const cropper = cropperRef.current?.cropper;
-      if (!cropper) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const delta = wheelZoomDelta(event.deltaY, event.deltaMode, area.clientHeight);
-      if (delta === 0) return;
-      const canvas = cropper.getCanvasData();
-      if (!(canvas.naturalWidth > 0) || !(canvas.width > 0)) return;
-      const rect = (area.querySelector(".cropper-container") ?? area).getBoundingClientRect();
-      cropper.zoomTo(canvas.width / canvas.naturalWidth * wheelZoomFactor(delta), {
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
-      });
-    };
-    area.addEventListener("wheel", handleWheel, { passive: false });
-    return () => area.removeEventListener("wheel", handleWheel);
-  }, [open]);
 
   const handleCropEvent = useCallback(() => {
     if (isManualInputRef.current) return;
@@ -284,18 +259,15 @@ export function CropModal({
         aria-modal="true"
         aria-label={t("crop_modal_title")}
         onClick={(e) => e.stopPropagation()}
-        className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-y-auto overscroll-y-contain rounded-2xl bg-slate-50 outline-none dark:bg-slate-900"
       >
         {/* Title bar */}
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
           <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100">
             {t("crop_modal_title")}
           </h2>
-          <CloseButton label={t("crop_modal_close")} onClick={onClose} />
         </div>
 
         {/* Cropper area */}
-        <div ref={cropAreaRef} className="h-[42vh] shrink-0 overflow-hidden px-4 py-3">
           <ReactCropper
             ref={cropperRef}
             src={imageSrc}
@@ -305,7 +277,6 @@ export function CropModal({
             autoCrop={allowCrop}
             autoCropArea={1}
             responsive={true}
-            zoomOnWheel={false}
             guides={true}
             crop={handleCropEvent}
             ready={handleReady}
@@ -324,10 +295,8 @@ export function CropModal({
 
         {/* Aspect ratio presets */}
         <div className="flex flex-wrap gap-2 px-4 py-2">
-          <Button label={t("crop_modal_rotate_left")} variant="secondary" size="sm"
             leadingIcon={<ArrowUturnLeftIcon className="size-4" />}
             onClick={() => handleRotate(-90)} disabled={isLoading} />
-          <Button label={t("crop_modal_rotate_right")} variant="secondary" size="sm"
             leadingIcon={<ArrowUturnRightIcon className="size-4" />}
             onClick={() => handleRotate(90)} disabled={isLoading} />
         </div>
@@ -389,7 +358,6 @@ export function CropModal({
             label={t("crop_modal_confirm")}
             onClick={handleConfirm}
             loading={isLoading}
-            variant="primary"
           />
         </div>
       </div>

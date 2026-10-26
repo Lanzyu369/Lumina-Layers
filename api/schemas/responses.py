@@ -400,11 +400,6 @@ class GradientCardMaterialBulkImportResponse(BaseModel):
     imported_materials: list[SavedMaterialSummaryResponse] = Field(default_factory=list)
 
 
-class MaterialSyncRevisionResponse(BaseModel):
-    revision_id: str
-    installed_at: str | None = None
-
-
 class MaterialSyncInstalledEntryResponse(BaseModel):
     """One material package recorded in the local sync index.
     本地同步索引记录的单个耗材包。
@@ -423,7 +418,6 @@ class MaterialSyncInstalledEntryResponse(BaseModel):
     local_exists: bool = False
     material_file_exists: bool = False
     available_revisions: list[str] = Field(default_factory=list)
-    revision_history: list[MaterialSyncRevisionResponse] = Field(default_factory=list)
 
 
 class MaterialSyncStatusResponse(BaseModel):
