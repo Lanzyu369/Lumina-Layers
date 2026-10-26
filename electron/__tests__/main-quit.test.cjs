@@ -28,6 +28,7 @@ async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}
   const ipcHandlers = new Map();
   let applicationMenu;
   ipcMain.handle = (channel, handler) => { ipcHandlers.set(channel, handler); };
+  ipcMain.removeHandler = channel => ipcHandlers.delete(channel);
   const event = () => ({ defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } });
   const app = new EventEmitter();
   Object.assign(app, {
@@ -57,9 +58,11 @@ async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}
     }
     loadURL(url) { this.loadedUrl = url; this.webContents.mainFrame.url = new URL(url).href; return Promise.resolve(); }
     loadFile() { return Promise.resolve(); }
+    focus() {}
     getBounds() { return { x: this.options.x, y: this.options.y, width: this.options.width, height: this.options.height }; }
-    maximize() { this.maximized = true; }
-    show() { this.visible = true; }
+    maximize() { this.maximized = true; this.show(); }
+    show() { this.visible = true; this.emit('show'); }
+    isVisible() { return !!this.visible; }
     isDestroyed() { return Boolean(this.destroyed); }
     close() {
       const closing = event();
@@ -155,6 +158,10 @@ async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}
       response.emit("end");
       await until(mainWindow);
       mainWindow().emit("ready-to-show");
+      const splash = windows.find(w => w.options.webPreferences?.preload?.endsWith('splash-preload.cjs'));
+      assert.equal(mainWindow().visible, undefined, 'main stays hidden until Studio finishes its own animation');
+      ipcMain.emit('studio-splash-finished', { sender: splash.webContents, senderFrame: splash.webContents.mainFrame });
+      await until(() => mainWindow().visible);
     },
   };
 }

@@ -1,0 +1,6 @@
+{
+  "desktop_startup_starting": { "zh": "正在启动", "en": "Starting" },
+  "desktop_startup_backend": { "zh": "正在准备运行环境", "en": "Preparing the runtime" },
+  "desktop_startup_window": { "zh": "正在准备工作区", "en": "Preparing the workspace" },
+  "desktop_startup_ready": { "zh": "准备就绪", "en": "Ready" }
+}
