@@ -131,7 +131,7 @@ export function computeStackPositions(
 ): Map<WidgetId, { x: number; y: number }> {
   const sorted = [...stackWidgets].sort((a, b) => a.stackOrder - b.stackOrder);
   const positions = new Map<WidgetId, { x: number; y: number }>();
-  const x = edge === 'left' ? 0 : containerWidth - widgetWidth;
+  const x = edge === 'left' ? STACK_GAP : Math.max(0, containerWidth - widgetWidth - STACK_GAP);
   let currentY = STACK_GAP; // top padding
 
   for (const widget of sorted) {

@@ -152,7 +152,8 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
     ),
     [containerWidth, workspace.mode]
   );
-  const dockScrollWidth = widgetWidth + (workspace.isCompact ? 12 : 16);
+  // Reserve the outer inset as well as the existing scrollbar clearance.
+  const dockScrollWidth = widgetWidth + STACK_GAP + (workspace.isCompact ? 12 : 16);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
@@ -368,7 +369,7 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
 
   const leftStackHeight = stackHeight('left');
   const rightStackHeight = stackHeight('right');
-  const rightDockOffset = Math.max(0, (containerWidth || window.innerWidth) - widgetWidth);
+  const rightDockOffset = Math.max(0, (containerWidth || window.innerWidth) - dockScrollWidth);
 
   // Whether the docks currently host visible widgets. Consumers (e.g.
   // floating action buttons over the 3D scene) read these CSS variables to

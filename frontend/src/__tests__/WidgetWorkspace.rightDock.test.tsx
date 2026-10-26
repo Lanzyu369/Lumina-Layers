@@ -15,7 +15,7 @@ import { COLLAPSED_HEIGHT, STACK_GAP } from '../utils/widgetUtils';
 vi.mock('../components/widget/WidgetPanel', async () => {
   const { useWidgetStore: useStore } = await import('../stores/widgetStore');
   return {
-    WidgetPanel: ({ widgetId, dockOffsetX = 0 }: { widgetId: WidgetId; dockOffsetX?: number }) => {
+    WidgetPanel: ({ widgetId, dockOffsetX = 0, width }: { widgetId: WidgetId; dockOffsetX?: number; width: number }) => {
       const widget = useStore((s) => s.widgets[widgetId]);
       if (!widget.visible) return null;
       return (
@@ -23,6 +23,7 @@ vi.mock('../components/widget/WidgetPanel', async () => {
           data-widget-id={widgetId}
           data-testid={`panel-${widgetId}`}
           data-local-left={widget.position.x - dockOffsetX}
+          data-width={width}
         />
       );
     },
@@ -81,8 +82,10 @@ function fireAllResizeObservers() {
   }
 }
 
-function rightPanelLocalLeft(id: WidgetId): number {
-  return Number(screen.getByTestId(`panel-${id}`).dataset.localLeft);
+function rightPanelOuterInset(id: WidgetId): number {
+  const panel = screen.getByTestId(`panel-${id}`);
+  const dockWidth = Number.parseFloat(screen.getByTestId('right-dock').style.width);
+  return dockWidth - Number(panel.dataset.localLeft) - Number(panel.dataset.width);
 }
 
 describe('WidgetWorkspace right dock alignment', () => {
@@ -117,11 +120,12 @@ describe('WidgetWorkspace right dock alignment', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps right-dock widgets at dock-local x=0 after a width change without window resize', async () => {
+  it('keeps both docks inset after a width change without window resize', async () => {
     render(<WidgetWorkspace />);
 
     await waitFor(() => {
-      expect(rightPanelLocalLeft('action-bar')).toBe(0);
+      expect(rightPanelOuterInset('action-bar')).toBe(8);
+      expect(Number(screen.getByTestId('panel-basic-settings').dataset.localLeft)).toBe(8);
     });
 
     // A page scrollbar appears: the workspace shrinks, but no window resize fires.
@@ -131,14 +135,15 @@ describe('WidgetWorkspace right dock alignment', () => {
     });
 
     await waitFor(() => {
-      expect(rightPanelLocalLeft('action-bar')).toBe(0);
-      expect(rightPanelLocalLeft('advanced-settings')).toBe(0);
+      expect(rightPanelOuterInset('action-bar')).toBe(8);
+      expect(rightPanelOuterInset('advanced-settings')).toBe(8);
+      expect(Number(screen.getByTestId('panel-basic-settings').dataset.localLeft)).toBe(8);
     });
     // Give the debounced widget re-stack a chance to run, then re-check.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 80));
     });
-    expect(rightPanelLocalLeft('action-bar')).toBe(0);
+    expect(rightPanelOuterInset('action-bar')).toBe(8);
   });
 
   it('updates sibling targets in the collapse commit, including a rapid reversal', () => {
