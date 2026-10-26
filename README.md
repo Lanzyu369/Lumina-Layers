@@ -1,25 +1,25 @@
 <p align="center">
-  <img src="logo.png" width="128" alt="Lumina Studio logo">
+  <img src="electron/assets/icon.png" width="128" alt="Lumina Studio logo">
 </p>
 
-<h1 align="center">Lumina Studio</h1>
+<h1 align="center">Lumina Studio 2.0</h1>
 
 <p align="center">
-  A photographed-calibration workflow for turning images into colour FDM prints
+  Flat full-colour FDM printing
 </p>
 
 <p align="center">
-  Convert illustrations, reaction images, and photographs into slicer-ready multi-material models.
+  Layer filaments to reproduce the colours and tonal detail of an image.
 </p>
 
 <p align="center">
   <a href="README_CN.md">简体中文</a>
   ·
-  <a href="https://github.com/lumina-layer-studio/Lumina-Layers/releases">Download 1.x</a>
+  <a href="#installation">Run from source</a>
   ·
   <a href="https://wiki.luminastudio.com.cn/">Project Wiki</a>
   ·
-  <a href="https://www.bilibili.com/video/BV1dhcqzSEaq">Calibration video</a>
+  <a href="#what-is-in-20">Features</a>
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
   </a>
   &nbsp;&nbsp;
   <a href="https://www.ifdian.net/a/MMMINNN">
-    <img height="54" src="https://img.shields.io/badge/Afdian-support%20development-946CE6?style=for-the-badge" alt="Support Lumina Studio on Afdian">
+    <img height="54" src="https://img.shields.io/badge/Afdian-support%20Lumina-946CE6?style=for-the-badge" alt="Support Lumina Studio on Afdian">
   </a>
 </p>
 
@@ -52,14 +52,13 @@
   <a href="https://mastodon.social/@wluf53gzlv98666"><img src="https://img.shields.io/badge/Mastodon-Lumina%20Studio-6364FF?style=flat-square&amp;logo=mastodon&amp;logoColor=white" alt="Mastodon"></a>
 </p>
 
-> [!NOTE]
-> This is the public Lumina Studio 1.x repository. Lumina Studio 2.0 remains in private beta and is currently planned to become open source in October 2026. The gallery below includes real prints from both 1.x and 2.0; refer to the relevant version notes for feature availability.
+## Bring the print closer to the original
 
-## What Lumina does
+Lumina Studio 2.0 layers different filaments to reproduce an image's colours and shading in a flat full-colour FDM print.
 
-Lumina converts an image into a model made from multiple material layers. At a fixed layer height, those layers combine into the colour seen in the finished print. The 1.x line mainly covers 2, 4, 6, and 8-colour workflows. The 2.0 beta is exploring custom colour counts, layer counts, and layer heights.
+It uses calibration data from your materials to match layer recipes to the image. Compare the preview with the original, change colours you do not like, and adjust gradients or recipes in individual regions. Then export a 3MF for your slicer.
 
-More colours and different model structures also open up different forms. Flat artwork, standing cut-outs, pixel characters, folding fans, puzzles, perforated boards, glow-in-the-dark phone cases, and large tiled prints can all grow from the same workflow.
+Use an existing LUT preset, or photograph gradient cards to build your own material profiles. Combine your materials and adjust colour layers and layer height.
 
 ## Printed by users
 
@@ -73,13 +72,17 @@ More colours and different model structures also open up different forms. Flat a
   <img src="assets/readme/showcase-color-counts.png" width="1000" alt="User prints labelled as 8 and 12 colours, including standing character cut-outs and framed artwork">
 </p>
 
-<p align="center"><sub>Standing cut-outs, framed work, and different colour counts.</sub></p>
+<p align="center"><sub>Colour, shading, and detail with different filament combinations.</sub></p>
+
+## What you can make
+
+Start with a photo, illustration, or piece of pixel art. Make framed pictures, standing cut-outs, keychains, or fridge magnets, or add your own structural design and try something different.
 
 <p align="center">
   <img src="assets/readme/showcase-creative-objects.png" width="1000" alt="Flat pixel characters and a jointed three-dimensional pixel figure">
 </p>
 
-<p align="center"><sub>Lumina is not limited to flat artwork; the output can become a three-dimensional or jointed object.</sub></p>
+<p align="center"><sub>With structural design and assembly, pixel characters can become jointed figures.</sub></p>
 
 <p align="center">
   <img src="assets/readme/showcase-form-factors.png" width="1000" alt="A folding fan, perforated board, puzzle, and glow-in-the-dark phone case">
@@ -91,57 +94,165 @@ More colours and different model structures also open up different forms. Flat a
   <img src="assets/readme/showcase-large-format.png" width="1000" alt="Two large-format colour FDM prints featuring cats">
 </p>
 
-<p align="center"><sub>Large work can be produced in sections, then assembled or framed.</sub></p>
+<p align="center"><sub>If the whole picture will not fit on the bed, print it in sections and assemble or frame it.</sub></p>
 
-Every image above shows a physical print, not a software preview. Community photographs are shown with permission. Copyright in the depicted artwork remains with its respective creator.
+These are physical prints made by Lumina users; colour counts follow the makers' labels. The photos are shown with permission for the project. Copyright in the depicted artwork remains with its respective creator. See the [image record](assets/readme/SOURCES.md).
 
-## Use Lumina Studio 1.x now
+## What is in 2.0
 
-Public repository: [lumina-layer-studio/Lumina-Layers](https://github.com/lumina-layer-studio/Lumina-Layers)
+| What you want to do | How to do it in Lumina |
+| --- | --- |
+| Reproduce colours and image detail | Choose high-fidelity, pixel, or SVG vector mode to suit the image. Crop, handle transparency, or vectorise a bitmap, then compare the colour result with the original and inspect it in 3D. |
+| Fix a colour you do not like | Select colours or a local region, replace colours, change recipes, and adjust gradients. Undo a change, or save a JSON project or PNG share card and carry on another day. |
+| Use your own filaments | Print and photograph gradient cards, then organise profiles and palettes in the material library. Fixed colour boards and existing LUT presets are still there. |
+| Reuse your conversion settings | Save the source type, filament combination, size, structure, layers, and coating settings as a preset for next time. Images and local edits belong in a JSON project or PNG share card. |
+| Make a keychain, fridge magnet, or similar piece | Add loops, magnet cavities, outlines, or transparent coating; choose single-sided, double-sided, relief, or cloisonné construction. Which options work together depends on the mode. |
+| Put artwork on an existing model | Open model-surface mode, select a planar face, and adjust the image's position, size, and angle before generating. |
+| Make a puzzle or a larger print | Use puzzle, large-format tiling, or batch conversion, arrange work for the selected printer bed, and export the projects. |
+| Try other creative tools | Install independent modules through Creative Workshop. The official bead-pattern studio can send its result back to Lumina for colour matching and printing. Community modules need the Electron desktop app; trusted official modules also work in the browser. |
 
-- Stable packages: [GitHub Releases](https://github.com/lumina-layer-studio/Lumina-Layers/releases)
-- Latest automatic builds: [GitHub Actions](https://github.com/lumina-layer-studio/Lumina-Layers/actions)
-- Complete 1.x guide: [Project Wiki](https://wiki.luminastudio.com.cn/zh/docs/legacy/lumina-studio-1x-guide)
-- Slicer setup: [multi-brand slicer guide](https://wiki.luminastudio.com.cn/zh/docs/tutorials/slicer-guide)
+The interface has Chinese and English, plus light and dark themes. Use the preview while editing, then check materials, process settings, and placement in your slicer before printing.
 
-### Shortest workflow
+## Your first print
 
-1. Import an image.
-2. Choose or import a preset that matches the materials.
-3. Generate and open the 3MF.
-4. Confirm the material order in the slicer, then print.
+1. **Prepare material profiles.** Import profiles that match the filaments you will use, or print and photograph gradient cards, then extract and save profiles in Material Extraction.
+2. **Choose your filament combination.** Set Source Type to Material Archive, select the filaments for this print, and set the number of colour layers and layer height.
+3. **Import an image or SVG.** Set its physical size and modelling mode, then create a preview.
+4. **Edit the result.** Compare it with the original and adjust local colours, recipes, and structure. To add a transparent coating, enable it and set its thickness. Save a JSON project or PNG share card to continue later.
+5. **Select a printer and generate.** Choose the slicer, device, nozzle, and build plate in Settings, then download the 3MF or multi-plate ZIP.
+6. **Check it in the slicer.** Confirm filament slots, temperatures, layer height, wipe tower, and bed limits before slicing and printing.
+
+For a first try, use a few profiled filaments to print a small sample and check how closely the colours and shading match the image. Recombine existing profiles when you want a different palette; when you add a new filament, create a profile for it.
 
 ## Why calibration matters
 
-The colour printed by a filament is not fully described by its label. Light passes through several material layers, so the result changes with layer order, layer height, print settings, filament batch, and photography. Lumina records a real calibration print first, then searches those measured results for layer combinations that match the image.
+Two rolls labelled red can look quite different when layered. Layer height, stacking order, material batch, print settings, and lighting all matter too. That is why Lumina records the colours of a physical print first and uses those measurements for colour matching.
 
-### 1.x: fixed colour board and photographed samples
-
-<p align="center">
-  <img src="assets/readme/calibration-1x.png" width="520" alt="A physical fixed calibration board used by Lumina Studio 1.x">
-</p>
-
-Lumina Studio 1.x uses a fixed colour board with exhaustive or reduced combinations, then photographs the result to build a preset. The advantage is a direct connection to what the printer produced. The trade-off is that changing the printer, material set, or important print settings normally requires a new calibration.
-
-Watch: [Lumina Studio 1.x calibration workflow](https://www.bilibili.com/video/BV1dhcqzSEaq)
-
-### 2.0 beta: gradient colour cards
+### Fixed boards and LUTs
 
 <p align="center">
-  <img src="assets/readme/calibration-2x.png" width="720" alt="Gradient calibration cards used by the Lumina Studio 2.0 beta">
+  <img src="assets/readme/calibration-1x.png" width="520" alt="A physical fixed calibration board">
 </p>
 
-The 2.0 beta introduces gradient colour cards and uses a calibrated result with computational simulation to predict colour mixing. This makes it easier to combine different materials and reduces repeated calibration. Photography error and optimisation can still shift the result, so real prints remain part of validation.
+The fixed-board process is straightforward: generate a board, print it, photograph it, extract the colours, and save a LUT. Choose a preset setup for 2, 4, 6, or 8 materials. A new material set or important setting change usually means making a new calibration board.
 
-Gallery: [prints from Lumina Studio 2.0 beta users](https://www.bilibili.com/opus/1211359624212512770)
+LUT inputs include `.npy`, keyed `.json`, `.npz`, and `.msgpack`. Match the preset's material order, layer height, and colour mode to the actual print; the filename or colour count alone is not enough.
 
-> Lumina Studio 2.0 is not public in this repository yet. This section shows the beta direction and physical results; it does not mean that the same features are available in 1.x.
+The [project Wiki](https://wiki.luminastudio.com.cn/) has guidance on photography and colour extraction.
+
+### Gradient cards and material profiles
+
+<p align="center">
+  <img src="assets/readme/calibration-2x.png" width="720" alt="Gradient calibration cards used by Lumina Studio 2.0">
+</p>
+
+Gradient cards record a material's data first, then profiles are combined to calculate colour mixing. Changing a palette does not require a complete fixed board for every combination. Organise, import, and export profiles in the material library, then use them for colour matching.
+
+Photography and calculation both have some error, so check the colour on a real print. A small sample is a good way to check colour and thickness before starting a large piece. More finished work is in the [users' gallery](https://www.bilibili.com/opus/1211359624212512770).
+
+## Installation
+
+Run the source in a browser or in the Electron desktop window.
+
+### Requirements
+
+| Dependency | Version |
+| --- | --- |
+| Python | Standard 64-bit CPython; **3.12 recommended**, 3.12–3.14 supported. |
+| Node.js | **24.x recommended**; 22.x must be at least 22.13. |
+| pnpm | **10.33.2**, matching the repository's `packageManager`. |
+
+Install [Python](https://www.python.org/downloads/), [Node.js](https://nodejs.org/en/download), and [pnpm](https://pnpm.io/installation). If using Corepack, enable it and select the pnpm version above; do not assume that Node.js includes Corepack.
+
+Precompiled dependencies for the complete application cover:
+
+| System | Architecture and minimum |
+| --- | --- |
+| Windows | x64 |
+| Linux | x86-64, glibc 2.28 or newer |
+| macOS | Apple Silicon (arm64), macOS 14 or newer |
+
+Intel Mac, Linux ARM, Alpine/musl, Windows ARM, 32-bit, and free-threaded Python are outside this complete dependency set. This is the intersection of the required dependencies, not a claim of physical printing tests on every platform or device.
+
+### 1. Get the 2.0 source
+
+```bash
+git clone https://github.com/lumina-layer-studio/Lumina-Layers.git
+cd Lumina-Layers
+```
+
+### 2. Create and activate a Python environment
+
+```bash
+python -m venv .venv
+```
+
+If macOS/Linux provides only `python3`, create it with `python3 -m venv .venv`. Activate it for your shell:
+
+| Shell | Command |
+| --- | --- |
+| Windows PowerShell | `.\.venv\Scripts\Activate.ps1` |
+| macOS / Linux | `source .venv/bin/activate` |
+
+### 3. Install dependencies and start
+
+From the repository root, with the environment active:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+pnpm --dir frontend install --frozen-lockfile
+python start_all.py
+```
+
+Open the frontend address printed by the launcher, normally `http://localhost:4174`. The backend uses port `8000` by default. Follow the launcher's prompt to stop it.
+
+Source installs do not connect to an online material library by default. Local material profiles work offline. To connect a Registry you host or are authorized to use, configure its service URL separately; see the [Registry connection guide](docs/material-registry-connection.md).
+
+Requirements pin `lumina-svg-core==0.3.4` and `fatcat-metadata==0.1.2` and automatically install the native SVG, 3MF, and material-metadata packages. Ordinary source use needs no separate SDK checkout, local wheelhouse, internal commit checkout, or C++ compilation. If no matching wheel is found, check Python, OS, and architecture against the table above. The [SVG distribution guide](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.4/docs/DISTRIBUTIONS.md) describes that library's wheels; the complete app still requires the platforms listed above. See the [native dependency and desktop guide](docs/desktop-electron.md) for details.
+
+### Optional: desktop window
+
+After installing the Python and frontend dependencies above:
+
+```bash
+pnpm --dir electron install --frozen-lockfile
+pnpm --dir electron start
+```
+
+The desktop window starts its own Python backend and frontend, so do not also run `start_all.py`. Confirming exit stops the processes it started.
+
+## One more look before printing
+
+- Check that the materials and layer height match your profile or preset. Transparent coating follows the model's material type; mixed or unknown types default to PLA. Confirm the actual transparent filament, temperatures, and compatibility warnings in the slicer before printing.
+- Model surface overlay currently cannot be exported together with large-format tiling; choose one of the two workflows.
+- If a large model's wipe tower or brim will not fit, Lumina keeps the warning and lets you download the project. You still need to arrange it in the slicer; a downloaded file has not necessarily been placed or sliced successfully.
+- Prusa export currently uses the **PrusaSlicer 3.0.0-alpha12** preview format. Check compatibility before using another version. Details are in [3MF export](docs/3mf-metadata-export.md).
+- Save a JSON project or PNG share card to continue editing later, and keep the original image, presets, and material profiles for important projects.
 
 ## Documentation, community, and support
 
-Visit the [project Wiki](https://wiki.luminastudio.com.cn/) for technical documentation, tutorials, and updates. For discussion, join QQ group `371270714` or [Discord](https://discord.gg/57whRe3C8G).
+The [project Wiki](https://wiki.luminastudio.com.cn/) contains guides and updates; the [multi-brand slicer guide](https://wiki.luminastudio.com.cn/zh/docs/tutorials/slicer-guide) covers print setup.
 
-Lumina Studio is a non-profit open-source community project. Sponsorship supports development, testing, packaging, documentation, and community maintenance. The public 1.x code is licensed under the [GNU GPL v3.0](LICENSE).
+Share a print or ask for help through the QQ and Discord links above. For a software problem, the built-in feedback tool helps us reproduce it: include what you did, the version, and relevant files. Reports are saved under local `feedback/` before submission to the official service. To keep them on your device, set `LUMINA_FEEDBACK_SERVER_URL=off` in `.env.local`. See [.env.example](.env.example) and [bug report details](docs/bug-report-reproducibility.md).
+
+Lumina Studio is a non-profit open-source community project. If it has helped you and you would like to keep the work going, you can support it on Afdian or Patreon. Support goes towards development, testing, documentation, packaging, and community maintenance. The [sponsors page](https://www.luminastudio.com.cn/sponsors) lists supporters and material-brand adaptation information.
+
+## License and commercial use
+
+Project-owned 2.0 software is licensed under **AGPL-3.0-only**. Independent modules, dependencies, and resources retain their own terms. See [LICENSE](LICENSE), [LICENSING.md](LICENSING.md), and [third-party resource notices](THIRD_PARTY_NOTICES.md).
+
+Individuals and businesses may use the software free of charge. Generated model files and physical prints may be sold commercially; public sharing or sale requires Lumina-Layers attribution under the [output terms](OUTPUT-TERMS.md). Contact the development team for separate written closed-source integration rights or an output-attribution waiver, as described in [commercial authorization](COMMERCIAL-LICENSE.md).
+
+## Contributing
+
+Contributions of reproducible issues, code, presets, material measurements, translations, and documentation are welcome. The source uses Python + FastAPI, React + TypeScript, and an Electron desktop host. Start with [CONTEXT-MAP.md](CONTEXT-MAP.md). Tests additionally need `requirements-dev.txt`. PostgreSQL is optional; ordinary local use needs no database.
+
+- [Changelog](CHANGELOG.md)
+- [Development and testing](docs/test_operations.md)
+- [Workshop module development](docs/workshop-module-development.md) and the [public SDK](https://github.com/lumina-layer-studio/Lumina-Workshop-SDK)
+
+Thanks to HueForge, AutoForge, [ChromaStack](https://github.com/borealis-zhe/ChromaStack), [LD_ColorLayering](https://github.com/Luban-Daddy/LD_ColorLayering), [ChromaPrint3D](https://github.com/Neroued/ChromaPrint3D), and the wider 3D-printing community for sharing their work. Third-party code, data, and resources remain subject to their respective licences and attribution notices.
 
 ## Contributors
 

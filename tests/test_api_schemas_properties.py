@@ -16,7 +16,6 @@ from pydantic import BaseModel, ValidationError
 
 from api.schemas import (
     # Enums
-    BackingColor,
     CalibrationColorMode,
     ColorMode,
     ExtractorPage,
@@ -32,7 +31,9 @@ from api.schemas import (
     ConvertGenerateRequest,
     ConvertPreviewRequest,
     ExtractorExtractRequest,
+    FridgeMagnetItem,
     ExtractorManualFixRequest,
+    LargeFormatConvertGenerateRequest,
 )
 
 # ---------------------------------------------------------------------------
@@ -45,7 +46,12 @@ st_structure_mode = st.sampled_from(list(StructureMode))
 st_auto_height_mode = st.sampled_from(list(AutoHeightMode))
 st_calibration_color_mode = st.sampled_from(list(CalibrationColorMode))
 st_extractor_page = st.sampled_from(list(ExtractorPage))
-st_backing_color = st.sampled_from(list(BackingColor))
+st_backing_thickness = st.floats(
+    min_value=0.4,
+    max_value=3.5,
+    allow_nan=False,
+    allow_infinity=False,
+)
 
 # ---------------------------------------------------------------------------
 # Hypothesis strategies for hex color strings
@@ -66,12 +72,12 @@ def st_convert_preview_request(draw: st.DrawFn) -> ConvertPreviewRequest:
     return ConvertPreviewRequest(
         lut_name=draw(st_non_empty_str),
         target_width_mm=draw(st.floats(min_value=10, max_value=400, allow_nan=False)),
-        auto_bg=draw(st.booleans()),
-        bg_tol=draw(st.integers(min_value=0, max_value=150)),
         color_mode=draw(st_color_mode),
         modeling_mode=draw(st_modeling_mode),
         quantize_colors=draw(st.integers(min_value=8, max_value=256)),
         enable_cleanup=draw(st.booleans()),
+        enable_outline=draw(st.booleans()),
+        outline_width=draw(st.floats(min_value=0.5, max_value=10.0, allow_nan=False)),
     )
 
 
@@ -86,15 +92,41 @@ def st_color_replacement_item(draw: st.DrawFn) -> ColorReplacementItem:
 
 
 @st.composite
+def st_fridge_magnet_item(draw: st.DrawFn) -> FridgeMagnetItem:
+    """Generate a valid FridgeMagnetItem instance."""
+    shape = draw(st.sampled_from(["round", "rect"]))
+    common_kwargs = {
+        "id": draw(st_non_empty_str),
+        "shape": shape,
+        "preset_key": draw(st_non_empty_str),
+        "thickness_mm": draw(st.floats(min_value=0.1, max_value=9.6, allow_nan=False)),
+        "center_x_mm": draw(st.floats(min_value=-500.0, max_value=500.0, allow_nan=False)),
+        "center_y_mm": draw(st.floats(min_value=-500.0, max_value=500.0, allow_nan=False)),
+    }
+    if shape == "round":
+        return FridgeMagnetItem(
+            **common_kwargs,
+            diameter_mm=draw(st.floats(min_value=0.1, max_value=100.0, allow_nan=False)),
+            width_mm=None,
+            height_mm=None,
+        )
+
+    return FridgeMagnetItem(
+        **common_kwargs,
+        diameter_mm=None,
+        width_mm=draw(st.floats(min_value=0.1, max_value=100.0, allow_nan=False)),
+        height_mm=draw(st.floats(min_value=0.1, max_value=100.0, allow_nan=False)),
+    )
+
+
+@st.composite
 def st_convert_generate_request(draw: st.DrawFn) -> ConvertGenerateRequest:
     """Generate a valid ConvertGenerateRequest instance."""
     return ConvertGenerateRequest(
         lut_name=draw(st_non_empty_str),
         target_width_mm=draw(st.floats(min_value=10, max_value=400, allow_nan=False)),
-        spacer_thick=draw(st.floats(min_value=0.2, max_value=3.5, allow_nan=False)),
+        spacer_thick=draw(st.floats(min_value=0.2, max_value=10.0, allow_nan=False)),
         structure_mode=draw(st_structure_mode),
-        auto_bg=draw(st.booleans()),
-        bg_tol=draw(st.integers(min_value=0, max_value=150)),
         color_mode=draw(st_color_mode),
         modeling_mode=draw(st_modeling_mode),
         quantize_colors=draw(st.integers(min_value=8, max_value=256)),
@@ -104,17 +136,25 @@ def st_convert_generate_request(draw: st.DrawFn) -> ConvertGenerateRequest:
         loop_width=draw(st.floats(min_value=2, max_value=10, allow_nan=False)),
         loop_length=draw(st.floats(min_value=4, max_value=15, allow_nan=False)),
         loop_hole=draw(st.floats(min_value=1, max_value=5, allow_nan=False)),
-        loop_pos=draw(st.none() | st.tuples(
-            st.floats(allow_nan=False, allow_infinity=False),
-            st.floats(allow_nan=False, allow_infinity=False),
-        )),
+        loop_pos=draw(
+            st.none()
+            | st.tuples(
+                st.floats(allow_nan=False, allow_infinity=False),
+                st.floats(allow_nan=False, allow_infinity=False),
+            )
+        ),
+        enable_fridge_magnet=draw(st.booleans()),
+        fridge_magnets=draw(st.lists(st_fridge_magnet_item(), max_size=3)),
         enable_relief=draw(st.booleans()),
-        color_height_map=draw(st.none() | st.dictionaries(
-            st_hex_color,
-            st.floats(min_value=0, max_value=20, allow_nan=False),
-            max_size=5,
-        )),
-        heightmap_max_height=draw(st.floats(min_value=0.08, max_value=15.0, allow_nan=False)),
+        color_height_map=draw(
+            st.none()
+            | st.dictionaries(
+                st_hex_color,
+                st.floats(min_value=0, max_value=20, allow_nan=False),
+                max_size=5,
+            )
+        ),
+        heightmap_max_height=draw(st.floats(min_value=0.08, max_value=25.0, allow_nan=False)),
         enable_outline=draw(st.booleans()),
         outline_width=draw(st.floats(min_value=0.5, max_value=10.0, allow_nan=False)),
         enable_cloisonne=draw(st.booleans()),
@@ -122,9 +162,13 @@ def st_convert_generate_request(draw: st.DrawFn) -> ConvertGenerateRequest:
         wire_height_mm=draw(st.floats(min_value=0.04, max_value=1.0, allow_nan=False)),
         enable_coating=draw(st.booleans()),
         coating_height_mm=draw(st.floats(min_value=0.04, max_value=0.12, allow_nan=False)),
-        replacement_regions=draw(st.none() | st.lists(
-            st_color_replacement_item(), max_size=3,
-        )),
+        replacement_regions=draw(
+            st.none()
+            | st.lists(
+                st_color_replacement_item(),
+                max_size=3,
+            )
+        ),
         free_color_set=draw(st.none() | st.frozensets(st_hex_color, max_size=3)),
     )
 
@@ -160,8 +204,7 @@ def st_color_merge_preview_request(draw: st.DrawFn) -> ColorMergePreviewRequest:
 def st_extractor_extract_request(draw: st.DrawFn) -> ExtractorExtractRequest:
     """Generate a valid ExtractorExtractRequest instance."""
     corner_points = [
-        draw(st.tuples(st.integers(min_value=0, max_value=5000),
-                        st.integers(min_value=0, max_value=5000)))
+        draw(st.tuples(st.integers(min_value=0, max_value=5000), st.integers(min_value=0, max_value=5000)))
         for _ in range(4)
     ]
     return ExtractorExtractRequest(
@@ -171,9 +214,9 @@ def st_extractor_extract_request(draw: st.DrawFn) -> ExtractorExtractRequest:
         offset_y=draw(st.integers(min_value=-30, max_value=30)),
         zoom=draw(st.floats(min_value=0.8, max_value=1.2, allow_nan=False)),
         distortion=draw(st.floats(min_value=-0.2, max_value=0.2, allow_nan=False)),
-        white_balance=draw(st.booleans()),
         vignette_correction=draw(st.booleans()),
         page=draw(st_extractor_page),
+        eight_color_full_export=draw(st.booleans()),
     )
 
 
@@ -182,10 +225,12 @@ def st_extractor_manual_fix_request(draw: st.DrawFn) -> ExtractorManualFixReques
     """Generate a valid ExtractorManualFixRequest instance."""
     return ExtractorManualFixRequest(
         lut_path=draw(st_non_empty_str),
-        cell_coord=draw(st.tuples(
-            st.integers(min_value=0, max_value=100),
-            st.integers(min_value=0, max_value=100),
-        )),
+        cell_coord=draw(
+            st.tuples(
+                st.integers(min_value=0, max_value=100),
+                st.integers(min_value=0, max_value=100),
+            )
+        ),
         override_color=draw(st_hex_color),
     )
 
@@ -195,9 +240,10 @@ def st_calibration_generate_request(draw: st.DrawFn) -> CalibrationGenerateReque
     """Generate a valid CalibrationGenerateRequest instance."""
     return CalibrationGenerateRequest(
         color_mode=draw(st_calibration_color_mode),
-        block_size=draw(st.integers(min_value=3, max_value=10)),
+        block_size=draw(st.floats(min_value=3, max_value=10, allow_nan=False)),
         gap=draw(st.floats(min_value=0.4, max_value=2.0, allow_nan=False)),
-        backing=draw(st_backing_color),
+        backing_thickness=draw(st_backing_thickness),
+        eight_color_full_export=draw(st.booleans()),
     )
 
 
@@ -215,12 +261,13 @@ st_any_schema = (
     | st_extractor_manual_fix_request()
     | st_calibration_generate_request()
     | st_color_replacement_item()
+    | st_fridge_magnet_item()
 )
 
 
 # ===========================================================================
 # Property 1: Schema Serialization Round-Trip
-# Feature: fastapi-backend-scaffold, Property 1: Schema 序列化 Round-Trip
+# Feature: fastapi-backend-scaffold, Property 1: Schema 搴忓垪鍖?Round-Trip
 # ===========================================================================
 
 
@@ -237,8 +284,7 @@ def test_schema_serialization_round_trip(instance: BaseModel) -> None:
     json_str = instance.model_dump_json()
     restored = type(instance).model_validate_json(json_str)
     assert instance == restored, (
-        f"Round-trip failed for {type(instance).__name__}: "
-        f"original={instance!r}, restored={restored!r}"
+        f"Round-trip failed for {type(instance).__name__}: " f"original={instance!r}, restored={restored!r}"
     )
 
 
@@ -264,9 +310,7 @@ def test_valid_data_passes_validation(instance: BaseModel) -> None:
     try:
         restored = type(instance).model_validate(data)
     except ValidationError as exc:
-        raise AssertionError(
-            f"Valid data rejected for {type(instance).__name__}: {exc}"
-        ) from exc
+        raise AssertionError(f"Valid data rejected for {type(instance).__name__}: {exc}") from exc
     assert restored == instance
 
 
@@ -277,14 +321,16 @@ def test_valid_data_passes_validation(instance: BaseModel) -> None:
 
 # Table of (Model, field_name, min_val, max_val) for constrained numeric fields
 CONSTRAINED_FIELDS: List[Tuple[Type[BaseModel], str, float, float]] = [
-    (ConvertPreviewRequest, "target_width_mm", 10, 400),
-    (ConvertPreviewRequest, "bg_tol", 0, 150),
-    (ConvertPreviewRequest, "quantize_colors", 8, 256),
-    (ConvertGenerateRequest, "spacer_thick", 0.2, 3.5),
+    (ConvertPreviewRequest, "target_width_mm", 0.5, 9999),
+    (ConvertGenerateRequest, "target_width_mm", 0.5, 9999),
+    (ConvertPreviewRequest, "quantize_colors", 8, 8192),
+    (ConvertPreviewRequest, "svg_pixels_per_mm", 2.0, 50.0),
+    (ConvertGenerateRequest, "spacer_thick", 0.2, 10.0),
+    (ConvertGenerateRequest, "svg_pixels_per_mm", 2.0, 50.0),
     (ConvertGenerateRequest, "loop_width", 2, 10),
     (ConvertGenerateRequest, "loop_length", 4, 15),
     (ConvertGenerateRequest, "loop_hole", 1, 5),
-    (ConvertGenerateRequest, "heightmap_max_height", 0.08, 15.0),
+    (ConvertGenerateRequest, "heightmap_max_height", 0.08, 25.0),
     (ConvertGenerateRequest, "outline_width", 0.5, 10.0),
     (ConvertGenerateRequest, "wire_width_mm", 0.2, 1.2),
     (ConvertGenerateRequest, "wire_height_mm", 0.04, 1.0),
@@ -297,7 +343,26 @@ CONSTRAINED_FIELDS: List[Tuple[Type[BaseModel], str, float, float]] = [
     (ExtractorExtractRequest, "offset_y", -30, 30),
     (CalibrationGenerateRequest, "block_size", 3, 10),
     (CalibrationGenerateRequest, "gap", 0.4, 2.0),
+    (CalibrationGenerateRequest, "backing_thickness", 0.4, 3.5),
 ]
+
+
+@pytest.mark.parametrize(
+    "model_cls",
+    [
+        ConvertPreviewRequest,
+        ConvertGenerateRequest,
+        LargeFormatConvertGenerateRequest,
+    ],
+)
+def test_converter_target_width_accepts_workshop_boundary(
+    model_cls: Type[BaseModel],
+) -> None:
+    request = model_cls(lut_name="test_lut", target_width_mm=0.5)
+    assert request.target_width_mm == 0.5
+
+    with pytest.raises(ValidationError):
+        model_cls(lut_name="test_lut", target_width_mm=0.499999)
 
 
 def _build_minimal_valid_data(model_cls: Type[BaseModel]) -> Dict[str, Any]:
@@ -317,6 +382,29 @@ def _build_minimal_valid_data(model_cls: Type[BaseModel]) -> Dict[str, Any]:
     return {}
 
 
+def test_convert_generate_request_accepts_total_relief_height_limit() -> None:
+    """ConvertGenerateRequest should allow the UI's max backing plus relief height."""
+    request = ConvertGenerateRequest(lut_name="test_lut", heightmap_max_height=25.0)
+
+    assert request.heightmap_max_height == 25.0
+
+
+def test_convert_generate_request_rejects_relief_height_above_total_limit() -> None:
+    """ConvertGenerateRequest should reject total relief heights above the UI maximum."""
+    with pytest.raises(ValidationError):
+        ConvertGenerateRequest(lut_name="test_lut", heightmap_max_height=25.01)
+
+
+@pytest.mark.parametrize("model_cls", [ConvertPreviewRequest, ConvertGenerateRequest])
+def test_svg_pixels_per_mm_requires_tenth_step(model_cls: Type[BaseModel]) -> None:
+    """SVG raster density accepts one decimal place and rejects finer steps."""
+    request = model_cls(lut_name="test_lut", svg_pixels_per_mm=25.5)
+    assert request.svg_pixels_per_mm == 25.5
+
+    with pytest.raises(ValidationError):
+        model_cls(lut_name="test_lut", svg_pixels_per_mm=25.55)
+
+
 # **Validates: Requirements 3.7, 5.3**
 @given(data=st.data())
 @settings(max_examples=100)
@@ -326,9 +414,7 @@ def test_out_of_range_values_rejected(data: st.DataObject) -> None:
 
     **Validates: Requirements 3.7, 5.3**
     """
-    model_cls, field_name, min_val, max_val = data.draw(
-        st.sampled_from(CONSTRAINED_FIELDS)
-    )
+    model_cls, field_name, min_val, max_val = data.draw(st.sampled_from(CONSTRAINED_FIELDS))
 
     # Decide whether to go below min or above max
     go_below = data.draw(st.booleans())
@@ -336,19 +422,13 @@ def test_out_of_range_values_rejected(data: st.DataObject) -> None:
     if go_below:
         # Generate a value strictly below min_val
         if isinstance(min_val, float):
-            bad_value = data.draw(
-                st.floats(max_value=min_val, exclude_max=True,
-                          allow_nan=False, allow_infinity=False)
-            )
+            bad_value = data.draw(st.floats(max_value=min_val, exclude_max=True, allow_nan=False, allow_infinity=False))
         else:
             bad_value = data.draw(st.integers(max_value=int(min_val) - 1))
     else:
         # Generate a value strictly above max_val
         if isinstance(max_val, float):
-            bad_value = data.draw(
-                st.floats(min_value=max_val, exclude_min=True,
-                          allow_nan=False, allow_infinity=False)
-            )
+            bad_value = data.draw(st.floats(min_value=max_val, exclude_min=True, allow_nan=False, allow_infinity=False))
         else:
             bad_value = data.draw(st.integers(min_value=int(max_val) + 1))
 
@@ -369,7 +449,7 @@ ENUM_FIELD_MAP: Dict[str, List[str]] = {
     "ConvertPreviewRequest": ["color_mode", "modeling_mode"],
     "ConvertGenerateRequest": ["color_mode", "modeling_mode", "structure_mode"],
     "ExtractorExtractRequest": ["color_mode", "page"],
-    "CalibrationGenerateRequest": ["color_mode", "backing"],
+    "CalibrationGenerateRequest": ["color_mode"],
 }
 
 # Strategies for models with enum fields
@@ -400,18 +480,16 @@ def test_enum_field_string_serialization(instance: BaseModel) -> None:
     for field_name in enum_fields:
         value = parsed[field_name]
         assert isinstance(value, str), (
-            f"{model_name}.{field_name} serialized as {type(value).__name__} "
-            f"({value!r}), expected str"
+            f"{model_name}.{field_name} serialized as {type(value).__name__} " f"({value!r}), expected str"
         )
-        # Ensure it's the enum *value* (e.g. "RYBW"), not the enum *name*
+        # Ensure it's the enum *value* (e.g. "4-Color"), not the enum *name*
         # (e.g. "FOUR_COLOR")
         field_obj = instance.__class__.model_fields[field_name]
         enum_cls = field_obj.annotation
         # Check value is one of the enum's string values
         valid_values = [e.value for e in enum_cls]
         assert value in valid_values, (
-            f"{model_name}.{field_name} = {value!r} is not a valid enum value. "
-            f"Expected one of: {valid_values}"
+            f"{model_name}.{field_name} = {value!r} is not a valid enum value. " f"Expected one of: {valid_values}"
         )
 
 
@@ -424,18 +502,22 @@ def test_enum_field_string_serialization(instance: BaseModel) -> None:
 OPTIONAL_DEFAULTS: List[Tuple[Type[BaseModel], Dict[str, Any], str, Any]] = [
     # ConvertPreviewRequest
     (ConvertPreviewRequest, {"lut_name": "x"}, "target_width_mm", 60.0),
-    (ConvertPreviewRequest, {"lut_name": "x"}, "auto_bg", False),
-    (ConvertPreviewRequest, {"lut_name": "x"}, "bg_tol", 40),
     (ConvertPreviewRequest, {"lut_name": "x"}, "quantize_colors", 48),
     (ConvertPreviewRequest, {"lut_name": "x"}, "enable_cleanup", True),
+    (ConvertPreviewRequest, {"lut_name": "x"}, "enable_outline", False),
+    (ConvertPreviewRequest, {"lut_name": "x"}, "outline_width", 2.0),
+    (ConvertPreviewRequest, {"lut_name": "x"}, "svg_pixels_per_mm", 10.0),
     # ConvertGenerateRequest
     (ConvertGenerateRequest, {"lut_name": "x"}, "target_width_mm", 60.0),
+    (ConvertGenerateRequest, {"lut_name": "x"}, "svg_pixels_per_mm", 10.0),
     (ConvertGenerateRequest, {"lut_name": "x"}, "spacer_thick", 1.2),
     (ConvertGenerateRequest, {"lut_name": "x"}, "add_loop", False),
     (ConvertGenerateRequest, {"lut_name": "x"}, "loop_width", 4.0),
     (ConvertGenerateRequest, {"lut_name": "x"}, "loop_length", 8.0),
     (ConvertGenerateRequest, {"lut_name": "x"}, "loop_hole", 2.5),
     (ConvertGenerateRequest, {"lut_name": "x"}, "loop_pos", None),
+    (ConvertGenerateRequest, {"lut_name": "x"}, "enable_fridge_magnet", False),
+    (ConvertGenerateRequest, {"lut_name": "x"}, "fridge_magnets", []),
     (ConvertGenerateRequest, {"lut_name": "x"}, "enable_relief", False),
     (ConvertGenerateRequest, {"lut_name": "x"}, "heightmap_max_height", 5.0),
     (ConvertGenerateRequest, {"lut_name": "x"}, "enable_outline", False),
@@ -453,7 +535,10 @@ OPTIONAL_DEFAULTS: List[Tuple[Type[BaseModel], Dict[str, Any], str, Any]] = [
     (ColorMergePreviewRequest, {"session_id": "s"}, "merge_max_distance", 20),
     # CalibrationGenerateRequest
     (CalibrationGenerateRequest, {}, "block_size", 5),
-    (CalibrationGenerateRequest, {}, "gap", 0.82),
+    (CalibrationGenerateRequest, {}, "gap", 0.84),
+    (CalibrationGenerateRequest, {}, "eight_color_full_export", False),
+    # ExtractorExtractRequest
+    (ExtractorExtractRequest, {"corner_points": [(0, 0), (100, 0), (100, 100), (0, 100)]}, "eight_color_full_export", False),
 ]
 
 
@@ -467,9 +552,7 @@ def test_optional_field_default_values(data: st.DataObject) -> None:
 
     **Validates: Requirements 11.3**
     """
-    model_cls, required_kwargs, field_name, expected = data.draw(
-        st.sampled_from(OPTIONAL_DEFAULTS)
-    )
+    model_cls, required_kwargs, field_name, expected = data.draw(st.sampled_from(OPTIONAL_DEFAULTS))
 
     # Randomize the required field values to add variety
     if "lut_name" in required_kwargs:
@@ -484,7 +567,234 @@ def test_optional_field_default_values(data: st.DataObject) -> None:
     instance = model_cls(**required_kwargs)
     actual = getattr(instance, field_name)
 
-    assert actual == expected, (
-        f"{model_cls.__name__}.{field_name}: expected default {expected!r}, "
-        f"got {actual!r}"
+    assert actual == expected, f"{model_cls.__name__}.{field_name}: expected default {expected!r}, " f"got {actual!r}"
+
+
+def test_fridge_magnet_item_accepts_round_shape() -> None:
+    """Round fridge magnets should accept only the round-specific diameter field."""
+
+    item = FridgeMagnetItem(
+        id="round-1",
+        shape="round",
+        preset_key="round-18",
+        diameter_mm=18.0,
+        width_mm=None,
+        height_mm=None,
+        thickness_mm=2.0,
+        center_x_mm=12.5,
+        center_y_mm=8.0,
     )
+
+    assert item.shape == "round"
+    assert item.diameter_mm == 18.0
+    assert item.width_mm is None
+    assert item.height_mm is None
+
+
+def test_fridge_magnet_item_accepts_rect_shape() -> None:
+    """Rect fridge magnets should accept only the rect-specific width/height fields."""
+
+    item = FridgeMagnetItem(
+        id="rect-1",
+        shape="rect",
+        preset_key="rect-20x10",
+        diameter_mm=None,
+        width_mm=20.0,
+        height_mm=10.0,
+        thickness_mm=2.0,
+        center_x_mm=3.0,
+        center_y_mm=4.0,
+    )
+
+    assert item.shape == "rect"
+    assert item.diameter_mm is None
+    assert item.width_mm == 20.0
+    assert item.height_mm == 10.0
+
+
+def test_fridge_magnet_item_rejects_round_without_diameter() -> None:
+    """Round fridge magnets should reject missing diameter values."""
+
+    with pytest.raises(ValidationError):
+        FridgeMagnetItem(
+            id="round-missing",
+            shape="round",
+            preset_key="round-missing",
+            diameter_mm=None,
+            width_mm=None,
+            height_mm=None,
+            thickness_mm=2.0,
+            center_x_mm=0.0,
+            center_y_mm=0.0,
+        )
+
+
+def test_fridge_magnet_item_rejects_round_with_rect_dimensions() -> None:
+    """Round fridge magnets should reject width/height values."""
+
+    with pytest.raises(ValidationError):
+        FridgeMagnetItem(
+            id="round-with-rect-dims",
+            shape="round",
+            preset_key="round-invalid",
+            diameter_mm=18.0,
+            width_mm=20.0,
+            height_mm=10.0,
+            thickness_mm=2.0,
+            center_x_mm=0.0,
+            center_y_mm=0.0,
+        )
+
+
+def test_fridge_magnet_item_rejects_rect_without_width_and_height() -> None:
+    """Rect fridge magnets should reject missing width/height values."""
+
+    with pytest.raises(ValidationError):
+        FridgeMagnetItem(
+            id="rect-missing",
+            shape="rect",
+            preset_key="rect-missing",
+            diameter_mm=None,
+            width_mm=None,
+            height_mm=None,
+            thickness_mm=2.0,
+            center_x_mm=0.0,
+            center_y_mm=0.0,
+        )
+
+
+def test_fridge_magnet_item_rejects_rect_with_round_diameter() -> None:
+    """Rect fridge magnets should reject diameter values."""
+
+    with pytest.raises(ValidationError):
+        FridgeMagnetItem(
+            id="rect-with-round-diameter",
+            shape="rect",
+            preset_key="rect-invalid",
+            diameter_mm=18.0,
+            width_mm=20.0,
+            height_mm=10.0,
+            thickness_mm=2.0,
+            center_x_mm=0.0,
+            center_y_mm=0.0,
+        )
+
+
+def test_convert_generate_request_defaults_fridge_magnet_fields() -> None:
+    """ConvertGenerateRequest should keep fridge-magnet fields backward compatible by default."""
+
+    request = ConvertGenerateRequest(lut_name="test-lut")
+
+    assert request.enable_fridge_magnet is False
+    assert request.fridge_magnets == []
+
+
+@pytest.mark.parametrize("thickness_mm", [float("inf"), 9.61, 1_000_000.0])
+def test_fridge_magnet_item_rejects_thickness_beyond_10_mm_backing(
+    thickness_mm: float,
+) -> None:
+    """A cavity must leave the required 0.4 mm shell inside 10 mm backing."""
+
+    with pytest.raises(ValidationError):
+        FridgeMagnetItem(
+            id="round-too-deep",
+            shape="round",
+            preset_key="custom",
+            diameter_mm=12.0,
+            thickness_mm=thickness_mm,
+            center_x_mm=0.0,
+            center_y_mm=0.0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value"),
+    [
+        ("diameter_mm", float("inf")),
+        ("width_mm", float("inf")),
+        ("height_mm", float("inf")),
+        ("center_x_mm", float("inf")),
+        ("center_y_mm", float("-inf")),
+    ],
+)
+def test_fridge_magnet_item_rejects_non_finite_geometry(
+    field_name: str,
+    field_value: float,
+) -> None:
+    """Cavity geometry must stay finite before raster or vector processing."""
+
+    payload = {
+        "id": "magnet-non-finite",
+        "shape": "round",
+        "preset_key": "custom",
+        "diameter_mm": 12.0,
+        "thickness_mm": 3.0,
+        "center_x_mm": 0.0,
+        "center_y_mm": 0.0,
+        field_name: field_value,
+    }
+    if field_name in {"width_mm", "height_mm"}:
+        payload.update(
+            {
+                "shape": "rect",
+                "diameter_mm": None,
+                "width_mm": 15.0,
+                "height_mm": 5.0,
+                field_name: field_value,
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        FridgeMagnetItem(**payload)
+
+
+@pytest.mark.parametrize(
+    ("thickness_mm", "expected_spacer_thick"),
+    [(2.5, 2.96), (3.0, 3.44), (9.6, 10.0)],
+)
+def test_convert_generate_request_raises_backing_to_fit_fridge_cavity(
+    thickness_mm: float,
+    expected_spacer_thick: float,
+) -> None:
+    """Raster and vector generation receive one cavity-safe backing height."""
+
+    request = ConvertGenerateRequest(
+        lut_name="test-lut",
+        spacer_thick=1.2,
+        enable_fridge_magnet=True,
+        fridge_magnets=[
+            FridgeMagnetItem(
+                id="round-1",
+                shape="round",
+                preset_key="custom",
+                diameter_mm=12.0,
+                thickness_mm=thickness_mm,
+                center_x_mm=0.0,
+                center_y_mm=0.0,
+            ),
+        ],
+    )
+
+    assert request.spacer_thick == expected_spacer_thick
+
+
+def test_convert_generate_request_rejects_more_than_20_fridge_magnets() -> None:
+    """API capacity matches the frontend and bug-report contract."""
+
+    magnet = {
+        "shape": "round",
+        "preset_key": "custom",
+        "diameter_mm": 12.0,
+        "thickness_mm": 3.0,
+        "center_x_mm": 0.0,
+        "center_y_mm": 0.0,
+    }
+    with pytest.raises(ValidationError):
+        ConvertGenerateRequest(
+            lut_name="test-lut",
+            enable_fridge_magnet=True,
+            fridge_magnets=[
+                {"id": f"round-{index}", **magnet}
+                for index in range(21)
+            ],
+        )

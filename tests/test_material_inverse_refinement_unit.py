@@ -1,0 +1,401 @@
+"""Unit tests for target-aware material inverse refinement."""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+import core.material_inverse_refinement as inverse_refinement
+from core.material_color_solver import (
+    DEFAULT_LAYER_HEIGHT_MM,
+    MaterialParams,
+    forward_model,
+    linear_to_srgb_uint8,
+    rgb_to_lab,
+)
+from core.material_inverse_refinement import (
+    MaterialInverseRefinementConfig,
+    compute_required_bottom_colors,
+    refine_material_matches,
+    required_bottom_color_mask,
+)
+
+
+def _mat(
+    name: str,
+    E: tuple[float, float, float],
+    k: tuple[float, float, float],
+) -> MaterialParams:
+    return MaterialParams(
+        name=name,
+        directory_name=name.lower(),
+        E=np.asarray(E, dtype=np.float64),
+        k=np.asarray(k, dtype=np.float64),
+        C0_white=np.asarray((1.0, 1.0, 1.0), dtype=np.float64),
+        estimated_rgb=np.asarray([int(round(255 * c)) for c in E], dtype=np.uint8),
+    )
+
+
+RED = _mat("Red", E=(0.65, 0.04, 0.04), k=(3.5, 3.5, 3.5))
+BLUE = _mat("Blue", E=(0.04, 0.08, 0.65), k=(3.5, 3.5, 3.5))
+WHITE = _mat("White", E=(0.95, 0.95, 0.95), k=(0.4, 0.4, 0.4))
+GREEN = _mat("Green", E=(0.08, 0.65, 0.08), k=(3.5, 3.5, 3.5))
+PALETTE = [RED, BLUE, WHITE, GREEN]
+
+
+def _srgb_for_recipe(recipe: np.ndarray) -> np.ndarray:
+    linear = forward_model(
+        recipe,
+        PALETTE,
+        DEFAULT_LAYER_HEIGHT_MM,
+        substrate_linear=np.ones(3, dtype=np.float64),
+    )
+    return linear_to_srgb_uint8(linear.reshape(1, 3))[0]
+
+
+def _delta_e(target_srgb: np.ndarray, matched_srgb: np.ndarray) -> float:
+    labs = rgb_to_lab(np.vstack([target_srgb, matched_srgb]).astype(np.uint8))
+    return float(np.linalg.norm(labs[0] - labs[1]))
+
+
+def test_required_bottom_color_reconstructs_target_for_valid_suffix() -> None:
+    target_linear = np.asarray([[0.45, 0.25, 0.2]], dtype=np.float64)
+    top_alpha = np.asarray([[0.8, 0.7, 0.6]], dtype=np.float64)
+    top_beta = np.asarray([[0.05, 0.04, 0.03]], dtype=np.float64)
+
+    required = compute_required_bottom_colors(target_linear[0], top_alpha, top_beta)
+
+    assert np.isfinite(required).all()
+    reconstructed = top_alpha * required + top_beta
+    np.testing.assert_allclose(reconstructed, target_linear, atol=1e-12)
+
+
+def test_out_of_bounds_required_bottom_colors_are_rejected() -> None:
+    target_linear = np.asarray([0.02, 0.02, 0.02], dtype=np.float64)
+    top_alpha = np.asarray(
+        [
+            [0.7, 0.7, 0.7],
+            [0.9, 0.9, 0.9],
+        ],
+        dtype=np.float64,
+    )
+    top_beta = np.asarray(
+        [
+            [0.9, 0.9, 0.9],
+            [0.01, 0.01, 0.01],
+        ],
+        dtype=np.float64,
+    )
+
+    required = compute_required_bottom_colors(target_linear, top_alpha, top_beta)
+    mask = required_bottom_color_mask(required, tolerance=0.0)
+
+    np.testing.assert_array_equal(mask, np.asarray([False, True]))
+
+
+def test_refinement_candidate_is_forward_verified() -> None:
+    target_recipe = np.asarray([0, 1, 1, 2], dtype=np.int32)
+    target_srgb = _srgb_for_recipe(target_recipe).reshape(1, 3)
+    baseline_recipe = np.asarray([[0, 0, 0, 0]], dtype=np.int32)
+    baseline_srgb = _srgb_for_recipe(baseline_recipe[0]).reshape(1, 3)
+    baseline_delta = np.asarray(
+        [_delta_e(target_srgb[0], baseline_srgb[0])],
+        dtype=np.float64,
+    )
+
+    result = refine_material_matches(
+        target_srgb=target_srgb,
+        baseline_matched_srgb=baseline_srgb,
+        baseline_recipes=baseline_recipe,
+        baseline_delta_e=baseline_delta,
+        materials=PALETTE,
+        layer_count=4,
+        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
+        substrate="white",
+        config=MaterialInverseRefinementConfig(
+            max_refine_materials=4,
+            max_refine_bottom_prefixes=16,
+            max_refine_top_suffixes=16,
+            refine_bottom_neighbors=2,
+        ),
+    )
+
+    verified_srgb = _srgb_for_recipe(result.recipes[0])
+    np.testing.assert_array_equal(result.matched_srgb[0], verified_srgb)
+    assert result.delta_e[0] <= baseline_delta[0]
+    assert result.improved_mask[0]
+
+
+def test_refinement_never_worsens_baseline_match() -> None:
+    baseline_recipe = np.asarray([[2, 2, 2, 2]], dtype=np.int32)
+    baseline_srgb = _srgb_for_recipe(baseline_recipe[0]).reshape(1, 3)
+    target_srgb = baseline_srgb.copy()
+    baseline_delta = np.asarray([0.0], dtype=np.float64)
+
+    result = refine_material_matches(
+        target_srgb=target_srgb,
+        baseline_matched_srgb=baseline_srgb,
+        baseline_recipes=baseline_recipe,
+        baseline_delta_e=baseline_delta,
+        materials=PALETTE,
+        layer_count=4,
+        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
+        substrate="white",
+        config=MaterialInverseRefinementConfig(
+            max_refine_materials=4,
+            max_refine_bottom_prefixes=16,
+            max_refine_top_suffixes=16,
+            refine_bottom_neighbors=2,
+        ),
+    )
+
+    np.testing.assert_array_equal(result.matched_srgb, baseline_srgb)
+    np.testing.assert_array_equal(result.recipes, baseline_recipe)
+    np.testing.assert_allclose(result.delta_e, baseline_delta)
+    np.testing.assert_array_equal(result.improved_mask, np.asarray([False]))
+
+
+def test_refinement_reuses_one_workspace_for_shared_subset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two target rows sharing a subset build only bottom and top candidates."""
+
+    target_recipes = np.asarray(
+        [
+            [0, 1, 1, 2],
+            [3, 1, 0, 2],
+        ],
+        dtype=np.int32,
+    )
+    target_srgb = np.vstack([_srgb_for_recipe(row) for row in target_recipes])
+    baseline_recipes = np.zeros((2, 4), dtype=np.int32)
+    baseline_matched = np.vstack(
+        [_srgb_for_recipe(row) for row in baseline_recipes],
+    )
+    baseline_delta = np.asarray(
+        [
+            _delta_e(target_srgb[index], baseline_matched[index])
+            for index in range(2)
+        ],
+        dtype=np.float64,
+    )
+    config = MaterialInverseRefinementConfig(
+        max_refine_materials=4,
+        max_refine_bottom_prefixes=16,
+        max_refine_top_suffixes=16,
+        refine_bottom_neighbors=2,
+    )
+    independent = [
+        refine_material_matches(
+            target_srgb=target_srgb[index : index + 1],
+            baseline_matched_srgb=baseline_matched[index : index + 1],
+            baseline_recipes=baseline_recipes[index : index + 1],
+            baseline_delta_e=baseline_delta[index : index + 1],
+            materials=PALETTE,
+            layer_count=4,
+            layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
+            substrate="white",
+            config=config,
+        )
+        for index in range(2)
+    ]
+
+    original_generate = inverse_refinement.generate_candidate_recipes
+    generation_calls: list[tuple[int, int, int, int]] = []
+
+    def _record_generation(
+        *,
+        material_count: int,
+        layer_count: int,
+        candidate_budget: int,
+        seed: int,
+    ):
+        generation_calls.append(
+            (material_count, layer_count, candidate_budget, seed),
+        )
+        return original_generate(
+            material_count=material_count,
+            layer_count=layer_count,
+            candidate_budget=candidate_budget,
+            seed=seed,
+        )
+
+    monkeypatch.setattr(
+        inverse_refinement,
+        "generate_candidate_recipes",
+        _record_generation,
+    )
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
+
+    batched = refine_material_matches(
+        target_srgb=target_srgb,
+        baseline_matched_srgb=baseline_matched,
+        baseline_recipes=baseline_recipes,
+        baseline_delta_e=baseline_delta,
+        materials=PALETTE,
+        layer_count=4,
+        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
+        substrate="white",
+        config=config,
+    )
+
+    assert len(generation_calls) == 2
+    for index, expected in enumerate(independent):
+        np.testing.assert_array_equal(
+            batched.matched_srgb[index],
+            expected.matched_srgb[0],
+        )
+        np.testing.assert_array_equal(
+            batched.recipes[index],
+            expected.recipes[0],
+        )
+        assert batched.delta_e[index] == expected.delta_e[0]
+        assert batched.improved_mask[index] == expected.improved_mask[0]
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
+
+
+def test_bounded_subset_recipes_reuses_deterministic_index_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Different material subsets reuse one shape-equivalent recipe template."""
+
+    original_generate = inverse_refinement.generate_candidate_recipes
+    generation_calls: list[tuple[int, int, int, int]] = []
+
+    def _record_generation(
+        *,
+        material_count: int,
+        layer_count: int,
+        candidate_budget: int,
+        seed: int,
+    ):
+        generation_calls.append(
+            (material_count, layer_count, candidate_budget, seed),
+        )
+        return original_generate(
+            material_count=material_count,
+            layer_count=layer_count,
+            candidate_budget=candidate_budget,
+            seed=seed,
+        )
+
+    monkeypatch.setattr(
+        inverse_refinement,
+        "generate_candidate_recipes",
+        _record_generation,
+    )
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
+
+    first = inverse_refinement._bounded_subset_recipes(
+        subset=np.asarray([0, 1, 2, 3], dtype=np.int32),
+        depth=3,
+        budget=16,
+        seed=7,
+    )
+    second = inverse_refinement._bounded_subset_recipes(
+        subset=np.asarray([4, 5, 6, 7], dtype=np.int32),
+        depth=3,
+        budget=16,
+        seed=7,
+    )
+    inverse_refinement._bounded_subset_recipes(
+        subset=np.asarray([4, 5, 6, 7], dtype=np.int32),
+        depth=3,
+        budget=16,
+        seed=8,
+    )
+
+    assert generation_calls == [
+        (4, 3, 16, 7),
+        (4, 3, 16, 8),
+    ]
+    np.testing.assert_array_equal(second, first + 4)
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
+
+
+def test_refinement_builds_each_subset_once_and_parallel_results_stay_stable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Independent subset groups may run concurrently without reordering rows."""
+
+    baseline_recipes = np.asarray(
+        [
+            [0, 1, 0, 1],
+            [0, 1, 0, 1],
+            [2, 3, 2, 3],
+            [2, 3, 2, 3],
+        ],
+        dtype=np.int32,
+    )
+    target_recipes = np.asarray(
+        [
+            [1, 0, 1, 0],
+            [0, 0, 1, 1],
+            [3, 2, 3, 2],
+            [2, 2, 3, 3],
+        ],
+        dtype=np.int32,
+    )
+    target_srgb = np.vstack([_srgb_for_recipe(row) for row in target_recipes])
+    baseline_matched = np.vstack(
+        [_srgb_for_recipe(row) for row in baseline_recipes],
+    )
+    baseline_delta = np.asarray(
+        [
+            _delta_e(target_srgb[index], baseline_matched[index])
+            for index in range(4)
+        ],
+        dtype=np.float64,
+    )
+    config = MaterialInverseRefinementConfig(
+        max_refine_materials=2,
+        max_refine_bottom_prefixes=4,
+        max_refine_top_suffixes=4,
+        refine_bottom_neighbors=2,
+    )
+    serial = refine_material_matches(
+        target_srgb=target_srgb,
+        baseline_matched_srgb=baseline_matched,
+        baseline_recipes=baseline_recipes,
+        baseline_delta_e=baseline_delta,
+        materials=PALETTE,
+        layer_count=4,
+        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
+        substrate="white",
+        config=config,
+    )
+
+    original_generate = inverse_refinement.generate_candidate_recipes
+    generation_calls = 0
+
+    def _record_generation(**kwargs):
+        nonlocal generation_calls
+        generation_calls += 1
+        return original_generate(**kwargs)
+
+    monkeypatch.setattr(
+        inverse_refinement,
+        "generate_candidate_recipes",
+        _record_generation,
+    )
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
+
+    parallel = refine_material_matches(
+        target_srgb=target_srgb,
+        baseline_matched_srgb=baseline_matched,
+        baseline_recipes=baseline_recipes,
+        baseline_delta_e=baseline_delta,
+        materials=PALETTE,
+        layer_count=4,
+        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
+        substrate="white",
+        config=config,
+        parallelism=2,
+    )
+
+    assert generation_calls == 2
+    np.testing.assert_array_equal(parallel.matched_srgb, serial.matched_srgb)
+    np.testing.assert_array_equal(parallel.recipes, serial.recipes)
+    np.testing.assert_array_equal(parallel.delta_e, serial.delta_e)
+    np.testing.assert_array_equal(parallel.improved_mask, serial.improved_mask)
+    inverse_refinement._candidate_recipe_index_template.cache_clear()

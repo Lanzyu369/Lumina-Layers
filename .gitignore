@@ -20,26 +20,12 @@ parts/
 sdist/
 var/
 wheels/
+wheelhouse/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
-
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-# Keep our custom spec file
-# *.spec
-
-# PyInstaller build outputs
-build/
-dist/
-LuminaStudio_v*/
-
-# PyInstaller test script
-test_paths.py
 
 # Debug and test files
 run_debug.bat
@@ -49,6 +35,11 @@ test.png
 *.rar
 *.zip
 *.7z
+/.pnpm-store/
+/workshop-sdk/dist-package/
+
+# Material Registry package collections live in the sibling Lumina-materials repo.
+material-registry-packages/
 
 # Old version folders
 Lumina-Layers-*/
@@ -71,7 +62,6 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
-.playwright-cli/
 
 # Translations
 *.mo
@@ -92,6 +82,7 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+docs/private/
 
 # PyBuilder
 .pybuilder/
@@ -158,7 +149,9 @@ celerybeat.pid
 
 # Environments
 .env
+.env.local
 .envrc
+dev/machine_registry.sources.local.json
 .venv
 env/
 venv/
@@ -195,7 +188,7 @@ cython_debug/
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-.idea/
+#.idea/
 
 # Abstra
 # Abstra is an AI-powered process automation framework.
@@ -209,6 +202,7 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file. However, if you prefer, 
 #  you could uncomment the following to ignore the entire vscode folder
 .vscode/
+.vs/
 
 # Ruff stuff:
 .ruff_cache/
@@ -234,20 +228,20 @@ output/*.glb
 output/*.npy
 output/lumina_stats.txt
 output/*
+output/temp/
+output/models/
 
-# Gradio cache directory
-output/.gradio_cache/
 # ==========================================
 # Lumina Studio Specific
 # ==========================================
 
-# 本地个人设置 (包含上次选择�?LUT 路径�?
+# 本地个人设置 (包含上次选择的 LUT 路径)
 user_settings.json
 
 # 批量生成产生的压缩包
 outputs/*.zip
 
-# 核心输出目录 (保留目录结构，忽略具体文�?
+# 核心输出目录 (保留目录结构，忽略具体文件)
 outputs/*.3mf
 outputs/*.glb
 outputs/*.npy
@@ -255,14 +249,13 @@ outputs/batch_*/
 
 # 指标统计文件
 lumina_stats.txt
-+lut-npy163623644576/Custom/*.npy
+lut-npy预设/Custom/*.npy
 .venv312/
 .venv*/
 
 
 # Kiro hooks
 .kiro/hooks/
-lut-npyԤ��/Custom/*.npy
 
 # Kiro documentation and internal files (personal use only)
 .kiro/
@@ -270,12 +263,109 @@ lut-npyԤ��/Custom/*.npy
 # Reference projects (for development reference only)
 LD_ColorLayering-main/
 ChromaStack-main/
+reference/*
+!reference/fatcat-patches/
+!reference/neroued-patches/
 
+# 3MF metadata analysis files (local testing only)
+元数据分析/
+
+# Frontend
 node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/dist-mls/
+
+# Tampermonkey / browser userscripts (local or shelved experiments, not core product)
+scripts/userscripts/
+
+# Performance profiling (ephemeral, machine-specific)
+artifacts/perf_latest.json
+artifacts/
+
+# Local test images at project root (not part of repo)
+/TCT.jpg
+/Giant_Pumpkin.png
+
+# ESLint report (generated)
+frontend/.eslint-report.json
 
 # Temporary assets
 assets/temp_*.npy
+assets/temp_*.json
+assets/temp_*.svg
+assets/workshop-seed/*.lumina-workshop
+assets/workshop-seed/*.lumina-workshop.sha256
 
-# Local temporary files
+# Application runtime logs (machine-local, regenerated each run)
+logs/
+
+# Material solver exhaustive cache (regenerable per palette)
+materials/_solver_cache/
+# Local backup dirs (never commit these — restore from git history instead)
+materials_*_ago/
+materials_backup*/
+**/_backup/
+# AI IDE local config
+.claude/
+.codex/
+.scratch/
+.idea/
+*.3mf
+output/temp/*.svg
+.cursor/
+.windsurf/
 .trae/
-OPTIMIZATION_LOG.md
+.worktrees/
+
+# Cascade browser tool traces and console captures
+.playwright-cli/
+
+# log_quality_check.py transient outputs
+# (only the *_reviewer.json baselines are kept under version control)
+progress/log_audit_fast_*.json
+progress/log_audit_full_*.json
+!progress/log_audit_fast_reviewer.json
+!progress/log_audit_full_reviewer.json
+
+# Bug-report payload dumps
+feedback/
+
+# Ad-hoc gate side-effects in lut-preset/Custom (lut_merge, lut_upload runners)
+lut-preset/Custom/Merged_*.npz
+lut-preset/Custom/synthetic_lut*.json
+
+# Cloud LUT registry local install/runtime sync outputs
+lut-preset/Cloud/
+lut-preset/_sync/luts/
+
+# Cascade per-round working files (historical prompts / PR bodies / patches)
+# Tracked: progress/governance-roadmap.md, progress/round-17-onwards-master-plan.md
+# Ignored: per-round drafting artifacts, archive directory
+progress/round-*-prompt.md
+progress/round-*-pr-body.md
+progress/round-*-patches/
+progress/archive/
+
+# reproducible-bug-reports: local reproduction bundles rebuilt from tickets
+repro_sessions/
+
+# ==========================================
+# Electron development dependencies
+# ==========================================
+electron/node_modules/
+
+# ==========================================
+# 本地参考工程(BambuStudio / OrcaSlicer / ChromaPrint3D 等),不入库
+# ==========================================
+reference-projects/
+
+# macOS Finder metadata
+.DS_Store
+
+
+# MLS — write-password config is committed (default value). Treat the
+# default as a deployment-time placeholder; rotate via env var
+# ``MLS_WRITE_PASSWORD`` or by editing the file directly.
+# MLS — 写入密码配置入库（默认值）。把默认值视作部署期占位，正式环境通过环境变量
+# ``MLS_WRITE_PASSWORD`` 或直接修改文件来轮换。

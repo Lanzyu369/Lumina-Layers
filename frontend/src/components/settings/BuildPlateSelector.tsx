@@ -1,0 +1,135 @@
+import { useRef } from "react";
+import type { KeyboardEvent } from "react";
+
+import type { BuildPlateInfo } from "../../api/types";
+import { useI18n } from "../../i18n/context";
+import HelpDot from "../ui/HelpDot";
+
+interface BuildPlateSelectorProps {
+  label: string;
+  hint: string;
+  plates: BuildPlateInfo[];
+  selectedId: string;
+  onSelect: (plateId: string) => void;
+  language?: "zh" | "en";
+}
+
+export default function BuildPlateSelector({
+  label,
+  hint,
+  plates,
+  selectedId,
+  onSelect,
+  language,
+}: BuildPlateSelectorProps) {
+  const { lang } = useI18n();
+  const resolvedLanguage = language ?? lang;
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const selectedIndex = plates.findIndex((plate) => plate.id === selectedId);
+  const tabStopIndex = selectedIndex >= 0 ? selectedIndex : 0;
+
+  if (plates.length === 0) {
+    return null;
+  }
+
+  const handleKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    currentIndex: number,
+  ) => {
+    let nextIndex: number;
+    switch (event.key) {
+      case "ArrowLeft":
+      case "ArrowUp":
+        nextIndex = (currentIndex - 1 + plates.length) % plates.length;
+        break;
+      case "ArrowRight":
+      case "ArrowDown":
+        nextIndex = (currentIndex + 1) % plates.length;
+        break;
+      case "Home":
+        nextIndex = 0;
+        break;
+      case "End":
+        nextIndex = plates.length - 1;
+        break;
+      default:
+        return;
+    }
+
+    event.preventDefault();
+    optionRefs.current[nextIndex]?.focus();
+    onSelect(plates[nextIndex].id);
+  };
+
+  return (
+    <div
+      data-testid="build-plate-selector"
+      className="border-t panel-divider pt-5"
+    >
+      <div className="mb-3">
+        <h4 className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
+          <span>{label}</span>
+          <HelpDot title={label} description={hint} />
+        </h4>
+      </div>
+      <div
+        role="radiogroup"
+        aria-label={label}
+        data-testid="build-plate-horizontal-strip"
+        className="flex snap-x gap-3 overflow-x-auto px-0.5 pb-2 pt-0.5"
+      >
+        {plates.map((plate, index) => {
+          const selected = plate.id === selectedId;
+          const displayName =
+            resolvedLanguage === "zh" && plate.display_name_zh
+              ? plate.display_name_zh
+              : plate.display_name;
+          return (
+            <button
+              key={plate.id}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              tabIndex={index === tabStopIndex ? 0 : -1}
+              ref={(element) => {
+                optionRefs.current[index] = element;
+              }}
+              onClick={() => onSelect(plate.id)}
+              onKeyDown={(event) => handleKeyDown(event, index)}
+              className={`group relative flex w-[clamp(11rem,14vw,20rem)] shrink-0 snap-start flex-col rounded-[10px] border border-transparent p-3 text-left transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)] ${
+                selected
+                  ? "bg-blue-500/10 text-blue-700 dark:bg-blue-400/10 dark:text-blue-200"
+                  : "bg-[var(--surface-well)] hover:border-[var(--surface-card-outline)] hover:bg-[var(--nav-chip-hover)]"
+              }`}
+            >
+              <span className="flex h-[clamp(6rem,10vw,14rem)] w-full items-center justify-center overflow-hidden rounded-lg px-2 py-2">
+                <img
+                  src={plate.image_url}
+                  alt=""
+                  aria-hidden="true"
+                  className="max-h-full max-w-full object-contain"
+                  loading="lazy"
+                />
+              </span>
+              <span className="mt-2 min-h-10 text-xs font-medium leading-5 text-slate-800 dark:text-slate-100">
+                {displayName}
+              </span>
+              <span
+                aria-hidden="true"
+                className={`absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full border ${
+                  selected
+                    ? "border-blue-500 bg-blue-500 dark:border-blue-400 dark:bg-blue-400"
+                    : "border-slate-300 bg-[var(--surface-panel-strong)] dark:border-slate-600 dark:bg-slate-900"
+                }`}
+              >
+                {selected && (
+                  <span className="h-2 w-2 rounded-full bg-[color:var(--surface-panel-strong)]" />
+                )}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

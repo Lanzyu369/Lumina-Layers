@@ -1,0 +1,48 @@
+﻿{
+  "version": "1.0.0",
+  "generated_at": "2026-04-02T00:00:00Z",
+  "files": [
+    {
+      "path": "images/logo.png",
+      "sha256": "ca57bc9a8c8e6b12edca46b7e90305e58a41399056fc5625141cd915c3dd205a",
+      "kind": "image",
+      "source": "logo.png"
+    },
+    {
+      "path": "luts/2c/Bambulab&PLA&BW&白-黑.npy",
+      "sha256": "5be77143e238d33500bc9e7118f2a52bdf73bc2fa8a1ce52590a6ec08c001b18",
+      "kind": "lut",
+      "source": "lut-preset/Custom/Bambulab&PLA&BW&白-黑.npy"
+    },
+    {
+      "path": "luts/4c/Aliz&PLA&4色RYBW&20260211.npy",
+      "sha256": "1c076fc40c894ca396349af5d2509db8d3128780ffc64905d432de0d140f64fa",
+      "kind": "lut",
+      "source": "lut-preset/Aliz/PLA/4色/Aliz&PLA&4色RYBW&20260211.npy"
+    },
+    {
+      "path": "luts/4c/Aliz&PLA&4色CMYW&20260223.npy",
+      "sha256": "5fb0811a4d7704bded353563efb01c387aa8d2788c004d9dd33218389b98ce65",
+      "kind": "lut",
+      "source": "lut-preset/Aliz/PLA/4色/Aliz&PLA&4色CMYW&20260223.npy"
+    },
+    {
+      "path": "luts/6c/Aliz&PLA&RYBW&红-蓝-黄-绿-白-黑&20260211.npy",
+      "sha256": "06f3da68833d8fa5e734bff5251ca193359b3302e7ef3766915912ce4075a3e7",
+      "kind": "lut",
+      "source": "lut-preset/Aliz/PLA/6色/Aliz&PLA&RYBW&红-蓝-黄-绿-白-黑&20260211.npy"
+    },
+    {
+      "path": "luts/6c/Aliz&PLA&CMYW&品红-青-黄-绿-白-黑&20260223.npy",
+      "sha256": "f2826ba5b04e84de7626264b41193f817156524b63281eb32ce9e76c3d7d81a9",
+      "kind": "lut",
+      "source": "lut-preset/Aliz/PLA/6色/Aliz&PLA&CMYW&品红-青-黄-绿-白-黑&20260223.npy"
+    },
+    {
+      "path": "luts/8c/Aliz&PLA&8色红-黄-蓝-品红-青-白-绿-黑&20260213.npy",
+      "sha256": "aced2f68fba2838820c295e1ef7bba5f0be839618591e90d0f9b793eaf388372",
+      "kind": "lut",
+      "source": "lut-preset/Aliz/PLA/8色/Aliz&PLA&8色红-黄-蓝-品红-青-白-绿-黑&20260213.npy"
+    }
+  ]
+}

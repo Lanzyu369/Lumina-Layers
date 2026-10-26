@@ -6,81 +6,58 @@ All notable changes to Lumina Studio are documented in this file.
 
 ---
 
-## v1.6.9 (2026-05-24)
+## Unreleased
 
-### New LUT Presets
-- Added 彩多屋 (Caiduowu) LUT presets: 4-Color PLA (CMYK, RYBW), 6-Color PLA (CMYWGK, RYBWGK), 8-Color PLA
-- Added 三绿 (Sanlv) PETG 4-Color RYBW preset
-- Added inslogic PLA 4-Color RYBW and 6-Color RYBWGK presets
-- Added 千云端 (QianYunDuan) PLA 4-Color RYBW and 6-Color RYBWGK presets
-- Added KYNIX PETG 4-Color RYBW preset
+### Removed
+- **Docker deployment** - Removed image builds, Compose provisioning, deployment/auto-update scripts, container CI and public-test origin bypasses. Use local installation or the Electron desktop client. Linux native wheels now build directly on the host; see [Runtime support](docs/runtime-support.md).
 
-### Bug Fixes
-- **fix(ui)**: Removed redundant "4-Color" option from color mode selectors — CMYW and RYBW are now directly selected instead of going through a generic "4-Color" intermediary
-- **fix(ui)**: Dropdown menus now auto-close on page scroll, preventing option popups from following page movement
+### Features
+- **Quick Recolor & Similar Recipes** - Color Adjustment gains a new **Similar colors** selection tool (selects every block within a ΔE00 color-difference tolerance) and a quick-recolor card: choose a target color B (type it, or use the eyedropper to click any point on the image) and replace the current selection with it in one click (LUT sources snap B to the nearest printable color), or pick from similar recipes ranked by color difference, each showing its layer stack. LUT sources suggest measured LUT entries (plus predicted recipes when the LUT has a prediction model); material-archive sources suggest colors already in the image. Suggestions whose color already appears in the image are marked "In image".
+- **Selection Workstation (Next-Gen)** - Reworked region selection around a single authoritative server-side selection mask with revision-based optimistic locking. Clicking a block now selects the whole visible matched-colour component instantly (local 4-connected flood-fill with server reconciliation), clicking again deselects, and a new **Selection Brush** paints circular strokes to sweep whole blocks into the selection. Selection boundaries render as Photoshop-style marching ants (white/black dual dashed outline) that stay crisp at any zoom and honour reduced-motion preferences.
+- **Checkpoint-based Undo/Redo** - All colour adjustments (replace, region replace, batch, recipe overrides, free colours, reset) now snapshot server-side before applying; undo/redo restores the exact state including the execution-time selection. Selection gestures are undoable individually and fold into the content operation they precede. "Clear all replacements" is itself undoable, and free-colour toggles are now reversible.
+- **Same-Colour Select Follows Recolour** - After recolouring a block, picking the new colour on the preview continues editing the same upstream colour; "select all same colour" and "pick blocks" now share one selection that survives tool switches.
+- **Extractor Enhancements** - Manufacturer field selects from the material library (with load/empty states), extracted brand names canonicalize to a standard form (incl. the "Aliz" Chinese alias), and 5-colour JSON recipes are preserved through extraction.
+- **Custom Recipe Layer Editing** - Reorder layers by drag-and-drop, apply a recipe by typing colour letters (e.g. `WRYBG`), and see "viewing face" annotations in the hover inspector.
+- **Help & Settings Copy Rework** - All help triggers use a lighter info icon (also available on dropdowns/radio groups), and every basic-setting item gained a plain-language explanation free of algorithm jargon; guidance is codified in `DESIGN.md`.
+- **Desktop Interface Scale** - Settings → General gains an Interface scale choice. The page is laid out on one fixed size, so the share of the window taken by the panels and the top bar no longer follows the screen resolution or the system scaling: 1080p at 125% and 4K at 200% get the same proportions. 100% is the default; seven steps from 80% to 175% are available, Ctrl with plus or minus steps through them, and Ctrl+0 returns to 100% (Command on a Mac). The first window is sized for the screen and starts maximized when needed.
+- **Puzzle Mode Finish Pass** - Added puzzle-layout overlay preview in the converter workspace, a dedicated puzzle settings widget, 2D/3D overlay rendering, recipe import/export support, and combined 3MF assembly for per-piece puzzle generation
+- **Native Source Bundle Selection** - Added legacy/native source switching, native brand + DB bundle selection, native predictive source metadata, and backend catalog/normalization for reference bundles
+- **Single-Stage Workflow** - Added single-stage dataset extraction, Stage A fitting endpoints, store wiring, and UI/test coverage for the single-stage calibration flow
+- **Predictive Recipe Workflow** - Added predictive recipe color search/apply flows, native custom recipe editing, and supporting runtime metadata for predictive/native LUT sources
+- **Reproducible Bug Reports** - Bug reports now land as ticket directories (`feedback/<YYYY-MM>/<ticket_id>/`) carrying the user's original image, generated 3MF / ZIP, LUT snapshot, selected materials bundle, 30-minute action history, 500-entry client log buffer, and a bilingual `index.md` / `summary.txt`. Run `python scripts/load_bug_repro.py <ticket_id>` to rebuild the session locally without guessing what the user did.
 
-### Refactoring
-- **refactor(ui)**: Renamed "Advanced" tab to "Software Settings" and moved it to the last position; removed "About" tab; relocated generation statistics into the Settings page
+### Behavior Changes
+- **Legacy LUT selection stays multi-choice** - The traditional LUT database keeps its same-group multi-select checkbox list.
+- **Selection tools regrouped** - The palette toolbar now offers "Same colour / Pick blocks / Selection brush"; the former "Single" mode entry was removed (its 3D paths remain internally).
 
-### Chores
-- **chore**: Removed React 2.0 frontend code (frontend/) from the 1.6 main branch
+### Fixes
+- **Selection reliability** - Fixed stale-response races that could pick the wrong block or resurrect cleared selections; dragging no longer misfires as a click; preview no longer flashes while region highlights load.
+- **Undo/redo consistency** - Undoing a selection gesture re-publishes the restored mask so recipe/region flows keep working (previously a 409 "No selected regions available for recipe override").
+- **Puzzle Preview Reliability** - Fixed stale failure races that could clear a newer successful overlay, and allowed same-parameter puzzle overlay retries after transient failures
+- **Puzzle Import Normalization** - Imported recipes now normalize puzzle-vs-large-format and puzzle-vs-keychain-loop conflicts, and clear the reserved back-label engraving flag during import
+- **Combined Puzzle 3MF Metadata** - Combined exports now rebuild slice metadata, filament-sequence metadata, and package preview images instead of inheriting stale first-piece metadata
+- **Puzzle Export Boundary Accuracy** - Puzzle exports now preserve crop-local polygon boundaries through meshing, disable puzzle-only material dilation, and keep coating/outline geometry aligned to the authoritative piece silhouette to reduce XY overlap and oversized tabs
+- **SVG Puzzle Piece Stability** - SVG puzzle generation now aligns per-piece helper rasters and boundary JSON to the worker's exact rebuild grid, and rounds float-epsilon piece widths instead of truncating them to avoid empty meshes
+- **Unsupported Back Engraving Guard** - Back-label engraving is now treated as reserved and rejected during generation instead of silently exporting without geometry changes
+- **Smoke Coverage** - Added puzzle backend/frontend coverage to the fast smoke gate
+- **Native/Puzzle Contract Hardening** - Restored puzzle response summaries, reconnected puzzle generation to the frontend generate path, forwarded fridge-magnet payloads, and normalized recipe overrides across preview/apply/generate/large-format flows
+- **Preview and Session Safety** - Cleared stale preview sessions when source selections change, prevented native bundle generate from reusing legacy sessions, and tightened pre-session temp cleanup for native preview failures
+- **Governance and Encoding Cleanup** - Removed new catch-all exception regressions in governed paths, fixed the vector-engine false-positive print() governance trigger, and cleaned real mojibake from `.gitignore`
+- **Single-Stage ZIP Safety** - Hardened ZIP extraction against path traversal and made malformed ZIP uploads return deterministic 422 responses with pre-session temp-file cleanup
 
----
+## v1.6.4 (2026-03-20)
 
-## v1.6.8 (2026-04-30)
+### Improvements (PR #159 by @sandboxdream)
+- **Rendering Performance** - Optimized 3D scene rendering and reduced unnecessary re-renders
+- **Panel UI Refactor** - Unified slate color scheme, rounded card layout, and `panelPrimitives` component library (`cx`, `PanelIntro`, `StatusBanner`)
+- **Settings Reliability** - Async retry mechanism (`retryAsync`) for settings loading; legacy slicer/printer option ID normalization (`settingsOptionIds`)
+- **Slider Enhancement** - New `displayDecimals` and `minInputWidthCh` props for finer display control
+- **Tooltip Cleanup** - Removed inline tooltip from Checkbox and Slider components for cleaner UI
+- **Temp File Cleanup** - Auto-detect colors endpoint now properly cleans up temporary files
+- **Project Maintenance** - Updated AGENTS.md guidelines
 
-### Bug Fixes
-- **fix(color)**: Distinguished CMYW and RYBW as separate color subtypes in `infer_color_mode()` and `ColorSystem.get()` — CMYW LUTs were previously misidentified as RYBW, causing wrong slot names, wrong filament colors, and wrong corner labels in 3MF export
-- **fix(color)**: Preserved CMYW/RYBW subtype through the full pipeline: LUT detection → config lookup → API schemas → Gradio UI → 3MF export, ensuring Cyan/Magenta/Yellow slots are used instead of Red/Blue/Yellow
-- **fix(3mf)**: Fixed `bambu_3mf_writer.py` overwriting CMYW/RYBW to generic "4-Color" mode, which always fell back to RYBW color mapping
-- **fix(ui)**: Added CMYW and RYBW as distinct color mode options in all Gradio Radio components (converter, calibration, extractor tabs)
-- **fix(ui)**: Fixed `generate_board_wrapper` in Gradio UI always passing "RYBW" to calibration generator regardless of selected mode
-- **fix(ui)**: Fixed `<label htmlFor>` not matching any element `id` in Dropdown and Slider React components
-- **fix(color)**: Updated Cyan/Magenta/Yellow filament colors to pure RGB values (`#00FFFF`/`#FF00FF`/`#FFFF00`) across CMYW, 6-Color, and 8-Color modes for accurate 3MF rendering
-
-### Changes
-- Added `CMYW` and `RYBW` enum values to `CalibrationColorMode`, `ColorMode` (backend schemas and frontend TypeScript types)
-- Added CMYW/RYBW routing entries in calibration API router and test routing maps
-
----
-
-## v1.6.7 (2026-03-29)
-
-### Bug Fixes
-- **fix(lut)**: Fixed critical bug where 6-Color RYBWGK LUT users (e.g. 瑞贝思) received wrong filament color assignments in BambuStudio AMS — the 3MF was hard-coded with CMYWGK slot preview colors (Cyan/Magenta/Green/Yellow) instead of the actual calibrated filament colors (Red/Yellow/Blue/Green), causing users to load the wrong filament in each slot and producing incorrect print results
-- **fix(lut)**: Preview colors in generated 3MF files now derive from the LUT's own pure-color calibration entries (`(i,i,i,i,i)` stacks) rather than the static `ColorSystem` defaults, making them accurate for any 4-Color, 6-Color, or 8-Color calibration regardless of filament brand or color variant
-
----
-
-## v1.6.6 (2026-03-29)
-
-### Bug Fixes
-- **fix(lut)**: Fixed 6-Color LUTs with generic filenames (e.g. `lumina_lut (8).npy`) being misidentified as 4-Color mode, causing incorrect layer stacking and inverted print output
-- **fix(lut)**: Fixed 6-Color RYBWGK LUTs with "RYBW" in filename being misidentified as 4-Color mode due to keyword matching taking precedence over file size detection
-- **fix(recipe)**: Fixed color recipe report displaying bottom-to-top and top-to-bottom layer indices in reversed order
-
-### Improvements
-- **feat(ui)**: Added filament color dot badges next to LUT dropdown in both Gradio and React frontends — shows actual filament colors for the detected mode (4/6/8-Color, Merged, BW)
-- **fix(ui)**: Updated color dot values to match actual filament hex values from config (Magenta `#EC008C`, Red `#DC143C`, etc.)
-- **refactor(lut)**: Reordered `infer_color_mode` detection priority: explicit numeric keywords → file size → color-system keywords, preventing RYBWGK from matching RYBW (4-Color)
-
----
-
-## v1.6.5 (2026-03-25)
-
-### Improvements
-- Added a visible "✕ Back" button at the top-left corner of the fullscreen 3D preview, allowing users to easily exit fullscreen mode (previously, the only exit was hidden in the small 2D thumbnail at the bottom-right corner)
-
----
-
-## v1.6.4 (2026-03-12)
-
-### Bug Fixes
-- Fixed SVG mode "separate backing plate" checkbox being ignored; backing plate was always exported as a separate object regardless of setting
-- Fixed SVG mode backing plate color appearing gray instead of white (Board slot now correctly falls back to white when not matched in color system)
-- Fixed SVG mode backing plate and adjacent color layer gaps/through-cracks: root cause was v1.6.3 geometry clipping independently calling `simplify()` on each shape, causing shared boundary coordinate misalignment; replaced with `set_precision(grid_size=1e-6)` to snap all shape vertices to the same precision grid, eliminating gaps at the source
-- Fixed converter page width/height linkage not triggering on the first manual Enter after flow "select image A -> generate -> remove -> select image B" (root cause: `lastValue` baseline was not synchronized after input remount)
-- Fixed manual width/height integer input being overwritten to decimal values (e.g. `240 -> 240.1`): linkage output is now normalized to integers and aligned with `step=1`
+### Contributors
+- Thanks to [@sandboxdream](https://github.com/sandboxdream) for the comprehensive UI/UX improvements and settings reliability enhancements in PR [#159](https://github.com/MOVIBALE/Lumina-Layers/pull/159) 🎉
 
 ---
 
@@ -116,28 +93,26 @@ All notable changes to Lumina Studio are documented in this file.
 - Fixed missing import for safe_fix_3mf_names in BW calibration generation
 - Fixed coating/outline compatibility when both features enabled simultaneously
 - Fixed relief/cloisonné mutual exclusion with auto-disable and info toast
-- Fixed preview click coordinate transformation for Gradio 6.0
+- Fixed preview click coordinate transformation
 - Fixed 5-Color high-fidelity top/bottom and left/right orientation
 - Fixed 5-Color Extended model orientation and SVG layer count
 - Disabled 2.5D relief for 5-Color Extended mode
 - Fixed 2.5D relief mode state leaks, hex key mismatch and parameter clamping
 - Fixed SVG subpath handling
 - Fixed color_recipe_path return value inconsistency after main branch merge
-- Removed svg_to_mesh internal progress calls to avoid Gradio event loop GIL interference
+- Removed svg_to_mesh internal progress calls to avoid UI event loop GIL interference
 - Removed redundant preview pre-generation in generate_with_auto_preview
 - Fixed HEIC format support: frontend display, upload file_types, passback conversion
 - Fixed cached 3MF invalidation when parameters change
 - Fixed ModelingMode None crash on image upload
-- Unified 8-color stacks asset path resolution for PyInstaller
+- Unified 8-color stacks asset path resolution
 - Restored ZIP_DEFLATED compression and indent alignment
 - Removed leftover conflict marker in bambu_3mf_writer.py
-- Removed file_types from gr.Image calls (incompatible with Gradio 6.5.1)
-- Fixed SVG upload crash due to Gradio base64 preprocessing bug
+- Fixed SVG upload crash during base64 preprocessing
 - Fixed SVG geometry crop: replaced pixel-based Dual-Pass Crop with geometry-based bounds crop
 - Fixed SVG even-odd fill rule when combining subpaths
-- Fixed icon.ico regenerated as square sizes and bundled in PyInstaller
+- Fixed icon.ico dimensions
 - Fixed slicer launch return count mismatch (5 outputs)
-- Fixed bambu_config_template.json not bundled in PyInstaller and artifact; fixed frozen path resolution
 - Removed unused create_5color_combination_tab and duplicate helper functions from layout_new.py
 
 ### Features (Post-Release)
@@ -220,7 +195,7 @@ All notable changes to Lumina Studio are documented in this file.
 
 ### Bug Fixes
 - Fixed black background in vector mode 2D preview
-- Fixed preview click coordinate transformation for Gradio 6.0
+- Fixed preview click coordinate transformation
 - Added missing colormath library to requirements
 
 ### Other
@@ -283,7 +258,6 @@ All notable changes to Lumina Studio are documented in this file.
 - **Modeling Mode Consolidation** - High-Fidelity mode replaces Vector & Woodblock modes; two unified modes (High-Fidelity / Pixel Art)
 - **Dynamic Language Toggle** - Click language button to switch Chinese/English; full UI translation without page reload
 - **Output Directory** - Save output files to local project output directory instead of C: temp
-- **Gradio Temp Directory Redirect** - Redirected Gradio temp directory to project directory
 
 ### Bug Fixes
 - Fixed 3MF naming issue when colors are missing; use local output dir
@@ -304,7 +278,6 @@ All notable changes to Lumina Studio are documented in this file.
 - **Auto Port Selection** - Automatically selects available port to avoid conflicts
 
 ### Bug Fixes
-- Fixed Gradio 6.0+ compatibility
 - Fixed macOS 26812 trace trap memory issue
 - Fixed cumulative generation statistics font color
 - Fixed language switch button styling

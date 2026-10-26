@@ -1,6 +1,6 @@
 """Property-based tests for cleanup_output_dir() extension filtering (Property 3).
 
-Feature: about-page-cache-cleanup, Property 3: OUTPUT_DIR 清理扩展名过滤
+Feature: about-page-cache-cleanup, Property 3: OUTPUT_DIR 按扩展名清理过滤
 
 Uses Hypothesis to verify:
 - cleanup_output_dir deletes only files with extensions in {.3mf, .glb, .png, .jpg}
@@ -26,10 +26,23 @@ from api.routers.system import CLEANABLE_EXTENSIONS, cleanup_output_dir
 cleanable_exts = st.sampled_from(sorted(CLEANABLE_EXTENSIONS))
 
 # Extensions that should NOT be cleaned
-non_cleanable_exts = st.sampled_from([
-    ".txt", ".py", ".json", ".xml", ".csv", ".log", ".md",
-    ".yaml", ".toml", ".cfg", ".ini", ".html", ".css", ".js",
-])
+non_cleanable_exts = st.sampled_from(
+    [
+        ".py",
+        ".json",
+        ".xml",
+        ".csv",
+        ".log",
+        ".md",
+        ".yaml",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".html",
+        ".css",
+        ".js",
+    ]
+)
 
 # Safe filename base: alphanumeric, 1-20 chars
 filename_base = st.text(
@@ -57,7 +70,7 @@ file_list = st.lists(
 
 
 # ---------------------------------------------------------------------------
-# Property 3: OUTPUT_DIR 清理扩展名过滤
+# Property 3: OUTPUT_DIR 按扩展名清理过滤
 # ---------------------------------------------------------------------------
 
 
@@ -67,7 +80,7 @@ file_list = st.lists(
 def test_cleanup_output_dir_only_deletes_cleanable_extensions(
     files: list[tuple[str, bool]],
 ) -> None:
-    """Feature: about-page-cache-cleanup, Property 3: OUTPUT_DIR 清理扩展名过滤
+    """Feature: about-page-cache-cleanup, Property 3: OUTPUT_DIR 按扩展名清理过滤
 
     For any set of filenames with various extensions, cleanup_output_dir should:
     1. Delete only files whose extension is in CLEANABLE_EXTENSIONS

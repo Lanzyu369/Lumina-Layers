@@ -3,409 +3,395 @@ Lumina Studio - Mesh Generation Strategies (Refactored v2.2)
 Mesh generation strategy module - Refactored version
 
 ARCHITECTURE:
-- High-Fidelity Mode: RLE-based solid extrusion with morphological dilation
-- Pixel Art Mode: Legacy voxel mesher (blocky aesthetic with gaps)
+- High-Fidelity Mode: exact labeled surfaces with optional material dilation
+- Pixel Art Mode: exact labeled surfaces without material dilation
 
-PERFORMANCE: Optimized for 100k+ faces with instant generation.
-
-CHANGELOG v2.2:
-- Vectorized _greedy_rect_merge using NumPy operations
-- np.diff + np.where replaces pixel-by-pixel horizontal scanning
-- np.all on slices replaces inner for-loop for vertical expansion
-- ~10-50x faster for large images (1000x1000+)
-
-CHANGELOG v2.1:
-- Added morphological dilation to HighFidelityMesher to fix thin wall issues
-- Ensures all features are printable (>0.4mm nozzle width)
-- Eliminates micro-gaps between adjacent color regions
+TOPOLOGY: Same-material cells share one exposed surface; edge/point-only
+contacts retain independent closed index domains. Puzzle boundaries are
+sampled onto that same printable pixel lattice before meshing; there is no
+secondary polygon-extrusion path.
 """
 
+import logging
 from abc import ABC, abstractmethod
-import numpy as np
+
 import cv2
-import trimesh
+import numpy as np
+from shapely import contains_xy
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
+from shapely.ops import unary_union
+
 from config import ModelingMode
+from core.layered_meshing import (
+    build_labeled_surface_mesh,
+    group_identical_material_layers,
+)
 
-try:
-    import numba
-    HAS_NUMBA = True
-except ImportError:
-    numba = None
-    HAS_NUMBA = False
+log = logging.getLogger(__name__)
 
 
-if HAS_NUMBA:
-    @numba.njit(cache=True)
-    def _greedy_rect_numba(mask):
-        h, w = mask.shape
-        processed = np.zeros((h, w), dtype=np.uint8)
-        rects = np.empty((h * w, 4), dtype=np.int32)
-        count = 0
-
-        for y in range(h):
-            x = 0
-            while x < w:
-                if mask[y, x] and processed[y, x] == 0:
-                    x_start = x
-                    x_end = x + 1
-                    while x_end < w and mask[y, x_end] and processed[y, x_end] == 0:
-                        x_end += 1
-
-                    y_end = y + 1
-                    while y_end < h:
-                        valid = 1
-                        for xx in range(x_start, x_end):
-                            if (not mask[y_end, xx]) or processed[y_end, xx] != 0:
-                                valid = 0
-                                break
-                        if valid == 0:
-                            break
-                        y_end += 1
-
-                    for yy in range(y, y_end):
-                        for xx in range(x_start, x_end):
-                            processed[yy, xx] = 1
-
-                    rects[count, 0] = x_start
-                    rects[count, 1] = y
-                    rects[count, 2] = x_end
-                    rects[count, 3] = y_end
-                    count += 1
-                    x = x_end
-                else:
-                    x += 1
-
-        return rects[:count]
-else:
-    def _greedy_rect_numba(mask):
+def _normalize_polygonal_geometry(geometry):
+    """Normalize polygonal geometry and drop non-polygon parts.
+    规范化多边形几何并丢弃非多边形部分。
+    """
+    if geometry is None or getattr(geometry, "is_empty", True):
         return None
+
+    candidate = geometry.buffer(0) if not geometry.is_valid else geometry
+    if candidate.is_empty:
+        return None
+    if isinstance(candidate, Polygon):
+        return candidate
+    if isinstance(candidate, MultiPolygon):
+        return candidate
+    if isinstance(candidate, GeometryCollection):
+        parts = [
+            part
+            for part in candidate.geoms
+            if isinstance(part, (Polygon, MultiPolygon)) and not part.is_empty
+        ]
+        if not parts:
+            return None
+        return _normalize_polygonal_geometry(unary_union(parts))
+    return None
+
+
+def rasterize_boundary_geometry(
+    geometry,
+    *,
+    height_px: int,
+    width_px: int,
+) -> np.ndarray:
+    """Sample a puzzle boundary onto the printable cell lattice.
+
+    将拼图边界按像素单元中心采样到统一可打印网格。
+
+    The converter already runs puzzle pieces at a fixed pixels-per-millimetre
+    resolution finer than the supported nozzle widths. Keeping the boundary
+    on this lattice lets all raster modes use one by-construction mesher and
+    removes the former polygon extrusion/topology-repair branch entirely.
+
+    Args:
+        geometry: Polygonal boundary in y-down pixel coordinates.
+            （y 向下像素坐标中的多边形边界）
+        height_px: Output mask height.（输出掩码高度）
+        width_px: Output mask width.（输出掩码宽度）
+
+    Returns:
+        Boolean ``(height_px, width_px)`` cell mask.（布尔单元掩码）
+    """
+
+    height_px = int(height_px)
+    width_px = int(width_px)
+    if height_px <= 0 or width_px <= 0:
+        raise ValueError("Boundary raster dimensions must be positive")
+    normalized = _normalize_polygonal_geometry(geometry)
+    if normalized is None:
+        return np.zeros((height_px, width_px), dtype=bool)
+    x_centers = np.arange(width_px, dtype=np.float64) + 0.5
+    y_centers = np.arange(height_px, dtype=np.float64) + 0.5
+    return np.asarray(
+        contains_xy(normalized, x_centers[None, :], y_centers[:, None]),
+        dtype=bool,
+    )
+
+
+def _mask_volume_from_layer_groups(layer_groups, shape):
+    """Expand merged masks into an exact boolean Z/Y/X volume.
+    将合并后的掩码组还原为精确的 Z/Y/X 布尔体。
+    """
+
+    mask_volume = np.zeros(shape, dtype=bool)
+    for start_z, end_z, mask in layer_groups:
+        mask_volume[start_z : end_z + 1] = mask
+    return mask_volume
+
+
+def _dilate_mask_preserving_enclosed_voids(mask, kernel):
+    """Dilate into exterior background while keeping enclosed voids open."""
+    if not np.any(mask):
+        return mask
+
+    mask_uint8 = mask.astype(np.uint8)
+    dilated_mask = cv2.dilate(mask_uint8, kernel, iterations=1).astype(bool)
+
+    background = (~mask).astype(np.uint8)
+    if not np.any(background):
+        return dilated_mask
+
+    _, labels = cv2.connectedComponents(background, connectivity=8)
+    border_labels = np.unique(
+        np.concatenate((labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]))
+    )
+    exterior_background = np.isin(labels, border_labels)
+    enclosed_voids = background.astype(bool) & ~exterior_background
+    if not np.any(enclosed_voids):
+        return dilated_mask
+
+    return dilated_mask & ~enclosed_voids
 
 
 class BaseMesher(ABC):
     """Mesh generator abstract base class"""
-    
+
     @abstractmethod
-    def generate_mesh(self, voxel_matrix, mat_id, height_px):
+    def generate_mesh(self, voxel_matrix, mat_id, height_px, *, z_edges: np.ndarray | None = None):
         """
         Generate 3D mesh for specified material
-        
+
         Args:
             voxel_matrix: (Z, H, W) voxel matrix
             mat_id: Material ID (0-7 for regular materials, -2 for backing layer)
             height_px: Image height (pixels)
-        
+            z_edges: Optional Z+1 integer layer boundaries for this volume.
+                Omit for dense volumes; never reused by a later mesh call.
+
         Returns:
             trimesh.Trimesh or None
         """
         pass
-    
-    def generate_backing_mesh(self, voxel_matrix, height_px):
+
+    def generate_backing_mesh(self, voxel_matrix, height_px, *, z_edges: np.ndarray | None = None):
         """
         Generate backing mesh (convenience method)
-        
+
         Args:
             voxel_matrix: (Z, H, W) voxel matrix
             height_px: Image height (pixels)
-        
+            z_edges: Optional Z+1 integer layer boundaries for this volume.
+
         Returns:
             trimesh.Trimesh or None
         """
-        return self.generate_mesh(voxel_matrix, mat_id=-2, height_px=height_px)
-
+        kwargs = {"z_edges": z_edges} if z_edges is not None else {}
+        return self.generate_mesh(voxel_matrix, mat_id=-2, height_px=height_px, **kwargs)
 
 class VoxelMesher(BaseMesher):
     """
     Pixel art mode mesh generator
-    Generates blocky voxel mesh (preserves gap aesthetic)
-    
-    LEGACY MODE: Preserves the "blocky with gaps" aesthetic for pixel art.
+    Builds one exact exposed surface from the material label volume.
     """
-    
-    def generate_mesh(self, voxel_matrix, mat_id, height_px):
-        """
-        Generate pixel mode mesh (Legacy Voxel Mode)
-        
-        Supports both regular materials (0-7) and backing layer (-2).
-        """
-        vertices, faces = [], []
-        shrink = 0.05  # Preserve gaps for blocky aesthetic
-        
-        for z in range(voxel_matrix.shape[0]):
-            z_bottom, z_top = z, z + 1
-            mask = (voxel_matrix[z] == mat_id)
-            if not np.any(mask):
-                continue
-            
-            for y in range(height_px):
-                world_y = (height_px - 1 - y)
-                row = mask[y]
-                padded = np.pad(row, (1, 1), mode='constant')
-                diff = np.diff(padded.astype(int))
-                starts, ends = np.where(diff == 1)[0], np.where(diff == -1)[0]
-                
-                for start, end in zip(starts, ends):
-                    x0, x1 = start + shrink, end - shrink
-                    y0, y1 = world_y + shrink, world_y + 1 - shrink
-                    
-                    base_idx = len(vertices)
-                    vertices.extend([
-                        [x0, y0, z_bottom], [x1, y0, z_bottom], 
-                        [x1, y1, z_bottom], [x0, y1, z_bottom],
-                        [x0, y0, z_top], [x1, y0, z_top], 
-                        [x1, y1, z_top], [x0, y1, z_top]
-                    ])
-                    cube_faces = [
-                        [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
-                        [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5],
-                        [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]
-                    ]
-                    faces.extend([[v + base_idx for v in f] for f in cube_faces])
-        
-        if not vertices:
-            return None
-        
-        mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-        mesh.merge_vertices()
-        mesh.update_faces(mesh.unique_faces())
-        
-        mesh_type = "Backing" if mat_id == -2 else f"Mat ID {mat_id}"
-        print(f"[VOXEL_MESHER] {mesh_type}: Generated {len(mesh.vertices):,} verts, {len(mesh.faces):,} faces")
-        
-        return mesh
 
+    def generate_mesh(self, voxel_matrix, mat_id, height_px, *, z_edges: np.ndarray | None = None):
+        """Generate a pixel-mode exact labeled surface.
+        生成像素模式的精确标签表面。
+
+        Args:
+            voxel_matrix (np.ndarray): (Z, H, W) int voxel matrix.
+            mat_id (int): Material ID (0-7 or -2 for backing).
+            height_px (int): Image height in pixels.
+            z_edges: Optional Z+1 integer layer boundaries for this volume.
+
+        Returns:
+            trimesh.Trimesh or None
+        """
+        mesh_type = "Backing" if mat_id == -2 else f"Mat ID {mat_id}"
+        mesh = build_labeled_surface_mesh(
+            np.asarray(voxel_matrix),
+            material_id=mat_id,
+            height_px=height_px,
+            **({"z_edges": z_edges} if z_edges is not None else {}),
+        )
+        if mesh is not None:
+            patch_count = int(
+                mesh.metadata["layered_mesh_stats"]["merged_patch_count"]
+            )
+            log.info(
+                "%s: built exact surface from %s patches",
+                mesh_type,
+                patch_count,
+                extra={
+                    "event": "voxel_mesher_mesh_built",
+                    "mesh_type": mesh_type,
+                    "patch_count": patch_count,
+                    "vertex_count": len(mesh.vertices),
+                    "face_count": len(mesh.faces),
+                },
+            )
+        return mesh
 
 class HighFidelityMesher(BaseMesher):
     """
     High-fidelity mode mesh generator
-    Uses Greedy Rectangle Merging algorithm to generate optimized, watertight 3D mesh
-    
+    Builds an optimized closed surface after optional material dilation.
+
     ALGORITHM:
     1. Apply morphological dilation to thicken thin features
-    2. Vertical layer compression (merge identical Z-layers)
-    3. Greedy rectangle merging (find maximal rectangles in 2D mask)
-    4. Generate ONE box per rectangle (instead of per-pixel-row)
-    
+    2. Reconstruct the effective labeled volume
+    3. Emit only exposed faces and merge coplanar cells
+    4. Preserve independent index domains for edge/point-only contacts
+
     OPTIMIZATION:
-    - Old method: 1 box per horizontal run → ~100k faces for 200x200 image
-    - New method: 1 box per maximal rectangle → ~5k-10k faces (80-95% reduction)
-    
+    - Removes internal faces between same-material cells
+    - Triangulates split rectangular boundaries without extra center vertices
+
     GEOMETRY:
     - Dilation: Expands features by ~0.1-0.15mm to ensure printability
-    - Perfect edge-to-edge contact (watertight)
+    - Exact edge-to-edge topology on an integer lattice
     - Vertices match pixel coordinates exactly
     """
-    
-    def generate_mesh(self, voxel_matrix, mat_id, height_px):
-        """
-        Generate high-fidelity mode mesh (Greedy Rectangle Merging)
-        
-        Supports both regular materials (0-7) and backing layer (-2).
-        
-        Returns a watertight mesh with optimized face count.
-        """
-        # Step 1: Vertical layer compression with dilation
-        layer_groups = self._merge_layers_with_dilation(voxel_matrix, mat_id)
-        
-        if not layer_groups:
-            return None
-        
-        mesh_type = "Backing" if mat_id == -2 else f"Mat ID {mat_id}"
-        print(f"[HIGH_FIDELITY] {mesh_type}: Merged {voxel_matrix.shape[0]} layers → {len(layer_groups)} groups")
-        
-        layer_rectangles = []
-        total_rects = 0
-        for start_z, end_z, mask in layer_groups:
-            rectangles = self._greedy_rect_merge(mask, height_px)
-            if not rectangles:
-                continue
-            total_rects += len(rectangles)
-            layer_rectangles.append((float(start_z), float(end_z + 1), rectangles))
 
-        if total_rects == 0:
-            return None
+    def __init__(self, disable_material_dilation: bool = False, boundary_geometry=None):
+        """Create a configurable high-fidelity mesher.
+        创建可配置的高保真 mesher。
 
-        all_vertices = np.empty((total_rects * 8, 3), dtype=np.float64)
-        all_faces = np.empty((total_rects * 12, 3), dtype=np.int64)
-
-        vertex_template = np.array([
-            [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
-            [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]
-        ], dtype=np.float64)
-        face_template = np.array([
-            [0, 2, 1], [0, 3, 2],
-            [4, 5, 6], [4, 6, 7],
-            [0, 1, 5], [0, 5, 4],
-            [1, 2, 6], [1, 6, 5],
-            [2, 3, 7], [2, 7, 6],
-            [3, 0, 4], [3, 4, 7]
-        ], dtype=np.int64)
-
-        rect_idx = 0
-        for z_bottom, z_top, rectangles in layer_rectangles:
-            rect_arr = np.asarray(rectangles, dtype=np.float64)
-            x0 = rect_arr[:, 0]
-            y0 = rect_arr[:, 1]
-            x1 = rect_arr[:, 2]
-            y1 = rect_arr[:, 3]
-            world_y0 = height_px - y1
-            world_y1 = height_px - y0
-            n = rect_arr.shape[0]
-
-            base = np.empty((n, 8, 3), dtype=np.float64)
-            base[:, :, :] = vertex_template
-            base[:, 0, 0] = x0
-            base[:, 0, 1] = world_y0
-            base[:, 0, 2] = z_bottom
-            base[:, 1, 0] = x1
-            base[:, 1, 1] = world_y0
-            base[:, 1, 2] = z_bottom
-            base[:, 2, 0] = x1
-            base[:, 2, 1] = world_y1
-            base[:, 2, 2] = z_bottom
-            base[:, 3, 0] = x0
-            base[:, 3, 1] = world_y1
-            base[:, 3, 2] = z_bottom
-            base[:, 4, 0] = x0
-            base[:, 4, 1] = world_y0
-            base[:, 4, 2] = z_top
-            base[:, 5, 0] = x1
-            base[:, 5, 1] = world_y0
-            base[:, 5, 2] = z_top
-            base[:, 6, 0] = x1
-            base[:, 6, 1] = world_y1
-            base[:, 6, 2] = z_top
-            base[:, 7, 0] = x0
-            base[:, 7, 1] = world_y1
-            base[:, 7, 2] = z_top
-
-            v_start = rect_idx * 8
-            v_end = (rect_idx + n) * 8
-            all_vertices[v_start:v_end] = base.reshape(-1, 3)
-
-            offsets = (np.arange(n, dtype=np.int64) * 8 + v_start).reshape(-1, 1, 1)
-            faces = face_template.reshape(1, 12, 3) + offsets
-            f_start = rect_idx * 12
-            f_end = (rect_idx + n) * 12
-            all_faces[f_start:f_end] = faces.reshape(-1, 3)
-            rect_idx += n
-
-        mesh = trimesh.Trimesh(vertices=all_vertices, faces=all_faces)
-        mesh.merge_vertices()
-        mesh.update_faces(mesh.unique_faces())
-        
-        print(f"[HIGH_FIDELITY] {mesh_type}: {total_rects} rects → {len(mesh.vertices):,} verts, {len(mesh.faces):,} faces")
-        
-        return mesh
-    
-    def _greedy_rect_merge(self, mask, height_px):
-        """
-        Greedy rectangle merging algorithm (Vectorized Version)
-        
-        Finds maximal rectangles to cover all True pixels in the mask.
-        
-        OPTIMIZATION v2.2:
-        - Uses NumPy vectorized operations instead of pixel-by-pixel loops
-        - np.diff + np.where to find all run-starts/ends in one operation
-        - np.all on slices to check row validity (replaces inner for-loop)
-        - ~10-50x faster than the original implementation
-        
-        Algorithm:
-        1. For each row, find all horizontal "runs" using diff (vectorized)
-        2. For each run, expand down using slice comparison (vectorized)
-        3. Mark rectangle as processed
-        4. Repeat until all pixels processed
-        
         Args:
-            mask: 2D boolean array (H, W)
-            height_px: Image height
-        
-        Returns:
-            List of rectangles: [(x0, y0, x1, y1), ...]
-            Coordinates are in pixel space (not world space)
+            disable_material_dilation: If True, skip per-material dilation.
+                (若为 True，则跳过每材质膨胀)
+            boundary_geometry: Optional polygonal boundary in pixel space.
+                (可选的像素空间 polygon 边界)
         """
-        if HAS_NUMBA:
-            rects = _greedy_rect_numba(mask)
-            return [
-                (float(r[0]), float(r[1]), float(r[2]), float(r[3]))
-                for r in rects
-            ]
+        self.disable_material_dilation = bool(disable_material_dilation)
+        self.boundary_geometry = _normalize_polygonal_geometry(boundary_geometry)
 
-        h, w = mask.shape
-        processed = np.zeros_like(mask, dtype=bool)
-        rectangles = []
-        
-        for y in range(h):
-            # 🚀 Vectorized: Get unprocessed pixels in this row
-            row_valid = mask[y] & ~processed[y]
-            
-            # Skip if no valid pixels in this row
-            if not np.any(row_valid):
-                continue
-            
-            # 🚀 Vectorized: Find all run starts and ends in one operation
-            # Pad with False to detect edges at boundaries
-            padded = np.concatenate([[False], row_valid, [False]])
-            diff = np.diff(padded.astype(np.int8))
-            starts = np.where(diff == 1)[0]   # Run start positions
-            ends = np.where(diff == -1)[0]    # Run end positions
-            
-            # Process each run
-            for x_start, x_end in zip(starts, ends):
-                # Skip if already processed (can happen due to previous rectangles)
-                if processed[y, x_start]:
-                    continue
-                
-                # 🚀 Vectorized: Expand down using slice comparison
-                y_end = y + 1
-                while y_end < h:
-                    # Check entire row segment at once using np.all
-                    segment_mask = mask[y_end, x_start:x_end]
-                    segment_proc = processed[y_end, x_start:x_end]
-                    
-                    # Row is valid only if ALL pixels are True AND none are processed
-                    if not (np.all(segment_mask) and not np.any(segment_proc)):
-                        break
-                    y_end += 1
-                
-                # Mark as processed (slice assignment is already vectorized)
-                processed[y:y_end, x_start:x_end] = True
-                
-                # Add rectangle
-                rectangles.append((float(x_start), float(y), float(x_end), float(y_end)))
-        
-        return rectangles
-    
+    def generate_mesh(
+        self,
+        voxel_matrix,
+        mat_id,
+        height_px,
+        boundary_geometry=None,
+        disable_material_dilation=None,
+        *,
+        z_edges: np.ndarray | None = None,
+    ):
+        """Generate a high-fidelity exact surface with optional dilation.
+        生成可选膨胀的高保真精确表面。
+
+        Args:
+            voxel_matrix (np.ndarray): (Z, H, W) int voxel matrix.
+            mat_id (int): Material ID (0-7 or -2 for backing).
+            height_px (int): Image height in pixels.
+            z_edges: Optional Z+1 integer layer boundaries for this volume.
+
+        Returns:
+            trimesh.Trimesh or None
+        """
+        boundary_geometry = (
+            self.boundary_geometry
+            if boundary_geometry is None
+            else _normalize_polygonal_geometry(boundary_geometry)
+        )
+        use_no_dilation = (
+            self.disable_material_dilation
+            if disable_material_dilation is None
+            else bool(disable_material_dilation)
+        )
+        boundary_enabled = boundary_geometry is not None
+
+        if use_no_dilation and not boundary_enabled:
+            layer_groups = None
+        elif use_no_dilation:
+            layer_groups = group_identical_material_layers(voxel_matrix, mat_id)
+        else:
+            layer_groups = self._merge_layers_with_dilation(voxel_matrix, mat_id)
+        if layer_groups is not None and not layer_groups:
+            return None
+
+        mesh_type = "Backing" if mat_id == -2 else f"Mat ID {mat_id}"
+        if layer_groups is not None:
+            log.info(
+                "%s: merged %s layers into %s groups%s%s",
+                mesh_type,
+                voxel_matrix.shape[0],
+                len(layer_groups),
+                " [no-dilation]" if use_no_dilation else "",
+                " [boundary-aware]" if boundary_enabled else "",
+                extra={
+                    "event": "mesh_layers_merged",
+                    "mesh_type": mesh_type,
+                    "layer_count": int(voxel_matrix.shape[0]),
+                    "group_count": len(layer_groups),
+                    "no_dilation": use_no_dilation,
+                    "boundary_enabled": boundary_enabled,
+                },
+            )
+
+        if use_no_dilation and not boundary_enabled:
+            effective_volume = np.asarray(voxel_matrix)
+            effective_material_id = mat_id
+        else:
+            effective_volume = _mask_volume_from_layer_groups(
+                layer_groups,
+                np.asarray(voxel_matrix).shape,
+            )
+            effective_material_id = True
+
+        if boundary_enabled:
+            boundary_mask = rasterize_boundary_geometry(
+                boundary_geometry,
+                height_px=np.asarray(voxel_matrix).shape[1],
+                width_px=np.asarray(voxel_matrix).shape[2],
+            )
+            effective_volume = np.asarray(effective_volume, dtype=bool)
+            effective_volume &= boundary_mask[None, :, :]
+
+        grid_mesh = build_labeled_surface_mesh(
+            effective_volume,
+            material_id=effective_material_id,
+            height_px=height_px,
+            **({"z_edges": z_edges} if z_edges is not None else {}),
+        )
+        mesh = grid_mesh
+        if mesh is not None:
+            lattice_stats = (
+                grid_mesh.metadata.get("layered_mesh_stats", {})
+                if grid_mesh is not None
+                else {}
+            )
+            if not isinstance(lattice_stats, dict):
+                lattice_stats = {}
+            lattice_patch_count = int(
+                lattice_stats.get("merged_patch_count", 0)
+            )
+            patch_count = lattice_patch_count
+            mesh.metadata["raster_surface_stats"] = {
+                "patch_count": patch_count,
+                "lattice_patch_count": lattice_patch_count,
+                "boundary_rasterized": boundary_enabled,
+                "boundary_enabled": boundary_enabled,
+                "material_dilation_applied": not use_no_dilation,
+            }
+            log.info(
+                "%s: built high-fidelity surface from %s patches",
+                mesh_type,
+                patch_count,
+                extra={
+                    "event": "high_fidelity_mesh_built",
+                    "mesh_type": mesh_type,
+                    "patch_count": patch_count,
+                    "vertex_count": len(mesh.vertices),
+                    "face_count": len(mesh.faces),
+                },
+            )
+        return mesh
+
     def _merge_layers_with_dilation(self, voxel_matrix, mat_id):
         """
         Merge identical vertical layers and apply morphological dilation
-        
+
         Groups consecutive Z-layers with identical masks to reduce geometry.
         Applies morphological dilation to ensure thin features are printable.
-        
+
         Returns:
             list of tuples: [(start_z, end_z, dilated_mask), ...]
         """
         kernel = np.ones((3, 3), np.uint8)
-        
+
         layer_groups = []
         prev_mask = None
         start_z = 0
-        
+
         for z in range(voxel_matrix.shape[0]):
-            curr_mask = (voxel_matrix[z] == mat_id)
-            
+            curr_mask = voxel_matrix[z] == mat_id
+
             if not np.any(curr_mask):
                 if prev_mask is not None and np.any(prev_mask):
                     layer_groups.append((start_z, z - 1, prev_mask))
                     prev_mask = None
                 continue
-            
-            dilated_mask = cv2.dilate(
-                curr_mask.astype(np.uint8), 
-                kernel, 
-                iterations=1
-            ).astype(bool)
-            
+
+            dilated_mask = _dilate_mask_preserving_enclosed_voids(curr_mask, kernel)
+
             if prev_mask is None:
                 start_z = z
                 prev_mask = dilated_mask.copy()
@@ -415,43 +401,81 @@ class HighFidelityMesher(BaseMesher):
                 layer_groups.append((start_z, z - 1, prev_mask))
                 start_z = z
                 prev_mask = dilated_mask.copy()
-        
+
         if prev_mask is not None and np.any(prev_mask):
             layer_groups.append((start_z, voxel_matrix.shape[0] - 1, prev_mask))
-        
+
         return layer_groups
 
 
 # ========== Factory Method ==========
 
-def get_mesher(mode_name: ModelingMode):
+
+def get_mesher(
+    mode_name: ModelingMode,
+    disable_material_dilation: bool = False,
+    boundary_geometry=None,
+):
     """
     Return corresponding Mesher instance based on mode name
-    
+
     Args:
         mode_name: ModelingMode enum value
             - ModelingMode.HIGH_FIDELITY → HighFidelityMesher
             - ModelingMode.PIXEL → VoxelMesher
             - ModelingMode.VECTOR → HighFidelityMesher (vector uses same algorithm)
-    
+
     Returns:
         BaseMesher instance
     """
     # High-Fidelity mode (replaces Vector and Woodblock)
     if mode_name == ModelingMode.HIGH_FIDELITY:
-        print("[MESHER_FACTORY] Selected: HighFidelityMesher (RLE-based with Dilation)")
-        return HighFidelityMesher()
-    
+        log.info(
+            "Selected HighFidelityMesher",
+            extra={
+                "event": "mesher_selected",
+                "mode": str(mode_name),
+                "mesher": "HighFidelityMesher",
+            },
+        )
+        return HighFidelityMesher(
+            disable_material_dilation=disable_material_dilation,
+            boundary_geometry=boundary_geometry,
+        )
+
     # Vector mode uses same algorithm as High-Fidelity
     if mode_name == ModelingMode.VECTOR:
-        print("[MESHER_FACTORY] Selected: HighFidelityMesher (Vector mode)")
-        return HighFidelityMesher()
-    
+        log.info(
+            "Selected HighFidelityMesher for vector mode",
+            extra={
+                "event": "mesher_selected",
+                "mode": str(mode_name),
+                "mesher": "HighFidelityMesher",
+            },
+        )
+        return HighFidelityMesher(
+            disable_material_dilation=disable_material_dilation,
+            boundary_geometry=boundary_geometry,
+        )
+
     # Pixel Art mode (legacy voxel)
     if mode_name == ModelingMode.PIXEL:
-        print("[MESHER_FACTORY] Selected: VoxelMesher (Blocky)")
+        log.info(
+            "Selected VoxelMesher",
+            extra={"event": "mesher_selected", "mode": str(mode_name), "mesher": "VoxelMesher"},
+        )
         return VoxelMesher()
-    
+
     # Default fallback to High-Fidelity
-    print(f"[MESHER_FACTORY] Unknown mode '{mode_name}', defaulting to HighFidelityMesher")
-    return HighFidelityMesher()
+    log.info(
+        "Unknown mode; defaulting to HighFidelityMesher",
+        extra={
+            "event": "mesher_defaulted",
+            "mode": str(mode_name),
+            "mesher": "HighFidelityMesher",
+        },
+    )
+    return HighFidelityMesher(
+        disable_material_dilation=disable_material_dilation,
+        boundary_geometry=boundary_geometry,
+    )

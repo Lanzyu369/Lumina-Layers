@@ -12,6 +12,9 @@ _Requirements: 9.3, 9.4, 9.5_
 
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
 from typing import List
 
 import pytest
@@ -29,9 +32,33 @@ EXPECTED_PATHS: List[str] = [
     "/api/convert/batch",
     "/api/convert/replace-color",
     "/api/convert/merge-colors",
-    "/api/extractor/extract",
-    "/api/extractor/manual-fix",
-    "/api/calibration/generate",
+]
+
+# Material/LUT endpoints are part of the main development baseline again.
+# 耗材/LUT 端点恢复为主应用开发基线的一部分。
+MAIN_APP_MATERIAL_LUT_PREFIXES: List[str] = [
+    "/api/extractor/",
+    "/api/calibration/",
+    "/api/five-color/",
+]
+
+MAIN_APP_SINGLE_STAGE_PATHS: List[str] = [
+    "/api/extractor/gradient-card-materials",
+    "/api/extractor/material-solver-cache/status",
+    "/api/material-sync/catalog",
+    "/api/material-sync/install",
+    "/api/material-sync/install-from-registry",
+    "/api/material-sync/refresh",
+    "/api/material-sync/rollback",
+    "/api/material-sync/status",
+]
+
+MATERIAL_REGISTRY_SERVICE_PATHS: List[str] = [
+    "/api/material-registry/v1/materials/catalog",
+    "/api/material-registry/v1/packages/{package_path}",
+    "/api/material-registry/v1/packages/upload",
+    "/api/material-registry/v1/packages/upload-local",
+    "/api/material-registry/v1/packages/{package_path}/approve",
 ]
 
 
@@ -41,6 +68,56 @@ def client() -> TestClient:
     为每个测试创建独立的 TestClient。
     """
     return TestClient(create_app())
+
+
+def test_frontend_dist_can_be_served_when_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FastAPI serves the built SPA from a configured directory.
+    FastAPI 可服务指定目录中已构建的前端 SPA。
+    """
+    dist_dir = tmp_path / "dist"
+    assets_dir = dist_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    (dist_dir / "index.html").write_text(
+        '<!doctype html><script type="module" src="/assets/app.js"></script>',
+        encoding="utf-8",
+    )
+    (assets_dir / "app.js").write_text("console.log('lumina-dist');", encoding="utf-8")
+    (dist_dir / "favicon.ico").write_bytes(b"ico")
+    hdr_dir = dist_dir / "hdr"
+    hdr_dir.mkdir()
+    (hdr_dir / "studio.hdr").write_bytes(b"hdr")
+
+    monkeypatch.setenv("LUMINA_SERVE_FRONTEND_DIST", "1")
+    monkeypatch.setenv("LUMINA_FRONTEND_DIST_DIR", str(dist_dir))
+
+    local_client = TestClient(create_app())
+
+    root_response = local_client.get("/")
+    assert root_response.status_code == 200
+    assert 'src="/assets/app.js"' in root_response.text
+
+    route_response = local_client.get("/converter")
+    assert route_response.status_code == 200
+    assert 'src="/assets/app.js"' in route_response.text
+
+    asset_response = local_client.get("/assets/app.js")
+    assert asset_response.status_code == 200
+    assert asset_response.text == "console.log('lumina-dist');"
+
+    favicon_response = local_client.get("/favicon.ico")
+    assert favicon_response.status_code == 200
+    assert favicon_response.content == b"ico"
+
+    nested_static_response = local_client.get("/hdr/studio.hdr")
+    assert nested_static_response.status_code == 200
+    assert nested_static_response.content == b"hdr"
+
+    missing_api_response = local_client.get("/api/does-not-exist")
+    assert missing_api_response.status_code == 404
+    assert "lumina-dist" not in missing_api_response.text
 
 
 # ===========================================================================
@@ -94,9 +171,54 @@ class TestOpenAPIJSON:
 
         for expected_path in EXPECTED_PATHS:
             assert expected_path in paths, (
-                f"Missing endpoint {expected_path!r} in OpenAPI paths. "
+                f"Missing endpoint {expected_path!r} in OpenAPI paths. " f"Found: {sorted(paths.keys())}"
+            )
+
+    def test_material_lut_endpoints_present_on_main_app(self, client: TestClient) -> None:
+        """Material/LUT extract/generate/query endpoints stay in the main app.
+        提取/生成/查询端点恢复在主应用内暴露。
+        """
+        resp = client.get("/openapi.json")
+        paths = resp.json().get("paths", {})
+        for prefix in MAIN_APP_MATERIAL_LUT_PREFIXES:
+            assert any(path.startswith(prefix) for path in paths), (
+                f"Missing main-app Material/LUT endpoint prefix {prefix!r}. "
                 f"Found: {sorted(paths.keys())}"
             )
+        for expected_path in MAIN_APP_SINGLE_STAGE_PATHS:
+            assert expected_path in paths, (
+                f"Missing main-app single-stage endpoint {expected_path!r}. "
+                f"Found: {sorted(paths.keys())}"
+            )
+
+    def test_material_registry_service_routes_are_disabled_by_default(
+        self,
+        client: TestClient,
+    ) -> None:
+        """Distribution builds do not expose Registry upload/approval routes.
+        分发版默认不暴露 Registry 上传/审批路由。
+        """
+        resp = client.get("/openapi.json")
+        paths = resp.json().get("paths", {})
+
+        for service_path in MATERIAL_REGISTRY_SERVICE_PATHS:
+            assert service_path not in paths
+
+    def test_material_registry_service_routes_can_be_enabled(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Dedicated Registry service mode can still host the write router.
+        独立 Registry 服务模式仍可注册写服务路由。
+        """
+        monkeypatch.setenv("LUMINA_ENABLE_MATERIAL_REGISTRY_SERVICE", "1")
+        service_client = TestClient(create_app())
+
+        resp = service_client.get("/openapi.json")
+        paths = resp.json().get("paths", {})
+
+        for service_path in MATERIAL_REGISTRY_SERVICE_PATHS:
+            assert service_path in paths
 
     def test_openapi_json_has_correct_title(self, client: TestClient) -> None:
         """OpenAPI JSON should have title 'Lumina Studio API'.
@@ -151,9 +273,7 @@ class TestCORSHeaders:
             },
         )
         allow_origin = resp.headers.get("access-control-allow-origin")
-        assert allow_origin in ("*", origin), (
-            f"Expected '*' or '{origin}', got {allow_origin!r}"
-        )
+        assert allow_origin in ("*", origin), f"Expected '*' or '{origin}', got {allow_origin!r}"
 
     def test_cors_allows_all_methods(self, client: TestClient) -> None:
         """CORS preflight should indicate all HTTP methods are allowed.
@@ -196,3 +316,156 @@ class TestCORSHeaders:
             },
         )
         assert resp.headers.get("access-control-allow-credentials") == "true"
+
+
+class TestRequestIdHeader:
+    """Verify request id generation/propagation contract."""
+
+    def test_request_id_is_generated_when_missing(self, client: TestClient) -> None:
+        resp = client.get("/openapi.json")
+        request_id = resp.headers.get("x-request-id")
+        assert request_id is not None
+        assert len(request_id) >= 8
+
+    def test_request_id_is_echoed_when_provided(self, client: TestClient) -> None:
+        req_id = "test-request-id-123"
+        resp = client.get("/openapi.json", headers={"X-Request-ID": req_id})
+        assert resp.headers.get("x-request-id") == req_id
+
+
+class TestValidationErrorSanitization:
+    """Verify global 422 validation responses do not echo submitted values."""
+
+    def test_validation_error_response_redacts_original_input(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        target_logger = logging.getLogger("lumina.api.app")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+        private_path = "/Users/min/private-path"
+        secret_token = "secret-token-should-not-return"
+
+        try:
+            response = client.post(
+                "/api/system/settings",
+                json={
+                    "last_lut": "",
+                    "last_modeling_mode": "high-fidelity",
+                    "last_color_mode": "4-Color",
+                    "last_slicer": "",
+                    "palette_mode": "swatch",
+                    "enable_crop_modal": {
+                        "path": private_path,
+                        "token": secret_token,
+                    },
+                    "nozzle_size": "0.4",
+                },
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422
+        body = response.json()
+        assert isinstance(body["detail"], list)
+        assert body["detail"]
+        first_error = body["detail"][0]
+        assert first_error["type"] == "bool_type"
+        assert first_error["loc"] == ["body", "enable_crop_modal"]
+        assert first_error["msg"] == "Input should be a valid boolean"
+        for error in body["detail"]:
+            assert set(error) <= {"type", "loc", "msg"}
+
+        response_text = response.text
+        assert "input" not in response_text
+        assert "ctx" not in response_text
+        assert "url" not in response_text
+        assert private_path not in response_text
+        assert secret_token not in response_text
+
+        records = [
+            record for record in caplog.records
+            if getattr(record, "event", None) == "api_validation_failed"
+        ]
+        assert len(records) == 1
+        assert records[0].error_type == "RequestValidationError"
+        assert records[0].validation_error_count == 1
+        assert (
+            records[0].error_message
+            == "body.enable_crop_modal: Input should be a valid boolean"
+        )
+        assert private_path not in records[0].error_message
+        assert secret_token not in records[0].error_message
+
+
+class TestClientLogEndpoint:
+    """Verify frontend diagnostic logs are bounded before server logging."""
+
+    def test_client_log_endpoint_sanitizes_large_payloads(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        target_logger = logging.getLogger("lumina.api.app")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.DEBUG, logger=target_logger.name)
+
+        response = client.post(
+            "/api/client-log",
+            json={
+                "label": "x" * 300,
+                "elapsed_ms": 12.34567,
+                "scope": "preview",
+                "phase": "request-sent",
+                "details": {
+                    "long": "y" * 1300,
+                    **{f"k{index}": index for index in range(30)},
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        records = [
+            record for record in caplog.records
+            if getattr(record, "event", None) == "client_log"
+        ]
+        assert len(records) == 1
+        assert records[0].client_label.endswith("...<truncated>")
+        assert records[0].duration_ms == 12.346
+        assert records[0].client_details["long"].endswith("...<truncated>")
+        assert records[0].client_details["__truncated_keys"] == 7
+
+    def test_client_log_endpoint_redacts_local_paths_in_detail_keys(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        target_logger = logging.getLogger("lumina.api.app")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.DEBUG, logger=target_logger.name)
+
+        response = client.post(
+            "/api/client-log",
+            json={
+                "label": "generate: keyed path diagnostic",
+                "details": {
+                    "/Users/min/private/source.png": "failed",
+                    "value_path": "failed while opening /private/tmp/lumina/source.png",
+                    "nested": {
+                        "C:\\Users\\min\\private\\source.png": "failed",
+                    },
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        records = [
+            record for record in caplog.records
+            if getattr(record, "event", None) == "client_log"
+        ]
+        assert len(records) == 1
+        serialized_details = json.dumps(records[0].client_details)
+        assert "Users" not in serialized_details
+        assert "/private/tmp" not in serialized_details
+        assert "<redacted:local-path>" in serialized_details

@@ -1,0 +1,3037 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-22T19:06:23+08:00",
+  "slicers": [
+    {
+      "slicer_id": "BambuStudio",
+      "display_name": "Bambu Studio",
+      "source_kind": "local_install",
+      "source_version": "02.07.00.07",
+      "profile_format": "bambu_orca",
+      "machines": [
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-a1",
+          "display_name": "Bambu Lab A1",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 256,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a1_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-a1:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab A1 0.2 nozzle",
+              "revision": "sha256:2e9e8ca5f7adf708151120807d55828de8b7712cd0b7c3f2f0272392f475356a",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-a1:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab A1 0.4 nozzle",
+              "revision": "sha256:44686115894540c6cc4f3f815ce42eeb9c05e572082052c0ae04c63d932ef538",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-a1:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab A1 0.6 nozzle",
+              "revision": "sha256:9b3219869a39d50f53ec11c38c21f080bd610599b9cbb835a6b841f69ba96eb0",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-a1:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab A1 0.8 nozzle",
+              "revision": "sha256:5b43e4d40b04d38e3b6534b58bc24e1b37407a28e2baba7c942409408405ad0c",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "cool-plate",
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-a1-mini",
+          "display_name": "Bambu Lab A1 mini",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 180,
+          "bed_depth": 180,
+          "bed_height": 180,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a1-mini_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-a1-mini:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab A1 mini 0.2 nozzle",
+              "revision": "sha256:5492f827592854259ce0016a3548ac97929d0cfa4dac965441f090918671289d",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-a1-mini:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab A1 mini 0.4 nozzle",
+              "revision": "sha256:5edead80fcdb63015e0dc46c41c7d59bef5f8f8633fc9819e1d8dd43852ccb6a",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-a1-mini:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab A1 mini 0.6 nozzle",
+              "revision": "sha256:d45c3edc7fa894d74b620af8e0e05aab2b0b590023c8b46b5b73f094844d488a",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-a1-mini:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab A1 mini 0.8 nozzle",
+              "revision": "sha256:31f3af1975eb158e85595ecb814eb563f892ab41c0dab474741d5bbe60a4d19f",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-A1M.stl"
+        },
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-a2l",
+          "display_name": "Bambu Lab A2L",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 330,
+          "bed_depth": 320,
+          "bed_height": 325,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a2l_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-a2l:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab A2L 0.2 nozzle",
+              "revision": "sha256:7f71cc785cfa51a81b28b7d4412d4a426361a1b9a89fcd4850e7a8463c1f6f01",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-a2l:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab A2L 0.4 nozzle",
+              "revision": "sha256:e35d69d6a6899abbf59ed211c4c1c5760045552943a8d6849c4b5303b62de0ae",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-a2l:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab A2L 0.6 nozzle",
+              "revision": "sha256:7e94db2bd56f324bd1162ede33d1b598feec798d9b167f4bede8f5fd76b43a14",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-a2l:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab A2L 0.8 nozzle",
+              "revision": "sha256:b599f16d47192e4d135ee8109c78f303edaaf6f26abeb881755b36cf5403d5f8",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-H2C.stl"
+        },
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2c",
+          "display_name": "Bambu Lab H2C",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 330,
+          "bed_depth": 320,
+          "bed_height": 325,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2c_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2c:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab H2C 0.2 nozzle",
+              "revision": "sha256:2be533e1ad6ea9afb29cc79eea3122b8f6365969b2731404e730e8eccf06e91a",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2c:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab H2C 0.4 nozzle",
+              "revision": "sha256:e59fcaca524bc6eac1fbdc5eff7f4c591ab5018b1f51d6f3e07eff1c42b7b0b5",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2c:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab H2C 0.6 nozzle",
+              "revision": "sha256:4766c3c11ffb611386ef399ad66ec86b97bdb650b30a526dd3f66b16811d3972",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2c:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab H2C 0.8 nozzle",
+              "revision": "sha256:974fc4063f8fa22182e764af22f53b58c594aff1a63926703295c426943ea8ab",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-H2C.stl"
+        },
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
+          "display_name": "Bambu Lab H2D",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 350,
+          "bed_depth": 320,
+          "bed_height": 325,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2d_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab H2D 0.2 nozzle",
+              "revision": "sha256:d3d0fa90ec9cbce458cd0cf5311ebba9096d2522303567043f6d52ac32858a90",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
+              "revision": "sha256:8fc80e88640791d7b15b6e4c142258fd65d983fb0c3b02bf520ebf0bca7f8563",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab H2D 0.6 nozzle",
+              "revision": "sha256:5fe13cca00fc081d665ca490b67e2301f6b18dd87ae962a3eac76bde988cbdc1",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab H2D 0.8 nozzle",
+              "revision": "sha256:01b86d86525b51515eb9f15e9b7df54744160b0f6f10404fc8bc2b41670b8f9e",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-H2D.stl"
+        },
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d-pro",
+          "display_name": "Bambu Lab H2D Pro",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 350,
+          "bed_depth": 320,
+          "bed_height": 325,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2d-pro_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d-pro:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab H2D Pro 0.2 nozzle",
+              "revision": "sha256:3e0c30b57ded929f3c4dcd64b4faf6d54fa805fe13302edcc2bdebece73c608b",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d-pro:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab H2D Pro 0.4 nozzle",
+              "revision": "sha256:22a1e8d162abc3237c41333b43fa08e020f7382ace6d1ea9a89f1cfe92040f82",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d-pro:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab H2D Pro 0.6 nozzle",
+              "revision": "sha256:e3de8dac153d085d18c165459e4db1074f962272f219eab0d885e91d2bfbfab0",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d-pro:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab H2D Pro 0.8 nozzle",
+              "revision": "sha256:af95b34c3687bf8a786577876521d5ac2fade25aa97503b1debc22c040b79614",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-H2D.stl"
+        },
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2s",
+          "display_name": "Bambu Lab H2S",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 340,
+          "bed_depth": 320,
+          "bed_height": 340,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2s_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2s:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab H2S 0.2 nozzle",
+              "revision": "sha256:f0803b2ebe0d79ae1ed988bdb30f4dbb4bc06a8cc08d61b07aa866773286cde1",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2s:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab H2S 0.4 nozzle",
+              "revision": "sha256:c2442aa492284aa23a560203ea982c49fdc670a27e7696231fee9b6d562030f7",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2s:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab H2S 0.6 nozzle",
+              "revision": "sha256:fd5a775a5093511aafe83376c7c4af7e8d1ef6978f9ff1476b88246c7a01de99",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-h2s:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab H2S 0.8 nozzle",
+              "revision": "sha256:ccc53c9572aac4eb59d88839f39741be6f3bb231811285589f29611c79167a69",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-O1S.stl"
+        },
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-p1p",
+          "display_name": "Bambu Lab P1P",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 250,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p1p_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-p1p:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab P1P 0.2 nozzle",
+              "revision": "sha256:8686236344d942f15849d8649a649cdbc53f20468d34b1c836ddd080a00a9c43",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-p1p:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab P1P 0.4 nozzle",
+              "revision": "sha256:1c8e8f25b425bfdc13394a53bf4b22792b789e374d03429d6c03454ce20722a0",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-p1p:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab P1P 0.6 nozzle",
+              "revision": "sha256:482e9c628c287eec0fe9ca9647f4d0e0c8720f2fa9263ea7c666873c9ff48732",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-p1p:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab P1P 0.8 nozzle",
+              "revision": "sha256:81f822a602122391d4fc8edee484ce5d99be9b584e4769c57a790e1845b764f2",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "cool-plate",
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-p1s",
+          "display_name": "Bambu Lab P1S",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 250,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p1s_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-p1s:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab P1S 0.2 nozzle",
+              "revision": "sha256:ef56babf78fb07fc4973a401d01ff8d8bfb950a157c753cf770a21d7651d5c20",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-p1s:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab P1S 0.4 nozzle",
+              "revision": "sha256:e5bf2bcfe701ff1013d6cb8bd2967fabf124cc0f2ad6f8217f6ec8a642e364e2",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-p1s:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab P1S 0.6 nozzle",
+              "revision": "sha256:b46db2efd4bc3768449bc87a6506eaad9396a3ecf9d26715a6f54b910fdcfef0",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-p1s:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab P1S 0.8 nozzle",
+              "revision": "sha256:90ffa6252b2643a42b1deb7e94f8515d57585677e183b6ada935debb3abdb069",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "cool-plate",
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-p2s",
+          "display_name": "Bambu Lab P2S",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 256,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p2s_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-p2s:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab P2S 0.2 nozzle",
+              "revision": "sha256:66b569e534d465d5e380397bcad16e306cc4ba5bd23c4e52ebd763d4b4b6a556",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-p2s:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab P2S 0.4 nozzle",
+              "revision": "sha256:cecd70cab002cb7392322310bc8a4e09ae34bf93d2baaf333086d8c36aa92c4a",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-p2s:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab P2S 0.6 nozzle",
+              "revision": "sha256:03710bc15efa1cf6b1306d7b394983f04518528d58709a2d697da2d5ebb3bce3",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-p2s:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab P2S 0.8 nozzle",
+              "revision": "sha256:788058c0a048f1956f7e0a36cdcd3782618934692f139df825c0eab59d8d8140",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-x1",
+          "display_name": "Bambu Lab X1",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 250,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x1:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab X1 0.2 nozzle",
+              "revision": "sha256:b90467b6459df0279ed0a41bdf1b97027e95b8ed3d128eb1d53e17a559ddf687",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x1:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab X1 0.4 nozzle",
+              "revision": "sha256:b2baf12c7da12aec24631ab501ab0a3246153b526a9b7b010a4e52679e9d819a",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x1:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab X1 0.6 nozzle",
+              "revision": "sha256:60f73eb4d1c1db5ec41f15c8bbe3f4f77d68b551fdd7696d928ac14756299212",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x1:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab X1 0.8 nozzle",
+              "revision": "sha256:ceeddefdc1846f3d06d5ec57501052bab3be333a54ca80279d48aeaccc66c905",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "cool-plate",
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-x1-carbon",
+          "display_name": "Bambu Lab X1 Carbon",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 250,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1-carbon_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x1-carbon:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab X1 Carbon 0.2 nozzle",
+              "revision": "sha256:d7a5f290a56a3452f7b72a2e2307c186ac79de3a8d108f632e47a77ec96f5281",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x1-carbon:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab X1 Carbon 0.4 nozzle",
+              "revision": "sha256:1f27523e4902eff3035d9ab0515f8d584ce077e9b1b63e8806e1dd09437bd844",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x1-carbon:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab X1 Carbon 0.6 nozzle",
+              "revision": "sha256:a7c46520faa18963f741aa2a10be4fa4bd905fc9084f1a13968e6c64ae87ae03",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x1-carbon:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab X1 Carbon 0.8 nozzle",
+              "revision": "sha256:565afa55a954aacf8ee8891e5832e32dda7ff19f3974f2a48ae1f9c7b89da527",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "cool-plate",
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-x1e",
+          "display_name": "Bambu Lab X1E",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 250,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1e_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x1e:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab X1E 0.2 nozzle",
+              "revision": "sha256:5337cdb093efd984dec2b69cde54ca803588ad8e91f6e6ee662b4a278245cbbf",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x1e:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab X1E 0.4 nozzle",
+              "revision": "sha256:0cda17a57977595561726ea51edeb07c4f97339433c3b51bafe52578ce4c5f8f",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x1e:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab X1E 0.6 nozzle",
+              "revision": "sha256:6c5007d1691cb7de826dfc4c01767138635ac4e7b54a89419b6d32db5b6d2de8",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x1e:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab X1E 0.8 nozzle",
+              "revision": "sha256:a8572a3a375c542dcabda5968ed4eb6dae7ffc9b35a345eca0cc44a48c87f97c",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "cool-plate",
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "BambuStudio:bbl:bambu-lab-x2d",
+          "display_name": "Bambu Lab X2D",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 261,
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x2d_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x2d:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab X2D 0.2 nozzle",
+              "revision": "sha256:53ffea615450b81f45d4a38321303e4211057be3c559c933e16e1cc426b57584",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x2d:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab X2D 0.4 nozzle",
+              "revision": "sha256:c4362558bbabb929c08903b8bfc765c152b0aaac3b4200db41f5d05073a7beb2",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x2d:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab X2D 0.6 nozzle",
+              "revision": "sha256:0e2818ce6755167c41665b95360c598e6bafd62a53d06585cb1de13428430d86",
+              "supported": true
+            },
+            {
+              "device_profile_id": "BambuStudio:bbl:bambu-lab-x2d:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab X2D 0.8 nozzle",
+              "revision": "sha256:4b343138a8938537ae35bb4f89bef7da36cd88b1d1604af7755d8dbb83817676",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "cool-plate",
+          "display_name": "Cool Plate",
+          "display_name_zh": "低温打印板",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料打印板",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-pei-plate",
+          "display_name": "Smooth PEI Plate / High Temp Plate",
+          "display_name_zh": "光面PEI打印板 / 高温打印板",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI打印板",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Bambu Cool Plate SuperTack",
+          "display_name_zh": "增稳低温打印板",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
+        }
+      ]
+    },
+    {
+      "slicer_id": "OrcaSlicer",
+      "display_name": "OrcaSlicer",
+      "source_kind": "local_install",
+      "source_version": "02.01.00.14",
+      "profile_format": "bambu_orca",
+      "machines": [
+        {
+          "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-a1",
+          "display_name": "Bambu Lab A1",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 256,
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-a1_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-a1:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab A1 0.2 nozzle",
+              "revision": "sha256:6bb378a6a8ba323efbfaabe6308cfe088b18ee8251655823d3412ae10b50f780",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-a1:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab A1 0.4 nozzle",
+              "revision": "sha256:a79f5bd2864635d563f4a23882b7816ecb4414532cc38226ce43bac9e246f0b2",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-a1:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab A1 0.6 nozzle",
+              "revision": "sha256:af04d4b0b0593a19fbae0f12b04a0d951d5a63ea14cc8951a7dd2e9c33a75c3e",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-a1:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab A1 0.8 nozzle",
+              "revision": "sha256:aed6a3022a613fc21d666d5939fd84bbab11273bedb60cebe7ca1423a313fbaa",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-a1-mini",
+          "display_name": "Bambu Lab A1 mini",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 180,
+          "bed_depth": 180,
+          "bed_height": 180,
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-a1-mini_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-a1-mini:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab A1 mini 0.2 nozzle",
+              "revision": "sha256:734a4faa02240afe47194430a902ff79d106ecfda24bd75e94b4be9f69095d9a",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-a1-mini:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab A1 mini 0.4 nozzle",
+              "revision": "sha256:10395ed6c7ac3f1d6863c59234a8d8fd2733926d5737c27d0dc51311354aaceb",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-a1-mini:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab A1 mini 0.6 nozzle",
+              "revision": "sha256:42e40c5b5029d3386a3e8a5a2ffc7d3457eda5120c8d22a1912f07cd15f2f053",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-a1-mini:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab A1 mini 0.8 nozzle",
+              "revision": "sha256:4c09af32c448c266f84be9e92f39d89318f725310f23e7c1af852f6037e7c1ee",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-A1M.stl"
+        },
+        {
+          "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d",
+          "display_name": "Bambu Lab H2D",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 350,
+          "bed_depth": 320,
+          "bed_height": 325,
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2d_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab H2D 0.2 nozzle",
+              "revision": "sha256:ed917b300577b070a4a1ef826b759da059b76d88939df73c0e547f6069208e8b",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
+              "revision": "sha256:e7f2c8a0a5aaa30ba294c66843d4425a3492ec524363b1f15c415e79532b60e5",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab H2D 0.6 nozzle",
+              "revision": "sha256:7d87427ed19b7aad101aef87e65eace415814a11d4fb2960aec7843d952fd51a",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab H2D 0.8 nozzle",
+              "revision": "sha256:a3e507b3b5c8043fe157d1ec73f4aab9738489e40d48ecacfed12d6a8a030c55",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-H2D.stl"
+        },
+        {
+          "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d-pro",
+          "display_name": "Bambu Lab H2D Pro",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 350,
+          "bed_depth": 320,
+          "bed_height": 325,
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2d-pro_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d-pro:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab H2D Pro 0.2 nozzle",
+              "revision": "sha256:884b892c7aa0d29007bc1cccf2bb2a1475499ab0b867e60f437a341d1b2b6b33",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d-pro:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab H2D Pro 0.4 nozzle",
+              "revision": "sha256:dc21ab7a3ddb0ad931b75c05e71cd06d73f277804ce69c6c3ed311d45eeefaa0",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d-pro:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab H2D Pro 0.6 nozzle",
+              "revision": "sha256:8aec37212630b47d3f50f3026e019c75bab46cf2e8105118f875e0c085cbad3f",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d-pro:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab H2D Pro 0.8 nozzle",
+              "revision": "sha256:eca7fe18b6ec6ed472cedefdf2b93e5e383d49d0bf5cb70f6125e1d85ca973d4",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-H2D.stl"
+        },
+        {
+          "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-h2s",
+          "display_name": "Bambu Lab H2S",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 340,
+          "bed_depth": 320,
+          "bed_height": 340,
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2s_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2s:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab H2S 0.2 nozzle",
+              "revision": "sha256:8f1cabfa0f3f146cd9fe3d39b718dc570cac404a27c361e8e91c074b95c17fe3",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2s:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab H2S 0.4 nozzle",
+              "revision": "sha256:6c73b34626c61a304bbd7d6fc76f29a347ea14e0215a58af8d2bb139d945123b",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2s:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab H2S 0.6 nozzle",
+              "revision": "sha256:9ade4f03c429a7526cb941a47e8cb0cedd92e0e0ad2fea717966142b051a1854",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2s:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab H2S 0.8 nozzle",
+              "revision": "sha256:5b3bda7d2cbe3f6937493999e994181bbf70c462c0f9046c9383e860fb54e1df",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-O1S.stl"
+        },
+        {
+          "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-p1p",
+          "display_name": "Bambu Lab P1P",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 250,
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p1p_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1p:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab P1P 0.2 nozzle",
+              "revision": "sha256:b49be69b841a603fbc9f63151e051d1db3a3da6b38a9898e8fb66381ec60afb4",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1p:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab P1P 0.4 nozzle",
+              "revision": "sha256:34508965214e3026ea9082e6c1685af42492286d2bf640594a563073934741ad",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1p:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab P1P 0.6 nozzle",
+              "revision": "sha256:8365ea3a8cbe8012da1f11fb343b71abc6cc0b9a7448b17112b3caf0cb3d1d04",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1p:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab P1P 0.8 nozzle",
+              "revision": "sha256:6cef2d3c16768657c2252c05cde42627a85ae51df13af5ce4c550df5e3cb6bbf",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s",
+          "display_name": "Bambu Lab P1S",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 250,
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p1s_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab P1S 0.2 nozzle",
+              "revision": "sha256:cd5d3e26f242a64a2a6cb776d1a780d9eba55176c2301fd8a52a056496e372fe",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab P1S 0.4 nozzle",
+              "revision": "sha256:59942a3a426984dc81ac57c470002d45b96ed3f2711d0a925d761fd815dd6324",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab P1S 0.6 nozzle",
+              "revision": "sha256:6718e6296ce11f1025510033634670ebf80a45f180267ac685c5dd698d9fde5d",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab P1S 0.8 nozzle",
+              "revision": "sha256:ba62f5984e2f62e75046700bcfe7c2812768ae2c86c6f3b16fbcde3067190854",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-p2s",
+          "display_name": "Bambu Lab P2S",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 256,
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p2s_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p2s:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab P2S 0.2 nozzle",
+              "revision": "sha256:27c49c0445ab5d7133199890b29c4f14e702887c8902fb2092123057267b3cfc",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p2s:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab P2S 0.4 nozzle",
+              "revision": "sha256:1586efd8b4b39087817f3e574d274c5a34410eedd91f404217e0ddb54acd05b7",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p2s:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab P2S 0.6 nozzle",
+              "revision": "sha256:e7d288dd561029c4422aaddb1e40997958a400a2d294696651d8a95736548769",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p2s:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab P2S 0.8 nozzle",
+              "revision": "sha256:855ae3848b6d4b530267418b68181adf9176619ec94a1684f32ce09d4de25283",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-x1",
+          "display_name": "Bambu Lab X1",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 250,
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab X1 0.2 nozzle",
+              "revision": "sha256:54353a18db4faee9f339964a2ab60d24c146ac68267aa71267e01d057db1aa46",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab X1 0.4 nozzle",
+              "revision": "sha256:3ad5867a6d636c77c2832b92f59228f73aa86806e0e992e782276ae4b2e643c7",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab X1 0.6 nozzle",
+              "revision": "sha256:9380583eed8a056e8e003dc3660842856fbcbdd921eb3de876363632f1d6c5e4",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab X1 0.8 nozzle",
+              "revision": "sha256:f661ae756365715ac8f2b732c64b236247068a9a2064ba83c21bd490e0ec441f",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-x1-carbon",
+          "display_name": "Bambu Lab X1 Carbon",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 250,
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1-carbon_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1-carbon:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab X1 Carbon 0.2 nozzle",
+              "revision": "sha256:0a3ccc0782958cf66a082385193393dfe6ff0074ed7c9a81fe84c2581310c8bb",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1-carbon:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab X1 Carbon 0.4 nozzle",
+              "revision": "sha256:4ab8826f92ff6eadeaa0eebe4c41340b01a58ff67ba1d9ff64c04d77317384f0",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1-carbon:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab X1 Carbon 0.6 nozzle",
+              "revision": "sha256:c152daf01061a246f35d36726779069313082fd71c547a1b311eb0ee50287c50",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1-carbon:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab X1 Carbon 0.8 nozzle",
+              "revision": "sha256:15c23e1fae651cbca7b262e9d2231cb6a6f8878e6d876bbb00519d8dbe1547e0",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-x1e",
+          "display_name": "Bambu Lab X1E",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 250,
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1e_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1e:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab X1E 0.2 nozzle",
+              "revision": "sha256:aa3dedf2bc612e110f49b36e32a4b7298dbd823615fd25329592e2ccaa31a3e3",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1e:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab X1E 0.4 nozzle",
+              "revision": "sha256:2ed39754988cd8d15f752a731825fa3e5e60594bfb9fe32882e638bdfc6e5e94",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1e:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab X1E 0.6 nozzle",
+              "revision": "sha256:4d1761a4c5098293ad22ae37d995772d3c23842679439f0a4efd8c20d6d9eaf7",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1e:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab X1E 0.8 nozzle",
+              "revision": "sha256:f789ed22d43dd08052f9467632681d694286bcf55ddf7d3107a9412070e0d72e",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        },
+        {
+          "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-x2d",
+          "display_name": "Bambu Lab X2D",
+          "brand": "Bambu Lab",
+          "vendor_key": "BBL",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 261,
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x2d_thumbnail.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x2d:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Bambu Lab X2D 0.2 nozzle",
+              "revision": "sha256:332c5dd4a8d0ad28d59d5ecd9d81b479515ea22792f38f66f23524541ed68afa",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x2d:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Bambu Lab X2D 0.4 nozzle",
+              "revision": "sha256:a6541c1771a6a10f1060ebe5056c189a5bf942c4d33f1c2e0fc69570d4e36462",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x2d:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Bambu Lab X2D 0.6 nozzle",
+              "revision": "sha256:8ae16a9e03139fe6cfc91aaa9a620e24d927a45cc90e461308d13136a6aadea1",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x2d:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Bambu Lab X2D 0.8 nozzle",
+              "revision": "sha256:8e90dcac87712fbdfd8b48dfc510aa64d0f08bc6256b693dfc54830a511355b1",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Smooth Cool Plate",
+          "display_name_zh": "光滑的低温打印床",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料热床",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "Smooth High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI热床",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "纹理的低温打印床",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（超强粘附）",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
+        }
+      ]
+    },
+    {
+      "slicer_id": "OrcaSlicer",
+      "display_name": "OrcaSlicer",
+      "source_kind": "local_install",
+      "source_version": "02.04.00.00",
+      "profile_format": "bambu_orca",
+      "machines": [
+        {
+          "machine_profile_id": "OrcaSlicer:elegoo:elegoo-centauri",
+          "display_name": "Elegoo Centauri",
+          "brand": "Elegoo",
+          "vendor_key": "Elegoo",
+          "bed_width": 257,
+          "bed_depth": 257,
+          "bed_height": 257,
+          "thumbnail": "slicers/OrcaSlicer/02.04.00.00/assets/elegoo-centauri_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:elegoo:elegoo-centauri:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Elegoo Centauri 0.2 nozzle",
+              "revision": "sha256:a2f55f859b8eed640c0c5b0579663880479146c06f8786d5adcbc084c1454422",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:elegoo:elegoo-centauri:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Elegoo Centauri 0.4 nozzle",
+              "revision": "sha256:aef63f134ec2c29c691e1ac3b1983006d9f9ef96f559411afdf4d8e2b9bd9916",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:elegoo:elegoo-centauri:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Elegoo Centauri 0.6 nozzle",
+              "revision": "sha256:7265d429e8a4bc5e50e3e052938627ce11816f605cbe1415c3391c49103ada18",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:elegoo:elegoo-centauri:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Elegoo Centauri 0.8 nozzle",
+              "revision": "sha256:f4f42c3fe8f00f88982ed9d4027a93a110658bb03816f28a1e7600aadd809289",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "elegoo_centuri_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon",
+          "display_name": "Elegoo Centauri Carbon",
+          "brand": "Elegoo",
+          "vendor_key": "Elegoo",
+          "bed_width": 257,
+          "bed_depth": 257,
+          "bed_height": 257,
+          "thumbnail": "slicers/OrcaSlicer/02.04.00.00/assets/elegoo-centauri-carbon_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Elegoo Centauri Carbon 0.2 nozzle",
+              "revision": "sha256:8f8786b55b236924d0db5c180244e3fef143d666173b3cccb6e09b79bfe856eb",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Elegoo Centauri Carbon 0.4 nozzle",
+              "revision": "sha256:3d9e0df34f5a329c20a3a208f024a85949181307e0e3ed05c36e38cffe23f458",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Elegoo Centauri Carbon 0.6 nozzle",
+              "revision": "sha256:f93fba2ccec8d9a689f3121f4af997f36b317b3eaa5c9bf9cdad755ee0c1c7a3",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Elegoo Centauri Carbon 0.8 nozzle",
+              "revision": "sha256:4e91df8599e05dc9c10d5d6313e2695cfa096d4b3c1a272259d3fb4ee84896b3",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "elegoo_centuri_carbon_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon-2",
+          "display_name": "Elegoo Centauri Carbon 2",
+          "brand": "Elegoo",
+          "vendor_key": "Elegoo",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 256,
+          "thumbnail": "slicers/OrcaSlicer/02.04.00.00/assets/elegoo-centauri-carbon-2_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon-2:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Elegoo Centauri Carbon 2 0.2 nozzle",
+              "revision": "sha256:2b0799a5f1fe40079ec81f917e58ff32da2a58093b88ae3b2330b94c89af0c58",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon-2:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Elegoo Centauri Carbon 2 0.4 nozzle",
+              "revision": "sha256:beb50e1d6337089c5c450fe59d79d26bc1e8e328a58960a9a1fe5f745a30cba0",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon-2:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Elegoo Centauri Carbon 2 0.6 nozzle",
+              "revision": "sha256:34f4161c65a3acccb40929f2deece0e20de4a18cdbf76f27a58f763213da141c",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon-2:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Elegoo Centauri Carbon 2 0.8 nozzle",
+              "revision": "sha256:e3ff89be83949c77220b1bfe15c7b7c50e48e4549abbc4ec2a7a1ba2d073ce0d",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "elegoo_centuri_carbon_buildplate_model.stl"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Smooth Cool Plate",
+          "display_name_zh": "光滑的低温打印床",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料热床",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "Smooth High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI热床",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "纹理的低温打印床",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（超强粘附）",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
+        }
+      ]
+    },
+    {
+      "slicer_id": "OrcaSlicer",
+      "display_name": "OrcaSlicer",
+      "source_kind": "local_install",
+      "source_version": "02.04.00.00",
+      "profile_format": "bambu_orca",
+      "machines": [
+        {
+          "machine_profile_id": "OrcaSlicer:snapmaker:snapmaker-u1",
+          "display_name": "Snapmaker U1",
+          "brand": "Snapmaker",
+          "vendor_key": "Snapmaker",
+          "bed_width": 270,
+          "bed_depth": 270,
+          "bed_height": 270,
+          "thumbnail": "slicers/OrcaSlicer/02.04.00.00/assets/snapmaker-u1_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "OrcaSlicer:snapmaker:snapmaker-u1:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Snapmaker U1 (0.4 nozzle)",
+              "revision": "sha256:1062e7afac028479944dff173a6c261805000e622cd38331e662c51d1407a607",
+              "supported": true
+            },
+            {
+              "device_profile_id": "OrcaSlicer:snapmaker:snapmaker-u1:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Snapmaker U1 (0.6 nozzle)",
+              "revision": "sha256:bb81f69be0859b68eb387a0772ddc7059752fdee4d2ca3ec20963615c8ba29af",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Snapmaker U1_bed.stl"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Smooth Cool Plate",
+          "display_name_zh": "光滑的低温打印床",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料热床",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "Smooth High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI热床",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "纹理的低温打印床",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（超强粘附）",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
+        }
+      ]
+    },
+    {
+      "slicer_id": "SnapmakerOrca",
+      "display_name": "Snapmaker Orca",
+      "source_kind": "local_install",
+      "source_version": "02.02.49.02",
+      "profile_format": "bambu_orca",
+      "machines": [
+        {
+          "machine_profile_id": "SnapmakerOrca:snapmaker:snapmaker-u1",
+          "display_name": "Snapmaker U1",
+          "brand": "Snapmaker",
+          "vendor_key": "Snapmaker",
+          "bed_width": 270,
+          "bed_depth": 270,
+          "bed_height": 270,
+          "thumbnail": "slicers/SnapmakerOrca/02.02.49.02/assets/snapmaker-u1_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "SnapmakerOrca:snapmaker:snapmaker-u1:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Snapmaker U1 (0.2 nozzle)",
+              "revision": "sha256:1daf719e9709dfbace8d5cc382f40eb9ffc49f8f6a2d4cc80c9b297a5c358dab",
+              "supported": true
+            },
+            {
+              "device_profile_id": "SnapmakerOrca:snapmaker:snapmaker-u1:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Snapmaker U1 (0.4 nozzle)",
+              "revision": "sha256:591a9e22189be063244130c8dce4546d19f9b80d1e635dfb9fb3caa3dcc2f5a1",
+              "supported": true
+            },
+            {
+              "device_profile_id": "SnapmakerOrca:snapmaker:snapmaker-u1:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Snapmaker U1 (0.6 nozzle)",
+              "revision": "sha256:e37110520714ca5dae99f7534f2dc95c7ab4a611345e0e70b581a11218250cd7",
+              "supported": true
+            },
+            {
+              "device_profile_id": "SnapmakerOrca:snapmaker:snapmaker-u1:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Snapmaker U1 (0.8 nozzle)",
+              "revision": "sha256:49893cf1f38f09150812ec9be4b4fe372ab1226709e742e57cc034d62ad14b0a",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "textured-pei-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Snapmaker U1_bed.stl"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Smooth Cool Plate",
+          "display_name_zh": "光滑的低温打印床",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料热床",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "Smooth High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI热床",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "纹理的低温打印床",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（超强粘附）",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
+        }
+      ]
+    },
+    {
+      "slicer_id": "ElegooSlicer",
+      "display_name": "ElegooSlicer",
+      "source_kind": "local_install",
+      "source_version": "01.05.01.06",
+      "profile_format": "bambu_orca",
+      "machines": [
+        {
+          "machine_profile_id": "ElegooSlicer:elegoo:elegoo-centauri",
+          "display_name": "Elegoo Centauri",
+          "brand": "Elegoo",
+          "vendor_key": "Elegoo",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 256,
+          "thumbnail": "slicers/ElegooSlicer/01.05.01.06/assets/elegoo-centauri_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "ElegooSlicer:elegoo:elegoo-centauri:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Elegoo Centauri 0.2 nozzle",
+              "revision": "sha256:26268e0f80f83414e11bd0abfe05772f456def6d0128162c413db3e870f1bb35",
+              "supported": true
+            },
+            {
+              "device_profile_id": "ElegooSlicer:elegoo:elegoo-centauri:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Elegoo Centauri 0.4 nozzle",
+              "revision": "sha256:8ca9b109790f083f2ff8f4e28e60da22ab4d8c8a4a5f8c26879eca19da2a00d1",
+              "supported": true
+            },
+            {
+              "device_profile_id": "ElegooSlicer:elegoo:elegoo-centauri:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Elegoo Centauri 0.6 nozzle",
+              "revision": "sha256:d26d2dc71b29b8fae06b9d0ae9c6ec7e7109060fff2f97841bc5f87227383fd7",
+              "supported": true
+            },
+            {
+              "device_profile_id": "ElegooSlicer:elegoo:elegoo-centauri:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Elegoo Centauri 0.8 nozzle",
+              "revision": "sha256:879a11777d67ceb16a2da77cc29230171b9836bbb6a769864d92bb78ae189494",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "textured-pei-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "elegoo_centuri_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon",
+          "display_name": "Elegoo Centauri Carbon",
+          "brand": "Elegoo",
+          "vendor_key": "Elegoo",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 256,
+          "thumbnail": "slicers/ElegooSlicer/01.05.01.06/assets/elegoo-centauri-carbon_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Elegoo Centauri Carbon 0.2 nozzle",
+              "revision": "sha256:4cb53861c76c7870674b57a4ff41044d9c530af705f8c2c54728b57c2843df5b",
+              "supported": true
+            },
+            {
+              "device_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Elegoo Centauri Carbon 0.4 nozzle",
+              "revision": "sha256:f526a7c0e758cbecc6da21cd6ecedd400ea34b1432a9c0e2815ee897976e09d9",
+              "supported": true
+            },
+            {
+              "device_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Elegoo Centauri Carbon 0.6 nozzle",
+              "revision": "sha256:41c9fc8223bf16e0144dace47cf6978e2d315782c0f92bdee284fad753f78fdf",
+              "supported": true
+            },
+            {
+              "device_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Elegoo Centauri Carbon 0.8 nozzle",
+              "revision": "sha256:3d75ff8196d936fe45a512863d69c986bceecc53ff2fd1f22a125799c68132dc",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "textured-pei-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "elegoo_centuri_carbon_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon-2",
+          "display_name": "Elegoo Centauri Carbon 2",
+          "brand": "Elegoo",
+          "vendor_key": "Elegoo",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 256,
+          "thumbnail": "slicers/ElegooSlicer/01.05.01.06/assets/elegoo-centauri-carbon-2_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon-2:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Elegoo Centauri Carbon 2 0.2 nozzle",
+              "revision": "sha256:7ea9a4bf5e31992b8df5119cfbfcbda81123ebb38bf2a01d57767c85515eb62c",
+              "supported": true
+            },
+            {
+              "device_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon-2:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Elegoo Centauri Carbon 2 0.4 nozzle",
+              "revision": "sha256:ef9da33df1f09cfd0d181f49ca2dea577d5f1ae143d16d47875e04b622819d7d",
+              "supported": true
+            },
+            {
+              "device_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon-2:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Elegoo Centauri Carbon 2 0.6 nozzle",
+              "revision": "sha256:59b7908ea41edbfa9ef662e5478e23deb5065e26efc1c3b5185c4036bab4f91b",
+              "supported": true
+            },
+            {
+              "device_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon-2:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Elegoo Centauri Carbon 2 0.8 nozzle",
+              "revision": "sha256:45a7673ea36c1a8117f268481278d78e76b9721c4ea7c2a4f7d8533af49e50b7",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "textured-pei-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "elegoo_centuri_carbon_buildplate_model.stl"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Smooth Cool Plate",
+          "display_name_zh": "光滑的低温打印床",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程耗材热床",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "Smooth High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI热床",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "纹理的低温打印床",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（超强粘附）",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
+        }
+      ]
+    },
+    {
+      "slicer_id": "AnycubicSlicerNext",
+      "display_name": "Anycubic Slicer Next",
+      "source_kind": "local_install",
+      "source_version": "1.3.2605.22",
+      "profile_format": "bambu_orca",
+      "machines": [
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-1",
+          "display_name": "Anycubic Kobra 1",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 220,
+          "bed_depth": 220,
+          "bed_height": 250,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-1_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-1:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra 1 0.4 nozzle",
+              "revision": "sha256:9160121867ffa16fef55ad67eed0a67b0faca7f42bd8edda5bc329b37762c117",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 1_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-1-max",
+          "display_name": "Anycubic Kobra 1 Max",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 400,
+          "bed_depth": 400,
+          "bed_height": 450,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-1-max_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-1-max:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra 1 Max 0.4 nozzle",
+              "revision": "sha256:cd7fd5775f00227a6dbee1aaff1406a949aa48e8ed9871c0686b9d0014d90d2e",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 1 Max_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-1-plus",
+          "display_name": "Anycubic Kobra 1 Plus",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 300,
+          "bed_depth": 300,
+          "bed_height": 350,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-1-plus_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-1-plus:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra 1 Plus 0.4 nozzle",
+              "revision": "sha256:f137117c94ffd531d00490bbeddb3b1316eb8f59b7429591dbb59fc95ac2cc1e",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 1 Plus_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2",
+          "display_name": "Anycubic Kobra 2",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 220,
+          "bed_depth": 220,
+          "bed_height": 250,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-2_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra 2 0.4 nozzle",
+              "revision": "sha256:4bb1a22f6cb607d7195d5e15321f30764f6e4e25bfe53847b070a447fb3e9f06",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 2_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-max",
+          "display_name": "Anycubic Kobra 2 Max",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 426,
+          "bed_depth": 426,
+          "bed_height": 500,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-2-max_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-max:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra 2 Max 0.4 nozzle",
+              "revision": "sha256:46b7878583a015c0afd2172d538ecd3d29f4757cf3a1c2cc50c48e99a6dfdb9c",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 2 Max_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-neo",
+          "display_name": "Anycubic Kobra 2 Neo",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 220,
+          "bed_depth": 220,
+          "bed_height": 250,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-2-neo_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-neo:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra 2 Neo 0.4 nozzle",
+              "revision": "sha256:1fbfb5c6fdeaf2150d0deb91977a20454147952a2b73c34f460bf2439f541177",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 2 Neo_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-plus",
+          "display_name": "Anycubic Kobra 2 Plus",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 320,
+          "bed_depth": 320,
+          "bed_height": 400,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-2-plus_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-plus:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra 2 Plus 0.4 nozzle",
+              "revision": "sha256:3a695b91838e4e80ecc843dc43e7bb65ce5bf07cb8eb353cddb75c1d844a8008",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 2 Plus_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-pro",
+          "display_name": "Anycubic Kobra 2 Pro",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 220,
+          "bed_depth": 220,
+          "bed_height": 250,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-2-pro_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-pro:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra 2 Pro 0.4 nozzle",
+              "revision": "sha256:802651e0d36a0a840a3947a61818be751da06dd8e1821cc56a0235e277ae0304",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 2 Pro_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3",
+          "display_name": "Anycubic Kobra 3",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 255,
+          "bed_depth": 255,
+          "bed_height": 260,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-3_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Anycubic Kobra 3 0.2 nozzle",
+              "revision": "sha256:178be537e355eb5f1fd307df445c03e5dc8f1decb0b009ff4d89335fe09800fb",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra 3 0.4 nozzle",
+              "revision": "sha256:a050f1fcdcc65f9d48159468d0c55973997b2494a8516834372c77fef78debc4",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Anycubic Kobra 3 0.6 nozzle",
+              "revision": "sha256:ab2149637876272e0156e442811cd1ab7ba0a16c85007f2b174459c891ca34cd",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Anycubic Kobra 3 0.8 nozzle",
+              "revision": "sha256:c73d5549e08b7e9134fc1a639fe26982b6ff2ebf13b81114df676e8edc12ae5b",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 3_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3-max",
+          "display_name": "Anycubic Kobra 3 Max",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 426,
+          "bed_depth": 420,
+          "bed_height": 501,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-3-max_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3-max:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra 3 Max 0.4 nozzle",
+              "revision": "sha256:b888b627baf95ffb93736e44a940066bc93d0c64c3bc5f987a2e4eb4c887d227",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3-max:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Anycubic Kobra 3 Max 0.6 nozzle",
+              "revision": "sha256:dc5fc163e8367422f5f38ff2386e691fda8df6c6c62829e2c7efd3a90b274e99",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3-max:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Anycubic Kobra 3 Max 0.8 nozzle",
+              "revision": "sha256:4fdcd7976edf780bb569283ff582d1c11bcc320b0d269cc6945c5e8ff10c2f3d",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 3 Max_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3-v2",
+          "display_name": "Anycubic Kobra 3 V2",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 255,
+          "bed_depth": 255,
+          "bed_height": 260,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-3-v2_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3-v2:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Anycubic Kobra 3 V2 0.2 nozzle",
+              "revision": "sha256:3fb8fc7ca818cd95017def87155345853f489ca51f5edd2643072dbabcfe5895",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3-v2:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra 3 V2 0.4 nozzle",
+              "revision": "sha256:3c8d034733eb4675eb654f2850063f9dd3a340c5891bfd10a029c3470f793fc9",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3-v2:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Anycubic Kobra 3 V2 0.6 nozzle",
+              "revision": "sha256:8eb07cbe9b159e256b3ad5014b2f8c069f079f68c66854e4b1325d61c8e12d6e",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3-v2:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Anycubic Kobra 3 V2 0.8 nozzle",
+              "revision": "sha256:6a647456336964852bcd80b2079a15ec059632174c170eebd967bb871365d662",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 3 V2_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-4",
+          "display_name": "Anycubic Kobra 4",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 260,
+          "bed_depth": 260,
+          "bed_height": 260,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-4_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-4:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Anycubic Kobra 4 0.25 nozzle",
+              "revision": "sha256:265dd6e3bfacf10f3a93eaaeb7b57ffc02655fdef4477c47f4833da2468c81ef",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-4:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra 4 0.4 nozzle",
+              "revision": "sha256:6c62d7ef9f10f8236a1dfa2db3343cd6b032a05d1a630fb83903516842f85f37",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-4:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Anycubic Kobra 4 0.6 nozzle",
+              "revision": "sha256:245a4504f4922593b6a21fe301619cb5796d7413083cb94a9006f19d58cd393e",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-4:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Anycubic Kobra 4 0.8 nozzle",
+              "revision": "sha256:0c6a68296ebef7b2a451da30cf6f613ce50a6bacb18ca452299334ec8846cdce",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 4_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1",
+          "display_name": "Anycubic Kobra S1",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 250,
+          "bed_depth": 250,
+          "bed_height": 250,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-s1_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Anycubic Kobra S1 0.25 nozzle",
+              "revision": "sha256:ed349acf51732b2f651fa4e873d7e2cdd97d209956d18224d85b6a245d46d8eb",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra S1 0.4 nozzle",
+              "revision": "sha256:b61a695af59ea7ba7a30b64f488ef0ff1fa37991eb2106a92231ca2b3d8e91e1",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Anycubic Kobra S1 0.6 nozzle",
+              "revision": "sha256:596c4bec1b2ca0841365ab2d567d6fe37edd57d1521e7d79e87e6935e25dc1e5",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Anycubic Kobra S1 0.8 nozzle",
+              "revision": "sha256:7b0daa0d4bf115f8600eb48a79eb5901e2fd4772e1e2ff78e8ec9b3870d56469",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra S1_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1-max",
+          "display_name": "Anycubic Kobra S1 Max",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 350,
+          "bed_depth": 350,
+          "bed_height": 350,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-s1-max_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1-max:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Anycubic Kobra S1 Max 0.25 nozzle",
+              "revision": "sha256:3ef0fb0a75f1ebcb7dd70ad82d339403bea05b453a38dfda73e6cf1bc86ee1be",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1-max:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra S1 Max 0.4 nozzle",
+              "revision": "sha256:4b8c1669940e0caefcdf4bf1f2bcae6994e270b50fcb9512b3fe769ff5349571",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1-max:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Anycubic Kobra S1 Max 0.6 nozzle",
+              "revision": "sha256:a05fc810518ad599300356c7f767dc923c16dae7a2dd91110bb37fe952eb7ad5",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1-max:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Anycubic Kobra S1 Max 0.8 nozzle",
+              "revision": "sha256:baf18104d8860b931cb5dc817c2f0267d7a53d15698a4fe4a11dbfd08058844e",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra S1 Max_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-x",
+          "display_name": "Anycubic Kobra X",
+          "brand": "Anycubic",
+          "vendor_key": "Anycubic",
+          "bed_width": 260,
+          "bed_depth": 260,
+          "bed_height": 260,
+          "thumbnail": "slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-x_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Anycubic Kobra X 0.25 nozzle",
+              "revision": "sha256:151e6710fa31c9334d8d49896e0b389cea1580704fcd6f6a67614ba89377e409",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Anycubic Kobra X 0.4 nozzle",
+              "revision": "sha256:7611fc397b9aadaf188d20574f371d5ca3a59f01f03282be890a646368ae0467",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.6",
+              "nozzle_size": "0.6",
+              "source_profile_name": "Anycubic Kobra X 0.6 nozzle",
+              "revision": "sha256:5ef664a3829b3040e8ff807adb908c94534fb01ad2793c8acfd80ae53c40cd0f",
+              "supported": true
+            },
+            {
+              "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.8",
+              "nozzle_size": "0.8",
+              "source_profile_name": "Anycubic Kobra X 0.8 nozzle",
+              "revision": "sha256:72f30d27f011be6327ee5c699e978a6776a51a8e7ae5d2c1cc5827b4af367ef0",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra X_buildplate_model.stl"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Cool Plate",
+          "display_name_zh": "低温打印板",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料打印板",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理 PEI 打印板",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "增稳低温打印板",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（SuperTack）",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
+        }
+      ]
+    },
+    {
+      "slicer_id": "FlashStudio",
+      "display_name": "Flash Studio Desktop",
+      "source_kind": "local_install",
+      "source_version": "02.01.01.00",
+      "profile_format": "bambu_orca",
+      "machines": [
+        {
+          "machine_profile_id": "FlashStudio:flashforge:flashforge-ad5x",
+          "display_name": "Flashforge AD5X",
+          "brand": "Flashforge",
+          "vendor_key": "Flashforge",
+          "bed_width": 220,
+          "bed_depth": 220,
+          "bed_height": 220,
+          "thumbnail": "slicers/FlashStudio/02.01.01.00/assets/flashforge-ad5x_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-ad5x:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Flashforge AD5X 0.25 nozzle",
+              "revision": "sha256:c64cfd9480c2237c7c9b3849ece001dde1cc6cac2d356721fa0371d6dc6dcd51",
+              "supported": true
+            },
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-ad5x:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Flashforge AD5X 0.4 nozzle",
+              "revision": "sha256:eb2db708a32c0a0cd4321e9476ca1509cd682b1a62c552c13d4e026d51bcdad0",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "flashforge_adventurer5m_series_buildplate_model.STL"
+        },
+        {
+          "machine_profile_id": "FlashStudio:flashforge:flashforge-creator-5",
+          "display_name": "Flashforge Creator 5",
+          "brand": "Flashforge",
+          "vendor_key": "Flashforge",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 256,
+          "thumbnail": "slicers/FlashStudio/02.01.01.00/assets/flashforge-creator-5_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-creator-5:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Flashforge Creator 5 0.25 nozzle",
+              "revision": "sha256:6e872ccb1802815511051ec9befbe10fdf99ef367459c33f7f8fb5f9573f23cd",
+              "supported": true
+            },
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-creator-5:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Flashforge Creator 5 0.4 nozzle",
+              "revision": "sha256:66c185dfc74c9403ccd745380c660d315453d5ab60524eb9edeec14c9982ee60",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "flashforge_c5_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "FlashStudio:flashforge:flashforge-creator-5-pro",
+          "display_name": "Flashforge Creator 5 Pro",
+          "brand": "Flashforge",
+          "vendor_key": "Flashforge",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 256,
+          "thumbnail": "slicers/FlashStudio/02.01.01.00/assets/flashforge-creator-5-pro_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-creator-5-pro:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Flashforge Creator 5 Pro 0.25 nozzle",
+              "revision": "sha256:9da5657d8993c89e0bbe57e189f95afb7a1a39612b516a1ecc20eb6c31ee228b",
+              "supported": true
+            },
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-creator-5-pro:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Flashforge Creator 5 Pro 0.4 nozzle",
+              "revision": "sha256:0137bf2510d8d92f06f18b83e07ab6d971b92d75c6cd7f6c510d1b7da2a3e1f2",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "flashforge_c5_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "FlashStudio:flashforge:flashforge-guider-3-ultra",
+          "display_name": "Flashforge Guider 3 Ultra",
+          "brand": "Flashforge",
+          "vendor_key": "Flashforge",
+          "bed_width": 300,
+          "bed_depth": 330,
+          "bed_height": 600,
+          "thumbnail": "slicers/FlashStudio/02.01.01.00/assets/flashforge-guider-3-ultra_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-guider-3-ultra:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Flashforge Guider 3 Ultra 0.4 Nozzle",
+              "revision": "sha256:e85f3618040edbdf7dec9125ce7dbf76f57a5a2b19b0cf9e8bc044d507bcfcc2",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [],
+          "default_build_plate_id": "",
+          "bed_model": "flashforge_g3u_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "FlashStudio:flashforge:flashforge-guider4",
+          "display_name": "Flashforge Guider4",
+          "brand": "Flashforge",
+          "vendor_key": "Flashforge",
+          "bed_width": 300,
+          "bed_depth": 300,
+          "bed_height": 300,
+          "thumbnail": "slicers/FlashStudio/02.01.01.00/assets/flashforge-guider4_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-guider4:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Flashforge Guider4 0.25 nozzle",
+              "revision": "sha256:50faa5d09d0eef1a6025d0648627a6cc433fa9f5a28b22c1b96848fbeea25e16",
+              "supported": true
+            },
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-guider4:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Flashforge Guider4 0.4 nozzle",
+              "revision": "sha256:7cbadd0c783f685942c9914d9262791aff8ebfb155ff2cbf27ac632ce2cf314d",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "flashforge_g4pro_buildplate_model.stl"
+        },
+        {
+          "machine_profile_id": "FlashStudio:flashforge:flashforge-guider4-pro",
+          "display_name": "Flashforge Guider4 Pro",
+          "brand": "Flashforge",
+          "vendor_key": "Flashforge",
+          "bed_width": 300,
+          "bed_depth": 300,
+          "bed_height": 300,
+          "thumbnail": "slicers/FlashStudio/02.01.01.00/assets/flashforge-guider4-pro_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-guider4-pro:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Flashforge Guider4 Pro 0.25 nozzle",
+              "revision": "sha256:a4de2a2358a51538b1f3df6787cb97ff8bb8d0eaf4a150d2bdd1590b929ed176",
+              "supported": true
+            },
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-guider4-pro:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Flashforge Guider4 Pro 0.4 nozzle",
+              "revision": "sha256:aabf7d1dde6636f5ac3e9bc30c38523d50cdb28b53443ce272c07b0f986df4fc",
+              "supported": true
+            }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "flashforge_g4pro_buildplate_model.stl"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Smooth Cool Plate",
+          "display_name_zh": "光滑的低温打印床",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料热床",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "Smooth High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI热床",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "纹理的低温打印床",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（超强粘附）",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
+        }
+      ]
+    },
+    {
+      "slicer_id": "QIDIStudio",
+      "display_name": "QIDI Studio",
+      "source_kind": "local_install",
+      "source_version": "02.07.02.60",
+      "profile_format": "bambu_orca",
+      "machines": [
+        {
+          "machine_profile_id": "QIDIStudio:qidi:q2",
+          "display_name": "Q2",
+          "brand": "QIDI",
+          "vendor_key": "Q Series",
+          "bed_width": 270,
+          "bed_depth": 270,
+          "bed_height": 256,
+          "thumbnail": "slicers/QIDIStudio/02.07.02.60/assets/q2_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "QIDIStudio:qidi:q2:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Q2 0.2 nozzle",
+              "revision": "sha256:3720ca449065bb7af66c96f60886f0d46fe48f055a0d19f9124875ee36cf76f4",
+              "supported": true
+            },
+            {
+              "device_profile_id": "QIDIStudio:qidi:q2:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Q2 0.4 nozzle",
+              "revision": "sha256:43e37eb7d191a980394932065bc62b45af69795fd5ecccdc4a76e6e6678dde37",
+              "supported": true
+            }
+          ],
+          "bed_model": "Q2_bed.stl"
+        },
+        {
+          "machine_profile_id": "QIDIStudio:qidi:q2c",
+          "display_name": "Q2C",
+          "brand": "QIDI",
+          "vendor_key": "Q Series",
+          "bed_width": 270,
+          "bed_depth": 270,
+          "bed_height": 256,
+          "thumbnail": "slicers/QIDIStudio/02.07.02.60/assets/q2c_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "QIDIStudio:qidi:q2c:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Q2C 0.2 nozzle",
+              "revision": "sha256:21e5321310fb95ba21740ba5a5656eeb36f3b35db6f45755a4b0b7c42aa60861",
+              "supported": true
+            },
+            {
+              "device_profile_id": "QIDIStudio:qidi:q2c:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Q2C 0.4 nozzle",
+              "revision": "sha256:2e1ab2e85ae95087f8aaa7ab46e2ea02f68524e5b4fb5fc8c211e9ed7ded7eac",
+              "supported": true
+            }
+          ],
+          "bed_model": "Q2C_bed.stl"
+        },
+        {
+          "machine_profile_id": "QIDIStudio:qidi:x-max-4",
+          "display_name": "X-Max 4",
+          "brand": "QIDI",
+          "vendor_key": "X 4 Series",
+          "bed_width": 390,
+          "bed_depth": 390,
+          "bed_height": 340,
+          "thumbnail": "slicers/QIDIStudio/02.07.02.60/assets/x-max-4_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "QIDIStudio:qidi:x-max-4:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "X-Max 4 0.2 nozzle",
+              "revision": "sha256:af44af53057fbfadb27b8d3b4092ce185781ddf4288e02b634f392730fd1bc7e",
+              "supported": true
+            },
+            {
+              "device_profile_id": "QIDIStudio:qidi:x-max-4:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "X-Max 4 0.4 nozzle",
+              "revision": "sha256:de1aa06641a5436a5e8ae3917445db267aadd40e524d3f31526ae0a46740ae46",
+              "supported": true
+            }
+          ],
+          "bed_model": "X-Max 4_bed.stl"
+        },
+        {
+          "machine_profile_id": "QIDIStudio:qidi:x-plus-5",
+          "display_name": "X-Plus 5",
+          "brand": "QIDI",
+          "vendor_key": "X 5 Series",
+          "bed_width": 320,
+          "bed_depth": 320,
+          "bed_height": 300,
+          "thumbnail": "slicers/QIDIStudio/02.07.02.60/assets/x-plus-5_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "QIDIStudio:qidi:x-plus-5:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "X-Plus 5 0.4 nozzle",
+              "revision": "sha256:aeb2ad1d89353e543f05efc86ce81ef0d4938680540c1acab5a356b25b9b931b",
+              "supported": true
+            }
+          ],
+          "bed_model": "X-Plus 5_bed.stl"
+        }
+      ]
+    }
+  ]
+}

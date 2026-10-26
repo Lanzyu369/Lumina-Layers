@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "moduleId": "lumina.bead-pattern",
+  "version": "1.0.1",
+  "repository": "https://github.com/lumina-layer-studio/Lumina-Fuse-Bead-Studio",
+  "releaseTag": "v1.0.1",
+  "releaseAsset": "lumina.bead-pattern-1.0.1.lumina-workshop",
+  "downloadUrl": "https://github.com/lumina-layer-studio/Lumina-Fuse-Bead-Studio/releases/download/v1.0.1/lumina.bead-pattern-1.0.1.lumina-workshop",
+  "assetBytes": 117755,
+  "sha256": "a67c39167c35bd0fb2a5e0144ae019d95bd2394963bedaf925abb5b02fbb9158",
+  "manifestSha256": "9b7e67267a78b29ea2f8f0e30adac5c343b047615933b132af19bf6b8f47b9a3"
+}

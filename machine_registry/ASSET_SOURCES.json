@@ -1,0 +1,1465 @@
+{
+  "schema_version": 1,
+  "checked_on": "2026-10-16",
+  "license_sources": "../third_party/interface-assets/sources.json",
+  "images": [
+    {
+      "path": "machine_registry/slicers/SnapmakerOrca/02.02.49.02/assets/snapmaker-u1_cover.png",
+      "blob": "d3f48f7852804d458baed7bb30f348b7a6c94954",
+      "sha256": "08522f94109d18ca337a4c9bb742e5939d95745914fbd1f8a56f74fb0a284e72",
+      "upstream_exact_matches": [
+        {
+          "repository": "Snapmaker/OrcaSlicer",
+          "source_path": "resources/web/flutter_web/assets/assets/images/snapmakerU1Cover.png"
+        },
+        {
+          "repository": "ANYCUBIC-3D/AnycubicSlicerNext",
+          "source_path": "resources/profiles/Snapmaker/Snapmaker U1_cover.png"
+        }
+      ],
+      "application_version": "02.02.49.02",
+      "slicer_id": "SnapmakerOrca"
+    },
+    {
+      "path": "machine_registry/slicers/QIDIStudio/02.07.02.60/assets/q2c_cover.png",
+      "blob": "e2ce1c25840ac6d04c8dfc2703b05a328dc0ace9",
+      "sha256": "38370bb4c9d1e757386363f016c8b15e4109f082fedc80303a613cb2ed6c18b8",
+      "upstream_exact_matches": [
+        {
+          "repository": "QIDITECH/QIDIStudio",
+          "source_path": "resources/profiles/Q Series/Q2C_cover.png"
+        }
+      ],
+      "application_version": "02.07.02.60",
+      "slicer_id": "QIDIStudio"
+    },
+    {
+      "path": "machine_registry/slicers/QIDIStudio/02.07.02.60/assets/x-max-4_cover.png",
+      "blob": "343b8c696bcc250f484b3c8c7d8d66d0f8b65232",
+      "sha256": "c491e0482f72b2a0fbcfaa76f07b6139ff4cfe807131f08a07a2160b9473ff46",
+      "upstream_exact_matches": [
+        {
+          "repository": "QIDITECH/QIDIStudio",
+          "source_path": "resources/profiles/X 4 Series/X-Max 4_cover.png"
+        }
+      ],
+      "application_version": "02.07.02.60",
+      "slicer_id": "QIDIStudio"
+    },
+    {
+      "path": "machine_registry/slicers/QIDIStudio/02.07.02.60/assets/x-plus-5_cover.png",
+      "blob": "06f5c5858df019a00fa26f45fa34f8bf8e618064",
+      "sha256": "40ed857cbd13add53a742fb7cd1bd1d03f88cfa6202043e23bc35c6297ac7bb9",
+      "upstream_exact_matches": [
+        {
+          "repository": "QIDITECH/QIDIStudio",
+          "source_path": "resources/profiles/X 5 Series/X-Plus 5_cover.png"
+        }
+      ],
+      "application_version": "02.07.02.60",
+      "slicer_id": "QIDIStudio"
+    },
+    {
+      "path": "machine_registry/slicers/QIDIStudio/02.07.02.60/assets/q2_cover.png",
+      "blob": "ec7c548216e59855c49e46a6dad23d9e4cc3dbdb",
+      "sha256": "6b592d37f87d84480d30c9873b0003c826c1ee1bd7716af2341ca324265723f7",
+      "upstream_exact_matches": [
+        {
+          "repository": "Snapmaker/OrcaSlicer",
+          "source_path": "resources/profiles/Qidi/Qidi Q2_cover.png"
+        },
+        {
+          "repository": "ANYCUBIC-3D/AnycubicSlicerNext",
+          "source_path": "resources/profiles/Qidi/Qidi Q2_cover.png"
+        },
+        {
+          "repository": "QIDITECH/QIDIStudio",
+          "source_path": "resources/profiles/Q Series/Q2_cover.png"
+        }
+      ],
+      "application_version": "02.07.02.60",
+      "slicer_id": "QIDIStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a2l_cover.png",
+      "blob": "513fa6fdaa1c2f3c457febccf15f5592f03118bc",
+      "sha256": "97723c77afab542df43bc3452561c66006dd8f88dc56678a2d4f1e4a363be28d",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab A2L_cover.png"
+        },
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/images/printer_preview_N9.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p1s_thumbnail.png",
+      "blob": "04d179dd05d1b9dcfe67ecaeb01efd45afbee788",
+      "sha256": "070ab3d7499d4e7991348e75291d91c3d8b73bb30f8e3e80af6185414cf59a87",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab P1S_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab P1S_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1e_thumbnail.png",
+      "blob": "5ae4c807d68e7b10b45b41cf6a30f0ad1db0ae56",
+      "sha256": "9771817f162e64e5bd6645f4e46178123cfa98cf7242431ff064e3b5033ea446",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1E_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1E_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1e_cover.png",
+      "blob": "1daaf9c3a9c1f1e913d4117af4d9cb4f84c1fd7e",
+      "sha256": "46d849f75f80f77fbc6f979e33664ad02973a325682fa704f988c0f589166ffa",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1E_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p1p_thumbnail.png",
+      "blob": "78c0d5d115f40cb81c61124f638f73238e405666",
+      "sha256": "261ef3fab9b861d67912f9197e1aa8b3a4b0fad79a16f5911d25191f5fec0fa6",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab P1P_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab P1P_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1_cover.png",
+      "blob": "5655a9f83c0f11bc05ae0726d5916a13eade1701",
+      "sha256": "2ffdf296c3d6bc359a29e6bd89c5d43917e2a30725bc9d06af9a91bcfcf5b792",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2d_thumbnail.png",
+      "blob": "3f3a099bc7567f332de72139ef568540a78c2e6f",
+      "sha256": "722ce2d9436b54e2364c5ce0e0931d376dca3b322deffd2f39d5616dbce672f2",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2D_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2D_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a1_cover.png",
+      "blob": "93f7121ace1c0154c04ea6dd681dfa8e51bfc1e2",
+      "sha256": "480c28ace97a1f378f303f72faf6c4b2543a1e0c1612a84b9b4d2bdf97d41f5e",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab A1_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p2s_thumbnail.png",
+      "blob": "30982b863a0cfa0af8b4cc433cbb0e9a3c420e09",
+      "sha256": "d4a44fc4ffcee1db62374797f36e601271cc25bead5e0b8e2378e5c75ed7e45b",
+      "upstream_exact_matches": [
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab P2S_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2d-pro_thumbnail.png",
+      "blob": "d45e2317942951b525531f732590b883de408e19",
+      "sha256": "d689f97d0aa8bacdfe932db8e5f2cafdb353ffd95fdcbb74e7ab8155fa27dfec",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2D Pro_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2D Pro_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1_thumbnail.png",
+      "blob": "76737741150fcb16ce56a79df107892b0a5f3e75",
+      "sha256": "d2cd32bd75af2a890f038c7c9c6900ae61d8ce7fcaeb7166f010fcac52b73ae3",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2s_cover.png",
+      "blob": "d2c5718d9546b6c58b474c4934a9405fd885f547",
+      "sha256": "4adce7f9ccef74ba5b5dcd433252451257c45534ffd5aee6ed5c5f207a91ffa1",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2S_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p1s_cover.png",
+      "blob": "38ec69bb8564fb9bc35669bb53756b1013298c3f",
+      "sha256": "4b06e5d9b6fb7d6b98e4ff7a52f5b0797c067e8aacd300d67f6e8b089bfc3bc0",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab P1S_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2d-pro_cover.png",
+      "blob": "3eb7b4cc07cb2a3442b5eb5fa952cd21a64db427",
+      "sha256": "08d7e7cb886864c57ae1e136e1b537ee2632248dc47012ce031b49d9f1b4c4f7",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2D Pro_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2c_thumbnail.png",
+      "blob": "6dfddf5ef65656f1c0ef277278fd48a32a17d993",
+      "sha256": "3ca299f3680553d61e91864ae668369800f395f47a8aaa8980bc55711a430b2f",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2C_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2s_thumbnail.png",
+      "blob": "70a048d50a342e52db76e5924d55621a26f86c17",
+      "sha256": "7f1d5223e6d0db96f0fd870213423d98a3643db647f6e583a08a13983bd3965f",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2S_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2S_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a1-mini_thumbnail.png",
+      "blob": "060e0a2d2ccd81e481379f9c0fe1556e9c67a277",
+      "sha256": "1dd868b4ba04bcc35734b561dd01eaecfb3b1e74456addaadc9aa8ca0ba94909",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab A1 mini_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab A1 mini_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2c_cover.png",
+      "blob": "6dfddf5ef65656f1c0ef277278fd48a32a17d993",
+      "sha256": "3ca299f3680553d61e91864ae668369800f395f47a8aaa8980bc55711a430b2f",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2C_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1-carbon_cover.png",
+      "blob": "eab8a6d5c6c4da662907b870821cc510b935d6bd",
+      "sha256": "1e7b4cb8f1b3e46de805d242e5aa1345cd63f253e5b06a95cc02cc062b9fd788",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1 Carbon_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p2s_cover.png",
+      "blob": "febba125eedd53c83e11e1c422511a5c178ad9d2",
+      "sha256": "6807188e742cbb89f44e4e12b6260df2c3a3c7b381713ddea16cb3ab2c97cc3c",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab P2S_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a2l_thumbnail.png",
+      "blob": "513fa6fdaa1c2f3c457febccf15f5592f03118bc",
+      "sha256": "97723c77afab542df43bc3452561c66006dd8f88dc56678a2d4f1e4a363be28d",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab A2L_cover.png"
+        },
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/images/printer_preview_N9.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a1-mini_cover.png",
+      "blob": "f224e40b890729bb9556773856c66b4151818932",
+      "sha256": "ffdacb31241bc1c6d7e9289305e7b89b4df438c5f224a8b170d0abfd93f41169",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab A1 mini_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x2d_cover.png",
+      "blob": "7478f9007fb0adb0380c751d586533f87736432e",
+      "sha256": "9ac33e3e44d06597758010387e922e17eba3f81a39a367c7ae251abbb6551ec6",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab X2D_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p1p_cover.png",
+      "blob": "566ce214569b510f076456fc4a4c31d2ab564ca7",
+      "sha256": "0e8818ff422376285f5b39893e104e89db3c1a5a20e5aa53b879532783108964",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab P1P_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x2d_thumbnail.png",
+      "blob": "fa4b9cf8fe072adfddfbd18644dc2e1c652818d7",
+      "sha256": "f59d0106e1f2d46a9c3967fc96e3620408f7cd8689559229eeae7b4fac0a3b6d",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X2D_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X2D_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1-carbon_thumbnail.png",
+      "blob": "d8b089524cb0c3648bece0ad08530ce29223a490",
+      "sha256": "70354bd90ed45fdaa6e73f4ceb827acde5299ba9a3393c7d84097999bc419e62",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1 Carbon_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1 Carbon_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2d_cover.png",
+      "blob": "753fbe31aad121db442e90bd38fa23974bf34bc8",
+      "sha256": "79e84fa646df90179cd1aea7ad13c6affa9d97bacec1312b649ff9fecd560759",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2D_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a1_thumbnail.png",
+      "blob": "e6a335806109e9facbc0a08282865a47b2afc615",
+      "sha256": "bab4ce9e1e95a81e801d34d7617782cb98d8d9050d9af82ddb7ea14366dc2226",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab A1_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab A1_cover.png"
+        }
+      ],
+      "application_version": "02.07.00.07",
+      "slicer_id": "BambuStudio"
+    },
+    {
+      "path": "machine_registry/slicers/ElegooSlicer/01.05.01.06/assets/elegoo-centauri-carbon-2_cover.png",
+      "blob": "9bc6c49c2c8ccac0578663d58cfd0ed0e8e0386f",
+      "sha256": "7939c6440912a5fb09a6521ea8a77808316bb3048f65f1dfc4c291b17145c095",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/Elegoo/Elegoo Centauri Carbon 2_cover.png"
+        }
+      ],
+      "application_version": "01.05.01.06",
+      "slicer_id": "ElegooSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/ElegooSlicer/01.05.01.06/assets/elegoo-centauri-carbon_cover.png",
+      "blob": "b5a208ff1787f294628ef9dcfa30fff03b875c24",
+      "sha256": "7ff88e865ac723b1c9bef7f5240a53db43d3067768327cf46e411a2d569e26ed",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/Elegoo/Elegoo Centauri Carbon_cover.png"
+        }
+      ],
+      "application_version": "01.05.01.06",
+      "slicer_id": "ElegooSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/ElegooSlicer/01.05.01.06/assets/elegoo-centauri_cover.png",
+      "blob": "a4bb79a31bc1a0fd455e5419e959ea9dad378545",
+      "sha256": "b4e3132b8722edf3ef25269cded29aa240fd48d49ec42e992c80f58b8cff3780",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/Elegoo/Elegoo Centauri_cover.png"
+        }
+      ],
+      "application_version": "01.05.01.06",
+      "slicer_id": "ElegooSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p1s_thumbnail.png",
+      "blob": "04d179dd05d1b9dcfe67ecaeb01efd45afbee788",
+      "sha256": "070ab3d7499d4e7991348e75291d91c3d8b73bb30f8e3e80af6185414cf59a87",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab P1S_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab P1S_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1e_thumbnail.png",
+      "blob": "5ae4c807d68e7b10b45b41cf6a30f0ad1db0ae56",
+      "sha256": "9771817f162e64e5bd6645f4e46178123cfa98cf7242431ff064e3b5033ea446",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1E_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1E_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1e_cover.png",
+      "blob": "1daaf9c3a9c1f1e913d4117af4d9cb4f84c1fd7e",
+      "sha256": "46d849f75f80f77fbc6f979e33664ad02973a325682fa704f988c0f589166ffa",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1E_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p1p_thumbnail.png",
+      "blob": "78c0d5d115f40cb81c61124f638f73238e405666",
+      "sha256": "261ef3fab9b861d67912f9197e1aa8b3a4b0fad79a16f5911d25191f5fec0fa6",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab P1P_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab P1P_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1_cover.png",
+      "blob": "5655a9f83c0f11bc05ae0726d5916a13eade1701",
+      "sha256": "2ffdf296c3d6bc359a29e6bd89c5d43917e2a30725bc9d06af9a91bcfcf5b792",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2d_thumbnail.png",
+      "blob": "3f3a099bc7567f332de72139ef568540a78c2e6f",
+      "sha256": "722ce2d9436b54e2364c5ce0e0931d376dca3b322deffd2f39d5616dbce672f2",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2D_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2D_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-a1_cover.png",
+      "blob": "93f7121ace1c0154c04ea6dd681dfa8e51bfc1e2",
+      "sha256": "480c28ace97a1f378f303f72faf6c4b2543a1e0c1612a84b9b4d2bdf97d41f5e",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab A1_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p2s_thumbnail.png",
+      "blob": "30982b863a0cfa0af8b4cc433cbb0e9a3c420e09",
+      "sha256": "d4a44fc4ffcee1db62374797f36e601271cc25bead5e0b8e2378e5c75ed7e45b",
+      "upstream_exact_matches": [
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab P2S_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2d-pro_thumbnail.png",
+      "blob": "d45e2317942951b525531f732590b883de408e19",
+      "sha256": "d689f97d0aa8bacdfe932db8e5f2cafdb353ffd95fdcbb74e7ab8155fa27dfec",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2D Pro_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2D Pro_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1_thumbnail.png",
+      "blob": "76737741150fcb16ce56a79df107892b0a5f3e75",
+      "sha256": "d2cd32bd75af2a890f038c7c9c6900ae61d8ce7fcaeb7166f010fcac52b73ae3",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2s_cover.png",
+      "blob": "d2c5718d9546b6c58b474c4934a9405fd885f547",
+      "sha256": "4adce7f9ccef74ba5b5dcd433252451257c45534ffd5aee6ed5c5f207a91ffa1",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2S_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p1s_cover.png",
+      "blob": "38ec69bb8564fb9bc35669bb53756b1013298c3f",
+      "sha256": "4b06e5d9b6fb7d6b98e4ff7a52f5b0797c067e8aacd300d67f6e8b089bfc3bc0",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab P1S_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2d-pro_cover.png",
+      "blob": "3eb7b4cc07cb2a3442b5eb5fa952cd21a64db427",
+      "sha256": "08d7e7cb886864c57ae1e136e1b537ee2632248dc47012ce031b49d9f1b4c4f7",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2D Pro_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2s_thumbnail.png",
+      "blob": "70a048d50a342e52db76e5924d55621a26f86c17",
+      "sha256": "7f1d5223e6d0db96f0fd870213423d98a3643db647f6e583a08a13983bd3965f",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2S_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2S_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-a1-mini_thumbnail.png",
+      "blob": "060e0a2d2ccd81e481379f9c0fe1556e9c67a277",
+      "sha256": "1dd868b4ba04bcc35734b561dd01eaecfb3b1e74456addaadc9aa8ca0ba94909",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab A1 mini_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab A1 mini_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1-carbon_cover.png",
+      "blob": "eab8a6d5c6c4da662907b870821cc510b935d6bd",
+      "sha256": "1e7b4cb8f1b3e46de805d242e5aa1345cd63f253e5b06a95cc02cc062b9fd788",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1 Carbon_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p2s_cover.png",
+      "blob": "febba125eedd53c83e11e1c422511a5c178ad9d2",
+      "sha256": "6807188e742cbb89f44e4e12b6260df2c3a3c7b381713ddea16cb3ab2c97cc3c",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab P2S_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-a1-mini_cover.png",
+      "blob": "f224e40b890729bb9556773856c66b4151818932",
+      "sha256": "ffdacb31241bc1c6d7e9289305e7b89b4df438c5f224a8b170d0abfd93f41169",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab A1 mini_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x2d_cover.png",
+      "blob": "7478f9007fb0adb0380c751d586533f87736432e",
+      "sha256": "9ac33e3e44d06597758010387e922e17eba3f81a39a367c7ae251abbb6551ec6",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab X2D_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p1p_cover.png",
+      "blob": "566ce214569b510f076456fc4a4c31d2ab564ca7",
+      "sha256": "0e8818ff422376285f5b39893e104e89db3c1a5a20e5aa53b879532783108964",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab P1P_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x2d_thumbnail.png",
+      "blob": "fa4b9cf8fe072adfddfbd18644dc2e1c652818d7",
+      "sha256": "f59d0106e1f2d46a9c3967fc96e3620408f7cd8689559229eeae7b4fac0a3b6d",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X2D_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X2D_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1-carbon_thumbnail.png",
+      "blob": "d8b089524cb0c3648bece0ad08530ce29223a490",
+      "sha256": "70354bd90ed45fdaa6e73f4ceb827acde5299ba9a3393c7d84097999bc419e62",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1 Carbon_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab X1 Carbon_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2d_cover.png",
+      "blob": "753fbe31aad121db442e90bd38fa23974bf34bc8",
+      "sha256": "79e84fa646df90179cd1aea7ad13c6affa9d97bacec1312b649ff9fecd560759",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/BBL/Bambu Lab H2D_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-a1_thumbnail.png",
+      "blob": "e6a335806109e9facbc0a08282865a47b2afc615",
+      "sha256": "bab4ce9e1e95a81e801d34d7617782cb98d8d9050d9af82ddb7ea14366dc2226",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab A1_cover.png"
+        },
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/BBL/Bambu Lab A1_cover.png"
+        }
+      ],
+      "application_version": "02.01.00.14",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.04.00.00/assets/elegoo-centauri-carbon-2_cover.png",
+      "blob": "9bc6c49c2c8ccac0578663d58cfd0ed0e8e0386f",
+      "sha256": "7939c6440912a5fb09a6521ea8a77808316bb3048f65f1dfc4c291b17145c095",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/Elegoo/Elegoo Centauri Carbon 2_cover.png"
+        }
+      ],
+      "application_version": "02.04.00.00",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.04.00.00/assets/elegoo-centauri-carbon_cover.png",
+      "blob": "b5a208ff1787f294628ef9dcfa30fff03b875c24",
+      "sha256": "7ff88e865ac723b1c9bef7f5240a53db43d3067768327cf46e411a2d569e26ed",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/Elegoo/Elegoo Centauri Carbon_cover.png"
+        }
+      ],
+      "application_version": "02.04.00.00",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.04.00.00/assets/snapmaker-u1_cover.png",
+      "blob": "d3f48f7852804d458baed7bb30f348b7a6c94954",
+      "sha256": "08522f94109d18ca337a4c9bb742e5939d95745914fbd1f8a56f74fb0a284e72",
+      "upstream_exact_matches": [
+        {
+          "repository": "Snapmaker/OrcaSlicer",
+          "source_path": "resources/web/flutter_web/assets/assets/images/snapmakerU1Cover.png"
+        },
+        {
+          "repository": "ANYCUBIC-3D/AnycubicSlicerNext",
+          "source_path": "resources/profiles/Snapmaker/Snapmaker U1_cover.png"
+        }
+      ],
+      "application_version": "02.04.00.00",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/OrcaSlicer/02.04.00.00/assets/elegoo-centauri_cover.png",
+      "blob": "a4bb79a31bc1a0fd455e5419e959ea9dad378545",
+      "sha256": "b4e3132b8722edf3ef25269cded29aa240fd48d49ec42e992c80f58b8cff3780",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/profiles/Elegoo/Elegoo Centauri_cover.png"
+        }
+      ],
+      "application_version": "02.04.00.00",
+      "slicer_id": "OrcaSlicer"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/COREONEL_thumbnail.png",
+      "blob": "1367f29b39b4add36f257487c475a2205d3b1c53",
+      "sha256": "10c44dd60136e0d9a09dd0ba1e6f60148a7579f4306c72840a8b555c2f3a3aad",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/XLP5T_thumbnail.png",
+      "blob": "cccbaa1e2afd74fb087b0356a0642c69dce21f7b",
+      "sha256": "494bbae39c016096c9ae743ea5edaf76e3f4b246ceeeb7e0d3b43478e9b7385f",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/XL_thumbnail.png",
+      "blob": "4fed11c6e99c1cac979aa3da039f05e22cf278f5",
+      "sha256": "132fa33d0dda896db691ba1d41bbc00817d6acb750a1c87a91cfc7c1088be923",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/MK2.5S_thumbnail.png",
+      "blob": "3232121111ed1f8152b1c88ae1d322762e906e10",
+      "sha256": "2acf754dc997bb674747979268b820036d4f2456efcdcb5c42f4bc58ddd9dc65",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/MINI_thumbnail.png",
+      "blob": "a2dcd9d5b32b6d2cd4f51bbe1527abe155c987dc",
+      "sha256": "0f513ecc95d9b77bcaedfd13324b98cb8dbf3e6f91438b1a2b5ad4801f54f9d7",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/COREONEOAK_thumbnail.png",
+      "blob": "6cd1eeba54b05af7f09a7c0922cf69287cc7db1c",
+      "sha256": "31d65a60142d1fa9751f8b505a35e93c51e4bf12f0e79921bc4ec5a8f201a0cd",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/XLP2T_thumbnail.png",
+      "blob": "bd73009daabfe584c953449a7461a927070efe3c",
+      "sha256": "403547cca0099f393cb403bbd981e9ec522f3e38554ab8513f87cf0d1d845fdc",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/MK4_thumbnail.png",
+      "blob": "8e6286ec1c8a10a68ccd04bf69f9b74409f3476f",
+      "sha256": "06678ed2db034918a2bfd67bae09b0ff133a472462079c463098f62a09473c06",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/MK3.5S_thumbnail.png",
+      "blob": "19f7a0e2e70749a5fbd83e040163f28079d6e0a6",
+      "sha256": "c72f7e7ccebc88ddfc328bd591c7e3826e799db4bef8065c8e07ed73b8dfbbeb",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/XLP1T_thumbnail.png",
+      "blob": "bb8736984ee8170382bef11443899c11cbdee101",
+      "sha256": "0bf79a876b1a0b38c1721e709a222ffd6e16b8799366e424c4b4337736e7adfd",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/COREONEINDX_thumbnail.png",
+      "blob": "b608a75833b139f7ec28553960ee4fb1c0cc9874",
+      "sha256": "e23405c10a6011bf732ec1f439e9ecaee47d6110afbd2f023cf127114a781319",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/MK3_thumbnail.png",
+      "blob": "71476c4f9762ad150a28115e241f77435bf171d4",
+      "sha256": "77ba7c40d7a9ef619d42b8d7d79c92848ba440120b3740a57bd48103889a334b",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/MK4S_thumbnail.png",
+      "blob": "784d607382c833e1c16c14c0ad7d02e9262003cb",
+      "sha256": "76381fa709a698396a7b4aa91263bd723b73e2b633787bcfa00b397219555412",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/XL2_thumbnail.png",
+      "blob": "f5bc1ce68d6dd5da3429979212ce012263c807f2",
+      "sha256": "ad3509eadd376b68933b614ac093939836aa0fb08097b8ba385577c2771910c4",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/MK2S_thumbnail.png",
+      "blob": "d34ea976f7b0ae931a75ddc9960c16aeec83234c",
+      "sha256": "db8fe0098a18ae81a80a273dca60af68831a5bf25781b6f9b4c1c7f4919931c5",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/COREONE_thumbnail.png",
+      "blob": "642728e6986a72c4c9c4791c9c32a72501012d90",
+      "sha256": "8c9062e10c002e28ac1878952fea59dd5becfe3a2f7c8562346f51a3926e2079",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/XL5_thumbnail.png",
+      "blob": "ee303b8492fddfbd6ff0e11f0df4b66a57bf3c1d",
+      "sha256": "91366745b0c48dab89eba3305165ac3b4bfd621464814689db9a21b822df94d6",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/PrusaSlicer/3.0.0-alpha12/assets/MK2.5_thumbnail.png",
+      "blob": "0efbaaebc33d0578c40e93e555d78a3f9112cf9e",
+      "sha256": "8ca2e141b79df2a2395359ec808aa8dd55607989b632296662b94fe4e55c8b95",
+      "upstream_exact_matches": [],
+      "application_version": "3.0.0-alpha12",
+      "slicer_id": "PrusaSlicer",
+      "transformation": "512-pixel rendering of official PrusaResearch FFF 1.0.11 SVG",
+      "acquisition": "PrusaSlicer 3.0.0-alpha12 official macOS release; package digest in adjacent SOURCES.md"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-s1-max_cover.png",
+      "blob": "9a6079ae9b65087f96e3521122f64e288e0e438b",
+      "sha256": "e1855107d3ad735a28af09d57a8facce7bde7251c29ba149d6a02ecbea7e7537",
+      "upstream_exact_matches": [
+        {
+          "repository": "elegooofficial/ElegooSlicer",
+          "source_path": "resources/profiles/Anycubic/Anycubic Kobra S1 Max_cover.png"
+        }
+      ],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-3_cover.png",
+      "blob": "5e4e8da1aebc2f196c024e9297587ce9cf606b3a",
+      "sha256": "11696f7b87af907ca3ea3cd5b6d4f2bdfacbb2955d567046e4729a0f264ef072",
+      "upstream_exact_matches": [],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-4_cover.png",
+      "blob": "e3dda5c851faac4e21eb8bb3c6784ff1a547c761",
+      "sha256": "17e80d2ff12e2512fe75bbf044ae8451a7c15b38a47658786454cece0e1e896a",
+      "upstream_exact_matches": [],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-3-max_cover.png",
+      "blob": "1a9fadf9e8a234f3a5687bc99e3ecd8cff516a5d",
+      "sha256": "310f4a644fb07e567aa73638850e10145a662070eabc26a910130923e6bd0d4e",
+      "upstream_exact_matches": [],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-3-v2_cover.png",
+      "blob": "a1700488cab4f0a5ed0984a29aae09b7fd1425dc",
+      "sha256": "cb53f995794cc5251aee5ba86c764eeefc94a31b5fb548ed122f3a705a27fd45",
+      "upstream_exact_matches": [],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-2_cover.png",
+      "blob": "821b2d179178fa86cfa7cb031053e0d16d6441e9",
+      "sha256": "e84d7bc5d5b03d7f8528c9219b94ee44f05eb7bef5648824a679230ea292c670",
+      "upstream_exact_matches": [],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-1-max_cover.png",
+      "blob": "078f8af8ecef1d0d2715f7fa0b4b39265cb45469",
+      "sha256": "40fadadd98951754611c6b1cb9156dcdee3abcdbcb5f96462d25d53e22df20ab",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/Anycubic/Anycubic Kobra Plus_cover.png"
+        },
+        {
+          "repository": "Snapmaker/OrcaSlicer",
+          "source_path": "resources/profiles/Anycubic/Anycubic Kobra Plus_cover.png"
+        },
+        {
+          "repository": "ANYCUBIC-3D/AnycubicSlicerNext",
+          "source_path": "resources/profiles/Anycubic/Anycubic Kobra Plus_cover.png"
+        }
+      ],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-x_cover.png",
+      "blob": "da07489253e20f284cea8ba3acda8705f8d063df",
+      "sha256": "e09978d4f8d5292dd98371ce524055df46c3a1dd92cf20085e920ee00148d810",
+      "upstream_exact_matches": [],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-1_cover.png",
+      "blob": "fe704c1122ad2308d2af33ea9f50ae04f8a54c31",
+      "sha256": "5c6cfc6239ca80dbd1e540f9d72e85e6bf63756a33120f356ecd78cc6f9a2dd0",
+      "upstream_exact_matches": [
+        {
+          "repository": "Snapmaker/OrcaSlicer",
+          "source_path": "resources/profiles/Anycubic/Anycubic Kobra_cover.png"
+        },
+        {
+          "repository": "ANYCUBIC-3D/AnycubicSlicerNext",
+          "source_path": "resources/profiles/Anycubic/Anycubic Kobra_cover.png"
+        }
+      ],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-2-plus_cover.png",
+      "blob": "0b9d2e46b2f524633602be3005b58f5190ff8762",
+      "sha256": "adb3579843c407f1e4eee70cc7ca6eca4ccfec0edcea35ac1ff0b045bb9b09dd",
+      "upstream_exact_matches": [],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-2-max_cover.png",
+      "blob": "f9ac646d61dc4dc98ff2d957f44cbd6404a7acd8",
+      "sha256": "0fcf58bb933dab83fe31710c0dc36dea468613e179f9fe3ca787189cd790e2ba",
+      "upstream_exact_matches": [],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-s1_cover.png",
+      "blob": "54921b8f182de7cd2856468411cb7750db4992ab",
+      "sha256": "41200bf11c2e5813e90968abcb39af63e42b03fb5360b73206040e265f0e408c",
+      "upstream_exact_matches": [],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-2-neo_cover.png",
+      "blob": "70c60ebcb7c54ae31444d0dcea346224dfc421bd",
+      "sha256": "5be8729e306d10023f06592a2a3d009474dbb4df471804b27a96cda69e0d541a",
+      "upstream_exact_matches": [],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-1-plus_cover.png",
+      "blob": "078f8af8ecef1d0d2715f7fa0b4b39265cb45469",
+      "sha256": "40fadadd98951754611c6b1cb9156dcdee3abcdbcb5f96462d25d53e22df20ab",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/profiles/Anycubic/Anycubic Kobra Plus_cover.png"
+        },
+        {
+          "repository": "Snapmaker/OrcaSlicer",
+          "source_path": "resources/profiles/Anycubic/Anycubic Kobra Plus_cover.png"
+        },
+        {
+          "repository": "ANYCUBIC-3D/AnycubicSlicerNext",
+          "source_path": "resources/profiles/Anycubic/Anycubic Kobra Plus_cover.png"
+        }
+      ],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext"
+    },
+    {
+      "path": "machine_registry/slicers/AnycubicSlicerNext/1.3.2605.22/assets/anycubic-kobra-2-pro_cover.png",
+      "blob": "39316aef89bc07943977870d9cc7be1167584f1c",
+      "sha256": "ff8a9d48180eaf77014e2cfcf93aa16231987befb4e764fba632385ff8b119d2",
+      "upstream_exact_matches": [],
+      "application_version": "1.3.2605.22",
+      "slicer_id": "AnycubicSlicerNext",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/FlashStudio/02.01.01.00/assets/flashforge-creator-5-pro_cover.png",
+      "blob": "b4003a61a536bbb6247484807f047a26c9cedf62",
+      "sha256": "80ff96f67f1cfb44eb646849fc62b3b06a996725f4dab0a31ab5fb18f88bb596",
+      "upstream_exact_matches": [],
+      "application_version": "02.01.01.00",
+      "slicer_id": "FlashStudio",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/FlashStudio/02.01.01.00/assets/flashforge-creator-5_cover.png",
+      "blob": "c6264272b760ee2ad134612e67f18faccacb9321",
+      "sha256": "d66cff186a2c10f61ff45e888befcbc509874fc82a304d7e90084c15d3a19221",
+      "upstream_exact_matches": [],
+      "application_version": "02.01.01.00",
+      "slicer_id": "FlashStudio",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/FlashStudio/02.01.01.00/assets/flashforge-ad5x_cover.png",
+      "blob": "67dae78153931bd2f66857c7d917690d172660ef",
+      "sha256": "4d13bbc75252677e39d9d88b2ef9e983df117b1d50ab1a8f5968aee9aa497353",
+      "upstream_exact_matches": [
+        {
+          "repository": "FlashForge/Orca-Flashforge",
+          "source_path": "resources/profiles/Flashforge/Flashforge AD5X_cover.png"
+        }
+      ],
+      "application_version": "02.01.01.00",
+      "slicer_id": "FlashStudio"
+    },
+    {
+      "path": "machine_registry/slicers/FlashStudio/02.01.01.00/assets/flashforge-guider-3-ultra_cover.png",
+      "blob": "17db7a37e6cbdff75da7717fa068dc389f799f68",
+      "sha256": "cae89dd18ec3fd424986a026e96bc6c12db419d53ad0679165351fc45a26e40a",
+      "upstream_exact_matches": [
+        {
+          "repository": "Snapmaker/OrcaSlicer",
+          "source_path": "resources/profiles/Flashforge/Flashforge Guider 3 Ultra_cover.png"
+        },
+        {
+          "repository": "ANYCUBIC-3D/AnycubicSlicerNext",
+          "source_path": "resources/profiles/Flashforge/Flashforge Guider 3 Ultra_cover.png"
+        },
+        {
+          "repository": "FlashForge/Orca-Flashforge",
+          "source_path": "resources/profiles/Flashforge/Flashforge Guider 3 Ultra_cover.png"
+        }
+      ],
+      "application_version": "02.01.01.00",
+      "slicer_id": "FlashStudio"
+    },
+    {
+      "path": "machine_registry/slicers/FlashStudio/02.01.01.00/assets/flashforge-guider4-pro_cover.png",
+      "blob": "084099d216ee24cd8304ec546f6d213fdeee72a2",
+      "sha256": "4261bc29db422cafa92b3b97961f170081f423b5c4ece3cb5410539de78c15c6",
+      "upstream_exact_matches": [],
+      "application_version": "02.01.01.00",
+      "slicer_id": "FlashStudio",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "machine_registry/slicers/FlashStudio/02.01.01.00/assets/flashforge-guider4_cover.png",
+      "blob": "9a70c47897ee83e8d25c34fcb8d1121056a9315e",
+      "sha256": "c92df1541d10064d4c4820c8a2d78c49129a64bc6e2ad3e6d3fcf558e4bdc662",
+      "upstream_exact_matches": [],
+      "application_version": "02.01.01.00",
+      "slicer_id": "FlashStudio",
+      "transformation": "Official installed profile image copied or resized with LANCZOS by tools/machine_adapter/import_profiles.py",
+      "acquisition": "Official slicer application resources; recorded import version retained"
+    },
+    {
+      "path": "frontend/src/assets/slicer-logos/anycubic-slicer-next.png",
+      "blob": "b5c715e68e9ee7dee2424898257924456b13dafb",
+      "sha256": "4d60dde93b7f907439f0c45b8ac332108ab80ff5e5a857b671dfd956e39cb1de",
+      "upstream_exact_matches": [
+        {
+          "repository": "ANYCUBIC-3D/AnycubicSlicerNext",
+          "source_path": "resources/images/AnycubicSlicer.png"
+        }
+      ],
+      "acquisition": "Official icon source recorded in frontend/src/assets/slicer-logos/SOURCES.md"
+    },
+    {
+      "path": "frontend/src/assets/slicer-logos/prusa-slicer.svg",
+      "blob": "927c3e70ba99b04792f432068c1474f1ca8d977f",
+      "sha256": "80ae834fe02004ed67aeba92134a75e42a511725d300b75e150746161646a458",
+      "upstream_exact_matches": [
+        {
+          "repository": "prusa3d/PrusaSlicer",
+          "source_path": "resources/icons/print_running.svg"
+        }
+      ],
+      "acquisition": "Official icon source recorded in frontend/src/assets/slicer-logos/SOURCES.md"
+    },
+    {
+      "path": "frontend/src/assets/slicer-logos/orca-slicer.svg",
+      "blob": "f8d677c55578547745ad87ccb99d936ab6b1b04b",
+      "sha256": "40c454caa70ef2d7a9a60139ae249f74386f6c1033961193cb3323f0b5ff3306",
+      "upstream_exact_matches": [
+        {
+          "repository": "OrcaSlicer/OrcaSlicer",
+          "source_path": "resources/images/OrcaSlicer.svg"
+        },
+        {
+          "repository": "ANYCUBIC-3D/AnycubicSlicerNext",
+          "source_path": "resources/images/OrcaSlicer.svg"
+        }
+      ],
+      "acquisition": "Official icon source recorded in frontend/src/assets/slicer-logos/SOURCES.md"
+    },
+    {
+      "path": "frontend/src/assets/slicer-logos/ultimaker-cura.svg",
+      "blob": "9c98035c6b69d221ee99ca0a86a24bb37f413c6f",
+      "sha256": "ca9aab67f5affdafa8c981d8b4ff006bf05e3817a54c1a0b70311aba256227b2",
+      "upstream_exact_matches": [
+        {
+          "repository": "Ultimaker/Cura",
+          "source_path": "packaging/icons/cura-icon.svg"
+        }
+      ],
+      "acquisition": "Official icon source recorded in frontend/src/assets/slicer-logos/SOURCES.md"
+    },
+    {
+      "path": "frontend/src/assets/slicer-logos/elegoo-slicer.png",
+      "blob": "86af4b8818a28535380ce77caa17091cd8b2579f",
+      "sha256": "5863fbce257131b49bc0f62836f016794c201d1330243fc5e8327e930e672b08",
+      "upstream_exact_matches": [],
+      "acquisition": "Official icon source recorded in frontend/src/assets/slicer-logos/SOURCES.md"
+    },
+    {
+      "path": "frontend/src/assets/slicer-logos/bambu-studio.svg",
+      "blob": "d269a08743154a7dd67238ff51a5e44404a48a2f",
+      "sha256": "0ab1a121fc86598746a165d94eead0052e0c8815dbefdd6c637429145f511df9",
+      "upstream_exact_matches": [
+        {
+          "repository": "bambulab/BambuStudio",
+          "source_path": "resources/images/BambuStudio.svg"
+        }
+      ],
+      "acquisition": "Official icon source recorded in frontend/src/assets/slicer-logos/SOURCES.md"
+    },
+    {
+      "path": "frontend/src/assets/slicer-logos/snapmaker-orca.png",
+      "blob": "0c241c137c3b29834c3a6cff43f65e1a6934bd3b",
+      "sha256": "afac1c225e09f5b67937c7d500eacc63801a9068517a257e41804e152b217568",
+      "upstream_exact_matches": [],
+      "acquisition": "Official icon source recorded in frontend/src/assets/slicer-logos/SOURCES.md"
+    }
+  ]
+}

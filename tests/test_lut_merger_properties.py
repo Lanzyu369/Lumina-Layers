@@ -14,30 +14,33 @@ import pytest
 
 from core.lut_merger import LUTMerger, _SIZE_TO_MODE, _MODE_PRIORITY
 
-
-# ═══════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 # Strategies
-# ═══════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 
-standard_sizes = st.sampled_from([32, 1024, 1296, 2738])
+standard_sizes = st.sampled_from([32, 1024, 1296, 2468, 2738])
 non_standard_sizes = st.integers(min_value=1, max_value=5000).filter(
-    lambda x: x not in {32, 1024, 1296, 2738} and not (30 <= x <= 36)
+    lambda x: x not in {32, 1024, 1296, 2468, 2738} and not (30 <= x <= 36)
 )
 color_modes = st.sampled_from(["BW", "4-Color", "6-Color", "8-Color"])
 all_modes_with_low = st.sampled_from(["BW", "4-Color"])
 high_modes = st.sampled_from(["6-Color", "8-Color"])
 
+
 # Small RGB arrays for fast testing
 def rgb_array(size):
     return np.random.randint(0, 256, size=(size, 3), dtype=np.uint8)
+
 
 def stack_array(size, max_id=7):
     return np.random.randint(0, max_id + 1, size=(size, 5), dtype=np.int32)
 
 
-# ═══════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# ══════════════════════════════════════════════════════════════
 # Property 1: 色彩模式检测正确性
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+
 
 class TestColorModeDetection:
     """
@@ -54,9 +57,7 @@ class TestColorModeDetection:
             np.save(path, rgb_array(size))
             mode, count = LUTMerger.detect_color_mode(path)
             assert count == size
-            assert mode == _SIZE_TO_MODE[size], (
-                f"Expected {_SIZE_TO_MODE[size]} for size {size}, got {mode}"
-            )
+            assert mode == _SIZE_TO_MODE[size], f"Expected {_SIZE_TO_MODE[size]} for size {size}, got {mode}"
 
     @given(size=non_standard_sizes)
     @settings(max_examples=100)
@@ -67,9 +68,19 @@ class TestColorModeDetection:
             np.save(path, rgb_array(size))
             mode, count = LUTMerger.detect_color_mode(path)
             assert count == size
-            assert mode == "Merged", (
-                f"Expected 'Merged' for non-standard size {size}, got {mode}"
-            )
+            assert mode == "Merged", f"Expected 'Merged' for non-standard size {size}, got {mode}"
+
+    def test_2468_compat_mode_can_return_merged(self, monkeypatch):
+        """2468 size can be treated as Merged when compat env switch is enabled."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test.npy")
+            np.save(path, rgb_array(2468))
+
+            monkeypatch.setenv("LUMINA_LUT_2468_MODE", "merged")
+            mode, count = LUTMerger.detect_color_mode(path)
+
+            assert count == 2468
+            assert mode == "Merged"
 
     def test_npz_detection(self):
         """A .npz file with rgb and stacks keys is detected as 'Merged'."""
@@ -83,9 +94,11 @@ class TestColorModeDetection:
             assert count == 500
 
 
-# ═══════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# ══════════════════════════════════════════════════════════════
 # Property 2: 兼容性校验正确性
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+
 
 class TestCompatibilityValidation:
     """
@@ -135,9 +148,11 @@ class TestCompatibilityValidation:
         assert valid
 
 
-# ═══════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# ══════════════════════════════════════════════════════════════
 # Property 3: 合并拼接完整性
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+
 
 class TestMergeConcatenation:
     """
@@ -186,14 +201,16 @@ class TestMergeConcatenation:
 
         merged_rgb, merged_stacks, stats = LUTMerger.merge_luts(entries, dedup_threshold=0)
 
-        assert stats['total_before'] == total
-        assert stats['total_after'] == total
+        assert stats["total_before"] == total
+        assert stats["total_after"] == total
         assert merged_rgb.shape[0] == total
 
 
-# ═══════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# ══════════════════════════════════════════════════════════════
 # Property 4: 材料 ID 范围不变量
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+
 
 class TestMaterialIDRange:
     """
@@ -226,9 +243,11 @@ class TestMaterialIDRange:
         assert merged_stacks.max() <= 5
 
 
-# ═══════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# ══════════════════════════════════════════════════════════════
 # Property 5: 去重后无相近色
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+
 
 class TestDedupNoSimilarColors:
     """
@@ -250,12 +269,12 @@ class TestDedupNoSimilarColors:
 
         merged_rgb, _, stats = LUTMerger.merge_luts(entries, dedup_threshold=0)
 
-        assert stats['exact_dupes'] == 1
-        assert stats['total_after'] == 3  # 4 - 1 duplicate
+        assert stats["exact_dupes"] == 1
+        assert stats["total_after"] == 3  # 4 - 1 duplicate
 
     def test_threshold_dedup_removes_similar(self):
         """With threshold > 0, similar colors (Delta-E < threshold) are removed."""
-        # Two identical reds — guaranteed Delta-E = 0
+        # Two identical reds 鈥?guaranteed Delta-E = 0
         rgb1 = np.array([[255, 0, 0]], dtype=np.uint8)
         rgb2 = np.array([[255, 0, 0]], dtype=np.uint8)
         stacks1 = np.array([[0, 0, 0, 0, 0]], dtype=np.int32)
@@ -269,14 +288,16 @@ class TestDedupNoSimilarColors:
         merged_rgb, _, stats = LUTMerger.merge_luts(entries, dedup_threshold=5.0)
 
         # Exact duplicate removed first, then no similar left
-        assert stats['total_after'] == 1
+        assert stats["total_after"] == 1
         # The 8-Color one should be kept (higher priority)
         assert tuple(merged_rgb[0]) == (255, 0, 0)
 
 
-# ═══════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# ══════════════════════════════════════════════════════════════
 # Property 6: 去重优先级正确性
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+
 
 class TestDedupPriority:
     """
@@ -299,14 +320,62 @@ class TestDedupPriority:
 
         merged_rgb, merged_stacks, stats = LUTMerger.merge_luts(entries, dedup_threshold=0)
 
-        assert stats['total_after'] == 1
+        assert stats["total_after"] == 1
         # 8-Color has higher priority, so its stack should be kept
         assert list(merged_stacks[0]) == [0, 1, 2, 3, 4]
 
+# ---------------------------------------------------------------------------
+# ══════════════════════════════════════════════════════════════
+# Property 6.1: 同配方对比统计正确性
+# ══════════════════════════════════════════════════════════════
 
-# ═══════════════════════════════════════════════════════════════
+
+class TestCompareByRecipe:
+    """Verify same-recipe comparison stats remain internally consistent."""
+
+    @given(n=st.integers(min_value=1, max_value=8))
+    @settings(max_examples=100)
+    def test_identical_inputs_produce_zero_delta(self, n):
+        """Identical RGB/stacks produce zero Delta-E for every shared recipe."""
+        rgb = rgb_array(n)
+        stacks = np.array([[i, 0, 0, 0, 0] for i in range(n)], dtype=np.int32)
+
+        result = LUTMerger.compare_luts_by_recipe(
+            rgb,
+            stacks,
+            rgb.copy(),
+            stacks.copy(),
+            top_n=5,
+        )
+
+        stats = result["stats"]
+        assert stats["matched_recipe_count"] == n
+        assert stats["identical_rgb_count"] == n
+        assert stats["mean_delta_e00"] == 0.0
+        assert stats["max_delta_e00"] == 0.0
+        assert stats["recipes_only_in_a"] == 0
+        assert stats["recipes_only_in_b"] == 0
+
+    def test_unshared_recipe_counts_are_reported(self):
+        """Recipes present on only one side are counted correctly."""
+        rgb_a = np.array([[255, 0, 0], [0, 255, 0]], dtype=np.uint8)
+        rgb_b = np.array([[255, 0, 0], [0, 0, 255]], dtype=np.uint8)
+        stacks_a = np.array([[0, 0, 0, 0, 0], [1, 0, 0, 0, 0]], dtype=np.int32)
+        stacks_b = np.array([[0, 0, 0, 0, 0], [2, 0, 0, 0, 0]], dtype=np.int32)
+
+        result = LUTMerger.compare_luts_by_recipe(rgb_a, stacks_a, rgb_b, stacks_b, top_n=5)
+        stats = result["stats"]
+
+        assert stats["matched_recipe_count"] == 1
+        assert stats["recipes_only_in_a"] == 1
+        assert stats["recipes_only_in_b"] == 1
+        assert len(result["worst_diffs"]) == 1
+
+
+# ══════════════════════════════════════════════════════════════
 # Property 9: 合并统计一致性
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+
 
 class TestMergeStatsConsistency:
     """
@@ -333,14 +402,16 @@ class TestMergeStatsConsistency:
 
         _, _, stats = LUTMerger.merge_luts(entries, dedup_threshold=0)
 
-        assert stats['total_before'] == n1 + n2
-        assert stats['total_before'] >= stats['total_after']
-        assert stats['exact_dupes'] + stats['similar_removed'] == stats['total_before'] - stats['total_after']
+        assert stats["total_before"] == n1 + n2
+        assert stats["total_before"] >= stats["total_after"]
+        assert stats["exact_dupes"] + stats["similar_removed"] == stats["total_before"] - stats["total_after"]
 
 
-# ═══════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# ══════════════════════════════════════════════════════════════
 # Property 7: 保存/加载往返一致性
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+
 
 class TestSaveLoadRoundTrip:
     """
@@ -359,12 +430,12 @@ class TestSaveLoadRoundTrip:
         path = os.path.join(tmpdir, "test_merged.npz")
         saved_path = LUTMerger.save_merged_lut(rgb, stacks, path)
 
-        assert saved_path.endswith('.npz')
+        assert saved_path.endswith(".npz")
         assert os.path.exists(saved_path)
 
         data = np.load(saved_path)
-        loaded_rgb = data['rgb'].copy()
-        loaded_stacks = data['stacks'].copy()
+        loaded_rgb = data["rgb"].copy()
+        loaded_stacks = data["stacks"].copy()
         data.close()
 
         np.testing.assert_array_equal(loaded_rgb, rgb)
@@ -378,12 +449,14 @@ class TestSaveLoadRoundTrip:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "test.npy")
             saved_path = LUTMerger.save_merged_lut(rgb, stacks, path)
-            assert saved_path.endswith('.npz')
+            assert saved_path.endswith(".npz")
 
 
-# ═══════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# ══════════════════════════════════════════════════════════════
 # Property 8: 非标准尺寸检测
-# ═══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+
 
 class TestNonStandardSizeDetection:
     """
@@ -403,7 +476,7 @@ class TestNonStandardSizeDetection:
             result = detect_lut_color_mode(path)
             assert result == "Merged", f"Expected 'Merged' for .npz, got {result}"
 
-    @given(size=non_standard_sizes.filter(lambda x: x > 36 and (x < 900 or x > 2800)))
+    @given(size=non_standard_sizes.filter(lambda x: x > 35 and (x < 900 or x > 2800)))
     @settings(max_examples=100)
     def test_non_standard_npy_detected_as_merged(self, size):
         """For any .npy with non-standard color count (outside known ranges),
@@ -414,6 +487,4 @@ class TestNonStandardSizeDetection:
             path = os.path.join(tmpdir, "test.npy")
             np.save(path, rgb_array(size))
             result = detect_lut_color_mode(path)
-            assert result == "Merged", (
-                f"Expected 'Merged' for non-standard size {size}, got {result}"
-            )
+            assert result == "Merged", f"Expected 'Merged' for non-standard size {size}, got {result}"

@@ -1,0 +1,22 @@
+{
+  "classification": "owned_synthetic_scale",
+  "fixture": {
+    "byte_size": 1359706,
+    "path": "native/lumina-svg-core/benchmarks/supported_scale_fixture.svg",
+    "path_count": 1024
+  },
+  "schema_version": 2,
+  "selection": {
+    "grid": [
+      32,
+      32
+    ],
+    "overlap_policy": "disjoint_cell_bounds",
+    "points_per_path": 64
+  },
+  "source": {
+    "algorithm": "radial_contours_v1",
+    "external_artwork": null,
+    "generator": "scripts/build_native_svg_supported_fixture.py"
+  }
+}

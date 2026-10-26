@@ -15,6 +15,7 @@ from api.schemas.five_color import (
     FiveColorQueryResponse,
 )
 from api.schemas.calibration import BackingColor, CalibrationGenerateRequest
+from api.schemas.single_stage import SingleStageKitGenerateRequest, StageAFitRequest
 from api.schemas.converter import (
     AutoHeightMode,
     ColorMergePreviewRequest,
@@ -24,20 +25,35 @@ from api.schemas.converter import (
     ConvertBatchRequest,
     ConvertGenerateRequest,
     ConvertPreviewRequest,
+    FridgeMagnetItem,
+    LargeFormatConvertGenerateRequest,
+    MIN_TARGET_WIDTH_MM,
     ModelingMode,
+    RecipeOverrideItem,
     StructureMode,
+    VirtualMaterial,
 )
 from api.schemas.extractor import (
     CalibrationColorMode,
     ExtractorExtractRequest,
+    ExtractorMergeEightColorRequest,
     ExtractorManualFixRequest,
+    ExtractorResolveCellRequest,
     ExtractorPage,
 )
 from api.schemas.lut import (
+    LutSourceSelection,
     LutInfoResponse,
+    LutInfoResponseV2,
     MergeRequest,
     MergeResponse,
     MergeStats,
+)
+from api.schemas.dynamic_material import (
+    DynamicMaterialLayerCapOptionResponse,
+    DynamicMaterialRecipeResponse,
+    DynamicMaterialResultResponse,
+    MaterialLayerBenefitPointResponse,
 )
 from api.schemas.system import (
     CacheCleanupDetails,
@@ -50,6 +66,11 @@ from api.schemas.slicer import (
     SlicerLaunchRequest,
     SlicerLaunchResponse,
 )
+from api.schemas.session import (
+    SessionCloseResponse,
+    SessionHeartbeatResponse,
+    SessionRequest,
+)
 from api.schemas.responses import (
     BatchItemResult,
     BatchResponse,
@@ -61,7 +82,11 @@ from api.schemas.responses import (
     LUTListResponse,
     ManualFixResponse,
     MergePreviewResponse,
+    PerformanceTimingResponse,
     PreviewResponse,
+    SingleStageExtractResponse,
+    SingleStageKitResponse,
+    StageAFitResponse,
 )
 
 __all__ = [
@@ -74,29 +99,48 @@ __all__ = [
     "ColorReplacementItem",
     "ConvertPreviewRequest",
     "ConvertGenerateRequest",
+    "LargeFormatConvertGenerateRequest",
     "ConvertBatchRequest",
     "ColorReplaceRequest",
     "ColorMergePreviewRequest",
+    "FridgeMagnetItem",
+    "RecipeOverrideItem",
+    "VirtualMaterial",
+    "MIN_TARGET_WIDTH_MM",
     # --- Extractor enums ---
     "CalibrationColorMode",
     "ExtractorPage",
     # --- Extractor models ---
     "ExtractorExtractRequest",
+    "ExtractorMergeEightColorRequest",
     "ExtractorManualFixRequest",
+    "ExtractorResolveCellRequest",
     # --- Calibration enums ---
     "BackingColor",
     # --- Calibration models ---
     "CalibrationGenerateRequest",
+    "SingleStageKitGenerateRequest",
+    "StageAFitRequest",
     # --- LUT Manager models ---
     "MergeRequest",
     "MergeResponse",
     "MergeStats",
+    "LutSourceSelection",
     "LutInfoResponse",
+    "LutInfoResponseV2",
+    "DynamicMaterialLayerCapOptionResponse",
+    "DynamicMaterialRecipeResponse",
+    "MaterialLayerBenefitPointResponse",
+    "DynamicMaterialResultResponse",
     # --- Slicer models ---
     "SlicerInfo",
     "SlicerDetectResponse",
     "SlicerLaunchRequest",
     "SlicerLaunchResponse",
+    # --- Session models ---
+    "SessionRequest",
+    "SessionHeartbeatResponse",
+    "SessionCloseResponse",
     # --- System models ---
     "CacheCleanupDetails",
     "ClearCacheResponse",
@@ -108,6 +152,7 @@ __all__ = [
     "FiveColorQueryResponse",
     # --- Response models ---
     "CalibrationResponse",
+    "PerformanceTimingResponse",
     "PreviewResponse",
     "ColorReplaceResponse",
     "MergePreviewResponse",
@@ -118,4 +163,7 @@ __all__ = [
     "HealthResponse",
     "ExtractResponse",
     "ManualFixResponse",
+    "SingleStageKitResponse",
+    "SingleStageExtractResponse",
+    "StageAFitResponse",
 ]

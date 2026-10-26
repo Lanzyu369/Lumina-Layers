@@ -1,0 +1,46 @@
+import { useConverterStore } from "../../stores/converter";
+import { useI18n } from "../../i18n/context";
+import { ModelingMode } from "../../api/types";
+import Checkbox from "../ui/Checkbox";
+import Slider from "../ui/Slider";
+import { StatusBanner } from "../ui/panelPrimitives";
+import { WIKI_DOCS } from "../../utils/wikiDocs";
+
+export default function CloisonneSettings() {
+  const { t } = useI18n();
+  const enable_cloisonne = useConverterStore((s) => s.enable_cloisonne);
+  const wire_width_mm = useConverterStore((s) => s.wire_width_mm);
+  const wire_height_mm = useConverterStore((s) => s.wire_height_mm);
+  const modeling_mode = useConverterStore((s) => s.modeling_mode);
+  const setEnableCloisonne = useConverterStore((s) => s.setEnableCloisonne);
+  const setWireWidthMm = useConverterStore((s) => s.setWireWidthMm);
+  const setWireHeightMm = useConverterStore((s) => s.setWireHeightMm);
+
+  const isVector = modeling_mode === ModelingMode.VECTOR;
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* 🚧 施工中标记 / Work-in-progress banner */}
+      <StatusBanner tone="warning">
+        <span className="flex items-center gap-2">
+          <span aria-hidden="true">🚧</span>
+          <span>{t("cloisonne_wip")}</span>
+        </span>
+      </StatusBanner>
+      <Checkbox
+        label={t("cloisonne_enable")}
+        checked={enable_cloisonne}
+        onChange={setEnableCloisonne}
+        disabled={isVector}
+        tooltip={t("cloisonne_enable_hint")}
+        wikiPath={WIKI_DOCS.cloisonne}
+      />
+      {enable_cloisonne && (
+        <>
+          <Slider label={t("cloisonne_wire_width")} tooltip={t("cloisonne_wire_width_hint")} wikiPath={WIKI_DOCS.cloisonne} value={wire_width_mm} min={0.2} max={1.2} step={0.1} unit="mm" onChange={setWireWidthMm} />
+          <Slider label={t("cloisonne_wire_height")} tooltip={t("cloisonne_wire_height_hint")} wikiPath={WIKI_DOCS.cloisonne} value={wire_height_mm} min={0.04} max={1.0} step={0.04} unit="mm" onChange={setWireHeightMm} />
+        </>
+      )}
+    </div>
+  );
+}

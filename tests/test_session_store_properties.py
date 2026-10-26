@@ -41,24 +41,54 @@ kv_dicts = st.dictionaries(
 # ---------------------------------------------------------------------------
 
 
+def test_create_accepts_explicit_session_id() -> None:
+    from api.session_store import SessionStore
+
+    store = SessionStore()
+    result = store.create(session_id="caller-supplied-id")
+    assert result == "caller-supplied-id"
+    assert store.exists("caller-supplied-id")
+
+
+def test_create_falls_back_to_uuid_on_collision() -> None:
+    from api.session_store import SessionStore
+
+    store = SessionStore()
+    first = store.create(session_id="dupe")
+    assert first == "dupe"
+    second = store.create(session_id="dupe")
+    assert second != "dupe"
+    assert store.exists(first)
+    assert store.exists(second)
+
+
+def test_create_without_explicit_id_mints_uuid() -> None:
+    from api.session_store import SessionStore
+
+    store = SessionStore()
+    sid = store.create()
+    # UUID4 string form is 36 chars with 4 dashes; full re check is unnecessary,
+    # length + a UUID parse is enough.
+    assert len(sid) == 36
+    assert sid.count("-") == 4
+    assert uuid.UUID(sid).version == 4
+    assert store.exists(sid)
+
+
 # **Validates: Requirements 1.1, 1.2, 1.3**
-@given(data=st.data())
-@settings(max_examples=100)
-def test_create_returns_valid_uuid4(data: st.DataObject) -> None:
+def test_create_returns_valid_uuid4() -> None:
     """create() returns a valid UUID4 format string."""
     store = SessionStore()
     session_id = store.create()
 
     # Must be a valid UUID4
-    parsed = uuid.UUID(session_id, version=4)
+    parsed = uuid.UUID(session_id)
     assert str(parsed) == session_id
     assert parsed.version == 4
 
 
 # **Validates: Requirements 1.1, 1.2, 1.3**
-@given(data=st.data())
-@settings(max_examples=100)
-def test_create_then_get_returns_empty_dict(data: st.DataObject) -> None:
+def test_create_then_get_returns_empty_dict() -> None:
     """create() followed by get() returns an empty dict {}."""
     store = SessionStore()
     session_id = store.create()
@@ -106,9 +136,7 @@ def test_multiple_puts_all_retrievable(kv: dict) -> None:
 
 
 # **Validates: Requirements 1.1, 1.2, 1.3**
-@given(data=st.data())
-@settings(max_examples=100)
-def test_exists_after_create(data: st.DataObject) -> None:
+def test_exists_after_create() -> None:
     """exists() returns True after create()."""
     store = SessionStore()
     session_id = store.create()

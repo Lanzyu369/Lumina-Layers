@@ -1,0 +1,448 @@
+﻿import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
+import fc from "fast-check";
+import { useExtractorStore } from "../stores/extractorStore";
+import { ExtractorColorMode, ExtractorPage } from "../api/types";
+import { listGradientCardMaterials } from "../api/extractor";
+
+// ========== Mock browser APIs ==========
+
+vi.stubGlobal(
+  "URL",
+  Object.assign(globalThis.URL ?? {}, {
+    createObjectURL: vi.fn(() => "blob:mock-url"),
+    revokeObjectURL: vi.fn(),
+  })
+);
+
+// Mock Image constructor for store's setImageFile
+class MockImage {
+  onload: (() => void) | null = null;
+  _src = "";
+  naturalWidth = 800;
+  naturalHeight = 600;
+  get src() {
+    return this._src;
+  }
+  set src(val: string) {
+    this._src = val;
+    if (this.onload) this.onload();
+  }
+}
+vi.stubGlobal("Image", MockImage);
+
+// Mock the extractor API to prevent real network calls
+vi.mock("../api/extractor", () => ({
+  colorcheckerConfirm: vi.fn(),
+  colorcheckerRelease: vi.fn(),
+  colorcheckerTouch: vi.fn(() => Promise.resolve()),
+  extractColors: vi.fn(),
+  listGradientCardMaterials: vi.fn(() => Promise.resolve({ materials: [] })),
+  manualFixCell: vi.fn(),
+}));
+
+// ========== Helpers ==========
+
+function resetExtractorStore(): void {
+  useExtractorStore.setState({
+    imageFile: null,
+    imagePreviewUrl: null,
+    imageNaturalWidth: null,
+    imageNaturalHeight: null,
+    color_mode: ExtractorColorMode.FOUR_COLOR_RYBW,
+    page: ExtractorPage.PAGE_1,
+    eight_color_full_export: false,
+    corner_points: [],
+    offset_x: 0,
+    offset_y: 0,
+    zoom: 1.0,
+    distortion: 0.0,
+    vignette_correction: false,
+    isLoading: false,
+    error: null,
+    session_id: null,
+    lut_download_url: null,
+    warp_view_url: null,
+    lut_preview_url: null,
+    manualFixLoading: false,
+    manualFixError: null,
+    page1Extracted: false,
+    page2Extracted: false,
+    extractedEightColorFullPages: [],
+    mergeLoading: false,
+    mergeError: null,
+    page1Extracted_5c: false,
+    page2Extracted_5c: false,
+    manufacturer: "",
+    type: "",
+    defaultPalette: [],
+    paletteConfirmed: false,
+    paletteConfirmLoading: false,
+    paletteConfirmError: null,
+    colorchecker_enabled: false,
+    colorchecker_phase: null,
+    calibratedPreviewUrl: null,
+    calibratedFullFileId: null,
+    previousCalibratedFullFileId: null,
+    calibratedFullWidth: null,
+    calibratedFullHeight: null,
+    calibratedPreviewWidth: null,
+    calibratedPreviewHeight: null,
+    originalPreviewUrl: null,
+    originalPreviewWidth: null,
+    originalPreviewHeight: null,
+    colorcheckerSummary: null,
+  });
+}
+
+// ========== Generators ==========
+
+const arbCornerPoint = fc.tuple(
+  fc.integer({ min: 0, max: 10000 }),
+  fc.integer({ min: 0, max: 10000 })
+) as fc.Arbitrary<[number, number]>;
+
+/** Generate corner_points array of length 0..4 */
+const arbCorners0to4 = fc
+  .integer({ min: 0, max: 4 })
+  .chain((len) => fc.array(arbCornerPoint, { minLength: len, maxLength: len }));
+
+/** Generate imageFile: null or a mock File */
+const arbImageFile = fc.constantFrom(null, "file") as fc.Arbitrary<null | string>;
+
+// ========== Tests ==========
+
+beforeEach(() => {
+  resetExtractorStore();
+  cleanup();
+});
+
+// **Feature: extractor-calibration-tab, Property 6: 提取按钮禁用状态前置条件**
+// **Validates: Requirements 6.2**
+describe("Feature: extractor-calibration-tab, Property 6: 提取按钮禁用状态前置条件", () => {
+  it("For any imageFile (null or non-null) and any corner_points (length 0..4), extract button disabled === (imageFile === null || corner_points.length < 4)", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+
+    await fc.assert(
+      fc.asyncProperty(arbImageFile, arbCorners0to4, async (imageFileFlag, corners) => {
+        cleanup();
+
+        const imageFile = imageFileFlag === null
+          ? null
+          : new File(["test"], "test.png", { type: "image/png" });
+
+        useExtractorStore.setState({
+          imageFile,
+          imagePreviewUrl: imageFile ? "blob:mock-url" : null,
+          corner_points: corners,
+          isLoading: false,
+          colorchecker_phase: null,
+        });
+
+        render(<ExtractorPanel />);
+
+        const extractDiv = screen.getByTestId("extract-button");
+        const button = extractDiv.querySelector("button")!;
+
+        const expectedDisabled = imageFile === null || corners.length < 4;
+
+        expect(button.disabled).toBe(expectedDisabled);
+
+        cleanup();
+        resetExtractorStore();
+      }),
+      { numRuns: 100 }
+    );
+  });
+
+  it.each(["calibrating", "confirming"] as const)(
+    "disables extraction while ColorChecker is %s",
+    async (phase) => {
+      const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+
+      useExtractorStore.setState({
+        imageFile: new File(["test"], "test.png", { type: "image/png" }),
+        imagePreviewUrl: "blob:mock-url",
+        corner_points: [[0, 0], [100, 0], [100, 100], [0, 100]],
+        isLoading: false,
+        colorchecker_enabled: true,
+        colorchecker_phase: phase,
+        calibratedFullFileId: phase === "confirming" ? "pending-full-id" : null,
+      });
+
+      render(<ExtractorPanel />);
+
+      const extractDiv = screen.getByTestId("extract-button");
+      const button = extractDiv.querySelector("button")!;
+
+      expect(button.disabled).toBe(true);
+    },
+  );
+
+  it("reopens ColorChecker calibration from the done state without dropping the accepted artifact", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+    const acceptedFileId = "accepted-full-id";
+
+    useExtractorStore.setState({
+      imageFile: new File(["test"], "test.png", { type: "image/png" }),
+      imagePreviewUrl: "/api/files/accepted-preview.png",
+      imageNaturalWidth: 800,
+      imageNaturalHeight: 600,
+      colorchecker_enabled: true,
+      colorchecker_phase: "done",
+      calibratedPreviewUrl: "/api/files/accepted-preview.png",
+      calibratedFullFileId: acceptedFileId,
+    });
+
+    render(<ExtractorPanel />);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /重新校色 \/ 替换|Recalibrate \/ Replace/,
+      }),
+    );
+
+    const state = useExtractorStore.getState();
+    expect(state.colorchecker_phase).toBe("calibrating");
+    expect(state.calibratedFullFileId).toBe(acceptedFileId);
+    expect(state.previousCalibratedFullFileId).toBe(acceptedFileId);
+  });
+});
+
+// ========== Unit Tests ==========
+
+describe("ExtractorPanel 单元测试", () => {
+  it("renders manual fix error messages", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+    const message = "Manual correction LUT file is missing. Re-run extraction before editing the LUT.";
+
+    useExtractorStore.setState({ manualFixError: message });
+
+    render(<ExtractorPanel />);
+
+    expect(screen.getByTestId("manual-fix-error")).toHaveTextContent(message);
+  });
+
+  it("renders all color mode options in the dropdown", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+
+    render(<ExtractorPanel />);
+
+    const colorModeDiv = screen.getByTestId("color-mode-select");
+    const combobox = within(colorModeDiv).getByRole("combobox");
+
+    fireEvent.click(combobox);
+
+    const listbox = screen.getByRole("listbox");
+    const options = within(listbox).getAllByRole("option");
+    const optionLabels = options.map((option) => option.textContent?.trim());
+    const expectedModes = Object.values(ExtractorColorMode);
+
+    expect(optionLabels).toEqual(expect.arrayContaining(expectedModes));
+    expect(options).toHaveLength(expectedModes.length);
+
+    fireEvent.click(within(listbox).getByRole("option", { name: ExtractorColorMode.FIVE_COLOR_EXT }));
+    expect(useExtractorStore.getState().color_mode).toBe(ExtractorColorMode.FIVE_COLOR_EXT);
+  });
+
+  it("shows page-select when color_mode is EIGHT_COLOR", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+
+    useExtractorStore.setState({ color_mode: ExtractorColorMode.EIGHT_COLOR });
+
+    render(<ExtractorPanel />);
+
+    expect(screen.getByTestId("page-select")).toBeInTheDocument();
+  });
+
+  it("shows 24 page options after enabling full 8-color extraction", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+
+    useExtractorStore.setState({ color_mode: ExtractorColorMode.EIGHT_COLOR });
+
+    render(<ExtractorPanel />);
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: /8色完整版提取|Full 8-Color Extraction/ }),
+    );
+
+    const pageSelect = screen.getByTestId("page-select");
+    const combobox = within(pageSelect).getByRole("combobox");
+    fireEvent.click(combobox);
+
+    const options = within(screen.getByRole("listbox")).getAllByRole("option");
+    expect(options).toHaveLength(24);
+  });
+
+  it("hides page-select when color_mode is not EIGHT_COLOR", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+
+    for (const mode of [
+      ExtractorColorMode.BW,
+      ExtractorColorMode.FOUR_COLOR_RYBW,
+      ExtractorColorMode.SIX_COLOR,
+    ]) {
+      cleanup();
+      resetExtractorStore();
+      useExtractorStore.setState({ color_mode: mode });
+
+      render(<ExtractorPanel />);
+
+      expect(screen.queryByTestId("page-select")).not.toBeInTheDocument();
+
+      cleanup();
+    }
+  });
+
+  it("renders download link when lut_download_url is set", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+
+    useExtractorStore.setState({ lut_download_url: "/api/files/lut-test.npy" });
+
+    render(<ExtractorPanel />);
+
+    const link = screen.getByTestId("lut-download-link");
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute("href", "/api/files/lut-test.npy");
+    expect(link).toHaveAttribute("download");
+  });
+
+  it("does not render download link when lut_download_url is null", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+
+    useExtractorStore.setState({ lut_download_url: null });
+
+    render(<ExtractorPanel />);
+
+    expect(screen.queryByTestId("lut-download-link")).not.toBeInTheDocument();
+  });
+
+  it("renders error message when error is set", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+
+    useExtractorStore.setState({ error: "颜色提取失败，请重试" });
+
+    render(<ExtractorPanel />);
+
+    const errorEl = screen.getByTestId("error-message");
+    expect(errorEl).toBeInTheDocument();
+    expect(errorEl.textContent).toBe("颜色提取失败，请重试");
+  });
+
+  it("does not render error message when error is null", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+
+    useExtractorStore.setState({ error: null });
+
+    render(<ExtractorPanel />);
+
+    expect(screen.queryByTestId("error-message")).not.toBeInTheDocument();
+  });
+
+  it("renders manufacturer and material controls without a type textbox", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+    vi.mocked(listGradientCardMaterials).mockResolvedValueOnce({
+      status: "ok",
+      message: "ok",
+      materials: [
+        {
+          material_name: "red",
+          directory_name: "Bambu Lab/red",
+          brand: "Bambu Lab",
+          archive_path: "",
+          stage_a_params_path: "",
+          material_file_url: null,
+          estimated_rgb: [],
+        },
+        {
+          material_name: "white",
+          directory_name: "Prusa/white",
+          brand: "Prusa",
+          archive_path: "",
+          stage_a_params_path: "",
+          material_file_url: null,
+          estimated_rgb: [],
+        },
+      ],
+    });
+
+    useExtractorStore.setState({
+      manufacturer: "Bambu Lab",
+      type: "PLA Basic",
+      defaultPalette: [
+        {
+          color: "White",
+          material: "PLA",
+          hex_color: "#FFFFFF",
+          color_name: "Jade White",
+        },
+      ],
+      paletteConfirmed: false,
+    });
+
+    render(<ExtractorPanel />);
+
+    const section = screen.getByTestId("palette-confirm-section");
+    expect(section).toBeInTheDocument();
+    expect(screen.getByText("White")).toBeInTheDocument();
+
+    const manufacturerInput = within(section).getByRole("combobox", {
+      name: "厂商",
+    });
+    const colorNameInput = within(section).getByRole("textbox");
+    expect(manufacturerInput).toHaveValue("Bambu Lab");
+    expect(colorNameInput).toHaveValue("Jade White");
+
+    fireEvent.change(manufacturerInput, { target: { value: "Prusa" } });
+    fireEvent.change(colorNameInput, { target: { value: "Pearl White" } });
+
+    const state = useExtractorStore.getState();
+    expect(state.manufacturer).toBe("Prusa");
+    expect(state.defaultPalette[0].color_name).toBe("Pearl White");
+  });
+
+  it("allows selecting manufacturer from existing material brands", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+    vi.mocked(listGradientCardMaterials).mockResolvedValueOnce({
+      status: "ok",
+      message: "ok",
+      materials: [
+        {
+          material_name: "red",
+          directory_name: "Aliz/red",
+          brand: "Aliz",
+          archive_path: "",
+          stage_a_params_path: "",
+          material_file_url: null,
+          estimated_rgb: [],
+        },
+      ],
+    });
+
+    useExtractorStore.setState({
+      manufacturer: "",
+      defaultPalette: [
+        {
+          color: "White",
+          material: "PLA",
+          hex_color: "#FFFFFF",
+          color_name: "",
+        },
+      ],
+      paletteConfirmed: false,
+    });
+
+    render(<ExtractorPanel />);
+
+    const section = screen.getByTestId("palette-confirm-section");
+    const manufacturerInput = within(section).getByRole("combobox", {
+      name: "厂商",
+    });
+    fireEvent.focus(manufacturerInput);
+
+    const option = await screen.findByRole("option", { name: "Aliz" });
+    fireEvent.click(option);
+
+    expect(useExtractorStore.getState().manufacturer).toBe("Aliz");
+  });
+});

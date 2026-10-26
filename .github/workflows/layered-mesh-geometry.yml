@@ -1,0 +1,79 @@
+name: Layered Mesh Geometry
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [dev-refactor, main]
+  workflow_dispatch:
+
+jobs:
+  windows-geometry:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-glb-v2.txt
+            requirements-3mf-native.txt
+
+      - name: Prepare native 3MF wheelhouse
+        uses: ./.github/actions/prepare-3mf-native-wheels
+
+      - name: Install geometry dependencies
+        run: python -m pip install -r requirements-dev.txt -r requirements-glb-v2.txt
+
+      - name: Exercise layered geometry and 3MF writer contracts
+        run: >-
+          python -m pytest
+          tests/test_layered_surface_mesh_unit.py
+          tests/test_layered_surface_mesh_properties.py
+          tests/test_unified_layered_meshing_integration.py
+          tests/test_vector_layer_geometry_unit.py
+          tests/test_vector_engine_mesh_weld_unit.py
+          tests/test_bambu_3mf_writer_unit.py
+          tests/test_3mf_native_dependency_unit.py -q
+
+  ubuntu-geometry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-glb-v2.txt
+            requirements-3mf-native.txt
+
+      - name: Prepare native 3MF wheelhouse
+        uses: ./.github/actions/prepare-3mf-native-wheels
+
+      - name: Install geometry dependencies
+        run: python -m pip install -r requirements-dev.txt -r requirements-glb-v2.txt
+
+      - name: Exercise production geometry and writer contracts
+        run: >-
+          python -m pytest
+          tests/test_geos_buffer_fast_unit.py
+          tests/test_vector_engine_fixes_unit.py
+          tests/test_layered_surface_mesh_unit.py
+          tests/test_unified_layered_meshing_integration.py
+          tests/test_vector_layer_geometry_unit.py
+          tests/test_vector_engine_mesh_weld_unit.py
+          tests/test_bambu_3mf_writer_unit.py
+          tests/test_3mf_native_dependency_unit.py -q
