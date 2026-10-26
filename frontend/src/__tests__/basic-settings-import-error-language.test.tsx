@@ -159,6 +159,7 @@ describe("BasicSettings recipe import visible errors", () => {
     useConverterStore.setState({
       imageFile,
       imagePreviewUrl,
+      source_version: "legacy",
       lut_name: currentLut.name,
       lutListFull: [currentLut],
       selectedLegacyManufacturer: "Current brand",

@@ -352,19 +352,43 @@ describe("BasicSettings", () => {
     expect(useConverterStore.getState().target_width_mm).toBe(500);
   });
 
+  it("shows one decimal place without rounding the stored dimensions on focus or confirmation", () => {
     useConverterStore.setState({
+      target_width_mm: 58.125,
+      target_height_mm: 201.6666667,
     });
 
     render(<BasicSettings />);
 
     expect(
       screen.getByRole("slider", { name: "宽度" }),
+    ).toHaveAttribute("step", "0.001");
     expect(
       screen.getByRole("textbox", { name: "宽度 value" }),
+    ).toHaveValue("58.1");
     expect(
       screen.getByRole("slider", { name: "高度" }),
+    ).toHaveAttribute("step", "0.001");
     expect(
       screen.getByRole("textbox", { name: "高度 value" }),
+    ).toHaveValue("201.7");
+
+    const widthInput = screen.getByRole("textbox", { name: "宽度 value" });
+    const heightInput = screen.getByRole("textbox", { name: "高度 value" });
+    fireEvent.focus(widthInput);
+    fireEvent.blur(widthInput);
+    fireEvent.focus(heightInput);
+    fireEvent.keyDown(heightInput, { key: "Enter" });
+    fireEvent.blur(heightInput);
+    expect(useConverterStore.getState()).toMatchObject({
+      target_width_mm: 58.125,
+      target_height_mm: 201.6666667,
+    });
+
+    fireEvent.focus(widthInput);
+    fireEvent.change(widthInput, { target: { value: "58.2" } });
+    fireEvent.blur(widthInput);
+    expect(useConverterStore.getState().target_width_mm).toBe(58.2);
 
     act(() => {
       useConverterStore.setState({
@@ -378,6 +402,7 @@ describe("BasicSettings", () => {
     ).toHaveAttribute("step", "1");
     expect(
       screen.getByRole("textbox", { name: "宽度 value" }),
+    ).toHaveValue("80.0");
   });
 
   it("keeps large-format manual dimensions above the everyday slider range", () => {
@@ -401,6 +426,7 @@ describe("BasicSettings", () => {
     fireEvent.blur(widthInput);
 
     expect(useConverterStore.getState().target_width_mm).toBe(30000);
+    expect(widthInput).toHaveValue("30000.0");
   });
 
   it("offers a preview-only cut outline toggle in large-format mode", () => {
@@ -789,6 +815,7 @@ describe("BasicSettings", () => {
   it("renders the source version selector and legacy LUT database panel in old mode", () => {
     render(<BasicSettings />);
 
+    expect(screen.getByText("色彩数据来源")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "经典 LUT" })).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "反推LUT" })).not.toBeInTheDocument();
     expect(screen.getByTestId("lut-picker-trigger")).toBeInTheDocument();
@@ -930,6 +957,7 @@ describe("BasicSettings", () => {
     expect(
       screen.getByRole("slider", { name: "最大有效叠层数" }),
     ).toHaveAttribute("max", "10");
+    expect(screen.queryByText(/单一层数的缓存入口已隐藏/)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "穷举缓存…" }),
     ).not.toBeInTheDocument();
@@ -1120,6 +1148,7 @@ describe("BasicSettings", () => {
     });
     const trigger = screen.getByTestId("lut-picker-trigger");
     expect(trigger).toHaveTextContent("A 4C");
+    expect(trigger).toHaveTextContent("已选 2 个 LUT");
     fireEvent.click(trigger);
     dialog = screen.getByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "Brand B" }));
@@ -1198,7 +1227,9 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
+    // Hydration still syncs the picker brand; the summary describes selected LUTs.
     await waitFor(() => {
+      expect(useConverterStore.getState().selectedLegacyManufacturer).toBe("Brand B");
     });
   });
 

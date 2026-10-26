@@ -403,6 +403,7 @@ function LutColorGridInner() {
       ) : lutColors.length === 0 ? (
         <p className="py-4 text-sm text-slate-500 dark:text-slate-400">{t("lut_grid_select_lut")}</p>
       ) : (
+        <div className={cx(cardClass, "panel-default-surface flex h-full flex-col gap-3 px-4 py-4")}>
           {/* Confirmation preview bar */}
           {pendingReplacement && (
             <div className={cx(wellPadClass, "flex flex-col gap-2")}>
@@ -452,6 +453,7 @@ function LutColorGridInner() {
                 <button
                   type="button"
                   onClick={() => confirmReplacement()}
+                  className="action-control rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors"
                 >
                   {t("replace_confirm_btn")}
                 </button>

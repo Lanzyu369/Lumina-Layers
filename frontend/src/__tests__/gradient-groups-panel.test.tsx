@@ -377,6 +377,7 @@ describe("GradientGroupsPanel", () => {
     });
     render(<GradientGroupsPanel />);
     const btn = screen.getByRole("button", { name: /select all|选中整组/i });
+    expect(btn).toHaveAttribute("aria-pressed", "true");
   });
 
   it("does NOT highlight the group button when gradientSelection points at a region", () => {
@@ -399,6 +400,7 @@ describe("GradientGroupsPanel", () => {
     const groupBtn = screen.getByRole("button", {
       name: /select all|选中整组/i,
     });
+    expect(groupBtn).toHaveAttribute("aria-pressed", "false");
   });
 
   it("switching from a group to one of its regions moves the highlight", async () => {
@@ -419,6 +421,7 @@ describe("GradientGroupsPanel", () => {
     const groupBtn1 = screen.getByRole("button", {
       name: /select all|选中整组/i,
     });
+    expect(groupBtn1).toHaveAttribute("aria-pressed", "true");
 
     // Expand and click region 1's "select region" button.
     fireEvent.click(
@@ -435,6 +438,8 @@ describe("GradientGroupsPanel", () => {
     const groupBtn2 = screen.getByRole("button", {
       name: /select all|选中整组/i,
     });
+    expect(groupBtn2).toHaveAttribute("aria-pressed", "false");
+    expect(regionBtns[0]).toHaveAttribute("aria-pressed", "true");
 
     // Sanity: the store recorded the region-scoped source.
     const state = useConverterStore.getState();

@@ -19,6 +19,7 @@ _PREFIX_RE = re.compile(r"^(?:slot|channel|material)\s*\d+\s*[:\-]?\s*", re.IGNO
 # ``color_conf`` belonging to a different, smaller color mode.
 # 基于标准 ColorSystem 预设一次性构建的 "颜色名 → RGBA" 规范表，
 # 用于在 native ColorDB 调色板 hex_color 缺省、且外部传入 color_conf
+# 过旧（例如用户从经典 CMYW LUT 切换到反推 LUT 时 color_mode 未同步）
 # 的情况下，保证每个常见颜色名都能解析到稳定且互不冲突的颜色。
 _CANONICAL_COLOR_LOOKUP: dict[str, list[int]] | None = None
 

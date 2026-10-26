@@ -1790,15 +1790,18 @@ export default function ColorPreview2D({
       )}
 
       {selectionTool === 'brush' && (brushStrokesRef.current.length > 0 || brushPointsRef.current.length > 0) && (
+        <div className="pointer-events-auto absolute bottom-2 left-1/2 z-30 flex -translate-x-1/2 gap-2 rounded-[10px] border border-slate-300/80 bg-slate-50 p-2 dark:border-slate-700/80 dark:bg-slate-900/95">
           <button
             type="button"
             onClick={executeBrushDraft}
+            className="action-control action-control-primary rounded-lg px-3 py-1.5 text-xs font-semibold"
           >
             {t('selection_brush_apply')}
           </button>
           <button
             type="button"
             onClick={clearBrushDraft}
+            className="action-control rounded-lg px-3 py-1.5 text-xs"
           >
             {t('selection_brush_clear')}
           </button>
@@ -1822,6 +1825,7 @@ export default function ColorPreview2D({
           data-testid="color-preview-2d-hold-original"
           data-active={showOriginal || undefined}
           className={cx(
+            "pointer-events-auto absolute right-2 top-2 z-30 flex h-7 w-7 items-center justify-center rounded-lg",
             "bg-slate-900/60 text-slate-100 backdrop-blur-sm transition-colors",
             "hover:bg-slate-900/75 active:bg-slate-900/85",
             showOriginal && "bg-slate-900/85",

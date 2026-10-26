@@ -1,6 +1,113 @@
 # Design System Inspired by Apple
 
+## Application Background Levels
+
+- 浅色模式的默认页面背景使用 `slate-50`；顶部两级导航和设置页左侧分类导航使用 `slate-200`，与内容区形成层次。
+- macOS 桌面端使用 `hidden` 标题栏，保留系统原生红黄绿按钮；一级导航直接放入标题栏，省去独立标题行，保留 Logo 和应用标题，左侧预留按钮空间。空白区域可拖动，导航及右侧控件使用 `no-drag`；窄窗口沿用标题收起和导航换行布局。浏览器和 Linux 保持原有窗口布局。
+- macOS 红黄绿按钮与顶栏第一行 Logo 垂直居中对齐，距窗口左边缘 16pt；首次在纵向边距为零时通过 Window Controls Overlay 测量原生按钮高度，按界面缩放换算定位，左侧按 `titlebar-area-x` 预留按钮空间。导航换行时仍对齐第一行，不使用固定按钮高度或人工纵向偏移。
+- Windows 同样合并一级导航，使用 Window Controls Overlay 保留系统窗口按钮，按 `titlebar-area-*` 环境变量避让右侧按钮并适应缩放；窗口按钮区域同步浅色／深色主题。浏览器和 Linux 保持原有布局。
+- 页面容器使用 `--surface-panel`，弹窗使用 `--surface-panel-strong`，浅色模式均映射到 `slate-50`。需要保留卡片外框的整块工作面板使用 `panel-default-surface`，不要直接沿用白色 `--surface-card`；卡片和输入控件不等同于页面背景。
+- 原先使用 `slate-50` 的内部控件、浅灰卡片和分组背景使用 `slate-100`；页面本身不随之加深。耗材卡片的悬停与选中背景使用 `slate-200`，文字保留原色。
+- 深色模式保持独立映射；真实颜色色块、透明棋盘格、图标和主题开关指示点不参与背景色阶迁移。
+
+## 仓库类页面设计规范
+
+适用于以浏览、查找、选择和管理资源为主要任务的页面，例如耗材库、LUT 库。目标是让用户持续定位资源、切换比较，并在需要时查看详细信息。页面应按以下规则实现；资源特有的字段、操作和分组名称按业务决定。
+
+### 页面结构与视觉层级
+
+- 页面由固定工具栏、可滚动资源列表、按需打开的详情区组成。工具栏放在导航下方，列表独立滚动；不在整页、统计区或整个列表外再套圆角卡片。
+- 页面与工具栏浅色背景使用 `slate-50`，搜索框和资源卡片使用 `slate-100`。悬停、选中使用 `slate-200`，保留原文字颜色。深色对应页面 `slate-950`、卡片 `slate-800`、悬停和选中 `slate-700`。
+- 卡片使用 10px 圆角、1px 细边框、无阴影。浅色默认边框 `slate-200`、选中 `slate-300`；深色默认 `slate-700`、选中 `slate-500`。以底色层次表达状态，不复用导航的白字蓝底选中样式。
+- 资源名称使用主文字色，类型、误差、日期等使用次要文字色。只使用现有 slate 色阶与共享主题令牌，不为单个仓库另建颜色体系。真实资源色块保留自身颜色。
+
+### 固定工具栏
+
+- 左侧放搜索与简洁统计，右侧放展开／收起、选择、导入、刷新等操作。工具栏宽度不足时自然换行，不压缩按钮文字。导航已经说明页面位置时，不重复放页面标题。
+- 统计使用“资源数 · 分组数”；选择模式显示已选数量。搜索时统计反映匹配结果，避免把全库总量当作当前结果数。
+- 工具栏保持不动，下方内容独立滚动。分界线在内容滚离顶部时显示，回到顶部时在 200ms 内渐隐；保留边框占位，避免布局跳动。减少动态效果偏好下关闭过渡。
+- 格式说明、导入方式等静态帮助放在操作入口的提示中。错误、当前进度及无法操作的原因保持可见，不用常驻说明段落占据工具栏空间。
+
+### 搜索与选择
+
+- 搜索覆盖用户可识别的名称、品牌／分组和资源类型，忽略首尾空白及大小写。搜索后回到列表顶部、自动展开匹配分组，并提供明确的无结果状态。
+- 搜索期间的分组展开状态与常规浏览分开维护。清空搜索后恢复原来的展开状态，不改写固定分组偏好。
+- 浏览模式下点击卡片查看详情；批量操作由明确的“选择”入口进入，卡片增加勾选标记。不得让一次点击同时承担查看详情和批量选择。
+- 搜索后的“全选／清除选择”只作用于当前结果，保留结果之外的已有选择；已选总数应仍可见。切换分组展开状态不清除选择。
+
+### 分组管理
+
+- 分组栏使用名称、带单位的数量、展开箭头及固定按钮。数量单位应符合资源含义，例如耗材显示“6种”，不只显示裸数字。
+- 普通分组默认收起。固定按钮记住“每次进入默认展开”的偏好；当前手动收起或“全部收起”不取消固定。所有当前分组已收起时，工具栏按钮变为“全部展开”，否则为“全部收起”。
+- 整条分组栏支持拖拽排序，不额外占用位置放拖动把手。拖动前设置小幅移动阈值，普通点击仍执行展开／收起；固定按钮独立响应，不触发拖动。
+- 拖动时浮层呈现完整分组栏，其他分组实时让位；松手后保存顺序，Esc 取消。固定、展开、选择等状态按资源／分组身份关联，不依赖显示位置。新分组不打乱已保存顺序。
+- 分组栏可通过键盘聚焦，使用上下方向键调整顺序；展开状态、固定状态和焦点应有可访问的表达。
+
+### 资源卡片
+
+- 卡片服务于快速识别和比较：优先展示色块／缩略图、名称、类型，以及确实影响选择的少量指标。耗材的拟合误差属于比较信息，可以直接展示；目录、路径、内部来源枚举等实现信息放入详情。
+- 默认卡片宽度为 `15rem`，卡片间距为 `1rem`。采用固定列宽并自动换行，不用 `1fr` 均分剩余宽度。详情打开或关闭时只改变列数，不改变卡片宽度、色块、字号和内部间距；极窄容器不足 `15rem` 时允许卡片收缩至容器宽度，避免横向溢出。
+- 卡片内边距为 `1.25rem`，图文间距为 `1rem`；耗材色块为 `3.5rem × 3.5rem`。名称与次要信息之间留 `0.5rem`，类型、误差、日期之间留 `0.25rem`。不强制截断长名称来凑相同高度。
+- 同一品牌／分组内的卡片保持等高，高度由该分组内容最多的卡片自然撑开，可使用 `auto-rows-fr` 与 `items-stretch`；不同分组独立计算，不设置全库统一的固定高度。
+- 等高卡片的文字区域统一顶部对齐，标题从相同的顶部内边距开始，后续字段按规定间距自然排列。短内容留下的空间放在底部，不将整块文字垂直居中，也不拉大字段间距填满卡片；按钮形式的卡片应显式设置内容布局，避免浏览器默认对齐造成错位。
+- 同名资源需要明确区分时，增加简洁的更新日期／时间，缺失时回退创建时间；不把长目录名追加到卡片，也不以临时序号代替可识别信息。完整来源和时间保留在详情中。
+- 信息缺失应如实显示未填写或缺失值，不推断类型、不把未知误差显示成零。
+
+### 详情与交互反馈
+
+- 详情统一按资源身份、选择依据、辅助信息、底部操作排列。顶部直接显示资源名称、品牌／类型和可用的色块，不重复“查看详情”标题；关闭按钮在右上角。
+- 普通字段使用左标签右数值的紧凑行，路径和目录默认与标签同行，仅空间不足时自然换行。耗材优先显示拟合误差和采集层高，LUT 优先显示颜色模式；仅展示实际可用的数据，不推测配色或日期。
+- 云端安装状态紧邻下载／更新操作，已安装不显示禁用的大按钮；可回退的版本记录按需打开。详情的全部操作集中在完整信息之后，不穿插字段；多个操作使用等尺寸两列布局，删除用红字中性底并入操作区。
+
+
+- 宽窗口下详情占独立侧列，与资源列表并列展示；不覆盖可点击的列表。允许卡片换行，固定卡片自身尺寸，方便连续切换比较。
+- 窄窗口下详情进入正常文档布局，避免将列表挤成不可用的窄列。详情按基本信息、业务指标和使用记录组织；路径、日期、大小等文件字段直接与其他详情排列，不设置“文件信息”标题、分组边界或折叠层级，其他低频信息可折叠，破坏性操作用红字中性底明确区分。
+- 切换资源时复用详情区，不跳转到独立页面。关闭按钮和 Esc 均可关闭详情，并把焦点还给触发卡片；宽窗口下打开详情不应主动滚动列表。
+- 拖拽、固定等简短操作提示使用共享的样式化悬停／键盘焦点提示组件（`HeaderTooltip`）；拖动期间隐藏提示。参数说明和详细帮助使用 `HelpDot`／控件 `tooltip`，不使用浏览器原生 `title` 气泡。
+- 普通操作复用共享按钮组件。通过语义状态、勾选标记、细边框和键盘焦点区分交互，不增加与导航争夺注意力的大面积强调色。
+
+### 实现与验收
+
+- 复用共享颜色、按钮、提示和拖拽组件；文本集中维护在翻译表。分组固定和顺序保存在本地，存储不可用时当前会话仍能操作；临时搜索和展开不覆盖长期偏好。
+- 验证宽窄布局、深浅主题、键盘操作和减少动态效果。检查列表滚动时工具栏稳定，打开详情前后卡片宽度不变，清空搜索恢复分组状态，拖拽后顺序与固定设置可恢复。
+- 不把业务字段或当前数据量写成所有仓库都必须一致的模板。新增字段应先判断它是否帮助用户在列表中识别或比较，否则放入详情。
+
+### 云端仓库的差异
+
+- 沿用仓库页面底色、固定工具栏、固定宽度卡片及并列详情；云端目录以搜索、状态筛选和分页浏览为主，不默认复制本地品牌折叠、拖拽排序及固定展开。
+- 卡片保留安装状态与下载／更新快捷入口，点击主体只查看详情，不触发安装。已安装状态不再重复占用一个禁用的大按钮。状态应有文字表达，不仅依靠颜色。
+- 卡片按当前行等高、文字顶部对齐、操作贴底，不因后续加载的长标题改变整个品牌已有卡片高度。
+- 搜索必须说明覆盖范围；未加载完整目录时不能把局部无结果表述为全库无结果。统计区分当前匹配目录与本地安装记录，不用同一个“已安装”标签表示不同范围的数量。
+- 路径、体积与版本记录放在详情；内容哈希仅供内部比对，不在用户界面展示；版本管理仍应提供全局入口，保证已不在当前目录中的本地记录也能访问。普通浏览不执行下载、更新或回滚。
+- 未下载或本地文件缺失的条目不显示本地路径；本地路径仅取自已确认存在的本地匹配或安装记录，不用云端目录预设的安装目标代替。
+- 新旧版对比入口是临时验收功能，两个版本共用数据和操作逻辑；切换不得清空搜索或中断正在执行的操作。
+
+## 关闭按钮
+
+- 详情区、侧栏及弹窗的关闭入口统一使用共享 `CloseButton`，放在右上角：圆形灰底、居中的叉号图标，无边框、无阴影，不使用单独的“关闭”文字或方形底。
+- 点击区域为 32×32px，叉号为 20×20px。浅色底为 `slate-200`、图标为 `slate-600`，悬停加深至 `slate-300`；深色底为 `slate-700`、图标为 `slate-300`，悬停为 `slate-600`。使用矢量叉号，避免 emoji 随平台改变颜色和外观。
+- 使用本地化的“关闭”可访问名称（`aria-label`），保留可见焦点环；叉号含义明确，不显示悬停／键盘焦点提示，也不添加原生 `title`。普通关闭不使用删除操作的危险色。
+- 关闭图标、Esc 和允许的遮罩点击应调用同一关闭逻辑；存在未保存检查时不能绕过。关闭后将焦点恢复至触发入口。
+- “取消编辑”“退出选择模式”“返回”和“退出应用”具有不同含义，不因采用此样式而替换成关闭图标。系统原生窗口按钮沿用平台外观。
+
+## 展开与收起
+
+- 可折叠的内容分组及面板统一使用 `DisclosureChevron`：16×16px、2px 细线箭头，收起向右、展开向下，不使用实心三角或文字字符代替图标。
+- 箭头放在标题行右侧，不另加圆形底或边框；它表示内容展开状态，与圆形灰底叉号的关闭操作区分。沿用 slate 次要文字色，旋转过渡为 200ms，减少动态效果时取消过渡。
+- 原生 `details` 使用共享 `DisclosureSummary`，隐藏浏览器默认标记，保留原生点击和键盘行为；受控按钮通过 `aria-expanded` 表达状态。图标本身对辅助技术隐藏，按钮保留明确名称和键盘焦点。
+- 下拉选择器、导航返回、排序方向和全屏按钮有不同含义，不套用内容折叠规则。
+
+## Native Scroll Boundaries
+
+- 独立页面、工作区侧栏和弹窗正文使用稳定的原生滚动容器，并设置 `overscroll-y-contain`，让触顶或触底后的滚动停留在所属区域。
+- 区域内的小列表保留默认滚动衔接：列表到边界后可以继续滚动所属面板。不要给所有 `overflow-auto` 或 `.dock-scrollbar` 统一加隔离。
+- 悬停只改变滚动条的外观，不切换 `overflow`；普通 DOM 内的滚动不通过 `wheel` 监听器手动改写 `scrollTop`。跨 Portal 的滚动衔接也必须尊重所属面板的边界。
+
 ## Color Workstation Selection Invariants
+
+- 颜色调整页使用连续的直角工作区：预览、选择工具、换色与 LUT 区域通过横向或竖向 `panel-divider` 分割，不使用圆角卡片外框或阴影。控件保留自身圆角。
+- 历史、选择工具、自由色、配方、悬停显示、目标颜色 B 和相似配方的分组标题使用中性文字，不添加装饰色点。
+- 共享选择工具使用独立的 `selection-tool-control` 样式，不引用导航选中态变量。浅色默认 `slate-100`、激活 `slate-200`，文字 `slate-900`；深色默认 `slate-800`、激活 `slate-700`，文字 `slate-100`。保留 `aria-pressed`、细描边和键盘焦点轮廓，悬停不清除激活态。「选区闪烁」放在选择工具下方的独立行，使用共享 `Switch` 组件，不使用工具按钮选中态。
 
 - **Tool is not selection:** switching between Same color, Pick blocks, and Selection brush never clears or rewrites the shared selection.
 - **The server mask is authoritative:** every tool edits one revisioned union mask; the frontend may render an exact local flood-fill immediately, but stale responses cannot overwrite a newer intent.
@@ -206,6 +313,7 @@ Typography is the stabilizer. SF Pro Display carries hero and merchandising hier
 
 #### Placement Standard (放置标准)
 
+Parameter explanations across all tabs follow this single source of truth. A visible info icon (ⓘ, stroke-style, no background — rendered by `HelpDot`) is shown for controls with explanatory help. Short action hints (such as pinning or dragging) use the shared `HeaderTooltip` on the action itself, as specified for repository pages above; they do not require an additional info icon.
 
 | Trigger type | When used | Implementation |
 |---|---|---|
@@ -249,10 +357,36 @@ Image-to-Vector tab (`VectorizerPanel.tsx`) is the canonical reference:
 
 - **Do not** use native `title` attribute or custom `?`/`ⓘ` spans; always use `HelpDot` (for Switch) or the `tooltip` prop (for Slider/Checkbox/Dropdown/RadioGroup)
 - Keep static explanations, parameter guidance, and optional detail in the tooltip popover; do not repeat them in a visible paragraph below the control.
+- Keep current values, actionable status, unavailable-option reasons, active compatibility limits, validation errors, and action-critical warnings visible. Do not make users open a tooltip to find out why an action is unavailable or unsafe.
 - When inline text and a help icon both appear, the inline text states the current result or constraint briefly; the tooltip supplies the explanation and detail. Do not reuse the same explanation in both places.
 - Hint text must be bilingual (`zh` + `en`) in `translations.ts` with a `*_hint` suffix key
 - The ⓘ icon visual style is fixed in `HelpDot` (stroke-style `InfoIcon`, no background); do not recreate it inline
+- Every control with parameter explanations **must** display a visible ⓘ icon. Short action hints use the shared hover/focus tooltip exception described above.
 - Hint copy is written for end users: describe the visible effect and the trade-off, avoid algorithm terms (e.g. no "K-Means", "8-neighborhood", "L\* roll-off")
+
+#### 提示语与帮助说明的信息分工
+
+判断一句话放在哪里，先问：**用户现在是否必须看到它，才能正确完成操作？** 必须看到的信息直接展示；用于理解功能的信息放入 ⓘ；只在特定条件下有用的信息按条件显示。
+
+| 信息类型 | 展示位置与时机 | 示例 |
+|---|---|---|
+| 功能解释、使用方法、默认值与取舍 | 标签旁的 ⓘ 帮助中，不在控件下方重复 | 模板继承哪些参数、SVG 清晰度的适用范围、缓存清理的作用 |
+| 当前取值、已选内容 | 控件自身或附近的简短摘要 | 保存目录、模板名称、模板设备信息、当前颜色计算精度 |
+| 影响当前操作的限制 | 相关选项启用、内容选中或操作触发后直接显示 | 自定义模板不支持批量、拼图、校准和色块生成 |
+| 错误、不可用原因及处理办法 | 对应控件或操作附近直接显示，不依赖打开帮助；问题解决后移除 | 模板缺失、通知权限被拒绝、功能不可用、路径校验失败 |
+| 用户操作的结果 | 操作完成后在原操作附近显示 | 缓存清理数量与释放空间、路径保存结果 |
+
+提示语与 ⓘ 可以同时存在，但必须提供不同的信息：行内文字简述当前状态或限制，帮助说明解释功能和细节。不要在两处复述同一段内容，也不要把所有解释都变成常驻提示条。没有需要处理的问题时，不使用成功或警告提示条长期占位。
+
+设置页遵循以下具体规则：
+
+- **3MF 项目模板**：使用内置配置时，不显示自定义模板的限制段落；匹配规则、参数继承和支持范围放入帮助。选中自定义模板后，显示模板摘要及简短的生成范围限制，帮助中不再重复该范围说明。模板丢失或校验失败时，直接给出原因和恢复方式；生成入口仍须直接解释实际的不兼容问题。
+- **完成通知**：正常的权限状态放在帮助中；权限被拒绝、浏览器不支持或请求失败时，直接显示原因及可行的处理办法，不能仅放进 ⓘ。
+- **SVG 清晰度与缓存管理**：通用适用范围、使用取舍和清理作用放入帮助。SVG 小洞补偿不可用的原因、缓存清理结果仍在界面中直接展示。
+- **手动设置切片软件**：折叠入口保留一句适用条件，帮助用户决定是否展开；路径格式和示例在展开后展示。
+- **父级设置与从属字段**：共享说明由父级提供一个帮助入口。只有子字段存在独立含义或操作要求时，才增加自己的 ⓘ，避免同一帮助在父子两处重复。
+
+行内提示保持简短，说明当前发生了什么；错误和限制需要给出下一步做法。中英文同步维护于 `frontend/src/i18n/translations.ts`，复用 `HelpDot`、控件的 `tooltip` 和现有状态提示组件。
 
 ### Hierarchy v2 — 单层卡片 + 凹槽 + 分割线 (Single-Card Layering)
 
@@ -279,6 +413,7 @@ Three primitives, three jobs:
 Grouping strength, weakest → strongest: **whitespace → group header → divider → well → card.** Reach for the weakest device that still reads. A divider with a small-caps header is almost always enough to separate two groups inside one card; promote to a well only when the inner content is itself a cluster of controls that needs a contained surface.
 分组强度由弱到强：**留白 → 组标题 → 分割线 → 凹槽 → 卡片**。优先用能读懂的最弱手段。卡内两个分组，"分割线 + 小标题"通常就够；只有当内部本身是一簇需要独立托底面的控件时，才升级成凹槽。
 
+图像转换的核心设置使用 `settingsGroupClass` 将导入、颜色设置（含色彩数据来源、LUT／耗材选择与量化颜色数）、尺寸和底板、单面/双面打印、建模模式分别放在连续的灰底分组中。分组使用 `--surface-well`、10px 圆角、12px 内边距和 16px 组间距，不再使用标题右侧横线；结构与建模直接使用单选组标题，避免重复标题。只有分组标题使用半粗字重；“色彩数据来源”等组选项标签沿用普通字段字重。组内滑块数值框使用 `--surface-card` 与灰底区分，深色主题沿用对应表面变量。
 
 #### Making dividers "一眼可辨" (visibility, per the original concern)
 
@@ -299,6 +434,8 @@ Radii step **down** as you go inward so outer and inner shapes never compete:
 | Level | Radius | Applies to |
 |---|---|---|
 | Card | `16px` (`rounded-2xl`) | `.panel-card` section shells |
+| Control / Well | `10px` (`rounded-[10px]`) | wells, inputs, dropdown trigger |
+| Small control | `8px` (`rounded-lg`) | buttons, dropdown menu items, swatch tiles |
 | Chip / banner | `6px` | status banners, hue-filter pills stay `rounded-full` by intent |
 
 Never flatten everything to one radius, and never let an inner element's radius meet or exceed its container's.
@@ -360,6 +497,8 @@ JS layer — `frontend/src/components/ui/panelPrimitives.tsx`:
 
 #### Migration status (迁移状态)
 
+设置页各分类复用 `cardPadClass` 作为唯一外层卡片，内部设备摘要和路径使用 10px 无边框凹槽，选项之间使用 `panel-divider`。普通选项标签统一 14px medium、次要墨色；组标题使用 14px semibold，弹窗标题使用 15px semibold。独立选项间距为 20px，开关行使用 16px 横向间距并垂直居中；开关展开的从属参数使用 `dependentGroupClass`。帮助说明统一由标签旁的 `HelpDot` 或控件的 `tooltip` 提供，兼容限制、当前状态和错误仍直接显示。分类导航复用主导航标签样式；打印机和打印板选项以底色及显式选中标记表达状态，内部不增加卡片描边或阴影。
+
 > Verified against the working tree on 2026-10-14. An earlier revision of this document claimed Settings had already migrated; that was wrong, and is corrected below.
 > 2026-10-14 按工作区实际代码核对。此前本文档写“设置页已迁移”与代码不符，已在下方更正。
 
@@ -373,6 +512,7 @@ JS layer — `frontend/src/components/ui/panelPrimitives.tsx`:
 | Material Management — `MaterialLibraryPanel`, `GradientCardGeneratePanel`, `GradientCardExtractPanel`, `MaterialRecipeQueryPanel` | **Pending** |
 | LUT Management — `CalibrationPanel`, `ExtractorPanel`, `FiveColorQueryPanel`, `ColorcheckerConfirmDialog` | **Pending** |
 | Image to Vector — `VectorizerPanel` | **Pending** |
+| Settings — `SettingsPanel`, category navigation, device / build-plate chooser and setting rows | **Migrated** |
 | Creative Workshop — `WorkshopPanel`, `ModuleDetails` | **Pending** |
 | Dialogs — `CustomRecipeDialog`, `CustomRecipeSidePanel`, `MaterialPickerDialog`, `BugReportModal` | **Pending** (dialog shells keep their single card; inner panels still nest) |
 
@@ -393,7 +533,15 @@ Legacy helpers scheduled for removal once the last user migrates: `sectionCardCl
 
 | Level | At rest | Used for |
 |---|---|---|
+| **Primary** | blue fill + white text (`.action-control-primary`) | the main commit in an area: generate, apply, confirm, save |
+| **Secondary / ordinary operation** | neutral fill + dark text + thin gray border (`.action-control`) | import, choose a file or device, edit, history, reset, cancel, close, back |
+| **Ghost** | text / icon only | compact tools, mode selections, toggles, dialog close icons and collapse headers |
 
+`Button` defaults to `secondary`. Explicitly select `variant="primary"` for the main commit; an operation dialog or a function call alone does not justify blue emphasis. A group usually has one primary action. Destructive actions use a neutral button with `tone="danger"` (red text), including delete and uninstall. Raw buttons use `.action-control` for ordinary operations and add `.action-control-primary` only for the main commit. Field pickers, selectable options, tabs and switches retain their own component styles.
+按钮默认使用中性 `secondary`；仅区域内的主要提交动作显式设置 `variant="primary"`，通常一组只保留一个蓝色主按钮。导入、选文件、更改设备、历史、重置和撤销等普通操作使用中性底色；删除与卸载使用中性底配 `tone="danger"` 红字。原生按钮沿用 `.action-control`，主要提交额外添加 `.action-control-primary`。导航选中态、字段选择器和开关保持各自语义。
+
+Standard text buttons use 8px corners: ordinary controls have a 32px minimum height and primary actions 36px. Small buttons remain 32px; icon-only buttons may remain circular. Buttons change fill on hover and press without moving or scaling. Both neutral and primary buttons use gray fill/text when disabled. The `--button-*` tokens in `index.css` define light and dark appearances; avoid per-page color overrides. Keyboard focus remains visible through an outline.
+普通文字按钮高度至少 32px，主操作至少 36px，圆角 8px；图标按钮可保留圆形。悬停与按下只改变底色，不上浮、不缩放。禁用时统一灰底灰字。深浅色统一使用 `--button-*` 变量，不在页面另写按钮配色；键盘聚焦保留轮廓提示。
 
 Exception: the slicer launch/download control (`SlicerSelector`, including "Generate and open in BBS") retains its slicer-specific brand colors and split-button styling.
 例外：切片软件启动/下载控件（`SlicerSelector`，包括「生成并在 BBS 中打开」）保留原有品牌配色和分体按钮样式。
@@ -472,8 +620,12 @@ A swatch, a layer thumbnail or a preview tile is *content*, not a container. A b
 
 > Lumina-specific rules for `TabNavBar` (primary tabs) and `SubTabBar` (sub tabs). 主导航与子导航的专用规则。
 
+- **One tab style for both levels:** borderless tabs with no track behind the group; the selected tab uses a solid blue fill (`--nav-tab-selected-bg`), white text and icons (`--nav-tab-selected-text`), 8px radius and no shadow. Hover uses `--nav-chip-hover`. Shared classes live in `frontend/src/components/widget/navTabStyles.ts`; Settings category navigation uses the same selected treatment.
+  两级导航使用同一种标签：无描边、无底槽，选中项是蓝底白字、白色图标（8px 圆角、无阴影），悬停用浅灰底。设置分类导航沿用同一选中态。
 - **Rows and dividers carry the hierarchy, not boxes:** the header row (brand, primary tabs, tools) and the sub-tab row share the chrome surface, one `panel-divider` hairline separates them and a second one closes the sub-tab row. Never add tracks, outlines or tinted bands to tell the levels apart.
   层级靠行和分隔线表达：顶栏行与子导航行同底色，中间一条细线，子导航行下方再一条；不要用底槽、描边或色带区分层级。
+- **Primary vs sub:** both levels use white selected text and icons in light and dark themes; both use semibold text, with 16px primary icons and 14px sub-tab icons.
+  两级导航的选中文字和图标在浅色和深色主题下均为白色；字重统一为半粗，主导航图标为 16px，子导航图标为 14px。
 - **Alignment is a user setting (`headerNavAlignment`):** `center` keeps both rows on one shared centre line, which is the window axis whenever there is room; `left` places the primary tabs after the brand and starts the sub tabs at the first primary tab. Never truncate, overlap, or stretch the tab group to the full width.
   对齐方式由用户设置决定：居中时两行共用一条中线，空间足够时就是窗口中线；居左时主导航紧跟标题，子导航从第一个主导航项开始。不截断、不重叠，也不把标签组拉满整行。
 - **A tight header gives way in a fixed order (`headerNavLayout.ts`, `useHeaderNavFit`):** the "Lumina Studio 2" title collapses to the logo whenever that gives the tabs the room they need, before the tabs move; centered tabs leave the window axis only as far as the brand and the tools require, with the sub tabs following the same centre line; only when the tabs no longer fit between the logo and the tools do they move to a row of their own, and the title returns.
@@ -608,3 +760,7 @@ Depth is intentionally restrained. Apple favors tonal contrast, surface stepping
 - Distinct semantic status colors (error/warning/success) were not consistently visible in the extracted page set.
 - Some interaction micro-states vary by module and are not represented as universal system tokens.
 - A few retail modules expose context-specific typography overrides that do not appear across all five pages.
+
+颜色设置的来源专有区域不使用左侧竖线、缩进或嵌套底色；耗材与 LUT 选择、层高、层数和底板耗材保持同级，使用共享普通字段标签（14px medium），不额外增加“叠层设置”等中间标题。同组标签与选择器间距 8px、参数间距 12px，独立小组间距 20px。选项沿用共享单选／开关控件，不以导航选中样式表达。
+
+短暂成功反馈使用 `TransientBanner`：显示 5 秒，先用 200ms 渐隐，再用 250ms 收起高度与组间距，结束后移除，禁止直接卸载造成下方内容跳动。错误及需要持续处理的提示不自动消失。减少动态效果偏好下省略动画。按钮加载统一使用 `ButtonContent`：原文字和图标隐藏但保留尺寸，旋转指示在按钮正中；按钮禁用并保留可访问名称及 `aria-busy`。

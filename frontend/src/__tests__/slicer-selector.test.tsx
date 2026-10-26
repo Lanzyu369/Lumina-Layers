@@ -193,6 +193,7 @@ describe("SlicerSelector settings linkage", () => {
     ).toBeInTheDocument();
   });
 
+  it("centers launch progress and hides the original logo and label", () => {
     useSlicerStore.setState({ isLaunching: true });
 
     render(
@@ -209,6 +210,10 @@ describe("SlicerSelector settings linkage", () => {
     const openButton = screen.getByRole("button", {
       name: "在 OrcaSlicer 中打开",
     });
+    expect(openButton).toHaveAttribute("aria-busy", "true");
+    expect(openButton.querySelectorAll(".animate-spin")).toHaveLength(1);
+    expect(openButton.querySelector(".animate-spin")?.parentElement).toHaveClass("absolute", "inset-0", "justify-center");
+    expect(within(openButton).getByTestId("slicer-logo-image").closest(".invisible")).toHaveAttribute("aria-hidden", "true");
   });
 
   it("does not fall back to Bambu Studio when the settings slicer is missing", async () => {
@@ -235,11 +240,39 @@ describe("SlicerSelector settings linkage", () => {
     );
 
     expect(
+      screen.getByText("未检测到 OrcaSlicer，仍可下载 3MF 文件后手动打开。"),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "在 Bambu Studio 中打开" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "下载 3MF" })).toBeInTheDocument();
+  });
+
+  it.each([
+    { isDetecting: false, largeFormat: false, hintCount: 1 },
+    { isDetecting: true, largeFormat: false, hintCount: 0 },
+    { isDetecting: false, largeFormat: true, hintCount: 0 },
+  ])("shows one relevant missing-slicer hint (detecting=$isDetecting, ZIP=$largeFormat)", ({ isDetecting, largeFormat, hintCount }) => {
+    useSlicerStore.setState({ slicers: [], selectedSlicerId: null, isDetecting });
+    render(
+      <I18nProvider>
+        <SlicerSelector
+          threemfDiskPath={null}
+          downloadUrl={null}
+          canSubmit
+          largeFormat={largeFormat}
+          onAutoGenerate={async () => null}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.queryAllByText(/未检测到/)).toHaveLength(hintCount);
+    if (hintCount) {
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "未检测到 OrcaSlicer，仍可下载 3MF 文件后手动打开。",
+      );
+      expect(screen.getByRole("button", { name: "生成并下载" })).toBeEnabled();
+    }
   });
 
   it("launches with an explicit settings-linked slicer id", async () => {

@@ -1,3 +1,4 @@
+import CloseButton from "./CloseButton";
 import { createPortal } from "react-dom";
 import { useI18n } from "../../i18n/context";
 import Button from "./Button";
@@ -53,9 +54,11 @@ export default function ImportConfirmDialog({
           <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100">
             {t("recipe_import_title")}
           </h2>
+          <CloseButton label={t("common_close")} onClick={onCancel} />
         </div>
 
         {/* Body */}
+        <div className="flex-1 overflow-y-auto overscroll-y-contain px-5 py-4">
           {/* Cover preview */}
           {recipe.cover && (
             <div className="mb-4 flex justify-center">
@@ -173,6 +176,7 @@ export default function ImportConfirmDialog({
             onContinueEditing && (
               <Button
                 label={t("recipe_import_continue_workshop")}
+                variant="secondary"
                 onClick={onContinueEditing}
                 disabled={isLoading}
                 className="px-4"

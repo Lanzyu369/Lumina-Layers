@@ -18,6 +18,8 @@ interface ToolbarGroupProps {
   contentClassName?: string;
 }
 
+/** Toolbar groups use neutral headings and spacing. */
+function ToolbarGroup({ label, children, contentClassName }: ToolbarGroupProps) {
   return (
     <div className="flex flex-col gap-1" role="group" aria-label={label}>
       <span className={groupHeaderClass}>
@@ -406,6 +408,7 @@ export default function PalettePanel({
   };
 
   return (
+    <div className={cx(cardClass, "color-tools-panel flex h-full min-h-0 flex-col px-4 py-4")}>
       {palette.length === 0 ? (
         <p className="py-4 text-sm text-slate-500 dark:text-slate-400">
           {t("palette_no_data")}
@@ -453,20 +456,24 @@ export default function PalettePanel({
 
             {/* Grouped toolbar: auto-fit grid keeps every group card the same width */}
             <div className="grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-2">
+              <ToolbarGroup label={t("palette_group_history")}>
                 <Button
                   label={t("palette_undo")}
+                  variant="secondary"
                   size="sm"
                   onClick={undoColorRemap}
                   disabled={!canUndoHistory || replacePreviewLoading}
                 />
                 <Button
                   label={t("palette_redo")}
+                  variant="secondary"
                   size="sm"
                   onClick={redoColorRemap}
                   disabled={!canRedoHistory || replacePreviewLoading}
                 />
                 <Button
                   label={t("palette_clear_remaps")}
+                  variant="secondary"
                   size="sm"
                   onClick={clearAllRemaps}
                   disabled={!hasRemaps || replacePreviewLoading}
@@ -480,15 +487,28 @@ export default function PalettePanel({
                 <SelectionToolPicker />
                 <Button
                   label={t("palette_clear_selection")}
+                  variant="secondary"
                   size="sm"
                   onClick={clearSelection}
                   className="w-full"
                 />
+                <label
+                  className="col-span-full mt-1 flex items-center justify-between gap-3 border-t border-slate-200 py-2 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300"
                   title={t("palette_selection_blink_title")}
+                >
+                  {t("palette_selection_blink")}
+                  <Switch
+                    checked={selectionBlinkEnabled}
+                    onChange={toggleSelectionBlink}
+                    ariaLabel={t("palette_selection_blink")}
+                  />
+                </label>
               </ToolbarGroup>
 
+              <ToolbarGroup label={t("palette_group_free")}>
                 <Button
                   label={t("conv_free_color_btn")}
+                  variant="secondary"
                   size="sm"
                   onClick={() => {
                     if (selectedColor) toggleFreeColor(selectedColor);
@@ -497,14 +517,17 @@ export default function PalettePanel({
                 />
                 <Button
                   label={t("conv_free_color_clear_btn")}
+                  variant="secondary"
                   size="sm"
                   onClick={clearFreeColors}
                   disabled={free_color_set.size === 0}
                 />
               </ToolbarGroup>
 
+              <ToolbarGroup label={t("palette_group_recipe")}>
                 <Button
                   label={t("recipe_custom_button")}
+                  variant="secondary"
                   size="sm"
                   onClick={() => setRecipeDialogOpen(true)}
                   disabled={!canUseCustomRecipe}
@@ -512,6 +535,7 @@ export default function PalettePanel({
                 />
               </ToolbarGroup>
 
+              <ToolbarGroup label={t("viewer_hover_toggle_group")}>
                 <label className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-slate-600 dark:text-slate-300">
                   <Switch
                     checked={showHoverMagnifier}

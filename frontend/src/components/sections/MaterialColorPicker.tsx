@@ -151,6 +151,7 @@ export default function MaterialColorPicker() {
           <p className="text-xs text-slate-100">{t("lut_grid_loading")}</p>
         </div>
       )}
+      <div className={cx(cardClass, "panel-default-surface flex h-full flex-col gap-3 px-4 py-4")}>
         {/* Pending replacement bar — mirrors LutColorGrid for consistent UX */}
         {pendingReplacement && (
           <div className={cx(wellPadClass, "flex flex-col gap-2")}>
@@ -199,6 +200,7 @@ export default function MaterialColorPicker() {
               <button
                 type="button"
                 onClick={() => confirmReplacement()}
+                className="action-control rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors"
               >
                 {t("replace_confirm_btn")}
               </button>
@@ -373,6 +375,7 @@ const TargetColorInputRow = memo(function TargetColorInputRow({
           type="button"
           onClick={handleSubmit}
           disabled={!normalizedTarget || loading}
+          className="action-control rounded-full px-3 py-1.5 text-[clamp(0.6rem,0.75vw,0.65rem)] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60"
         >
           {t("material_picker_submit")}
         </button>

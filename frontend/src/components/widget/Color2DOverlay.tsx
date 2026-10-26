@@ -85,10 +85,13 @@ export default function Color2DOverlay() {
       exit={{ opacity: 0 }}
       transition={{ duration: 0.2, ease: "easeOut" }}
       data-testid="color-2d-overlay"
+      className="color-adjustment-workspace absolute inset-0 z-[45] flex flex-col bg-slate-50 dark:bg-slate-950/95 backdrop-blur-sm"
     >
       {/* Content: left = 2D preview, right = palette + LUT grid in two columns */}
       {contentReady && (
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(18rem,0.82fr)_minmax(17rem,0.46fr)_minmax(20rem,0.72fr)]">
         {/* Left: 2D preview image (click to select color/region) */}
+        <div className="min-h-0">
           <ColorPreview2D
             showMagnifier={showHoverMagnifier}
             showLayerDetails={showHoverLayerDetails}
@@ -96,6 +99,8 @@ export default function Color2DOverlay() {
         </div>
 
         {/* Middle: palette panel */}
+        <div className="panel-divider min-h-0 border-l">
+          <div className="h-full overflow-y-auto overscroll-y-contain">
             <PalettePanel
               showHoverMagnifier={showHoverMagnifier}
               showHoverLayerDetails={showHoverLayerDetails}
@@ -106,7 +111,9 @@ export default function Color2DOverlay() {
         </div>
 
         {/* Right: quick recolor card + LUT color grid */}
+        <div className="panel-divider flex min-h-0 flex-col border-l bg-slate-50 dark:bg-slate-950">
           <ColorQuickReplacePanel />
+          <div className="panel-divider min-h-0 flex-1 overflow-y-auto overscroll-y-contain border-t">
             <LutColorGrid />
           </div>
         </div>

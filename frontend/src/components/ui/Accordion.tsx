@@ -1,3 +1,4 @@
+import DisclosureChevron from "./DisclosureChevron";
 import { useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -18,10 +19,12 @@ export default function Accordion({
     <div className="border-b border-slate-200 dark:border-slate-700">
       <button
         type="button"
+        aria-expanded={open}
         onClick={() => setOpen((prev) => !prev)}
         className="flex w-full items-center justify-between py-3 text-sm font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 transition-colors"
       >
         <span>{title}</span>
+        <DisclosureChevron expanded={open} />
       </button>
       <AnimatePresence initial={false}>
         {open && (

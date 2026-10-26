@@ -7,6 +7,7 @@ interface HeaderTooltipProps {
   children: ReactNode;
   /** Hide the hint while a popover anchored to the trigger is open. */
   suppressed?: boolean;
+  className?: string;
 }
 
 /**
@@ -24,7 +25,9 @@ interface HeaderTooltipProps {
  * 与顶栏整体视觉语言保持一致。只在 ``:focus-visible`` 时显示，鼠标点击后菜单把焦点
  * 还给触发按钮时不会一直挂着提示。
  */
+export function HeaderTooltip({ label, children, suppressed = false, className = "" }: HeaderTooltipProps) {
   return (
+    <span className={`group/header-tip relative inline-flex ${className}`}>
       {children}
       {!suppressed && (
         <span

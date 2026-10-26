@@ -23,6 +23,7 @@ import type {
 interface MaterialCloudCatalogCardProps {
   entry: MaterialRegistryCatalogEntry;
   installState: CatalogInstallState;
+  localDirectory?: string | null;
   isInstalling: boolean;
   installDisabled: boolean;
   onInstall: (entry: MaterialRegistryCatalogEntry) => void;
@@ -79,6 +80,7 @@ function MetaItem({
 export default function MaterialCloudCatalogCard({
   entry,
   installState,
+  localDirectory,
   isInstalling,
   installDisabled,
   onInstall,
@@ -114,6 +116,7 @@ export default function MaterialCloudCatalogCard({
       );
     }
     const label = installState === "update_available"
+      ? t("cloud_library_update")
       : t("mat_sync_install_btn");
     return (
       <Button
@@ -169,6 +172,14 @@ export default function MaterialCloudCatalogCard({
               <span key={index} className="truncate">· {part}</span>
             ))}
           </p>
+          {localDirectory && (
+            <p
+              className="mt-1 truncate font-mono text-[11px] text-slate-400 dark:text-slate-500"
+              title={localDirectory}
+            >
+              {localDirectory}
+            </p>
+          )}
         </div>
       </header>
 

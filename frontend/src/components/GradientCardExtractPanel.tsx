@@ -1,3 +1,4 @@
+import CloseButton from "./ui/CloseButton";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useI18n } from "../i18n/context";
@@ -287,6 +288,7 @@ const SubstrateSignalCard = ({
   return (
     <div
       data-testid={testId}
+      className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50"
     >
       <dt className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
         <span>{label}</span>
@@ -378,11 +380,15 @@ const CornerNudgeControl = ({
       />
       <div className="grid grid-cols-3 gap-2 justify-items-center">
         <div />
+        <Button label={t("ext_nudge_up")} icon={<ChevronUp />} variant="secondary" size="icon" onClick={() => onNudge(0, -1)} disabled={!nudgeEnabled} />
         <div />
+        <Button label={t("ext_nudge_left")} icon={<ChevronLeft />} variant="secondary" size="icon" onClick={() => onNudge(-1, 0)} disabled={!nudgeEnabled} />
         <div className="flex items-center justify-center text-xs tabular-nums text-slate-500 dark:text-slate-400">
           {activeCornerPoint ? `(${Math.round(activeCornerPoint[0])}, ${Math.round(activeCornerPoint[1])})` : "—"}
         </div>
+        <Button label={t("ext_nudge_right")} icon={<ChevronRight />} variant="secondary" size="icon" onClick={() => onNudge(1, 0)} disabled={!nudgeEnabled} />
         <div />
+        <Button label={t("ext_nudge_down")} icon={<ChevronDown />} variant="secondary" size="icon" onClick={() => onNudge(0, 1)} disabled={!nudgeEnabled} />
         <div />
       </div>
     </div>
@@ -792,6 +798,7 @@ export default function GradientCardExtractPanel() {
       />
       <Button
         label={t("mat_gradient_save_override_btn")}
+        variant="secondary"
         onClick={() => handleSave(anchor, "override")}
         disabled={!sessionId || !materialName.trim() || isSaving}
         loading={isSaving}
@@ -981,6 +988,7 @@ export default function GradientCardExtractPanel() {
               </div>
               <Button
                 label={t("mat_gradient_select_dataset_btn")}
+                variant="secondary"
                 onClick={() => datasetInputRef.current?.click()}
                 className="w-full"
               />
@@ -1067,12 +1075,14 @@ export default function GradientCardExtractPanel() {
                 <div className="grid gap-2 sm:grid-cols-2">
                   <Button
                     label={t("mat_gradient_colorchecker_white_btn")}
+                    variant="secondary"
                     onClick={() => openColorcheckerDialog("white")}
                     disabled={!whiteImageFile || colorcheckerPending}
                     className="w-full"
                   />
                   <Button
                     label={t("mat_gradient_colorchecker_black_btn")}
+                    variant="secondary"
                     onClick={() => openColorcheckerDialog("black")}
                     disabled={!blackImageFile || colorcheckerPending}
                     className="w-full"
@@ -1145,6 +1155,7 @@ export default function GradientCardExtractPanel() {
               </div>
               <Button
                 label={t("mat_gradient_select_image_btn")}
+                variant="secondary"
                 onClick={() => whiteImageInputRef.current?.click()}
                 disabled={isExtracting}
                 className="w-full"
@@ -1152,6 +1163,7 @@ export default function GradientCardExtractPanel() {
               <div className="grid gap-3 grid-cols-2">
                 <Button
                   label={t("mat_gradient_rotate_ccw_btn")}
+                  variant="secondary"
                   onClick={() => void rotateWhiteImage("ccw")}
                   disabled={!whiteImageFile || isRotatingWhite || isExtracting || colorcheckerPending}
                   loading={isRotatingWhite}
@@ -1160,6 +1172,7 @@ export default function GradientCardExtractPanel() {
                 />
                 <Button
                   label={t("mat_gradient_rotate_cw_btn")}
+                  variant="secondary"
                   onClick={() => void rotateWhiteImage("cw")}
                   disabled={!whiteImageFile || isRotatingWhite || isExtracting || colorcheckerPending}
                   loading={isRotatingWhite}
@@ -1169,6 +1182,7 @@ export default function GradientCardExtractPanel() {
               </div>
               <Button
                 label={t("mat_gradient_clear_points_btn")}
+                variant="secondary"
                 onClick={clearWhiteCornerPoints}
                 disabled={whiteCornerPoints.length === 0}
                 className="w-full"
@@ -1228,6 +1242,7 @@ export default function GradientCardExtractPanel() {
               </div>
               <Button
                 label={t("mat_gradient_select_image_btn")}
+                variant="secondary"
                 onClick={() => blackImageInputRef.current?.click()}
                 disabled={isExtracting}
                 className="w-full"
@@ -1235,6 +1250,7 @@ export default function GradientCardExtractPanel() {
               <div className="grid gap-3 grid-cols-2">
                 <Button
                   label={t("mat_gradient_rotate_ccw_btn")}
+                  variant="secondary"
                   onClick={() => void rotateBlackImage("ccw")}
                   disabled={!blackImageFile || isRotatingBlack || isExtracting || colorcheckerPending}
                   loading={isRotatingBlack}
@@ -1243,6 +1259,7 @@ export default function GradientCardExtractPanel() {
                 />
                 <Button
                   label={t("mat_gradient_rotate_cw_btn")}
+                  variant="secondary"
                   onClick={() => void rotateBlackImage("cw")}
                   disabled={!blackImageFile || isRotatingBlack || isExtracting || colorcheckerPending}
                   loading={isRotatingBlack}
@@ -1252,6 +1269,7 @@ export default function GradientCardExtractPanel() {
               </div>
               <Button
                 label={t("mat_gradient_clear_points_btn")}
+                variant="secondary"
                 onClick={clearBlackCornerPoints}
                 disabled={blackCornerPoints.length === 0}
                 className="w-full"
@@ -1386,6 +1404,7 @@ export default function GradientCardExtractPanel() {
                     </h4>
                   </div>
                   <dl className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                       <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                         {t("mat_gradient_rgb_label")}
                       </dt>
@@ -1393,6 +1412,7 @@ export default function GradientCardExtractPanel() {
                         {estimatedRgbLabel}
                       </dd>
                     </div>
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                       <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                         {t("mat_gradient_hex_label")}
                       </dt>
@@ -1402,6 +1422,7 @@ export default function GradientCardExtractPanel() {
                     </div>
                   </dl>
                   <dl className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                       <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                         {t("mat_gradient_mean_delta_e_label")}
                       </dt>
@@ -1409,6 +1430,7 @@ export default function GradientCardExtractPanel() {
                         {formatMetricValue(meanDeltaE, 3)}
                       </dd>
                     </div>
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                       <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                         {t("mat_gradient_max_delta_e_label")}
                       </dt>
@@ -1416,6 +1438,7 @@ export default function GradientCardExtractPanel() {
                         {formatMetricValue(maxDeltaE, 3)}
                       </dd>
                     </div>
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                       <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                         {t("mat_gradient_rmse_linear_label")}
                       </dt>
@@ -1423,6 +1446,7 @@ export default function GradientCardExtractPanel() {
                         {formatMetricValue(rmseLinear, 4)}
                       </dd>
                     </div>
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50 sm:col-span-3">
                       <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                         {t("mat_gradient_channel_rmse_label")}
                       </dt>
@@ -1453,6 +1477,7 @@ export default function GradientCardExtractPanel() {
                         )}
                       </div>
                       <dl className="grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                           <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                             {t("mat_gradient_white_orientation_label")}
                           </dt>
@@ -1460,6 +1485,7 @@ export default function GradientCardExtractPanel() {
                             {bestCandidate.white_orientation}
                           </dd>
                         </div>
+                        <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                           <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                             {t("mat_gradient_black_orientation_label")}
                           </dt>
@@ -1467,6 +1493,7 @@ export default function GradientCardExtractPanel() {
                             {bestCandidate.black_orientation}
                           </dd>
                         </div>
+                        <div className="rounded-2xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
                           <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                             {t("mat_gradient_delta_e_gap_label")}
                           </dt>
@@ -1501,6 +1528,7 @@ export default function GradientCardExtractPanel() {
                 <div className="flex justify-end">
                   <Button
                     label={t("mat_gradient_view_details_btn")}
+                    variant="secondary"
                     onClick={() => setDetailsDialogOpen(true)}
                     className="w-full sm:w-auto"
                   />
@@ -1571,8 +1599,10 @@ export default function GradientCardExtractPanel() {
                       {t("mat_gradient_details_dialog_desc")}
                     </p>
                   </div>
+                  <CloseButton label={t("mat_gradient_details_close_btn")} onClick={() => setDetailsDialogOpen(false)} />
                 </div>
 
+                <div className="flex-1 overflow-y-auto overscroll-y-contain px-5 py-4">
                   <div className="flex flex-col gap-4">
                     {stageAParamsUrl ? (
                       <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>

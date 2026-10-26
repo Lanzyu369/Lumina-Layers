@@ -1,3 +1,4 @@
+import CloseButton from "./ui/CloseButton";
 import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { useI18n } from "../i18n/context";
@@ -342,6 +343,7 @@ export default function LutComparePanel() {
               data-testid="error-message"
               tone="error"
               action={
+                <CloseButton label={t("lut_manager_close_error")} onClick={clearError} />
               }
             >
               {error}

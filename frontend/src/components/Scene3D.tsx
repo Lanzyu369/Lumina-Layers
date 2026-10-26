@@ -1,3 +1,4 @@
+import PreviewOrbitControls from "./ui/PreviewOrbitControls";
 import { saveGeneratedFile } from "../utils/saveGeneratedFile";
 import {
   Suspense,
@@ -11,6 +12,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Environment, Html } from "@react-three/drei";
 import { LIGHTING_CONFIG } from "./lightingConfig";
 import * as THREE from "three";
 import { computeFitDistance } from "./ModelViewer";
@@ -1592,6 +1594,7 @@ function Scene3D({ modelUrl, deferInitialization = false, suspended = false }: S
           intensity={themeColors.keyLightIntensity}
           color={themeColors.keyLightColor}
         />
+        <PreviewOrbitControls
           makeDefault
           enableDamping
           dampingFactor={0.1}

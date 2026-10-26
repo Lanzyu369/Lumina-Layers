@@ -314,6 +314,7 @@ export default function GradientCardCanvasPreview({
     : null;
 
   return (
+    <section className="flex flex-col gap-3 rounded-3xl border border-slate-200/80 bg-slate-100/80 p-4 shadow-[var(--shadow-panel)] dark:border-slate-700/80 dark:bg-slate-900/70">
       <div className="flex flex-col gap-1">
         <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-50">{title}</h3>
         {hint ? <p className="text-xs text-slate-500 dark:text-slate-400">{hint}</p> : null}
@@ -322,10 +323,12 @@ export default function GradientCardCanvasPreview({
       {!imageUrl ? (
         <div
           data-testid={emptyStateTestId}
+          className="flex min-h-64 items-center justify-center rounded-2xl border border-dashed border-slate-300/80 bg-slate-100/80 px-4 text-center text-sm text-slate-500 dark:border-slate-700/80 dark:bg-slate-950/60 dark:text-slate-400"
         >
           {emptyText}
         </div>
       ) : (
+        <div className="rounded-2xl border border-slate-200/80 bg-slate-100/60 p-3 dark:border-slate-700/80 dark:bg-slate-950/50">
           <div className="relative mx-auto w-full max-w-full">
             <div
               className="relative min-h-64 w-full overflow-hidden rounded-xl border border-slate-200/80 bg-slate-950/5 dark:border-slate-700/80 dark:bg-slate-950/30"

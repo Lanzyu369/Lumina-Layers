@@ -159,6 +159,7 @@ const defaultCatalog = (): MaterialRegistryCatalogEntry[] => [
 ];
 
 const openLocalRevisions = () => {
+  fireEvent.click(screen.getByRole("button", { name: /本地历史版本|Local Version History/ }));
 };
 
 afterEach(() => {
@@ -187,11 +188,45 @@ describe("MaterialCloudSyncPanel", () => {
     });
   });
 
+  it("keeps the new view inspectable without installing and has no comparison tabs", async () => {
+    render(<MaterialCloudSyncPanel />);
+    const card = await screen.findByRole("button", { name: /Silk PETG/ });
+    fireEvent.click(card);
+    expect(installMaterialRegistryCatalogEntry).not.toHaveBeenCalled();
+    const close = screen.getByRole("button", { name: /关闭|Close/i });
+    expect(close).toHaveFocus();
+    fireEvent.click(close);
+    expect(card).toHaveFocus();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Silk PETG/ })).toBeInTheDocument();
+  });
+
+  it("opens local history as a date-based modal in the new view", async () => {
+    render(<MaterialCloudSyncPanel />);
+    await screen.findByRole("button", { name: /Silk PETG/ });
+    const trigger = screen.getByRole("button", { name: /本地历史版本|Local Version History/ });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: /本地历史版本|Local Version History/ });
+    expect(dialog).not.toHaveTextContent(/rev_old|rev_new|sha256/);
+    fireEvent.click(within(dialog).getAllByRole("radio")[0]);
+    fireEvent.click(within(dialog).getByRole("button", { name: /恢复所选版本|Restore selected/ }));
+    await waitFor(() => expect(rollbackMaterialSyncRevision).toHaveBeenCalledWith("mat_test", "rev_old"));
+    await waitFor(() => expect(dialog).toHaveTextContent(/耗材版本已回滚|Material revision rolled back/i));
+    expect(dialog).not.toHaveTextContent("rolled back mat_test to rev_old");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   it("renders the cloud catalog and installs a selected material", async () => {
     render(<MaterialCloudSyncPanel />);
 
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: /可更新|Updates/i })).toHaveTextContent("1"));
 
+    fireEvent.change(screen.getByRole("searchbox"), {
       target: { value: "PETG" },
     });
     await waitFor(() => {
@@ -202,7 +237,9 @@ describe("MaterialCloudSyncPanel", () => {
       });
     });
     await waitFor(() => {
+      expect(screen.getAllByRole("article")).toHaveLength(1);
     });
+    expect(within(screen.getAllByRole("article")[0]).getByText("Silk PETG")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /下载到本地|download/i }));
 
@@ -272,6 +309,7 @@ describe("MaterialCloudSyncPanel", () => {
     expect(screen.queryByRole("button", { name: /上传耗材包|upload material package/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /批准|approve/i })).not.toBeInTheDocument();
 
+    fireEvent.change(screen.getByRole("searchbox"), {
       target: { value: "PETG" },
     });
     await waitFor(() => {
@@ -279,7 +317,14 @@ describe("MaterialCloudSyncPanel", () => {
     });
   });
 
+  it("shows fit error on cards and channel in details", async () => {
     render(<MaterialCloudSyncPanel />);
+    const card = await screen.findByRole("button", { name: /Silk PETG/ });
+    expect(card).toHaveTextContent("4.87");
+    expect(card).toHaveTextContent("BrandB");
+    fireEvent.click(card);
+    expect(screen.getByText(/社区频道|Community/i)).toBeInTheDocument();
+    expect(screen.getByText("0.08 mm")).toBeInTheDocument();
   });
 
   it("turns server pages instead of appending more entries", async () => {
@@ -290,6 +335,7 @@ describe("MaterialCloudSyncPanel", () => {
 
     expect(await screen.findByText("Item 00 PLA")).toBeInTheDocument();
     expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({ limit: PAGE_SIZE, offset: 0 });
+    expect(screen.getAllByRole("article")).toHaveLength(PAGE_SIZE);
     expect(screen.queryByRole("button", { name: /加载更多|load more/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /上一页|previous/i })).toBeDisabled();
 
@@ -300,6 +346,7 @@ describe("MaterialCloudSyncPanel", () => {
     });
     expect(await screen.findByText("Item 24 PLA")).toBeInTheDocument();
     expect(screen.queryByText("Item 00 PLA")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("article")).toHaveLength(6);
     expect(screen.getByRole("button", { name: /第 2 页|page 2/i })).toHaveAttribute("aria-current", "page");
 
     fireEvent.click(screen.getByRole("button", { name: /第 1 页|page 1/i }));
@@ -322,8 +369,11 @@ describe("MaterialCloudSyncPanel", () => {
       expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({ limit: PAGE_SIZE, offset: PAGE_SIZE * 2 });
     });
     await waitFor(() => {
+      expect(screen.getAllByRole("article")).toHaveLength(24);
     });
     expect(screen.getByText("Item 00 PLA")).toBeInTheDocument();
+    expect(screen.getAllByRole("article")).toHaveLength(PAGE_SIZE);
+    expect(screen.queryByText(/没有匹配的云端耗材|No matching cloud materials/i)).not.toBeInTheDocument();
   });
 
   it("does not fetch the full catalog when nothing is installed locally", async () => {
@@ -333,8 +383,12 @@ describe("MaterialCloudSyncPanel", () => {
     render(<MaterialCloudSyncPanel />);
 
     expect(await screen.findByText("Item 00 PLA")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /可更新|Updates/i })).toHaveTextContent("0");
 
+    fireEvent.click(screen.getByRole("button", { name: /可更新|Updates/i }));
+    expect(await screen.findByText(/没有匹配的云端耗材|No matching cloud materials/i)).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: /未安装|Not installed/i }));
     expect(await screen.findByText("Item 00 PLA")).toBeInTheDocument();
     expect(fetchMaterialRegistryCatalog).not.toHaveBeenCalledWith({});
   });
@@ -354,15 +408,21 @@ describe("MaterialCloudSyncPanel", () => {
     await waitFor(() => {
       expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({});
     });
+    await waitFor(() => expect(screen.getByRole("button", { name: /可更新|Updates/i })).toHaveTextContent("1"));
+    expect(screen.getByRole("button", { name: /已安装|Installed/i })).toHaveTextContent("1");
+    expect(screen.getByRole("button", { name: /未安装|Not installed/i })).toHaveTextContent("28");
 
     vi.mocked(fetchMaterialRegistryCatalog).mockClear();
     fireEvent.click(screen.getByRole("button", { name: /下一页|next/i }));
     expect(await screen.findByText("Item 29 PLA")).toBeInTheDocument();
     expect(fetchMaterialRegistryCatalog).not.toHaveBeenCalled();
 
+    fireEvent.click(screen.getByRole("button", { name: /可更新|Updates/i }));
     await waitFor(() => {
+      expect(screen.getAllByRole("article")).toHaveLength(1);
     });
     expect(screen.getByText("Item 27 PLA")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
   });
 
   it("offers a retry when the full catalog cannot be loaded for a state filter", async () => {
@@ -378,12 +438,14 @@ describe("MaterialCloudSyncPanel", () => {
     render(<MaterialCloudSyncPanel />);
 
     expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /可更新|Updates/i }));
     const warning = await screen.findByTestId("material-cloud-full-catalog-failed");
 
     failFullCatalog = false;
     fireEvent.click(within(warning).getByRole("button", { name: /重试|retry/i }));
 
     await waitFor(() => {
+      expect(screen.getAllByRole("article")).toHaveLength(1);
     });
     expect(screen.getByText("PLA Pro")).toBeInTheDocument();
   });
@@ -401,6 +463,7 @@ describe("MaterialCloudSyncPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /下一页|next/i }));
     expect(await screen.findByText("Item 24 PLA")).toBeInTheDocument();
 
+    fireEvent.change(screen.getByRole("searchbox"), {
       target: { value: "PETG" },
     });
 
@@ -408,8 +471,10 @@ describe("MaterialCloudSyncPanel", () => {
       expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({ limit: PAGE_SIZE, offset: 0, q: "PETG" });
     });
     await waitFor(() => {
+      expect(screen.getAllByRole("article")).toHaveLength(1);
     });
     expect(screen.getByText("Silk PETG")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
   });
 
   it("debounces rapid typing while keeping refresh and clear immediate", async () => {
@@ -420,6 +485,7 @@ describe("MaterialCloudSyncPanel", () => {
     vi.mocked(fetchMaterialRegistryCatalog).mockClear();
     vi.useFakeTimers();
 
+    const searchInput = screen.getByRole("searchbox");
     fireEvent.change(searchInput, { target: { value: "P" } });
     fireEvent.change(searchInput, { target: { value: "PE" } });
     fireEvent.change(searchInput, { target: { value: "PETG" } });
@@ -481,6 +547,7 @@ describe("MaterialCloudSyncPanel", () => {
 
     vi.mocked(fetchMaterialRegistryCatalog).mockClear();
     vi.useFakeTimers();
+    fireEvent.change(screen.getByRole("searchbox"), {
       target: { value: "PLA" },
     });
     expect(fetchMaterialRegistryCatalog).not.toHaveBeenCalled();
@@ -527,6 +594,7 @@ describe("MaterialCloudSyncPanel", () => {
       throw new Error(`unexpected query: ${query?.q ?? ""}`);
     });
 
+    const searchInput = screen.getByRole("searchbox");
     fireEvent.change(searchInput, { target: { value: "P" } });
     await act(async () => {
       vi.advanceTimersByTime(400);
@@ -584,6 +652,7 @@ describe("MaterialCloudSyncPanel", () => {
     });
 
     vi.useFakeTimers();
+    fireEvent.change(screen.getByRole("searchbox"), {
       target: { value: "Fresh" },
     });
     await act(async () => {
@@ -617,6 +686,7 @@ describe("MaterialCloudSyncPanel", () => {
     render(<MaterialCloudSyncPanel />);
 
     expect((await screen.findAllByText("PLA Pro")).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: /^(更新|Update)$/i }));
 
     await waitFor(() => {
       expect(installMaterialRegistryCatalogEntry).toHaveBeenCalledWith({
@@ -638,7 +708,10 @@ describe("MaterialCloudSyncPanel", () => {
     render(<MaterialCloudSyncPanel />);
 
     expect((await screen.findAllByText("PLA Basic")).length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByRole("button", { name: /可更新|Updates/i })).toHaveTextContent("1"));
+    expect(screen.getByText("PLA Basic").closest("article")).not.toHaveTextContent(/有新版本|update available/i);
     expect(screen.queryByRole("button", { name: /更新到 old|update to old/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^(更新|Update)$/i })).toBeInTheDocument();
   });
 
   it("treats matching local directory and content hash as installed when material ids differ", async () => {
@@ -664,6 +737,9 @@ describe("MaterialCloudSyncPanel", () => {
     render(<MaterialCloudSyncPanel />);
 
     expect((await screen.findAllByText("PLA Local")).length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByRole("button", { name: /可更新|Updates/i })).toHaveTextContent("0"));
+    expect(screen.getByText("PLA Local").closest("article")).toHaveTextContent(/已安装|installed/i);
+    expect(screen.queryByRole("button", { name: /^(已安装|Installed)$/i })).not.toBeInTheDocument();
     expect(screen.queryByTestId("material-cloud-local-installed-section")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /下载到本地|download/i })).not.toBeInTheDocument();
   });
@@ -681,24 +757,35 @@ describe("MaterialCloudSyncPanel", () => {
 
     render(<MaterialCloudSyncPanel />);
 
+    expect(await screen.findByText(/没有匹配的云端耗材|No matching cloud materials/i)).toBeInTheDocument();
     expect(screen.queryByTestId("material-cloud-local-installed-section")).not.toBeInTheDocument();
     expect(screen.queryByText("Missing PLA")).not.toBeInTheDocument();
   });
 
+  it("keeps local history closed until requested", async () => {
     render(<MaterialCloudSyncPanel />);
+    await screen.findByText("Silk PETG");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     openLocalRevisions();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("PLA Basic");
+    expect(within(dialog).getAllByRole("radio")).toHaveLength(1);
   });
 
   it("rolls back from the local revision notice when catalog search hides the card", async () => {
     render(<MaterialCloudSyncPanel />);
 
     expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox"), {
       target: { value: "Silk" },
     });
     await waitFor(() => {
+      expect(screen.getAllByRole("article")).toHaveLength(1);
     });
 
     openLocalRevisions();
+    fireEvent.click(screen.getAllByRole("radio")[0]);
+    fireEvent.click(screen.getByRole("button", { name: /恢复所选版本|Restore selected/ }));
 
     await waitFor(() => {
       expect(rollbackMaterialSyncRevision).toHaveBeenCalledWith("mat_test", "rev_old");
@@ -713,6 +800,8 @@ describe("MaterialCloudSyncPanel", () => {
     expect(await screen.findByTestId("material-cloud-sync-error")).toHaveTextContent("catalog unavailable");
 
     openLocalRevisions();
+    fireEvent.click(screen.getAllByRole("radio")[0]);
+    fireEvent.click(screen.getByRole("button", { name: /恢复所选版本|Restore selected/ }));
 
     await waitFor(() => {
       expect(rollbackMaterialSyncRevision).toHaveBeenCalledWith("mat_test", "rev_old");
@@ -733,6 +822,7 @@ describe("MaterialCloudSyncPanel", () => {
     expect(screen.getByText(/没有匹配的云端耗材|No matching cloud materials/i)).toBeInTheDocument();
 
     openLocalRevisions();
+    expect(screen.getAllByRole("radio")[0]).toBeEnabled();
   });
 
   it("renders installed catalog status and rolls back a previous revision", async () => {
@@ -740,8 +830,11 @@ describe("MaterialCloudSyncPanel", () => {
 
     expect(await screen.findByText("PLA Basic")).toBeInTheDocument();
     expect(screen.queryByTestId("material-cloud-filter-official")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(已安装|Installed)$/i })).not.toBeInTheDocument();
 
     openLocalRevisions();
+    fireEvent.click(screen.getAllByRole("radio")[0]);
+    fireEvent.click(screen.getByRole("button", { name: /恢复所选版本|Restore selected/ }));
 
     await waitFor(() => {
       expect(rollbackMaterialSyncRevision).toHaveBeenCalledWith("mat_test", "rev_old");
@@ -749,5 +842,6 @@ describe("MaterialCloudSyncPanel", () => {
     await waitFor(() => {
       expect(fetchMaterialSyncStatus).toHaveBeenCalledTimes(2);
     });
+    expect(await screen.findByTestId("material-cloud-sync-success")).toHaveTextContent(/耗材版本已回滚|Material revision rolled back/i);
   });
 });

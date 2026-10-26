@@ -1,3 +1,4 @@
+import CloseButton from "../ui/CloseButton";
 import { useEffect, useRef } from "react";
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
@@ -79,8 +80,10 @@ export default function TutorialWelcomeDialog({
               {t("tutorial_welcome_title")}
             </h2>
           </div>
+          <CloseButton label={t("tutorial_welcome_close")} onClick={onSkip} />
         </div>
 
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-5 py-4" data-testid="tutorial-welcome-body">
           <p className="whitespace-pre-line text-sm leading-6 text-slate-600 dark:text-slate-300">
             {t("tutorial_welcome_body")}
           </p>

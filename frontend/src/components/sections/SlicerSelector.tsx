@@ -1,3 +1,4 @@
+import ButtonContent from "../ui/ButtonContent";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useSlicerStore } from "../../stores/slicerStore";
@@ -15,6 +16,7 @@ import {
 import type { SlicerInfo } from "../../api/types";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
 import SlicerLogo from "../slicer/SlicerLogo";
+import { useApplicationMenuCommand } from "../../integrations/applicationMenu";
 import WikiTooltip from "../ui/WikiTooltip";
 
 /** Brand color style for a slicer button. 切片软件品牌配色样式。 */
@@ -289,6 +291,9 @@ export default function SlicerSelector({
     activeSlicer?.display_name ?? null,
     t,
   );
+  const outputHint = !isDetecting && !largeFormat
+    ? slicerLinkHint ?? (!hasSlicers ? t("slicer_not_detected") : null)
+    : null;
   const resolveLatestDownloadUrl =
     getLatestDownloadUrl ?? (() => useConverterStore.getState().downloadUrl);
   const resolveLatestThreemfDiskPath =
@@ -402,6 +407,7 @@ export default function SlicerSelector({
 
   const isDisabled = !canSubmit || isDetecting || isLaunching || isAutoGenerating || isDownloading;
   const actionBusy = isLaunching || isAutoGenerating || isDownloading;
+  useApplicationMenuCommand('export', () => { void handleDownloadFromMenu(); }, Boolean(downloadUrl) && !isDisabled);
   const showActiveSlicerLogo = !largeFormat && activeSlicerId !== null;
 
   const mainButtonLabel = getButtonLabel(
@@ -430,7 +436,14 @@ export default function SlicerSelector({
                 type="button"
                 onClick={() => void handleMainClick()}
                 disabled={isDisabled}
+                aria-label={mainButtonLabel}
+                aria-busy={actionBusy || undefined}
+                className={`relative flex min-h-10 flex-1 items-center justify-center gap-2 rounded-l-md px-4 py-1.5 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
               >
+                <ButtonContent loading={actionBusy}>
+                  {showActiveSlicerLogo && <SlicerLogo slicerId={activeSlicerId} variant="onBrand" />}
+                  {mainButtonLabel}
+                </ButtonContent>
               </button>
             </WikiTooltip>
 
@@ -516,7 +529,13 @@ export default function SlicerSelector({
                   type="button"
                   onClick={() => void handleMainClick()}
                   disabled={isDisabled}
+                  aria-label={getButtonLabel(false, launchArtifactSource, null, t, largeFormat)}
+                  aria-busy={(isAutoGenerating || isDownloading) || undefined}
+                  className={`relative flex w-full items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
                 >
+                  <ButtonContent loading={isAutoGenerating || isDownloading}>
+                    {getButtonLabel(false, launchArtifactSource, null, t, largeFormat)}
+                  </ButtonContent>
                 </button>
               </WikiTooltip>
             </>
@@ -527,6 +546,8 @@ export default function SlicerSelector({
       {launchMessage && (
         <p className="text-xs text-green-400">{launchMessage}</p>
       )}
+      {outputHint && (
+        <p role="status" className="text-xs text-slate-500 dark:text-slate-400">{outputHint}</p>
       )}
       {error && (
         <p className="text-xs text-red-400">{error}</p>

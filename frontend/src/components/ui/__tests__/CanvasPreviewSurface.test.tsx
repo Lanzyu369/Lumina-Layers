@@ -264,6 +264,43 @@ describe("CanvasPreviewSurface", () => {
     expect(contexts.at(-1)?.imageSmoothingEnabled).toBe(false)
   })
 
+  describe.each([1.15, undefined])("wheel step %s", (step) => {
+  it.each([
+    { deltas: [-100], deltaMode: 0, expected: 1.15 },
+    { deltas: Array(20).fill(-5) as number[], deltaMode: 0, expected: 1.15 },
+    { deltas: [-1], deltaMode: 0, expected: Math.pow(1.15, 0.01) },
+    { deltas: [-10000], deltaMode: 0, expected: 1.15 },
+    { deltas: [-6.25], deltaMode: 1, expected: 1.15 },
+    { deltas: [-1], deltaMode: 2, expected: 1.15 },
+    { deltas: [-100, 100], deltaMode: 0, expected: 1 },
+    { deltas: [0], deltaMode: 0, expected: 1 },
+  ])("scales by wheel distance: $deltas in mode $deltaMode", ({ deltas, deltaMode, expected }) => {
+    const scaleChanges: number[] = []
+    installCanvasContextMock(() => ({
+      clearRect: vi.fn(), save: vi.fn(), restore: vi.fn(),
+      setTransform: vi.fn(), translate: vi.fn(), scale: vi.fn(), drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D))
+    render(
+      <CanvasPreviewSurface
+        src="/preview.png"
+        alt="Preview"
+        wheelZoomStepMultiplier={step}
+        onScaleChange={(scale) => scaleChanges.push(scale)}
+      />,
+    )
+    const surface = screen.getByTestId("canvas-preview-surface")
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 0, top: 0, width: 400, height: 300,
+      right: 400, bottom: 300, x: 0, y: 0, toJSON: () => ({}),
+    })
+    act(() => latestImage?.dispatchLoad())
+    for (const deltaY of deltas) {
+      fireEvent.wheel(surface, { deltaY, deltaX: 10, deltaMode, clientX: 60, clientY: 40 })
+    }
+    expect(scaleChanges.at(-1)).toBeCloseTo(step ? expected : Math.exp(Math.log(expected) / Math.log(1.15) * 0.1), 8)
+  })
+  })
+
   it("does not change scale when wheel zoom is disabled", () => {
     const scaleChanges: number[] = []
     installCanvasContextMock(() => ({

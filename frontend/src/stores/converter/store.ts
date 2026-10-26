@@ -101,6 +101,7 @@ import {
 } from "../../utils/fridgeMagnetLayout";
 import {
   isSvgImageFile,
+  resolveRotatedImageSize,
   rotateImageFile,
   type ImageRotationDegrees,
 } from "../../utils/imageRotation";
@@ -1661,6 +1662,15 @@ function buildImageAspectRatioState(state: ConverterState, ratio: number): Parti
   if (!Number.isFinite(ratio) || ratio <= 0) return {};
   // An imported project already supplies explicit dimensions before its image loads.
   if (state.aspectRatio !== null) return { aspectRatio: ratio };
+  const remembered = state.conversionParameterContext === "defaults"
+    ? useSettingsStore.getState().conversionPreferences.last
+    : null;
+  const longestEdge = remembered?.size_mm ?? Math.max(state.target_width_mm, state.target_height_mm);
+  const requested = {
+    target_width_mm: ratio >= 1 ? longestEdge : Math.max(10, Math.round(longestEdge * ratio)),
+    target_height_mm: ratio >= 1 ? Math.max(10, Math.round(longestEdge / ratio)) : longestEdge,
+  };
+  const dimensions = fitTargetDimensions(requested, state, useSettingsStore.getState().printerModel);
   return {
     aspectRatio: ratio,
     ...dimensions,
@@ -1858,6 +1868,7 @@ export const DEFAULT_STATE: ConverterState = {
   modelSurfaceError: null,
   modelSurfaceWarnings: [],
   sessionId: null,
+  source_version: "material",
   lut_name: DEFAULT_LUT_NAME,
   lut_names: normalizeLegacyLutNames([], DEFAULT_LUT_NAME),
   nativeBrandGroups: [],
@@ -2272,6 +2283,26 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         );
         rememberDerivedImageSource(rotatedFile, state.imageFile);
         _get().setImageFile(rotatedFile);
+        if (state.conversionParameterContext === "project") {
+          // A project owns exact millimeter dimensions. Publish the rotated
+          // axes before Image.onload so it only updates the artwork ratio.
+          const rotatedSize = resolveRotatedImageSize(
+            state.target_width_mm, state.target_height_mm, degrees,
+          );
+          const aspectRatio = rotatedSize.width / rotatedSize.height;
+          const dimensions = fitTargetDimensions({
+            target_width_mm: rotatedSize.width,
+            target_height_mm: rotatedSize.height,
+          }, { ...state, aspectRatio }, useSettingsStore.getState().printerModel);
+          set({
+            ...dimensions,
+            aspectRatio,
+            fridge_magnets: canonicalizeFridgeMagnets(
+              getFallbackModelBounds({ ...state, ...dimensions, modelBounds: null }),
+              state.fridge_magnets,
+            ),
+          });
+        }
       } catch (err) {
         set({
           error: visibleConverterError(err, tRuntime("basic_image_rotation_failed")),

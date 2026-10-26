@@ -60,6 +60,7 @@ async function buildTestRecipe(
   recipe: LuminaRecipe;
   state: ConverterState;
 }> {
+  const state = { ...DEFAULT_STATE, source_version: "legacy", ...stateOverrides } as ConverterState;
   const path = lutPath ?? LOCAL_LUTS.find((lut) => lut.name === state.lut_name)?.path;
   const converterRecipe = exportConverterRecipe(
     state,
@@ -538,6 +539,7 @@ describe("recipe integration", () => {
     });
 
     it("changed LUT record path triggers name fallback with warning", async () => {
+      const state = { ...DEFAULT_STATE, source_version: "legacy", lut_name: "TestLUT" } as ConverterState;
       const converterRecipe = exportConverterRecipe(state, DEFAULT_SETTINGS, "missing-record");
 
       const recipe = await buildFullRecipe(
@@ -669,6 +671,7 @@ describe("recipe integration", () => {
 
     it("recipe with heightmap preserves its attachment without digest metadata", async () => {
       const hmFile = new File([new Uint8Array([10, 20, 30])], "height.png", { type: "image/png" });
+      const state = { ...DEFAULT_STATE, source_version: "legacy", lut_name: "TestLUT", heightmapFile: hmFile } as ConverterState;
       const converterRecipe = exportConverterRecipe(state, DEFAULT_SETTINGS, "fp_test");
       const assets = await buildRecipeAssets(
         new File([new Uint8Array([1, 2])], "img.png", { type: "image/png" }),

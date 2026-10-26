@@ -207,6 +207,21 @@ describe("SettingsPanel base-layer-height modifier", () => {
     ).toBeInTheDocument();
   });
 
+  it("opens modifier help without changing or syncing the setting", async () => {
+    renderPanel();
+    const toggle = await screen.findByRole("switch", { name: "底板层高修改器" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "更改设备" })).toBeEnabled());
+    vi.mocked(systemApi.saveSettings).mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "底板层高修改器" }));
+
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      translations["settings.base_layer_height_modifier_desc"].zh,
+    );
+    expect(toggle).toBeChecked();
+    expect(useSettingsStore.getState().enableBaseLayerHeightModifier).toBe(true);
+    expect(systemApi.saveSettings).not.toHaveBeenCalled();
+  });
+
   it("describes compatible slicers without merging Orca and Bambu settings", () => {
     const description = translations["settings.base_layer_height_modifier_desc"];
 

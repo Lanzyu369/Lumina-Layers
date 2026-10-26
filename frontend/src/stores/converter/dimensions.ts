@@ -16,6 +16,9 @@ export function getPrinterBedDimensions(
 }
 
 export function getTargetDimensionLimits(state: DimensionState, printerId: string) {
+  // The fallback bed is only a UI placeholder. Do not shrink saved dimensions
+  // before the selected printer's actual catalog entry has arrived.
+  if (state.bedSizes.length === 0) return { width: Infinity, height: Infinity };
   const { width, height } = getPrinterBedDimensions(state, printerId);
   const ratio = state.aspectRatio;
   return {
@@ -30,7 +33,16 @@ export function fitTargetDimensions(
   printerId: string,
 ) {
   const { target_width_mm, target_height_mm } = dimensions;
+  if (state.largeFormatEnabled || state.bedSizes.length === 0) return { target_width_mm, target_height_mm };
   const limits = getPrinterBedDimensions(state, printerId);
+  if (state.aspectRatio === null) {
+    // No artwork ratio exists yet. Each axis is a placeholder; fitting it as
+    // a square would lose a valid long edge on a rectangular printer bed.
+    return {
+      target_width_mm: Math.min(target_width_mm, limits.width),
+      target_height_mm: Math.min(target_height_mm, limits.height),
+    };
+  }
   const scale = Math.min(
     1,
     limits.width / target_width_mm,

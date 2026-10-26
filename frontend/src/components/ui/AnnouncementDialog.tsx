@@ -1,3 +1,4 @@
+import CloseButton from "./CloseButton";
 import { useEffect } from "react";
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
@@ -87,8 +88,10 @@ export default function AnnouncementDialog({
               {anchorEntry.version}
             </span>
           </div>
+          <CloseButton label={t("announcement_close")} onClick={onClose} />
         </div>
 
+        <div className="max-h-[70vh] flex-1 overflow-y-auto overscroll-y-contain px-5 py-4">
           {resolvedEntries.map((currentEntry, entryIndex) => (
             <article
               key={currentEntry.version}
@@ -146,6 +149,7 @@ export default function AnnouncementDialog({
           />
           <Button
             label={t("announcement_mark_read")}
+            variant="secondary"
             onClick={onDismissVersion}
             className="px-4"
           />
