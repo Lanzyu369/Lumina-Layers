@@ -5,28 +5,32 @@
 """
 
 import re
+import uuid
 from datetime import datetime
 from typing import Optional, Dict
 
 from config import ModelingMode
-
 
 # 建模模式 → 文件名标识映射
 MODELING_MODE_TAGS: Dict[ModelingMode, str] = {
     ModelingMode.HIGH_FIDELITY: "HiFi",
     ModelingMode.PIXEL: "Pixel",
     ModelingMode.VECTOR: "Vector",
+    ModelingMode.COLOR_CARD: "ColorCard",
 }
 
 # 颜色模式 → 文件名标识映射
 COLOR_MODE_TAGS: Dict[str, str] = {
     "4-Color": "4C",
     "4-Color (1024 colors)": "4C",
+    "4-Color (CMYW)": "4C",
+    "4-Color (RYBW)": "4C",
     "CMYW": "4C",
     "RYBW": "4C",
     "5-Color Extended": "5C",
     "6-Color": "6C",
-    "6-Color (Smart 1296)": "6C",
+    "6-Color (CMYWGK 1296)": "6C",
+    "6-Color (RYBWGK 1296)": "6C",
     "8-Color Max": "8C",
     "8-Color": "8C",
     "BW": "BW",
@@ -48,13 +52,64 @@ def _sanitize(name: str) -> str:
     return name
 
 
-# Gradio/pywebview 临时文件前缀模式: tmp{random}_ (例如 tmpq7esd8mm_photo, tmpud7d8o06_photo)
+# Legacy uploader/pywebview temporary file prefix pattern: tmp{random}_
+# (e.g. tmpq7esd8mm_photo, tmpud7d8o06_photo)
 _TEMP_PREFIX_RE = re.compile(r"^tmp[a-zA-Z0-9]{4,12}_")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+_WINDOWS_RESERVED_NAME_RE = re.compile(
+    r"^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]) *(?:\.|$)",
+    re.IGNORECASE,
+)
+_PRESERVED_3MF_EXTENSION = ".3mf"
+_MAX_FILENAME_COMPONENT_BYTES = 255
+_MAX_PRESERVED_3MF_STEM_BYTES = (
+    _MAX_FILENAME_COMPONENT_BYTES - len(_PRESERVED_3MF_EXTENSION.encode("utf-8"))
+)
 
 
 def _strip_temp_prefix(name: str) -> str:
-    """去除 Gradio/pywebview 生成的临时文件名前缀。"""
+    """去除上传器/pywebview 生成的临时文件名前缀。"""
     return _TEMP_PREFIX_RE.sub("", name)
+
+
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    """Truncate text to a UTF-8 byte limit without splitting a code point."""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def generate_preserved_upload_3mf_filename(
+    source_basename: str | None,
+) -> str | None:
+    """Build a safe 3MF download name from an uploaded source basename.
+
+    根据上传文件的无扩展名名称生成安全的 3MF 下载文件名。
+
+    Args:
+        source_basename: Extension-free basename captured from upload metadata.
+            从上传元数据中取得的无扩展名文件名。
+
+    Returns:
+        A safe ``.3mf`` filename, or ``None`` when no usable stem remains.
+        安全的 ``.3mf`` 文件名；无法得到有效名称时返回 ``None``。
+    """
+    stem = str(source_basename or "").strip()
+    if not stem:
+        return None
+    stem = _strip_temp_prefix(stem)
+    stem = _CONTROL_CHAR_RE.sub("_", stem)
+    stem = _sanitize(stem).strip(" .")
+    stem = _truncate_utf8(stem, _MAX_PRESERVED_3MF_STEM_BYTES).rstrip(" .")
+    if not stem:
+        return None
+    if _WINDOWS_RESERVED_NAME_RE.match(stem):
+        stem = _truncate_utf8(
+            f"_{stem}",
+            _MAX_PRESERVED_3MF_STEM_BYTES,
+        ).rstrip(" .")
+    return f"{stem}{_PRESERVED_3MF_EXTENSION}"
 
 
 def generate_model_filename(
@@ -93,6 +148,42 @@ def generate_preview_filename(
     return f"{base}_Preview_{ts}{extension}"
 
 
+def generate_segmented_glb_filename(
+    session_id: Optional[str],
+    extension: str = ".glb",
+) -> str:
+    """Generate a session-scoped, collision-free filename for segmented GLB output.
+    生成按会话隔离且不会冲突的分色 GLB 输出文件名。
+
+    Combines a short session_id prefix (for traceability in OUTPUT_DIR listings
+    and log correlation) with a uuid4 segment (for uniqueness even when the
+    same session triggers multiple concurrent GLB builds within the same
+    second). API endpoints that expose ``/api/files/{glb_id}`` rely on this
+    so cross-session writes never overwrite each other on disk.
+    将 session_id 前 8 位（便于在 OUTPUT_DIR 列表与日志中追溯）与 uuid4 短段
+    （即便同一会话在同一秒内并发触发多次 GLB 生成也保持唯一）拼接。暴露
+    ``/api/files/{glb_id}`` 的 API 端点依赖该助手，确保跨会话写入不会在磁盘
+    上互相覆盖。
+
+    Format / 格式: ``segmented_{session_prefix}_{uuid12}{extension}``
+
+    Args:
+        session_id (str | None): Caller's session identifier. ``None`` or empty
+            falls back to ``"anon"`` so the helper never raises on missing sessions.
+            (会话标识；``None`` 或空字符串回退为 ``"anon"``，确保调用永远不抛错)
+        extension (str): File extension including the leading dot. Default ``.glb``.
+            (含前导点的扩展名，默认 ``.glb``)
+
+    Returns:
+        str: Collision-free basename safe for ``os.path.join(OUTPUT_DIR, ...)``.
+            (可直接拼到 ``OUTPUT_DIR`` 后的无冲突文件名)
+    """
+    raw_prefix = (session_id or "anon")[:8] or "anon"
+    safe_prefix = _sanitize(raw_prefix)
+    rand = uuid.uuid4().hex[:12]
+    return f"segmented_{safe_prefix}_{rand}{extension}"
+
+
 def generate_calibration_filename(
     color_mode: str,
     calibration_type: str = "Standard",
@@ -125,22 +216,14 @@ def generate_batch_filename(
 _TS_PATTERN = r"\d{8}_\d{6}"
 
 # Valid mode and color tags for matching
-_VALID_MODE_TAGS = {"HiFi", "Pixel", "Vector"}
+_VALID_MODE_TAGS = {"HiFi", "Pixel", "Vector", "ColorCard"}
 _VALID_COLOR_TAGS = {"4C", "5C", "6C", "8C", "BW", "Merged"}
 
 # Regex patterns for each file type
-_MODEL_RE = re.compile(
-    rf"^(.+)_Lumina_(HiFi|Pixel|Vector)_(4C|5C|6C|8C|BW|Merged)_({_TS_PATTERN})(\.[\w]+)$"
-)
-_PREVIEW_RE = re.compile(
-    rf"^(.+)_Preview_({_TS_PATTERN})(\.[\w]+)$"
-)
-_CALIBRATION_RE = re.compile(
-    rf"^Lumina_Calibration_(.+?)_(4C|5C|6C|8C|BW|Merged)_({_TS_PATTERN})(\.[\w]+)$"
-)
-_BATCH_RE = re.compile(
-    rf"^Lumina_Batch_({_TS_PATTERN})(\.[\w]+)$"
-)
+_MODEL_RE = re.compile(rf"^(.+)_Lumina_(HiFi|Pixel|Vector|ColorCard)_(4C|5C|6C|8C|BW|Merged)_({_TS_PATTERN})(\.[\w]+)$")
+_PREVIEW_RE = re.compile(rf"^(.+)_Preview_({_TS_PATTERN})(\.[\w]+)$")
+_CALIBRATION_RE = re.compile(rf"^Lumina_Calibration_(.+?)_(4C|5C|6C|8C|BW|Merged)_({_TS_PATTERN})(\.[\w]+)$")
+_BATCH_RE = re.compile(rf"^Lumina_Batch_({_TS_PATTERN})(\.[\w]+)$")
 
 
 def parse_filename(filename: str) -> Optional[Dict[str, str]]:

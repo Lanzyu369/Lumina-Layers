@@ -1,0 +1,59 @@
+{
+  "duplicate_event_count": 3,
+  "duplicate_event_ratio": 0.2727272727272727,
+  "event_counts": {
+    "converter_generate_timing": 1,
+    "converter_preview_timing": 1,
+    "converter_region_replace_timing": 1,
+    "image_processor_done": 2,
+    "image_processor_init": 2,
+    "log_file_configured": 2,
+    "lut_presets_discovered": 1,
+    "worker_pool_started": 1
+  },
+  "generated_at": "2026-04-26T16:35:00.403623+00:00",
+  "input_files": [
+    "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\logs\\lumina_20260427_003445.log"
+  ],
+  "label": "unmocked_after",
+  "request_completed_count": 0,
+  "request_completed_ratio": 0.0,
+  "structured_lines": 11,
+  "top_events": [
+    {
+      "count": 2,
+      "event": "log_file_configured"
+    },
+    {
+      "count": 2,
+      "event": "image_processor_init"
+    },
+    {
+      "count": 2,
+      "event": "image_processor_done"
+    },
+    {
+      "count": 1,
+      "event": "worker_pool_started"
+    },
+    {
+      "count": 1,
+      "event": "lut_presets_discovered"
+    },
+    {
+      "count": 1,
+      "event": "converter_preview_timing"
+    },
+    {
+      "count": 1,
+      "event": "converter_generate_timing"
+    },
+    {
+      "count": 1,
+      "event": "converter_region_replace_timing"
+    }
+  ],
+  "total_bytes": 3275,
+  "total_lines": 11,
+  "unstructured_lines": 0
+}

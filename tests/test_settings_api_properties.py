@@ -24,12 +24,13 @@ client: TestClient = TestClient(app)
 
 # Valid values for constrained string fields
 modeling_modes = st.sampled_from(["high-fidelity", "pixel", "vector"])
-color_modes = st.sampled_from(["RYBW", "6-Color", "8-Color Max", "BW", "Merged"])
+color_modes = st.sampled_from(["4-Color", "6-Color", "8-Color Max", "BW", "Merged"])
 safe_text = st.text(
     alphabet=st.characters(whitelist_categories=("L", "N", "P", "Z")),
     min_size=0,
     max_size=100,
 )
+nozzle_sizes = st.sampled_from(["0.2", "0.4"])
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +46,7 @@ safe_text = st.text(
     last_slicer=safe_text,
     palette_mode=safe_text,
     enable_crop_modal=st.booleans(),
+    nozzle_size=nozzle_sizes,
 )
 @settings(max_examples=100)
 def test_settings_round_trip(
@@ -54,6 +56,7 @@ def test_settings_round_trip(
     last_slicer: str,
     palette_mode: str,
     enable_crop_modal: bool,
+    nozzle_size: str,
 ) -> None:
     """Property 6: For any valid UserSettings, POST then GET SHALL return
     equivalent data.
@@ -68,6 +71,7 @@ def test_settings_round_trip(
         "last_slicer": last_slicer,
         "palette_mode": palette_mode,
         "enable_crop_modal": enable_crop_modal,
+        "nozzle_size": nozzle_size,
     }
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -94,6 +98,7 @@ def test_settings_round_trip(
             assert returned["last_slicer"] == last_slicer
             assert returned["palette_mode"] == palette_mode
             assert returned["enable_crop_modal"] == enable_crop_modal
+            assert returned["nozzle_size"] == nozzle_size
 
 
 # ---------------------------------------------------------------------------
@@ -130,13 +135,49 @@ def test_settings_rejects_invalid_enable_crop_modal(bad_value) -> None:
     payload = {
         "last_lut": "",
         "last_modeling_mode": "high-fidelity",
-        "last_color_mode": "RYBW",
+        "last_color_mode": "4-Color",
         "last_slicer": "",
         "palette_mode": "swatch",
         "enable_crop_modal": bad_value,
+        "nozzle_size": "0.4",
     }
 
     resp = client.post("/api/system/settings", json=payload)
     assert resp.status_code == 422, (
         f"Expected 422 for enable_crop_modal={bad_value!r}, got {resp.status_code}: {resp.text}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Desktop default save folder for generated files
+# ---------------------------------------------------------------------------
+
+
+def test_settings_round_trip_generated_file_directory() -> None:
+    """The desktop save-dialog default folder persists and defaults to empty."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_file = Path(tmp_dir) / "user_settings.json"
+        with patch("api.routers.system.SETTINGS_FILE", tmp_file):
+            assert (
+                client.get("/api/system/settings").json()["settings"][
+                    "generated_file_directory"
+                ]
+                == ""
+            )
+            folder = "D:\\Prints\\Lumina 输出"
+            post_resp = client.post(
+                "/api/system/settings",
+                json={"generated_file_directory": folder},
+            )
+            assert post_resp.status_code == 200, post_resp.text
+            returned = client.get("/api/system/settings").json()["settings"]
+            assert returned["generated_file_directory"] == folder
+
+
+def test_settings_rejects_overlong_generated_file_directory() -> None:
+    """An unbounded folder path is rejected instead of being persisted."""
+    resp = client.post(
+        "/api/system/settings",
+        json={"generated_file_directory": "D:\\" + "a" * 1100},
+    )
+    assert resp.status_code == 422, resp.text

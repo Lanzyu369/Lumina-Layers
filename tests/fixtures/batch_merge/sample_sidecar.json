@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "source_filename": "kitten.png",
+  "xy_bbox_mm": {
+    "width_mm": 80.0,
+    "depth_mm": 60.0
+  },
+  "slots": [
+    {
+      "slot_id": 0,
+      "slot_name": "Bambu PLA Black",
+      "preview_color": "#101010",
+      "material_id": "GFL00"
+    },
+    {
+      "slot_id": 1,
+      "slot_name": "Bambu PLA White",
+      "preview_color": "#F0F0F0",
+      "material_id": "GFL01"
+    }
+  ]
+}

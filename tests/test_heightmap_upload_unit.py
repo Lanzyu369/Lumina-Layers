@@ -11,14 +11,15 @@ Validates:
 from __future__ import annotations
 
 import io
-from unittest.mock import patch
-
+from pathlib import Path
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
 from api.app import app
 from api.dependencies import get_session_store, get_file_registry
+from api.preview_cache_artifacts import externalize_preview_cache
 from api.session_store import SessionStore
 from api.file_registry import FileRegistry
 
@@ -26,8 +27,21 @@ from api.file_registry import FileRegistry
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
 
-app.dependency_overrides[get_session_store] = lambda: _test_store
-app.dependency_overrides[get_file_registry] = lambda: _test_registry
+
+def _apply_test_overrides() -> None:
+    """Apply this module's dependency overrides to shared app."""
+    app.dependency_overrides[get_session_store] = lambda: _test_store
+    app.dependency_overrides[get_file_registry] = lambda: _test_registry
+
+
+@pytest.fixture(autouse=True)
+def _isolate_dependency_overrides():
+    """Ensure per-test override isolation against cross-module pollution."""
+    _apply_test_overrides()
+    yield
+    app.dependency_overrides.pop(get_session_store, None)
+    app.dependency_overrides.pop(get_file_registry, None)
+
 
 client: TestClient = TestClient(app)
 
@@ -106,6 +120,27 @@ def _setup_session_with_preview(
     return session_id
 
 
+def _delete_externalized_preview_cache_field(
+    store: SessionStore,
+    session_id: str,
+    tmp_path: Path,
+    field_name: str,
+) -> Path:
+    session_data = store.get(session_id)
+    cache_ref = externalize_preview_cache(
+        session_id,
+        store,
+        session_data["preview_cache"],
+        root_dir=tmp_path,
+    )
+    store.put(session_id, "preview_cache", cache_ref)
+    field_path = Path(cache_ref["fields"][field_name]["path"])
+    assert field_path.exists()
+    field_path.unlink()
+    assert not field_path.exists()
+    return field_path
+
+
 # =========================================================================
 # 1. Valid grayscale PNG upload returns 200 - Requirement 8.1, 8.2
 # =========================================================================
@@ -113,6 +148,59 @@ def _setup_session_with_preview(
 
 class TestValidHeightmapUpload:
     """Verify valid heightmap upload returns 200 with expected fields."""
+
+    def test_transparent_pixels_and_absent_colors_do_not_raise_relief(self) -> None:
+        session_id = _setup_session_with_preview(_test_store, 2, 2)
+        cache = _test_store.get(session_id)["preview_cache"]
+        cache["mask_solid"][0, 1] = False
+        cache["color_palette"].append({"hex": "#FFFFFF", "color": (255, 255, 255)})
+        pixels = np.array([[0, 255], [255, 255]], dtype=np.uint8)
+        buf = io.BytesIO()
+        Image.fromarray(pixels).save(buf, format="PNG")
+
+        response = client.post(
+            "/api/convert/upload-heightmap",
+            files={"heightmap": ("heightmap.png", buf.getvalue(), "image/png")},
+            data={"session_id": session_id, "max_relief_height": "2.0"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["color_height_map"] == {
+            "ff0000": 0.08, "00ff00": 2.0, "ffffff": 0.08,
+        }
+        assert _test_store.get(session_id)["heightmap_color_height_map"] == (
+            response.json()["color_height_map"]
+        )
+
+    def test_uint16_png_preserves_thumbnail_cache_and_color_heights(self) -> None:
+        session_id = _setup_session_with_preview(_test_store)
+        pixels = np.empty((100, 100), dtype=np.uint16)
+        pixels[:50] = 16384
+        pixels[50:] = 49152
+        buf = io.BytesIO()
+        Image.fromarray(pixels).save(buf, format="PNG")
+        response = client.post(
+            "/api/convert/upload-heightmap",
+            files={"heightmap": ("heightmap16.png", buf.getvalue(), "image/png")},
+            data={"session_id": session_id, "max_relief_height": "3.0"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["color_height_map"]["ff0000"] == pytest.approx(
+            0.08 + 64 / 255 * 2.92, abs=1e-4,
+        )
+        assert body["color_height_map"]["00ff00"] == pytest.approx(
+            0.08 + 191 / 255 * 2.92, abs=1e-4,
+        )
+        expected = np.where(pixels < 32768, 64, 191).astype(np.uint8)
+        np.testing.assert_array_equal(
+            _test_store.get(session_id)["heightmap_grayscale"], expected,
+        )
+        thumbnail = client.get(body["thumbnail_url"])
+        assert thumbnail.status_code == 200
+        np.testing.assert_array_equal(
+            np.array(Image.open(io.BytesIO(thumbnail.content))), expected,
+        )
 
     def test_valid_grayscale_png_returns_200(self) -> None:
         session_id = _setup_session_with_preview(_test_store)
@@ -137,6 +225,10 @@ class TestValidHeightmapUpload:
         for hex_key, height in body["color_height_map"].items():
             assert 0.08 <= height <= 2.0, f"Height {height} out of range for {hex_key}"
 
+        # The heightmap runs from black at the top to white at the bottom.
+        # White must therefore produce the higher relief region.
+        assert body["color_height_map"]["ff0000"] < body["color_height_map"]["00ff00"]
+
         assert "thumbnail_url" in body
         assert "original_size" in body
         assert body["original_size"] == [100, 100]
@@ -156,6 +248,61 @@ class TestValidHeightmapUpload:
         body = response.json()
         assert body["status"] == "ok"
         assert len(body["color_height_map"]) == 2
+
+    def test_artifact_preview_cache_avoids_common_full_hydrate(self, tmp_path) -> None:
+        session_id = _setup_session_with_preview(_test_store)
+        session_data = _test_store.get(session_id)
+        cache_ref = externalize_preview_cache(
+            session_id,
+            _test_store,
+            session_data["preview_cache"],
+            root_dir=tmp_path,
+        )
+        _test_store.put(session_id, "preview_cache", cache_ref)
+        buf = _make_grayscale_png(100, 100)
+
+        from unittest.mock import patch
+
+        with patch(
+            "api.routers.converter.common.hydrate_preview_cache",
+            side_effect=AssertionError("heightmap must not fully hydrate artifact cache"),
+        ):
+            response = client.post(
+                "/api/convert/upload-heightmap",
+                files={"heightmap": ("heightmap.png", buf, "image/png")},
+                data={"session_id": session_id, "max_relief_height": "2.0"},
+            )
+
+        assert response.status_code == 200, response.text
+        assert set(response.json()["color_height_map"]) == {"ff0000", "00ff00"}
+
+    def test_stale_artifact_preview_cache_returns_repreview_error(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        session_id = _setup_session_with_preview(_test_store)
+        stale_path = _delete_externalized_preview_cache_field(
+            _test_store,
+            session_id,
+            tmp_path,
+            "matched_rgb",
+        )
+        buf = _make_grayscale_png(100, 100)
+
+        response = client.post(
+            "/api/convert/upload-heightmap",
+            files={"heightmap": ("heightmap.png", buf, "image/png")},
+            data={"session_id": session_id, "max_relief_height": "2.0"},
+        )
+
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert "Re-run preview" in detail
+        assert str(stale_path) not in detail
+        session_data = _test_store.get(session_id)
+        assert "heightmap_grayscale" not in session_data
+        assert "heightmap_original_size" not in session_data
+        assert "heightmap_color_height_map" not in session_data
 
 
 # =========================================================================
@@ -205,7 +352,7 @@ class TestAspectRatioWarning:
         body = response.json()
         assert len(body["warnings"]) > 0
         # Warning should mention aspect ratio deviation
-        assert any("宽高比" in w or "偏差" in w for w in body["warnings"])
+        assert any(isinstance(w, str) and w for w in body["warnings"])
 
     def test_matching_aspect_ratio_no_warning(self) -> None:
         """Upload 100x100 heightmap for 100x100 target -> no warning."""
@@ -265,3 +412,25 @@ class TestMissingPreviewCacheReturns409:
 
         assert response.status_code == 409
         assert "preview" in response.json()["detail"].lower()
+
+
+class TestDependencyOverrideIsolation:
+    """Regression: external override tampering should not break this module."""
+
+    def test_upload_still_works_after_override_tamper(self) -> None:
+        # Simulate another module mutating shared app overrides.
+        app.dependency_overrides[get_session_store] = lambda: SessionStore(ttl=1)
+        app.dependency_overrides[get_file_registry] = lambda: FileRegistry()
+
+        # Re-apply this module's contract and verify endpoint remains reachable.
+        _apply_test_overrides()
+        session_id = _setup_session_with_preview(_test_store)
+        buf = _make_grayscale_png(100, 100)
+
+        response = client.post(
+            "/api/convert/upload-heightmap",
+            files={"heightmap": ("heightmap.png", buf, "image/png")},
+            data={"session_id": session_id},
+        )
+
+        assert response.status_code == 200

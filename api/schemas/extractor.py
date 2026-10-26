@@ -10,12 +10,11 @@ including calibration board scanning and manual LUT cell correction.
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, model_validator
 
-from config import normalize_4color_mode
-
+from api.schemas.lut import PaletteEntrySchema
 
 # ========== Enums ==========
 
@@ -27,39 +26,68 @@ class CalibrationColorMode(str, Enum):
     Attributes:
         BW: Black & White grayscale mode (32 levels).
             黑白灰度模式 (32 级)。
-        CMYW: 4-Color CMYW mode (1024 colors).
-            4 色 CMYW (青/品红/黄/白) 模式 (1024 色)。
-        RYBW: 4-Color RYBW mode (1024 colors).
-            4 色 RYBW (红/黄/蓝/白) 模式 (1024 色)。
+        FOUR_COLOR_CMYW: 4-Color CMYW mode (1024 colors).
+            4 色 CMYW 模式 (1024 色)。
+        FOUR_COLOR_RYBW: 4-Color RYBW mode (1024 colors).
+            4 色 RYBW 模式 (1024 色)。
         FIVE_COLOR_EXT: 5-Color Extended mode (1444 colors).
             5 色扩展模式 (1444 色)。
-        SIX_COLOR: 6-Color extended smart mode (1296 colors).
-            6 色扩展智能模式 (1296 色)。
+        SIX_COLOR: 6-Color CMYWGK mode (1296 colors).
+            6 色 CMYWGK 模式 (1296 色)。
+        SIX_COLOR_RYBW: 6-Color RYBWGK mode (1296 colors).
+            6 色 RYBWGK 模式 (1296 色)。
         EIGHT_COLOR: 8-Color professional mode (2738 colors).
             8 色专业模式 (2738 色)。
     """
 
     BW = "BW (Black & White)"
-    CMYW = "CMYW"
-    RYBW = "RYBW"
+    FOUR_COLOR_CMYW = "4-Color (CMYW)"
+    FOUR_COLOR_RYBW = "4-Color (RYBW)"
     FIVE_COLOR_EXT = "5-Color Extended (1444)"
-    SIX_COLOR = "6-Color (Smart 1296)"
+    SIX_COLOR = "6-Color (CMYWGK 1296)"
+    SIX_COLOR_RYBW = "6-Color (RYBWGK 1296)"
     EIGHT_COLOR = "8-Color Max"
 
 
 class ExtractorPage(str, Enum):
-    """Page selector for 8-Color two-page calibration workflow.
-    8 色双页校准流程的页码选择器。
+    """Page selector for paged calibration workflows.
+    分页校准流程的页码选择器。
 
     Attributes:
         PAGE_1: First calibration page.
             第一页。
         PAGE_2: Second calibration page.
             第二页。
+        PAGE_3: Third calibration page.
+            第三页。
+        PAGE_24: Twenty-fourth calibration page.
+            第二十四页。
     """
 
     PAGE_1 = "Page 1"
     PAGE_2 = "Page 2"
+    PAGE_3 = "Page 3"
+    PAGE_4 = "Page 4"
+    PAGE_5 = "Page 5"
+    PAGE_6 = "Page 6"
+    PAGE_7 = "Page 7"
+    PAGE_8 = "Page 8"
+    PAGE_9 = "Page 9"
+    PAGE_10 = "Page 10"
+    PAGE_11 = "Page 11"
+    PAGE_12 = "Page 12"
+    PAGE_13 = "Page 13"
+    PAGE_14 = "Page 14"
+    PAGE_15 = "Page 15"
+    PAGE_16 = "Page 16"
+    PAGE_17 = "Page 17"
+    PAGE_18 = "Page 18"
+    PAGE_19 = "Page 19"
+    PAGE_20 = "Page 20"
+    PAGE_21 = "Page 21"
+    PAGE_22 = "Page 22"
+    PAGE_23 = "Page 23"
+    PAGE_24 = "Page 24"
 
 
 # ========== Models ==========
@@ -86,17 +114,16 @@ class ExtractorExtractRequest(BaseModel):
             透视校正缩放。
         distortion: Lens distortion correction factor.
             畸变校正。
-        white_balance: Whether to apply white balance correction.
-            白平衡校正。
         vignette_correction: Whether to apply vignette correction.
             暗角校正。
-        page: Page number for 8-Color two-page workflow.
-            8-Color 页码。
+        page: Page number for paged calibration workflows.
+            分页校准页码。
+        eight_color_full_export: Whether 8-color extraction uses the exhaustive
+            24-page calibration workflow instead of the compact two-page kit.
+            8 色提取是否使用全量 24 页流程，而非精简双页套件。
     """
 
-    color_mode: CalibrationColorMode = Field(
-        CalibrationColorMode.RYBW, description="校准颜色模式"
-    )
+    color_mode: CalibrationColorMode = Field(CalibrationColorMode.FOUR_COLOR_RYBW, description="校准颜色模式")
     corner_points: List[Tuple[int, int]] = Field(
         ..., min_length=4, max_length=4, description="4 个角点坐标 [(x,y), ...]"
     )
@@ -104,16 +131,22 @@ class ExtractorExtractRequest(BaseModel):
     offset_y: int = Field(0, ge=-30, le=30, description="垂直采样偏移 (px)")
     zoom: float = Field(1.0, ge=0.8, le=1.2, description="透视校正缩放")
     distortion: float = Field(0.0, ge=-0.2, le=0.2, description="畸变校正")
-    white_balance: bool = Field(False, description="白平衡校正")
     vignette_correction: bool = Field(False, description="暗角校正")
-    page: ExtractorPage = Field(
-        ExtractorPage.PAGE_1, description="8-Color 页码"
-    )
+    page: ExtractorPage = Field(ExtractorPage.PAGE_1, description="8-Color 页码")
+    eight_color_full_export: bool = Field(False, description="8 色是否使用全量 24 页提取")
 
-    @field_validator("color_mode", mode="before")
-    @classmethod
-    def normalize_color_mode(cls, v: str) -> str:
-        return normalize_4color_mode(v)
+
+class ExtractorMergeEightColorRequest(BaseModel):
+    """Request model for merging extracted 8-color pages.
+    8 色提取页合并请求模型。
+
+    Attributes:
+        eight_color_full_export: Whether the merge should combine the full
+            24-page exhaustive extraction set instead of the compact two-page set.
+            合并时是否使用全量 24 页提取结果，而不是精简双页结果。
+    """
+
+    eight_color_full_export: bool = Field(False, description="8 色是否合并全量 24 页提取结果")
 
 
 class ExtractorManualFixRequest(BaseModel):
@@ -135,5 +168,43 @@ class ExtractorManualFixRequest(BaseModel):
 
     lut_path: str = Field("", description="LUT 文件路径 (可选，优先使用 session_id 查找)")
     session_id: str = Field("", description="Session ID (用于查找 LUT 路径)")
-    cell_coord: Tuple[int, int] = Field(..., description="单元格坐标 (row, col)")
+    cell_coord: Optional[Tuple[int, int]] = Field(None, description="单元格坐标 (row, col)")
+    row_index: Optional[int] = Field(None, ge=0, description="LUT 行索引；优先于 cell_coord")
     override_color: str = Field(..., description="覆盖颜色 (hex)")
+
+    @model_validator(mode="after")
+    def require_cell_locator(self) -> "ExtractorManualFixRequest":
+        if self.row_index is None and self.cell_coord is None:
+            raise ValueError("row_index or cell_coord is required")
+        return self
+
+
+class ExtractorResolveCellRequest(BaseModel):
+    """Request model for resolving a LUT preview click to a backend layout cell."""
+
+    session_id: str = Field(..., description="Session ID (用于查找当前 LUT)")
+    x: float = Field(..., ge=0.0, le=1.0, description="预览图内容区归一化 X 坐标")
+    y: float = Field(..., ge=0.0, le=1.0, description="预览图内容区归一化 Y 坐标")
+    card_index: int = Field(0, ge=0, description="色卡索引，默认当前提取页")
+
+
+class ConfirmPaletteRequest(BaseModel):
+    """Request model for confirming user palette after extraction.
+    调色板确认请求模型。
+
+    Used by ``POST /api/extractor/confirm-palette`` to submit the
+    user-confirmed palette data to the session.
+    用于 ``POST /api/extractor/confirm-palette``，提交用户确认的调色板数据。
+
+    Attributes:
+        session_id: Extraction session ID. (提取会话 ID)
+        manufacturer: LUT / color DB manufacturer. (厂商)
+        type: Optional LUT / color DB type. Defaults from material when blank.
+            (可选类型；为空时根据耗材类型自动生成)
+        palette: User-confirmed palette entries. (用户确认的调色板数组)
+    """
+
+    session_id: str = Field(..., description="提取会话 ID")
+    manufacturer: str = Field("", description="厂商")
+    type: str = Field("", description="类型")
+    palette: list[PaletteEntrySchema] = Field(..., min_length=1, description="用户确认的调色板数组")

@@ -1,0 +1,68 @@
+diff --git a/src/operation/buffer/BufferBuilder.cpp b/src/operation/buffer/BufferBuilder.cpp
+index a5d423e9e..ea35c87f8 100644
+--- a/src/operation/buffer/BufferBuilder.cpp
++++ b/src/operation/buffer/BufferBuilder.cpp
+@@ -55,6 +55,9 @@
+ #include <geos/profiler.h>
+ #include <geos/util/Interrupt.h>
+-
++#include <geos/index/bintree/Bintree.h>
++#include <geos/index/bintree/Interval.h>
++
+ #include <cassert>
+ #include <vector>
++#include <unordered_map>
+ #include <iomanip>
+@@ -754,6 +757,8 @@ BufferBuilder::buildSubgraphs(const std::vector<BufferSubgraph*>& subgraphList,
+     std::cerr << __FUNCTION__ << " got " << subgraphList.size() << " subgraphs" << std::endl;
+ #endif
+     std::vector<BufferSubgraph*> processedGraphs;
++    index::bintree::Bintree processedGraphIndex;
++    std::unordered_map<BufferSubgraph*, std::size_t> processedOrder;
+     for(std::size_t i = 0, n = subgraphList.size(); i < n; i++) {
+         BufferSubgraph* subgraph = subgraphList[i];
+         Coordinate* p = subgraph->getRightmostCoordinate();
+@@ -763,7 +768,19 @@ BufferBuilder::buildSubgraphs(const std::vector<BufferSubgraph*>& subgraphList,
+         std::cerr << " " << i << ") Subgraph[" << subgraph << "]" << std::endl;
+         std::cerr << "  rightmost Coordinate " << *p;
+ #endif
+-        SubgraphDepthLocater locater(&processedGraphs);
++        index::bintree::Interval queryInterval(p->y, p->y);
++        std::vector<void*> rawCandidates;
++        processedGraphIndex.query(&queryInterval, &rawCandidates);
++        std::vector<BufferSubgraph*> candidates;
++        candidates.reserve(rawCandidates.size());
++        for(void* item : rawCandidates) {
++            candidates.push_back(static_cast<BufferSubgraph*>(item));
++        }
++        std::sort(candidates.begin(), candidates.end(),
++            [&processedOrder](BufferSubgraph* lhs, BufferSubgraph* rhs) {
++                return processedOrder.at(lhs) < processedOrder.at(rhs);
++            });
++        SubgraphDepthLocater locater(&candidates);
+ #if GEOS_DEBUG
+         std::cerr << " after SubgraphDepthLocater processedGraphs contain "
+                   << processedGraphs.size()
+@@ -781,6 +798,10 @@ BufferBuilder::buildSubgraphs(const std::vector<BufferSubgraph*>& subgraphList,
+                   << "   " << subgraph->getNodes()->size() << " Nodes " << std::endl;
+ #endif
+         processedGraphs.push_back(subgraph);
++        processedOrder.emplace(subgraph, i);
++        const Envelope* env = subgraph->getEnvelope();
++        index::bintree::Interval yInterval(env->getMinY(), env->getMaxY());
++        processedGraphIndex.insert(&yInterval, subgraph);
+ #if GEOS_DEBUG
+         std::cerr << " added " << subgraph << " to processedGraphs, new size is "
+                   << processedGraphs.size() << std::endl;
+diff --git a/src/operation/buffer/PolygonBuilder.cpp b/src/operation/buffer/PolygonBuilder.cpp
+index 893847f91..d73f6a967 100644
+--- a/src/operation/buffer/PolygonBuilder.cpp
++++ b/src/operation/buffer/PolygonBuilder.cpp
+@@ -116,3 +116,6 @@ PolygonBuilder::add(const std::vector<DirectedEdge*>* dirEdges,
+     sortShellsAndHoles(edgeRings, shellList, freeHoleList);
+-
++    if(freeHoleList.empty()) {
++        return;
++    }
++
+     std::vector<FastPIPRing> indexedshellist;

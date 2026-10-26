@@ -1,0 +1,55 @@
+{
+  "fixture": {
+    "byte_size": 3946010,
+    "canvas_user_units": [
+      16000.0,
+      16000.0
+    ],
+    "classification": "derived_supported_scale",
+    "clip_count": 0,
+    "path": "native/lumina-svg-core/benchmarks/supported_scale_fixture.svg",
+    "path_count": 1024,
+    "stroke_count": 0,
+    "transform_count": 2048
+  },
+  "host": {
+    "cpu_count": 10,
+    "machine": "arm64",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "platform_release": "25.5.0",
+    "processor": "Apple M5",
+    "python": "3.12.13"
+  },
+  "measurement": {
+    "kernel_seconds": 0.066064167,
+    "median_seconds": 0.110499333,
+    "peak_rss_bytes": 85458944,
+    "public_entrypoint_seconds": 0.110499333,
+    "range_seconds": 0.002231459,
+    "recorder_seconds": 0.044449125,
+    "result_conversion_seconds": 3.458e-06,
+    "swap_delta_bytes": 0,
+    "swap_measurement": "system_vm.swapusage",
+    "threshold_passed": true,
+    "threshold_seconds": 1.0,
+    "warm_runs_seconds": [
+      0.108588333,
+      0.110819792,
+      0.110499333
+    ],
+    "warmup_runs": 1
+  },
+  "output": {
+    "coordinate_count": 67104,
+    "fingerprint": "3eb4d8458a4f5e90adb895b8ea4ddcbad8b0880e0713829a2d75d92ac957c595",
+    "hole_count": 0,
+    "material_count": 1024,
+    "region_count": 1024,
+    "status": "supported"
+  },
+  "parameters": {
+    "target_width_mm": 111.0,
+    "tolerance_mm": 0.02
+  },
+  "schema_version": 2
+}

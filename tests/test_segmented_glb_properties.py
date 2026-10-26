@@ -12,13 +12,18 @@ import sys
 import numpy as np
 import pytest
 import trimesh
-from hypothesis import assume, given, settings
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 # Ensure project root is on sys.path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from config import PrinterConfig
 from core.converter import generate_segmented_glb
+
+# Total Z layers hard-coded inside generate_segmented_glb().
+# generate_segmented_glb 内部硬编码的总层数。
+_TOTAL_LAYERS_IN_GLB = 25
 
 # Regex for valid color_<hex> node names
 COLOR_NODE_RE = re.compile(r"^color_([0-9a-f]{6})$")
@@ -101,22 +106,32 @@ def matched_rgb_strategy(draw: st.DrawFn):
 # **Validates: Requirements 1.1, 1.2, 1.4**
 # ============================================================================
 
-@settings(max_examples=100)
+@pytest.mark.parametrize("kernel", ["shapely_v1", "rasterio_manifold3d"])
+@settings(
+    max_examples=100,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
 @given(data=matched_rgb_strategy())
-def test_glb_segmentation_correctness(data):
+def test_glb_segmentation_correctness(tmp_path, monkeypatch, kernel, data):
     """Property 1: GLB 分段正确性
 
     For any valid preview cache (with matched_rgb and mask_solid),
     generate_segmented_glb() should produce a GLB file satisfying:
     (a) Each unique color maps to exactly one Mesh node
     (b) Each Mesh is named color_<hex> (6-digit lowercase hex)
-    (c) Each Mesh's face color matches the hex in its name
+    (c) Each Mesh's display color matches the hex in its name
     (d) Each Mesh's vertex min Z = 0 (Pivot Point constraint)
+
+    ``tmp_path`` is reused across all hypothesis examples; each example
+    writes-reads-asserts sequentially, so file overwrites within the test
+    are safe and never observable to other tests.
     """
+    monkeypatch.setenv("LUMINA_GLB_KERNEL", kernel)
     matched_rgb, mask_solid, expected_unique_colors = data
     cache = _make_cache(matched_rgb, mask_solid)
 
-    glb_path = generate_segmented_glb(cache)
+    out_path = str(tmp_path / "segmented_test.glb")
+    glb_path = generate_segmented_glb(cache, output_path=out_path)
 
     # Function should succeed for valid input with solid pixels
     assert glb_path is not None, "generate_segmented_glb returned None for valid input"
@@ -162,19 +177,28 @@ def test_glb_segmentation_correctness(data):
 
         # (b) Name format already validated by regex match above
 
-        # (c) Face color matches the hex in the name
-        face_colors = mesh.visual.face_colors  # (N, 4) RGBA
-        assert face_colors is not None and len(face_colors) > 0, (
-            f"Mesh {node_name} has no face colors"
+        # (c) Both per-face and material-only exports must display the named RGB.
+        if isinstance(mesh.visual, trimesh.visual.TextureVisuals):
+            material = mesh.visual.material
+            assert isinstance(material, trimesh.visual.material.PBRMaterial)
+            assert material.baseColorTexture is None
+            material_rgba = np.asarray(material.baseColorFactor)
+            assert material_rgba.shape == (4,), (
+                f"Mesh {node_name} has no RGBA material color"
+            )
+            unique_rgb = material_rgba[:3].reshape(1, 3)
+        else:
+            face_colors = mesh.visual.face_colors
+            assert face_colors is not None and len(face_colors) > 0, (
+                f"Mesh {node_name} has no face colors"
+            )
+            unique_rgb = np.unique(face_colors[:, :3], axis=0)
+        assert len(unique_rgb) == 1, (
+            f"Mesh {node_name} has {len(unique_rgb)} distinct RGB values, expected 1"
         )
-        # All faces should share the same RGB (alpha may vary)
-        unique_face_rgb = np.unique(face_colors[:, :3], axis=0)
-        assert len(unique_face_rgb) == 1, (
-            f"Mesh {node_name} has {len(unique_face_rgb)} distinct face RGB values, expected 1"
-        )
-        actual_r, actual_g, actual_b = unique_face_rgb[0]
+        actual_r, actual_g, actual_b = unique_rgb[0]
         assert (actual_r, actual_g, actual_b) == (expected_r, expected_g, expected_b), (
-            f"Mesh {node_name} face color ({actual_r},{actual_g},{actual_b}) "
+            f"Mesh {node_name} display color ({actual_r},{actual_g},{actual_b}) "
             f"does not match name hex ({expected_r},{expected_g},{expected_b})"
         )
 
@@ -254,9 +278,12 @@ def many_colors_strategy(draw: st.DrawFn):
 # **Validates: Requirements 1.5**
 # ============================================================================
 
-@settings(max_examples=100)
+@settings(
+    max_examples=100,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
 @given(data=many_colors_strategy())
-def test_glb_mesh_count_limit(data):
+def test_glb_mesh_count_limit(tmp_path, data):
     """Property 2: GLB Mesh 数量上限
 
     For any matched_rgb with more unique colors than max_meshes,
@@ -267,7 +294,8 @@ def test_glb_mesh_count_limit(data):
     matched_rgb, mask_solid, max_meshes = data
     cache = _make_cache(matched_rgb, mask_solid)
 
-    glb_path = generate_segmented_glb(cache, max_meshes=max_meshes)
+    out_path = str(tmp_path / "segmented_test.glb")
+    glb_path = generate_segmented_glb(cache, output_path=out_path, max_meshes=max_meshes)
 
     # Should succeed for valid input with solid pixels
     assert glb_path is not None, "generate_segmented_glb returned None for valid input"
@@ -290,18 +318,43 @@ def test_glb_mesh_count_limit(data):
     )
 
     # (b) All original solid pixels are covered by some Mesh (no pixel loss).
-    # Each solid pixel becomes exactly one voxel box (8 vertices, 12 faces).
-    # Total voxels across all meshes must equal total solid pixels.
+    # We check the representation-agnostic invariant:
+    #     sum(mesh.volume) == solid_pixel_count × pixel_scale² × total_layers × LAYER_HEIGHT
+    # Each solid pixel owns a 1×1 footprint in pixel space (before the
+    # per-scene ``scale_transform`` maps pixel→mm) and a full-stack height
+    # of ``_TOTAL_LAYERS_IN_GLB`` voxel units, so the expected total volume
+    # equals pixel_count × per-pixel-volume regardless of whether the mesh
+    # is encoded as per-pixel voxel boxes or as a single contour-extruded
+    # prism per colour.
+    # 用和实现无关的体积守恒代替原先"每像素 8 顶点"的体素假设：
+    # 每个实体像素在像素坐标下占 1×1 面积，高度为 ``_TOTAL_LAYERS_IN_GLB``
+    # 层，因此总体积等于像素数 × 单像素体积，体素盒和轮廓挤出两种表示都
+    # 应当满足。
     total_solid_pixels = int(np.count_nonzero(mask_solid))
-    total_voxels_in_glb = 0
+    pixel_scale = float(cache["target_width_mm"]) / matched_rgb.shape[1]
+    per_pixel_volume = (
+        (pixel_scale ** 2)
+        * float(_TOTAL_LAYERS_IN_GLB)
+        * float(PrinterConfig.LAYER_HEIGHT)
+    )
+    expected_total_volume = total_solid_pixels * per_pixel_volume
+
+    actual_total_volume = 0.0
     for node_name in color_nodes:
         transform, geom_name = scene.graph[node_name]
         geom = scene.geometry[geom_name]
-        # Each voxel box has 8 vertices
-        n_verts = len(geom.vertices)
-        total_voxels_in_glb += n_verts // 8
+        try:
+            volume = float(geom.volume)
+        except (ValueError, TypeError, RuntimeError, AttributeError):
+            volume = 0.0
+        if np.isfinite(volume):
+            actual_total_volume += abs(volume)
 
-    assert total_voxels_in_glb == total_solid_pixels, (
-        f"Pixel coverage mismatch: {total_solid_pixels} solid pixels but "
-        f"{total_voxels_in_glb} voxels in GLB (no pixel should be lost)"
+    tolerance = max(1e-6, 1e-3 * expected_total_volume)
+    assert abs(actual_total_volume - expected_total_volume) <= tolerance, (
+        f"Volume coverage mismatch: expected {expected_total_volume:.6f} "
+        f"(pixels={total_solid_pixels}, pixel_scale={pixel_scale:.6f} mm, "
+        f"total_layers={_TOTAL_LAYERS_IN_GLB}, "
+        f"LAYER_HEIGHT={PrinterConfig.LAYER_HEIGHT}), "
+        f"got {actual_total_volume:.6f}"
     )

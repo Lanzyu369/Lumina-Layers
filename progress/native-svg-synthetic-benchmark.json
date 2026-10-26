@@ -1,0 +1,222 @@
+{
+  "alpha_compositing": {
+    "fixture": {
+      "byte_size": 2630,
+      "canvas_user_units": [
+        320.0,
+        320.0
+      ],
+      "classification": "alpha_compositing",
+      "clip_count": 0,
+      "path": "native/lumina-svg-core/benchmarks/alpha_compositing_fixture.svg",
+      "path_count": 0,
+      "stroke_count": 0,
+      "stroke_only_count": 0,
+      "transform_count": 0
+    },
+    "measurement": {
+      "cache_policy": {
+        "artifact_cache_disabled": true,
+        "memory_cache_cleared_before_each_run": true
+      },
+      "color_match_seconds": 0.010929707,
+      "median_seconds": 0.023663708,
+      "median_threshold_passed": true,
+      "median_threshold_seconds": 1.0,
+      "native_adapter_conversion_seconds": 0.006703209,
+      "native_binding_conversion_seconds": 3.125e-06,
+      "native_bounds_seconds": 7.916e-06,
+      "native_composite_seconds": 0.001862916,
+      "native_export_seconds": 0.002355208,
+      "native_geometry_total_seconds": 0.011709709,
+      "native_kernel_seconds": 0.004114542,
+      "native_normalize_raw_seconds": 7.4875e-05,
+      "native_normalize_visible_seconds": 0.0,
+      "native_recorder_seconds": 0.000125584,
+      "native_replay_seconds": 4.0417e-05,
+      "native_topology_seconds": 4.17e-07,
+      "orchestration_seconds": 0.001062126,
+      "p95_method": "linear_interpolation_r7",
+      "p95_seconds": 0.026093521,
+      "p95_threshold_passed": true,
+      "p95_threshold_seconds": 1.25,
+      "peak_rss_bytes": 146014208,
+      "process_isolation": "fresh_subprocess",
+      "process_pid": 1590,
+      "range_seconds": 0.004401375,
+      "swap_delta_bytes": 101711872,
+      "swap_measurement": "system_vm.swapusage",
+      "warm_runs_seconds": [
+        0.021962126,
+        0.023663708,
+        0.0263635
+      ],
+      "warmup_runs": 1
+    },
+    "output": {
+      "composite_visible_shape_count": 256,
+      "coordinate_count": 3840,
+      "fingerprint": "9a3253ffe9e84bf8ca6e7d8b068bb07773d393ed9f93ca31ff72e0329e9080fd",
+      "fingerprint_contract": "geometry-exact-rgba-paint-provenance-v2",
+      "geometry_backend": "native",
+      "matched_recipe_count": 112,
+      "matched_shape_count": 768,
+      "native_cache_hit": false,
+      "native_schema_version": 4,
+      "native_version": "0.3.3",
+      "partial_alpha_raw_shape_count": 32,
+      "partial_alpha_visible_shape_count": 768,
+      "raw_shape_count": 32,
+      "silhouette_component_count": 1,
+      "silhouette_hole_count": 225,
+      "source_color_count": 288,
+      "stable_across_runs": true,
+      "visible_contributor_count": 1024,
+      "visible_shape_count": 768
+    }
+  },
+  "entrypoint": "core.vector_engine.VectorProcessor.analyze_svg",
+  "fixture": {
+    "byte_size": 1359706,
+    "canvas_user_units": [
+      16000.0,
+      16000.0
+    ],
+    "classification": "owned_synthetic_scale",
+    "clip_count": 0,
+    "path": "native/lumina-svg-core/benchmarks/supported_scale_fixture.svg",
+    "path_count": 1024,
+    "provenance": {
+      "classification": "owned_synthetic_scale",
+      "fixture": {
+        "byte_size": 1359706,
+        "path": "native/lumina-svg-core/benchmarks/supported_scale_fixture.svg",
+        "path_count": 1024
+      },
+      "schema_version": 2,
+      "selection": {
+        "grid": [
+          32,
+          32
+        ],
+        "overlap_policy": "disjoint_cell_bounds",
+        "points_per_path": 64
+      },
+      "source": {
+        "algorithm": "radial_contours_v1",
+        "external_artwork": null,
+        "generator": "scripts/build_native_svg_supported_fixture.py"
+      }
+    },
+    "stroke_count": 0,
+    "stroke_only_count": 0,
+    "transform_count": 1024
+  },
+  "host": {
+    "cpu_count": 10,
+    "machine": "arm64",
+    "memory_bytes": 17179869184,
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "platform_release": "25.5.0",
+    "processor": "Apple M5",
+    "python": "3.12.13"
+  },
+  "large_regression": {
+    "classification": "large_regression",
+    "matching_files": [],
+    "memory_policy": "observation_only",
+    "minimum_byte_size": 52428800,
+    "note": "No SVG at or above 50 MiB was found; the smaller derived supported-scale fixture, source proxy, and real R4C1 fixture were not substituted.",
+    "searched_roots": [
+      "repository"
+    ],
+    "status": "unavailable"
+  },
+  "lut": {
+    "byte_size": 3200,
+    "color_mode": "4-Color (RYBW)",
+    "path": "lut-preset/bambulab/bambulab_pla_basic_rybw.npy"
+  },
+  "measurement": {
+    "cache_policy": {
+      "artifact_cache_disabled": true,
+      "memory_cache_cleared_before_each_run": true
+    },
+    "color_match_seconds": 0.003976082,
+    "median_seconds": 0.173175459,
+    "median_threshold_passed": true,
+    "median_threshold_seconds": 1.0,
+    "native_adapter_conversion_seconds": 0.0344005,
+    "native_binding_conversion_seconds": 3.834e-06,
+    "native_bounds_seconds": 0.001035834,
+    "native_composite_seconds": 0.001905709,
+    "native_export_seconds": 0.068776875,
+    "native_geometry_total_seconds": 0.164825168,
+    "native_kernel_seconds": 0.106055875,
+    "native_normalize_raw_seconds": 0.025279667,
+    "native_normalize_visible_seconds": 0.0,
+    "native_recorder_seconds": 0.022943084,
+    "native_replay_seconds": 0.005966666,
+    "native_topology_seconds": 6.0417e-05,
+    "orchestration_seconds": 0.004374209,
+    "p95_method": "linear_interpolation_r7",
+    "p95_seconds": 0.177392258,
+    "p95_threshold_passed": true,
+    "p95_threshold_seconds": 1.25,
+    "peak_rss_bytes": 194297856,
+    "process_isolation": "fresh_subprocess",
+    "process_pid": 1569,
+    "range_seconds": 0.016390707,
+    "swap_delta_bytes": 0,
+    "swap_measurement": "system_vm.swapusage",
+    "warm_runs_seconds": [
+      0.173175459,
+      0.161470084,
+      0.177860791
+    ],
+    "warmup_runs": 1
+  },
+  "output": {
+    "composite_visible_shape_count": 0,
+    "coordinate_count": 66560,
+    "fingerprint": "16c71017c9bacf150908eb4bad686b8555348e12e4620d57514b82ad55a11edc",
+    "fingerprint_contract": "geometry-exact-rgba-paint-provenance-v2",
+    "geometry_backend": "native",
+    "matched_recipe_count": 52,
+    "matched_shape_count": 1024,
+    "native_cache_hit": false,
+    "native_schema_version": 4,
+    "native_version": "0.3.3",
+    "partial_alpha_raw_shape_count": 0,
+    "partial_alpha_visible_shape_count": 0,
+    "raw_shape_count": 1024,
+    "silhouette_component_count": 1024,
+    "silhouette_hole_count": 0,
+    "source_color_count": 64,
+    "stable_across_runs": true,
+    "visible_contributor_count": 1024,
+    "visible_shape_count": 1024
+  },
+  "parameters": {
+    "build_type": "Release",
+    "caller_threads": 1,
+    "openmp_enabled": false,
+    "target_width_mm": 111.0,
+    "tolerance_mm": 0.02
+  },
+  "real_r4c1": {
+    "classification": "real_r4c1",
+    "native_by_default_ready": false,
+    "reason_code": null,
+    "source": "not_provided",
+    "status": "unavailable"
+  },
+  "schema_version": 5,
+  "source_proxy": {
+    "classification": "real_proxy",
+    "native_by_default_ready": false,
+    "reason_code": null,
+    "source": "not_provided",
+    "status": "unavailable"
+  }
+}

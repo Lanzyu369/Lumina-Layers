@@ -1,0 +1,560 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+
+vi.mock("../../api/system", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/system")>();
+  return {
+    ...actual,
+    clearCache: vi.fn(),
+    getPrinters: vi.fn(),
+    getCustom3mfTemplates: vi.fn().mockResolvedValue([]),
+    getSlicers: vi.fn(),
+    saveSettings: vi.fn(),
+  };
+});
+
+vi.mock("../../utils/retryAsync", () => ({
+  retryAsync: vi.fn((operation: () => Promise<unknown>) => operation()),
+}));
+
+import { I18nProvider } from "../../i18n/context";
+import SettingsPanel from "../SettingsPanel";
+import { DEFAULT_SETTINGS, useSettingsStore } from "../../stores/settingsStore";
+import { useSlicerStore } from "../../stores/slicerStore";
+import type { PrinterInfo, SlicerOption } from "../../api/types";
+import * as systemApi from "../../api/system";
+import { translations } from "../../i18n/translations";
+
+const SLICERS: SlicerOption[] = [
+  { id: "BambuStudio", display_name: "Bambu Studio" },
+  { id: "OrcaSlicer", display_name: "OrcaSlicer" },
+  { id: "FlashStudio", display_name: "Flash Studio Desktop" },
+  { id: "QIDIStudio", display_name: "QIDI Studio" },
+];
+
+const PRINTERS: PrinterInfo[] = [
+  {
+    id: "bambu-h2d",
+    display_name: "Bambu Lab H2D",
+    brand: "Bambu Lab",
+    bed_width: 350,
+    bed_depth: 320,
+    bed_height: 325,
+    supported_nozzle_sizes: ["0.2", "0.4", "0.6", "0.8"],
+    supported_slicers: ["BambuStudio", "OrcaSlicer"],
+    thumbnail: "slicers/BambuStudio/02.07.01.57/assets/bambu-lab-h2d_cover.png",
+    device_profiles: [
+      {
+        device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.2",
+        slicer_id: "BambuStudio",
+        nozzle_size: "0.2",
+        source_profile_name: "Bambu Lab H2D 0.2 nozzle",
+        revision: "sha256:bambu-02",
+        supported: true,
+      },
+      {
+        device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+        machine_profile_id: "BambuStudio:bbl:bambu-lab-h2d",
+        slicer_id: "BambuStudio",
+        nozzle_size: "0.4",
+        source_profile_name: "Bambu Lab H2D 0.4 nozzle",
+        revision: "sha256:bambu",
+        supported: true,
+        build_plates: [
+          {
+            id: "textured-pei-plate",
+            display_name: "Textured PEI Plate",
+            display_name_zh: "纹理PEI打印板",
+            image_url: "/api/system/machine-registry/assets/slicers/BambuStudio/build_plates/bed_pei.png",
+          },
+          {
+            id: "smooth-pei-plate",
+            display_name: "Smooth PEI Plate / High Temp Plate",
+            display_name_zh: "光面PEI打印板 / 高温打印板",
+            image_url: "/api/system/machine-registry/assets/slicers/BambuStudio/build_plates/bed_high_templ.png",
+          },
+        ],
+        default_build_plate_id: "textured-pei-plate",
+      },
+      {
+        device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.6",
+        slicer_id: "BambuStudio",
+        nozzle_size: "0.6",
+        source_profile_name: "Bambu Lab H2D 0.6 nozzle",
+        revision: "sha256:bambu-06",
+        supported: true,
+      },
+      {
+        device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.8",
+        slicer_id: "BambuStudio",
+        nozzle_size: "0.8",
+        source_profile_name: "Bambu Lab H2D 0.8 nozzle",
+        revision: "sha256:bambu-08",
+        supported: true,
+      },
+      {
+        device_profile_id: "OrcaSlicer:bbl:bambu-lab-h2d:0.2",
+        slicer_id: "OrcaSlicer",
+        nozzle_size: "0.2",
+        source_profile_name: "Bambu Lab H2D 0.2 nozzle",
+        revision: "sha256:orca",
+        supported: true,
+      },
+    ],
+  },
+  {
+    id: "bambu-p1s",
+    display_name: "Bambu Lab P1S",
+    brand: "Bambu Lab",
+    bed_width: 256,
+    bed_depth: 256,
+    bed_height: 250,
+    supported_nozzle_sizes: ["0.4"],
+    supported_slicers: ["BambuStudio"],
+    thumbnail: "slicers/BambuStudio/02.07.01.57/assets/bambu-lab-p1s_cover.png",
+    device_profiles: [
+      {
+        device_profile_id: "BambuStudio:bbl:bambu-lab-p1s:0.4",
+        slicer_id: "BambuStudio",
+        nozzle_size: "0.4",
+        source_profile_name: "Bambu Lab P1S 0.4 nozzle",
+        revision: "sha256:p1s",
+        supported: true,
+      },
+    ],
+  },
+  {
+    id: "flashforge-guider-3-ultra",
+    display_name: "Flashforge Guider 3 Ultra",
+    brand: "Flashforge",
+    bed_width: 300,
+    bed_depth: 330,
+    bed_height: 600,
+    supported_nozzle_sizes: ["0.4"],
+    supported_slicers: ["FlashStudio"],
+    thumbnail: "slicers/FlashStudio/02.01.01.00/assets/flashforge-guider-3-ultra_cover.png",
+    device_profiles: ["0.4"].map((nozzleSize) => ({
+      device_profile_id: `FlashStudio:flashforge:flashforge-guider-3-ultra:${nozzleSize}`,
+      machine_profile_id: "FlashStudio:flashforge:flashforge-guider-3-ultra",
+      slicer_id: "FlashStudio",
+      nozzle_size: nozzleSize,
+      source_profile_name: `Flashforge Guider 3 Ultra ${nozzleSize} Nozzle`,
+      revision: `sha256:flash-guider-${nozzleSize}`,
+      supported: true,
+      build_plates: [],
+      default_build_plate_id: "",
+    })),
+  },
+  {
+    id: "qidi-q2",
+    display_name: "Q2",
+    brand: "QIDI",
+    bed_width: 270,
+    bed_depth: 270,
+    bed_height: 256,
+    supported_nozzle_sizes: ["0.2", "0.4"],
+    supported_slicers: ["QIDIStudio"],
+    thumbnail: "slicers/QIDIStudio/02.07.02.60/assets/q2_cover.png",
+    device_profiles: ["0.2", "0.4"].map((nozzleSize) => ({
+      device_profile_id: `QIDIStudio:qidi:q2:${nozzleSize}`,
+      slicer_id: "QIDIStudio",
+      nozzle_size: nozzleSize,
+      source_profile_name: `Q2 ${nozzleSize} nozzle`,
+      revision: `sha256:qidi-q2-${nozzleSize}`,
+      supported: true,
+    })),
+  },
+];
+
+function renderPanel() {
+  return render(
+    <I18nProvider>
+      <SettingsPanel />
+    </I18nProvider>,
+  );
+}
+
+async function openMachineDialog() {
+  const changeDeviceButton = await screen.findByRole("button", {
+    name: "更改设备",
+  });
+  await waitFor(() => {
+    expect(changeDeviceButton).toBeEnabled();
+  });
+  fireEvent.click(changeDeviceButton);
+  return screen.findByRole("dialog", {
+    name: "选择打印设备",
+  });
+}
+
+describe("SettingsPanel machine adapter registry UI", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useSettingsStore.setState({
+      ...DEFAULT_SETTINGS,
+      printerModel: "bambu-h2d",
+      slicerSoftware: "BambuStudio",
+      nozzleSize: "0.4",
+      deviceProfileId: "OrcaSlicer:bbl:bambu-lab-h2d:0.2",
+      language: "zh",
+    });
+    useSlicerStore.setState({
+      slicers: [],
+      selectedSlicerId: null,
+      isDetecting: false,
+      isLaunching: false,
+      isValidatingCustomPath: false,
+      launchMessage: null,
+      customPathMessage: null,
+      customPathError: null,
+      error: null,
+    });
+    vi.mocked(systemApi.getPrinters).mockResolvedValue(PRINTERS);
+    vi.mocked(systemApi.getSlicers).mockResolvedValue(SLICERS);
+    vi.mocked(systemApi.clearCache).mockResolvedValue({
+      status: "success",
+      message: "ok",
+      deleted_files: 0,
+      freed_bytes: 0,
+      details: {
+        registry_cleaned: 0,
+        sessions_cleaned: 0,
+        output_files_cleaned: 0,
+      },
+    });
+    vi.mocked(systemApi.saveSettings).mockResolvedValue({
+      status: "success",
+      message: "Settings saved",
+    });
+  });
+
+  it("renders registry thumbnail and normalizes selected device profile", async () => {
+    renderPanel();
+
+    await openMachineDialog();
+    const h2dCard = await screen.findByTestId("machine-adapter-card-bambu-h2d");
+    const image = within(h2dCard).getByAltText("Bambu Lab H2D");
+    expect(image).toHaveAttribute(
+      "src",
+      "/api/system/machine-registry/assets/slicers/BambuStudio/02.07.01.57/assets/bambu-lab-h2d_cover.png",
+    );
+    expect(await screen.findByText(/Bambu Lab H2D 0\.4 nozzle/)).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().deviceProfileId).toBe(
+        "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      );
+    });
+  });
+
+  it("shows native plates as a horizontal strip without stretching artwork", async () => {
+    renderPanel();
+
+    const strip = await screen.findByTestId("build-plate-horizontal-strip");
+    expect(strip).toHaveClass("flex", "overflow-x-auto");
+    expect(strip).toHaveAttribute("role", "radiogroup");
+    const textured = within(strip).getByRole("radio", {
+      name: "纹理PEI打印板",
+    });
+    const smooth = within(strip).getByRole("radio", {
+      name: "光面PEI打印板 / 高温打印板",
+    });
+    expect(textured).toHaveAttribute("aria-checked", "true");
+    const artwork = textured.querySelector("img");
+    expect(artwork).not.toBeNull();
+    expect(artwork).toHaveClass("max-h-full", "max-w-full", "object-contain");
+
+    fireEvent.click(smooth);
+    expect(useSettingsStore.getState().buildPlateId).toBe("smooth-pei-plate");
+    expect(
+      useSettingsStore.getState().buildPlateSelections[
+        "BambuStudio:bbl:bambu-lab-h2d"
+      ],
+    ).toBe("smooth-pei-plate");
+  });
+
+  it("moves radio focus with arrow keys and stores the focused plate", async () => {
+    renderPanel();
+
+    const strip = await screen.findByTestId("build-plate-horizontal-strip");
+    const textured = within(strip).getByRole("radio", {
+      name: "纹理PEI打印板",
+    });
+    const smooth = within(strip).getByRole("radio", {
+      name: "光面PEI打印板 / 高温打印板",
+    });
+
+    expect(textured).toHaveAttribute("tabindex", "0");
+    expect(smooth).toHaveAttribute("tabindex", "-1");
+    textured.focus();
+
+    expect(fireEvent.keyDown(textured, { key: "ArrowRight" })).toBe(false);
+    expect(smooth).toHaveFocus();
+    await waitFor(() => {
+      expect(useSettingsStore.getState().buildPlateId).toBe("smooth-pei-plate");
+      expect(smooth).toHaveAttribute("tabindex", "0");
+      expect(textured).toHaveAttribute("tabindex", "-1");
+    });
+  });
+
+  it("clears the active plate for machines without plates and restores the remembered choice", async () => {
+    renderPanel();
+
+    const strip = await screen.findByTestId("build-plate-horizontal-strip");
+    fireEvent.click(
+      within(strip).getByRole("radio", {
+        name: "光面PEI打印板 / 高温打印板",
+      }),
+    );
+    expect(useSettingsStore.getState().buildPlateId).toBe("smooth-pei-plate");
+
+    act(() => {
+      const settings = useSettingsStore.getState();
+      settings.setSlicerSoftware("FlashStudio");
+      settings.setPrinterModel("flashforge-guider-3-ultra");
+      settings.setNozzleSize("0.4");
+      settings.setDeviceProfileId(
+        "FlashStudio:flashforge:flashforge-guider-3-ultra:0.4",
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("build-plate-selector")).not.toBeInTheDocument();
+      expect(useSettingsStore.getState().buildPlateId).toBe("");
+    });
+
+    act(() => {
+      const settings = useSettingsStore.getState();
+      settings.setSlicerSoftware("BambuStudio");
+      settings.setPrinterModel("bambu-h2d");
+      settings.setNozzleSize("0.4");
+      settings.setDeviceProfileId("BambuStudio:bbl:bambu-lab-h2d:0.4");
+    });
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().buildPlateId).toBe("smooth-pei-plate");
+    });
+    expect(
+      useSettingsStore.getState().buildPlateSelections[
+        "BambuStudio:bbl:bambu-lab-h2d"
+      ],
+    ).toBe("smooth-pei-plate");
+  });
+
+  it("renders visual printer cards and selecting one updates the active machine", async () => {
+    renderPanel();
+
+    expect(
+      screen.queryByTestId("machine-adapter-card-bambu-h2d"),
+    ).not.toBeInTheDocument();
+    await openMachineDialog();
+    const h2dCard = await screen.findByTestId("machine-adapter-card-bambu-h2d");
+    const p1sCard = await screen.findByTestId("machine-adapter-card-bambu-p1s");
+
+    expect(h2dCard).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByAltText("Bambu Lab P1S"),
+    ).toHaveAttribute(
+      "src",
+      "/api/system/machine-registry/assets/slicers/BambuStudio/02.07.01.57/assets/bambu-lab-p1s_cover.png",
+    );
+
+    fireEvent.click(p1sCard);
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().printerModel).toBe("bambu-p1s");
+      expect(useSettingsStore.getState().deviceProfileId).toBe(
+        "BambuStudio:bbl:bambu-lab-p1s:0.4",
+      );
+    });
+    expect(p1sCard).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps wider nozzle sizes hidden for slicers that have not enabled them", async () => {
+    renderPanel();
+
+    await openMachineDialog();
+    await screen.findByTestId("machine-adapter-card-bambu-h2d");
+
+    const h2dNozzle02 = await screen.findByTestId("machine-adapter-nozzle-bambu-h2d-0_2");
+    const h2dNozzle04 = await screen.findByTestId("machine-adapter-nozzle-bambu-h2d-0_4");
+    expect(h2dNozzle02).toHaveTextContent(/0\.2\s*(mm|毫米)/);
+    expect(h2dNozzle04).toHaveTextContent(/0\.4\s*(mm|毫米)/);
+    expect(screen.queryByTestId("machine-adapter-nozzle-bambu-h2d-0_6")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("machine-adapter-nozzle-bambu-h2d-0_8")).not.toBeInTheDocument();
+
+    fireEvent.click(h2dNozzle02);
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().printerModel).toBe("bambu-h2d");
+      expect(useSettingsStore.getState().nozzleSize).toBe("0.2");
+      expect(useSettingsStore.getState().deviceProfileId).toBe(
+        "BambuStudio:bbl:bambu-lab-h2d:0.2",
+      );
+    });
+    expect(h2dNozzle02).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("combobox", { name: "喷嘴尺寸" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the detected slicer selection aligned with the settings slicer", async () => {
+    useSlicerStore.setState({
+      slicers: [
+        {
+          id: "bambu_studio",
+          display_name: "Bambu Studio",
+          exe_path: "/Applications/Bambu Studio.app",
+        },
+        {
+          id: "orca_slicer",
+          display_name: "OrcaSlicer",
+          exe_path: "/Applications/OrcaSlicer.app",
+        },
+      ],
+      selectedSlicerId: "bambu_studio",
+    });
+
+    renderPanel();
+
+    await openMachineDialog();
+    fireEvent.click(await screen.findByRole("combobox", { name: "切片软件" }));
+    fireEvent.click(await screen.findByRole("option", { name: "OrcaSlicer" }));
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().slicerSoftware).toBe("OrcaSlicer");
+      expect(useSettingsStore.getState().deviceProfileId).toBe(
+        "OrcaSlicer:bbl:bambu-lab-h2d:0.2",
+      );
+      expect(useSlicerStore.getState().selectedSlicerId).toBe("orca_slicer");
+    });
+  });
+
+  it("shows the selected and listed slicer logos in the settings dropdown", async () => {
+    renderPanel();
+
+    await openMachineDialog();
+    const slicerDropdown = await screen.findByRole("combobox", {
+      name: "切片软件",
+    });
+    expect(
+      within(slicerDropdown).getByTestId("slicer-logo-BambuStudio"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(slicerDropdown);
+
+    expect(
+      within(screen.getByRole("option", { name: "OrcaSlicer" })).getByTestId(
+        "slicer-logo-OrcaSlicer",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole("option", { name: "Flash Studio Desktop" }),
+      ).getByTestId("slicer-logo-FlashStudio"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows only Flash Studio nozzles at or below 0.4 supported by the machine", async () => {
+    useSettingsStore.setState({
+      printerModel: "flashforge-guider-3-ultra",
+      slicerSoftware: "FlashStudio",
+      nozzleSize: "0.4",
+      deviceProfileId: "FlashStudio:flashforge:flashforge-guider-3-ultra:0.4",
+    });
+    renderPanel();
+
+    await openMachineDialog();
+    await screen.findByTestId("machine-adapter-card-flashforge-guider-3-ultra");
+    expect(
+      screen.queryByTestId("machine-adapter-nozzle-flashforge-guider-3-ultra-0_25"),
+    ).not.toBeInTheDocument();
+    const nozzle04 = await screen.findByTestId(
+      "machine-adapter-nozzle-flashforge-guider-3-ultra-0_4",
+    );
+    expect(nozzle04).toHaveTextContent(/0\.4\s*(mm|毫米)/);
+    expect(
+      screen.queryByTestId("machine-adapter-nozzle-flashforge-guider-3-ultra-0_6"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("machine-adapter-nozzle-flashforge-guider-3-ultra-0_8"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows QIDI Studio's native Q2 nozzles and device profile ids", async () => {
+    useSettingsStore.setState({
+      printerModel: "qidi-q2",
+      slicerSoftware: "QIDIStudio",
+      nozzleSize: "0.4",
+      deviceProfileId: "QIDIStudio:qidi:q2:0.4",
+    });
+    renderPanel();
+
+    await openMachineDialog();
+    await screen.findByTestId("machine-adapter-card-qidi-q2");
+    const nozzle02 = await screen.findByTestId("machine-adapter-nozzle-qidi-q2-0_2");
+    const nozzle04 = await screen.findByTestId("machine-adapter-nozzle-qidi-q2-0_4");
+    expect(nozzle02).toHaveTextContent(/0\.2\s*(mm|毫米)/);
+    expect(nozzle04).toHaveTextContent(/0\.4\s*(mm|毫米)/);
+    expect(screen.queryByTestId("machine-adapter-nozzle-qidi-q2-0_6")).not.toBeInTheDocument();
+
+    fireEvent.click(nozzle02);
+    await waitFor(() => {
+      expect(useSettingsStore.getState().deviceProfileId).toBe(
+        "QIDIStudio:qidi:q2:0.2",
+      );
+    });
+  });
+
+  it("shows a visible error when printer options fail to load", async () => {
+    vi.mocked(systemApi.getPrinters).mockRejectedValueOnce(
+      new Error("Printer registry unavailable"),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      translations["settings.printer_options_load_failed"].zh.replace("{error}", ""),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Printer registry unavailable",
+    );
+    expect(await screen.findByText("Bambu Studio")).toBeInTheDocument();
+  });
+
+  it("retries printer options from the visible error banner", async () => {
+    vi.mocked(systemApi.getPrinters)
+      .mockRejectedValueOnce(new Error("Printer registry unavailable"))
+      .mockResolvedValueOnce(PRINTERS);
+
+    renderPanel();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Printer registry unavailable",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: translations.widget_retry.zh }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+    await openMachineDialog();
+    expect(await screen.findByTestId("machine-adapter-card-bambu-h2d")).toBeInTheDocument();
+    expect(systemApi.getPrinters).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a visible error when slicer options fail to load", async () => {
+    vi.mocked(systemApi.getSlicers).mockRejectedValueOnce(
+      new Error("Slicer registry unavailable"),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      translations["settings.slicer_options_load_failed"].zh.replace("{error}", ""),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Slicer registry unavailable",
+    );
+    await openMachineDialog();
+    expect(await screen.findByTestId("machine-adapter-card-bambu-h2d")).toBeInTheDocument();
+  });
+});

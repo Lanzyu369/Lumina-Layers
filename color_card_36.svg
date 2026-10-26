@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  36-swatch validation colour card / 36 色验证色卡
+  Colours sampled directly from the user-provided screenshot
+  (Snipaste_2026-04-30_11-19-14.png) by per-cell median RGB.
+  Layout: 3 rows x 12 columns, white background, white gaps, no labels.
+  布局：3 行 x 12 列，白底白缝，无文字标签。
+  注意：r1c1 是纯白，与原色卡一致；不是采样错误。
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 850 220"
+     width="850" height="220"
+     shape-rendering="crispEdges">
+  <rect x="0" y="0" width="850" height="220" fill="#FFFFFF"/>
+
+  <!-- Row 1 / 第 1 行 -->
+  <rect x="10"  y="10" width="60" height="60" fill="#FFFFFF"/>
+  <rect x="80"  y="10" width="60" height="60" fill="#000000"/>
+  <rect x="150" y="10" width="60" height="60" fill="#FF0000"/>
+  <rect x="220" y="10" width="60" height="60" fill="#FFFF00"/>
+  <rect x="290" y="10" width="60" height="60" fill="#0000FF"/>
+  <rect x="360" y="10" width="60" height="60" fill="#00FF00"/>
+  <rect x="430" y="10" width="60" height="60" fill="#FF00FF"/>
+  <rect x="500" y="10" width="60" height="60" fill="#00FFFF"/>
+  <rect x="570" y="10" width="60" height="60" fill="#FF8000"/>
+  <rect x="640" y="10" width="60" height="60" fill="#8000FF"/>
+  <rect x="710" y="10" width="60" height="60" fill="#FF80C0"/>
+  <rect x="780" y="10" width="60" height="60" fill="#0080FF"/>
+
+  <!-- Row 2 / 第 2 行 -->
+  <rect x="10"  y="80" width="60" height="60" fill="#C0C0C0"/>
+  <rect x="80"  y="80" width="60" height="60" fill="#808080"/>
+  <rect x="150" y="80" width="60" height="60" fill="#408080"/>
+  <rect x="220" y="80" width="60" height="60" fill="#80C4C4"/>
+  <rect x="290" y="80" width="60" height="60" fill="#808040"/>
+  <rect x="360" y="80" width="60" height="60" fill="#804000"/>
+  <rect x="430" y="80" width="60" height="60" fill="#0000A0"/>
+  <rect x="500" y="80" width="60" height="60" fill="#400000"/>
+  <rect x="570" y="80" width="60" height="60" fill="#800040"/>
+  <rect x="640" y="80" width="60" height="60" fill="#FF8080"/>
+  <rect x="710" y="80" width="60" height="60" fill="#FFFF80"/>
+  <rect x="780" y="80" width="60" height="60" fill="#80FF80"/>
+
+  <!-- Row 3 / 第 3 行 -->
+  <rect x="10"  y="150" width="60" height="60" fill="#00FF80"/>
+  <rect x="80"  y="150" width="60" height="60" fill="#80FFFF"/>
+  <rect x="150" y="150" width="60" height="60" fill="#FFE0BD"/>
+  <rect x="220" y="150" width="60" height="60" fill="#E0AC69"/>
+  <rect x="290" y="150" width="60" height="60" fill="#F9F1EE"/>
+  <rect x="360" y="150" width="60" height="60" fill="#F5E2D2"/>
+  <rect x="430" y="150" width="60" height="60" fill="#FFC4C4"/>
+  <rect x="500" y="150" width="60" height="60" fill="#CE4D4D"/>
+  <rect x="570" y="150" width="60" height="60" fill="#3CBE3A"/>
+  <rect x="640" y="150" width="60" height="60" fill="#FFCD00"/>
+  <rect x="710" y="150" width="60" height="60" fill="#24C287"/>
+  <rect x="780" y="150" width="60" height="60" fill="#AE8BED"/>
+</svg>

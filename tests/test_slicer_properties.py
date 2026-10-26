@@ -109,7 +109,10 @@ def test_nonexistent_exe_paths_filtered(num_valid: int, num_invalid: int) -> Non
         )
 
     try:
-        with patch("core.slicer.scan_registry", return_value=mock_slicers):
+        with (
+            patch("core.slicer.platform.system", return_value="Windows"),
+            patch("core.slicer.scan_registry", return_value=mock_slicers),
+        ):
             result = detect_installed_slicers()
 
         # Every returned entry must have an existing exe_path
@@ -298,6 +301,18 @@ def test_registry_match_produces_correct_display_name(
     dn_lower = display_name.lower()
     if expected_sid == "cura" and ("cuda" in dn_lower or "nvidia" in dn_lower):
         assume(False)
+    dn_compact = "".join(ch for ch in dn_lower if ch.isalnum())
+    matched_sids = set()
+    for other_keyword, other_sid, _other_display_name in _ALL_MATCH_KEYWORDS:
+        other_lower = other_keyword.lower()
+        other_compact = "".join(ch for ch in other_lower if ch.isalnum())
+        if other_lower in dn_lower or (
+            other_compact and other_compact in dn_compact
+        ):
+            if other_sid == "cura" and ("cuda" in dn_lower or "nvidia" in dn_lower):
+                continue
+            matched_sids.add(other_sid)
+    assume(matched_sids == {expected_sid})
 
     result = _match_slicer_id(display_name)
 
@@ -315,7 +330,7 @@ def test_registry_match_produces_correct_display_name(
 
 # =========================================================================
 # Feature: slicer-launch-integration
-# Property 1: GenerateResponse 包含 3MF 磁盘路径
+# Property 1: GenerateResponse hides server-local 3MF disk paths
 # **Validates: Requirements 1.1, 7.1, 7.2**
 # =========================================================================
 
@@ -328,12 +343,10 @@ _nonempty_path_strategy = st.text(min_size=1).filter(lambda s: s.strip() != "")
 
 @given(path=_nonempty_path_strategy)
 @settings(max_examples=200)
-def test_generate_response_contains_threemf_disk_path(path: str) -> None:
-    """Property 1: For any successful 3MF generation where generate_final_model
-    returns a valid threemf_path, GenerateResponse.threemf_disk_path SHALL equal
-    that path and be a non-empty string.
+def test_generate_response_redacts_threemf_disk_path(path: str) -> None:
+    """Property 1: Public GenerateResponse must not expose server-local paths.
 
-    Feature: slicer-launch-integration, Property 1: GenerateResponse 包含 3MF 磁盘路径
+    Feature: slicer-launch-integration, Property 1: GenerateResponse hides disk paths
     **Validates: Requirements 1.1, 7.1, 7.2**
     """
     resp = GenerateResponse(
@@ -344,14 +357,7 @@ def test_generate_response_contains_threemf_disk_path(path: str) -> None:
         threemf_disk_path=path,
     )
 
-    # threemf_disk_path must equal the input path
-    assert resp.threemf_disk_path == path, (
-        f"Expected threemf_disk_path={path!r}, got {resp.threemf_disk_path!r}"
-    )
-    # threemf_disk_path must be a non-empty string
-    assert isinstance(resp.threemf_disk_path, str) and len(resp.threemf_disk_path) > 0, (
-        f"threemf_disk_path should be a non-empty string, got {resp.threemf_disk_path!r}"
-    )
+    assert resp.threemf_disk_path is None
 
 
 def test_generate_response_threemf_disk_path_none_when_omitted() -> None:

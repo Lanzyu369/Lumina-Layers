@@ -6,15 +6,22 @@ roundtrip preserves pixel values exactly (PNG is lossless).
 **Validates: Requirements 2.1, 2.3**
 """
 
+import asyncio
 import io
 
 import numpy as np
+import pytest
+from fastapi import HTTPException
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 from PIL import Image
 
-from api.file_bridge import ndarray_to_png_bytes, pil_to_png_bytes
+from api.file_bridge import (
+    ensure_png_tempfile,
+    ndarray_to_png_bytes,
+    pil_to_png_bytes,
+)
 
 # ---------------------------------------------------------------------------
 # Strategies

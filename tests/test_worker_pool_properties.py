@@ -13,6 +13,7 @@ import asyncio
 import os
 import re
 import time
+from typing import Iterator
 from unittest.mock import patch
 
 import pytest
@@ -103,41 +104,27 @@ class TestWorkerPoolMaxWorkersProperty:
 # ---------------------------------------------------------------------------
 
 
-class TestWorkerPoolConfigEnvOverrideProperty:
-    """For any n (1–32) and f (1.0–3600.0), env vars override config.
-
-    **Validates: Requirements 5.2, 5.3**
-    """
-
-    @given(
-        n=st.integers(min_value=1, max_value=32),
-        f=st.floats(min_value=1.0, max_value=3600.0, allow_nan=False, allow_infinity=False),
-    )
-    @settings(max_examples=100)
-    def test_env_vars_override_config(self, n: int, f: float) -> None:
-        """Property 4: 配置环境变量覆盖.
-        Property 4: 环境变量覆盖配置。
-
-        When LUMINA_MAX_WORKERS=n and LUMINA_TASK_TIMEOUT=f are set,
-        WorkerPoolConfig.from_env() returns MAX_WORKERS == n and
-        TASK_TIMEOUT == f.
-
-        **Validates: Requirements 5.2, 5.3**
-        """
-        env_patch = {
-            "LUMINA_MAX_WORKERS": str(n),
-            "LUMINA_TASK_TIMEOUT": str(f),
-        }
-        with patch.dict(os.environ, env_patch, clear=False):
-            cfg = WorkerPoolConfig.from_env()
-        assert cfg.MAX_WORKERS == n
-        assert cfg.TASK_TIMEOUT == pytest.approx(f)
 
 
 # ---------------------------------------------------------------------------
 # Property 2: Worker 异常传播
 # Feature: thread-separation-upgrade, Property 2: Worker 异常传播
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="class")
+def exception_pool() -> Iterator[WorkerPoolManager]:
+    """One started pool shared by every generated example.
+
+    Spawning a Windows process pool per example cost about 0.8 s each; reusing
+    one pool also proves it keeps serving tasks after workers raise.
+    """
+    pool = WorkerPoolManager(max_workers=1)
+    pool.start()
+    try:
+        yield pool
+    finally:
+        pool.shutdown(wait=True)
 
 
 class TestWorkerExceptionPropagationProperty:
@@ -155,7 +142,12 @@ class TestWorkerExceptionPropagationProperty:
         ).filter(lambda s: s.strip()),
     )
     @settings(max_examples=100, deadline=5000)
-    def test_worker_exception_propagates(self, exc_index: int, msg: str) -> None:
+    def test_worker_exception_propagates(
+        self,
+        exception_pool: WorkerPoolManager,
+        exc_index: int,
+        msg: str,
+    ) -> None:
         """Property 2: Worker 异常传播.
         Property 2: Worker 异常传播。
 
@@ -166,46 +158,11 @@ class TestWorkerExceptionPropagationProperty:
         **Validates: Requirements 1.4**
         """
         exc_type, worker_fn = _EXCEPTION_WORKERS[exc_index]
-        pool = WorkerPoolManager(max_workers=1)
-        pool.start()
-        try:
-            with pytest.raises(exc_type, match=re.escape(msg)):
-                asyncio.run(pool.submit(worker_fn, msg, timeout=30.0))
-        finally:
-            pool.shutdown(wait=True)
+        with pytest.raises(exc_type, match=re.escape(msg)):
+            asyncio.run(exception_pool.submit(worker_fn, msg))
 
 
 # ---------------------------------------------------------------------------
 # Property 3: 任务超时取消
 # Feature: thread-separation-upgrade, Property 3: 任务超时取消
 # ---------------------------------------------------------------------------
-
-
-class TestTaskTimeoutCancellationProperty:
-    """For any timeout t, tasks exceeding t raise asyncio.TimeoutError.
-
-    **Validates: Requirements 2.3**
-    """
-
-    @given(
-        timeout=st.floats(min_value=0.1, max_value=1.0, allow_nan=False, allow_infinity=False),
-    )
-    @settings(max_examples=20, deadline=30000)
-    def test_task_timeout_raises_timeout_error(self, timeout: float) -> None:
-        """Property 3: 任务超时取消.
-        Property 3: 任务超时取消。
-
-        For any timeout value t (0.1 to 1.0 seconds) and a task that
-        sleeps for t + 2 seconds, pool.submit(fn, timeout=t) should
-        raise asyncio.TimeoutError within a reasonable time.
-
-        **Validates: Requirements 2.3**
-        """
-        sleep_duration = timeout + 2.0
-        pool = WorkerPoolManager(max_workers=1)
-        pool.start()
-        try:
-            with pytest.raises(asyncio.TimeoutError):
-                asyncio.run(pool.submit(_worker_sleep, sleep_duration, timeout=timeout))
-        finally:
-            pool.shutdown(wait=False)

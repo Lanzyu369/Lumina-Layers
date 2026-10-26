@@ -28,11 +28,13 @@ _real_path_join = os.path.join
 
 def _make_join_redirector(assets_dir: str):
     """Create an os.path.join side_effect that redirects temp_5c files to assets_dir."""
+
     def _join(*args: Any) -> str:
         last = args[-1] if args else ""
-        if isinstance(last, str) and "temp_5c" in last:
+        if isinstance(last, str) and ("temp_5c" in last or "lumina_lut" in last):
             return _real_path_join(assets_dir, last)
         return _real_path_join(*args)
+
     return _join
 
 
@@ -40,15 +42,14 @@ def _make_join_redirector(assets_dir: str):
 # Strategies
 # ═══════════════════════════════════════════════════════════════
 
+
 # Generate valid LUT arrays of shape (N, 3) with RGB values 0-255
-def lut_array_strategy(
-    min_rows: int = 1, max_rows: int = 200
-) -> st.SearchStrategy[np.ndarray]:
+def lut_array_strategy(min_rows: int = 1, max_rows: int = 200) -> st.SearchStrategy[np.ndarray]:
     """Strategy that produces (N, 3) uint8 arrays representing LUT RGB data."""
-    return st.integers(min_value=min_rows, max_value=max_rows).flatmap(
-        lambda n: st.just(n)
-    ).map(
-        lambda n: np.random.randint(0, 256, size=(n, 3), dtype=np.uint8)
+    return (
+        st.integers(min_value=min_rows, max_value=max_rows)
+        .flatmap(lambda n: st.just(n))
+        .map(lambda n: np.random.randint(0, 256, size=(n, 3), dtype=np.uint8))
     )
 
 
@@ -61,6 +62,7 @@ page_choice = st.sampled_from(["Page 1", "Page 2"])
 # Feature: component-completion, Property 4: LUT 合并拼接形状不变量
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestLUTMergeShapeInvariant:
     """
     **Feature: component-completion, Property 4: LUT 合并拼接形状不变量**
@@ -72,8 +74,7 @@ class TestLUTMergeShapeInvariant:
     RGB values should be preserved in the merged result.
     """
 
-    @given(n=st.integers(min_value=1, max_value=200),
-           m=st.integers(min_value=1, max_value=200))
+    @given(n=st.integers(min_value=1, max_value=200), m=st.integers(min_value=1, max_value=200))
     @settings(max_examples=100)
     def test_merge_shape_is_sum(self, n: int, m: int) -> None:
         """Merged shape should be (N + M, 3) for inputs of (N, 3) and (M, 3)."""
@@ -82,12 +83,9 @@ class TestLUTMergeShapeInvariant:
 
         merged = np.vstack([lut1.reshape(-1, 3), lut2.reshape(-1, 3)])
 
-        assert merged.shape == (n + m, 3), (
-            f"Expected shape ({n + m}, 3), got {merged.shape}"
-        )
+        assert merged.shape == (n + m, 3), f"Expected shape ({n + m}, 3), got {merged.shape}"
 
-    @given(n=st.integers(min_value=1, max_value=200),
-           m=st.integers(min_value=1, max_value=200))
+    @given(n=st.integers(min_value=1, max_value=200), m=st.integers(min_value=1, max_value=200))
     @settings(max_examples=100)
     def test_merge_preserves_all_values(self, n: int, m: int) -> None:
         """All original RGB values from both LUTs are preserved in the merged result."""
@@ -101,40 +99,56 @@ class TestLUTMergeShapeInvariant:
         # Last M rows should match lut2
         np.testing.assert_array_equal(merged[n:], lut2)
 
-    @given(n=st.integers(min_value=1, max_value=100),
-           m=st.integers(min_value=1, max_value=100))
-    @settings(max_examples=100)
+    @given(n=st.integers(min_value=1, max_value=100), m=st.integers(min_value=1, max_value=100))
+    @settings(max_examples=100, deadline=None)
     def test_merge_via_endpoint_shape(self, n: int, m: int) -> None:
         """The merge-5color-extended endpoint produces (N + M, 3) shaped output."""
+        from utils.lut_manager import LUTManager
+        from config import LUTMetadata, PaletteEntry
+
         lut1 = np.random.randint(0, 256, size=(n, 3), dtype=np.uint8)
         lut2 = np.random.randint(0, 256, size=(m, 3), dtype=np.uint8)
 
+        # 构建最小 metadata 用于 save_keyed_json
+        metadata = LUTMetadata(
+            palette=[
+                PaletteEntry(color="White", material="PLA Basic"),
+                PaletteEntry(color="Cyan", material="PLA Basic"),
+                PaletteEntry(color="Magenta", material="PLA Basic"),
+                PaletteEntry(color="Yellow", material="PLA Basic"),
+                PaletteEntry(color="Black", material="PLA Basic"),
+            ]
+        )
+        stacks1 = np.zeros((n, 5), dtype=np.int32)
+        stacks2 = np.zeros((m, 5), dtype=np.int32)
+
         with tempfile.TemporaryDirectory() as tmpdir:
-            np.save(_real_path_join(tmpdir, "temp_5c_ext_page_1.npy"), lut1)
-            np.save(_real_path_join(tmpdir, "temp_5c_ext_page_2.npy"), lut2)
-            merged_path = _real_path_join(tmpdir, "lumina_lut.npy")
+            # 保存为 .json 格式（与端点期望一致）
+            page1_path = _real_path_join(tmpdir, "temp_5c_ext_page_1.json")
+            page2_path = _real_path_join(tmpdir, "temp_5c_ext_page_2.json")
+            LUTManager.save_keyed_json(page1_path, lut1, stacks1, metadata)
+            LUTManager.save_keyed_json(page2_path, lut2, stacks2, metadata)
+            merged_path = _real_path_join(tmpdir, "lumina_lut.json")
 
             with (
-                patch("api.routers.extractor.os.path.join",
-                      side_effect=_make_join_redirector(tmpdir)),
+                patch("api.routers.extractor.os.path.join", side_effect=_make_join_redirector(tmpdir)),
                 patch("config.LUT_FILE_PATH", merged_path),
             ):
                 response = client.post("/api/extractor/merge-5color-extended")
 
             assert response.status_code == 200
 
-            merged = np.load(merged_path)
-            assert merged.shape == (n + m, 3), (
-                f"Expected ({n + m}, 3), got {merged.shape}"
-            )
-            np.testing.assert_array_equal(merged[:n], lut1)
-            np.testing.assert_array_equal(merged[n:], lut2)
+            merged_rgb, _, _ = LUTManager.load_lut_with_metadata(merged_path)
+            assert merged_rgb.shape == (n + m, 3), f"Expected ({n + m}, 3), got {merged_rgb.shape}"
+            np.testing.assert_array_equal(merged_rgb[:n], lut1)
+            np.testing.assert_array_equal(merged_rgb[n:], lut2)
 
 
 # ═══════════════════════════════════════════════════════════════
 # Property 5: 5-Color Extended 提取临时文件路径
 # Feature: component-completion, Property 5: 5-Color Extended 提取临时文件路径
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestExtractTempFilePath:
     """
@@ -158,8 +172,7 @@ class TestExtractTempFilePath:
         computed_filename = f"temp_5c_ext_page_{computed_idx}.npy"
 
         assert computed_filename == expected_filename, (
-            f"For page='{page}', expected '{expected_filename}', "
-            f"got '{computed_filename}'"
+            f"For page='{page}', expected '{expected_filename}', " f"got '{computed_filename}'"
         )
 
     @given(page=page_choice)
@@ -192,8 +205,6 @@ class TestExtractTempFilePath:
             np.save(temp_path, lut_data)
 
             # Verify file exists and content matches
-            assert os.path.exists(temp_path), (
-                f"Temp file {expected_filename} should exist"
-            )
+            assert os.path.exists(temp_path), f"Temp file {expected_filename} should exist"
             loaded = np.load(temp_path)
             np.testing.assert_array_equal(loaded, lut_data)

@@ -8,15 +8,12 @@ sorted (alphabetical) order:
     forall luts = get_all_lut_files(),
       list(luts.keys()) == sorted(list(luts.keys()))
 
-We verify this property in three ways:
+We verify the manager directly and the API with real and generated entries:
 1. Direct call to LUTManager.get_all_lut_files() on real filesystem
 2. GET /api/lut/list via TestClient
-3. Hypothesis-generated random LUT entries to verify sorting is preserved
-   regardless of insertion order
+3. Hypothesis-generated sorted entries to check API ordering and length
 """
 
-import os
-import tempfile
 from typing import Dict
 from unittest.mock import patch
 
@@ -97,25 +94,6 @@ def test_lut_list_via_api_keys_sorted() -> None:
 # =========================================================================
 # 3. Hypothesis PBT — random LUT directory contents
 # =========================================================================
-
-
-@given(random_luts=_lut_dict_strategy)
-@settings(max_examples=100)
-def test_sorting_preserved_for_random_lut_entries(
-    random_luts: Dict[str, str],
-) -> None:
-    """Sorting property holds for any set of LUT entries.
-
-    We mock get_all_lut_files to return an *unsorted* dict built from
-    Hypothesis-generated entries, then apply the same sorting logic used
-    by the real implementation and verify the result is sorted.
-
-    **Validates: Requirements 10.1, 10.2**
-    """
-    # Simulate what LUTManager does: dict(sorted(...))
-    sorted_luts = dict(sorted(random_luts.items()))
-    keys = list(sorted_luts.keys())
-    assert keys == sorted(keys)
 
 
 @given(random_luts=_lut_dict_strategy)

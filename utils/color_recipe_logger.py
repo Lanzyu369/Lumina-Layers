@@ -14,13 +14,92 @@ import numpy as np
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 
+from api.structured_logging import get_logger
+
+
+log = get_logger(__name__)
+
+_PACKED_STACK_BITS = 8
+_MAX_PACKED_STACK_LAYERS = 5
+
+
+def _can_pack_color_stack_keys(
+    solid_rgb: np.ndarray,
+    solid_materials: np.ndarray,
+) -> bool:
+    if solid_rgb.ndim != 2 or solid_rgb.shape[1] != 3:
+        return False
+    if solid_materials.ndim != 2 or solid_materials.shape[1] > _MAX_PACKED_STACK_LAYERS:
+        return False
+    if not np.issubdtype(solid_rgb.dtype, np.integer):
+        return False
+    if not np.issubdtype(solid_materials.dtype, np.integer):
+        return False
+    if solid_rgb.size and (np.min(solid_rgb) < 0 or np.max(solid_rgb) > 255):
+        return False
+    if solid_materials.size and (
+        np.min(solid_materials) < 0 or np.max(solid_materials) > 255
+    ):
+        return False
+    return True
+
+
+def _count_unique_color_stack_combinations(
+    matched_rgb: np.ndarray,
+    material_matrix: np.ndarray,
+    mask_solid: np.ndarray,
+) -> list[tuple[tuple[int, int, int], tuple[int, ...], int]]:
+    """Count unique ``(matched_rgb, material_stack)`` pairs in first-seen order."""
+
+    solid_rgb = np.asarray(matched_rgb)[mask_solid]
+    solid_materials = np.asarray(material_matrix)[mask_solid]
+    if len(solid_rgb) == 0:
+        return []
+
+    if _can_pack_color_stack_keys(solid_rgb, solid_materials):
+        keys = solid_rgb[:, 0].astype(np.uint64)
+        keys |= solid_rgb[:, 1].astype(np.uint64) << 8
+        keys |= solid_rgb[:, 2].astype(np.uint64) << 16
+        for layer_index in range(solid_materials.shape[1]):
+            keys |= solid_materials[:, layer_index].astype(np.uint64) << (
+                24 + _PACKED_STACK_BITS * layer_index
+            )
+        _, first_indices, counts = np.unique(
+            keys,
+            return_index=True,
+            return_counts=True,
+        )
+    else:
+        combined = np.concatenate(
+            (
+                solid_rgb.astype(np.int64, copy=False),
+                solid_materials.astype(np.int64, copy=False),
+            ),
+            axis=1,
+        )
+        _, first_indices, counts = np.unique(
+            combined,
+            axis=0,
+            return_index=True,
+            return_counts=True,
+        )
+
+    ordered_unique_indices = np.argsort(first_indices)
+    combinations: list[tuple[tuple[int, int, int], tuple[int, ...], int]] = []
+    for unique_index in ordered_unique_indices:
+        first_index = int(first_indices[unique_index])
+        rgb_tuple = tuple(int(value) for value in solid_rgb[first_index])
+        stack_tuple = tuple(int(value) for value in solid_materials[first_index])
+        combinations.append((rgb_tuple, stack_tuple, int(counts[unique_index])))
+    return combinations
+
 
 class ColorRecipeLogger:
     """
     Logs color mapping and stacking recipes to a text file.
     """
     
-    def __init__(self, lut_path: str, lut_rgb: np.ndarray, ref_stacks: np.ndarray, color_mode: str):
+    def __init__(self, lut_path: str, lut_rgb: np.ndarray, ref_stacks: np.ndarray, color_mode: str, metadata=None):
         """
         Initialize the logger.
         
@@ -29,15 +108,21 @@ class ColorRecipeLogger:
             lut_rgb: LUT RGB array (N, 3)
             ref_stacks: Reference stacks array (N, 5)
             color_mode: Color mode string (e.g., "8-Color")
+            metadata: Optional LUTMetadata with palette info (可选的 LUT 元数据)
         """
         self.lut_path = lut_path
         self.lut_filename = os.path.basename(lut_path)
         self.lut_rgb = lut_rgb
         self.ref_stacks = ref_stacks
         self.color_mode = color_mode
+        self.metadata = metadata
         
         # Extract color names from LUT filename if possible
         self.color_names = self._extract_color_names_from_filename()
+        
+        # If metadata has palette, prefer palette color names
+        if metadata and hasattr(metadata, 'palette') and metadata.palette:
+            self.color_names = [e.color for e in metadata.palette]
         
         # Color mappings to record
         self.mappings: List[Dict] = []
@@ -139,14 +224,13 @@ class ColorRecipeLogger:
             pixel_count: Number of pixels with this color
         """
         # Get stacking recipe
-        # Note: self.ref_stacks stores stacks in top-to-bottom order
-        # (after the reversed() conversion in _load_lut: bottom-to-top → top-to-bottom)
-        # stack[0] = viewing surface (顶/观赏面), stack[4] = backing (底/背板)
+        # Note: self.ref_stacks already stores stacks in bottom-to-top order
+        # (after the reversed() conversion in _load_lut)
         stack = self.ref_stacks[lut_index]
         
-        # Convert stack to color names (stack is top-to-bottom: index 0 = viewing surface)
-        stack_names_top_to_bottom = [self._get_color_name(int(mat_id)) for mat_id in stack]
-        stack_names_bottom_to_top = list(reversed(stack_names_top_to_bottom))
+        # Convert stack to color names (stack is already bottom-to-top)
+        stack_names_bottom_to_top = [self._get_color_name(int(mat_id)) for mat_id in stack]
+        stack_names_top_to_bottom = list(reversed(stack_names_bottom_to_top))
         
         mapping = {
             'original_rgb': original_rgb,
@@ -186,17 +270,31 @@ class ColorRecipeLogger:
         lines.append(f"总颜色数 / Total Colors: {len(self.mappings)}")
         lines.append("")
         
-        # LUT Color Order
+        # Material Slot Order (not LUT order)
         lines.append("-" * 80)
-        lines.append("LUT 颜色顺序 / LUT Color Order")
+        lines.append("材料槽位顺序 / Material Slot Order")
         lines.append("-" * 80)
         
-        # Show first 8 colors (base colors)
-        for i in range(min(8, len(self.lut_rgb))):
-            rgb = self.lut_rgb[i]
-            hex_color = f'#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}'
+        # Show material slots with their representative colors
+        # Find a pure stack for each material to get its RGB
+        material_rgb_map = {}
+        for lut_idx in range(len(self.ref_stacks)):
+            stack = self.ref_stacks[lut_idx]
+            # Check if this is a pure color (all layers same material)
+            if len(set(stack)) == 1:
+                material_id = stack[0]
+                if material_id >= 0 and material_id not in material_rgb_map:
+                    material_rgb_map[material_id] = self.lut_rgb[lut_idx]
+        
+        # Display material slots
+        for i in range(min(8, len(self.color_names) if self.color_names else 8)):
             color_name = self._get_color_name(i)
-            lines.append(f"  索引 {i}: {color_name:15s} RGB({rgb[0]:3d}, {rgb[1]:3d}, {rgb[2]:3d}) = {hex_color}")
+            if i in material_rgb_map:
+                rgb = material_rgb_map[i]
+                hex_color = f'#{int(rgb[0]):02x}{int(rgb[1]):02x}{int(rgb[2]):02x}'
+                lines.append(f"  槽位 {i}: {color_name:15s} RGB({int(rgb[0]):3d}, {int(rgb[1]):3d}, {int(rgb[2]):3d}) = {hex_color}")
+            else:
+                lines.append(f"  槽位 {i}: {color_name:15s} (未找到纯色样本)")
         lines.append("")
         
         # Color Mappings
@@ -225,14 +323,14 @@ class ColorRecipeLogger:
             lines.append(f"    堆叠配方 (底→顶) / Stack Recipe (Bottom→Top):")
             stack_str = " -> ".join(mapping['stack_names_bottom_to_top'])
             lines.append(f"      {stack_str}")
-            lines.append(f"      索引 / Indices: {list(reversed(mapping['stack_indices']))}")
+            lines.append(f"      索引 / Indices: {mapping['stack_indices']}")
             lines.append(f"")
             
             # Stacking recipe (top to bottom)
             lines.append(f"    堆叠配方 (顶→底) / Stack Recipe (Top→Bottom):")
             stack_str = " -> ".join(mapping['stack_names_top_to_bottom'])
             lines.append(f"      {stack_str}")
-            lines.append(f"      索引 / Indices: {mapping['stack_indices']}")
+            lines.append(f"      索引 / Indices: {list(reversed(mapping['stack_indices']))}")
             lines.append("")
             lines.append("-" * 80)
             lines.append("")
@@ -251,12 +349,21 @@ class ColorRecipeLogger:
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
         
-        print(f"[COLOR_RECIPE] ✅ Color recipe saved: {output_path}")
+        log.debug(
+            "Color recipe saved",
+            extra={
+                "event": "color_recipe_saved",
+                "path": output_path,
+                "mapping_count": len(self.mappings),
+                "color_mode": self.color_mode,
+                "model_filename": model_filename,
+            },
+        )
     
     @staticmethod
     def create_from_processor(processor, output_dir: str, model_filename: str,
                              matched_rgb: np.ndarray, material_matrix: np.ndarray,
-                             mask_solid: np.ndarray):
+                             mask_solid: np.ndarray, metadata=None):
         """
         Create a color recipe logger from image processor results.
         
@@ -267,6 +374,7 @@ class ColorRecipeLogger:
             matched_rgb: Matched RGB array (H, W, 3)
             material_matrix: Material matrix (H, W, 5)
             mask_solid: Solid mask (H, W)
+            metadata: Optional LUTMetadata with palette info (可选的 LUT 元数据)
         
         Returns:
             Path to the generated report file
@@ -275,37 +383,32 @@ class ColorRecipeLogger:
             lut_path=processor.lut_path if hasattr(processor, 'lut_path') else 'unknown.npy',
             lut_rgb=processor.lut_rgb,
             ref_stacks=processor.ref_stacks,
-            color_mode=processor.color_mode
+            color_mode=processor.color_mode,
+            metadata=metadata,
         )
         
-        # Extract unique colors and their pixel counts
-        solid_rgb = matched_rgb[mask_solid]
-        solid_materials = material_matrix[mask_solid]
-        
-        # Find unique color-stack combinations
-        unique_colors = {}
-        for i in range(len(solid_rgb)):
-            rgb_tuple = tuple(solid_rgb[i])
-            stack_tuple = tuple(solid_materials[i])
-            
-            key = (rgb_tuple, stack_tuple)
-            if key not in unique_colors:
-                unique_colors[key] = 0
-            unique_colors[key] += 1
-        
+        color_stack_counts = _count_unique_color_stack_combinations(
+            matched_rgb,
+            material_matrix,
+            mask_solid,
+        )
+        lut_index_by_rgb = {
+            tuple(int(channel) for channel in lut_color): idx
+            for idx, lut_color in enumerate(processor.lut_rgb)
+        }
+        lut_rgb_int = processor.lut_rgb.astype(int)
+
         # Add mappings
-        for (rgb_tuple, stack_tuple), count in unique_colors.items():
+        for rgb_tuple, _stack_tuple, count in color_stack_counts:
             # Find LUT index by matching RGB
-            lut_index = -1
-            for idx, lut_color in enumerate(processor.lut_rgb):
-                if tuple(lut_color) == rgb_tuple:
-                    lut_index = idx
-                    break
-            
-            if lut_index == -1:
+            lut_index = lut_index_by_rgb.get(rgb_tuple)
+            if lut_index is None:
                 # Fallback: find closest match
-                distances = np.sum(np.abs(processor.lut_rgb.astype(int) - np.array(rgb_tuple).astype(int)), axis=1)
-                lut_index = np.argmin(distances)
+                distances = np.sum(
+                    np.abs(lut_rgb_int - np.array(rgb_tuple, dtype=int)),
+                    axis=1,
+                )
+                lut_index = int(np.argmin(distances))
             
             logger.add_mapping(
                 original_rgb=rgb_tuple,  # In this case, we don't have the original, so use matched

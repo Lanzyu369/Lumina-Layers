@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import List
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class SlicerInfo(BaseModel):
@@ -24,13 +24,15 @@ class SlicerInfo(BaseModel):
             切片软件标识符。
         display_name: Human-readable display name, e.g. "Bambu Studio".
             显示名称。
-        exe_path: Absolute path to the slicer executable.
-            可执行文件路径。
+        exe_path: Redacted compatibility field; public responses do not expose
+            the local executable path.
+            脱敏兼容字段；公开响应不暴露本机可执行文件路径。
     """
 
     id: str = Field(..., min_length=1, description="切片软件标识符")
     display_name: str = Field(..., description="显示名称")
-    exe_path: str = Field(..., description="可执行文件路径")
+    exe_path: str | None = Field(default=None, description="已脱敏的可执行文件路径")
+    source: str = Field(default="auto", description="检测来源")
 
 
 class SlicerDetectResponse(BaseModel):
@@ -52,12 +54,48 @@ class SlicerLaunchRequest(BaseModel):
     Attributes:
         slicer_id: Identifier of the slicer to launch.
             要启动的切片软件 ID。
-        file_path: Path to the 3MF file to open.
-            要打开的 3MF 文件路径。
+        file_path: Legacy server-local path to the 3MF file to open.
+            旧版服务器本地 3MF 文件路径。
+        download_url: Public ``/api/files/<id>`` URL for the 3MF artifact.
+            公开的 3MF 产物 ``/api/files/<id>`` 地址。
     """
 
     slicer_id: str = Field(..., description="要启动的切片软件 ID")
-    file_path: str = Field(..., min_length=1, description="要打开的 3MF 文件路径")
+    file_path: str | None = Field(
+        default=None,
+        min_length=1,
+        description="旧版要打开的 3MF 文件路径",
+    )
+    download_url: str | None = Field(
+        default=None,
+        min_length=1,
+        description="要打开的 3MF 下载 URL",
+    )
+    slicer_path: str | None = Field(default=None, description="可选手动切片软件路径")
+
+    @model_validator(mode="after")
+    def require_launch_source(self) -> "SlicerLaunchRequest":
+        if not self.file_path and not self.download_url:
+            raise ValueError("Either file_path or download_url is required")
+        return self
+
+
+class SlicerCustomPathRequest(BaseModel):
+    """Request model for validating a user-provided slicer path.
+    校验用户手动提供的切片软件路径的请求模型。
+    """
+
+    path: str = Field(..., min_length=1, description="切片软件路径")
+
+
+class SlicerCustomPathResponse(BaseModel):
+    """Response model for validating a user-provided slicer path.
+    校验用户手动提供的切片软件路径的响应模型。
+    """
+
+    status: str = Field(..., description="结果状态 (success / error)")
+    message: str = Field(..., description="描述信息")
+    slicer: SlicerInfo | None = Field(default=None, description="已识别切片软件")
 
 
 class SlicerLaunchResponse(BaseModel):

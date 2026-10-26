@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Minimal SVG fixture for vector + outline pipeline property tests.
+为 vector + outline 管道 PBT 提供的最小 SVG fixture。
+
+一个填色矩形 + 一个填色圆，确保 ``analysis.matched_shapes`` 至少包含
+两个非平凡的 shapely 几何，用于断言 outline ring 与 matched_shapes
+union 的相交面积近似为零（即真正的 "ring" 而非 "fill"）。
+
+参考工单：LUM-20260527-001。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm" viewBox="0 0 100 100">
+  <rect x="10" y="10" width="40" height="40" fill="#ff0000"/>
+  <circle cx="70" cy="30" r="15" fill="#0000ff"/>
+</svg>

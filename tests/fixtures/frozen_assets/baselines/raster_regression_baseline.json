@@ -1,0 +1,431 @@
+﻿{
+  "version": "1.1.0",
+  "generated_at": "2026-10-02T05:10:32.229513+00:00",
+  "regression_scope": "raster_only",
+  "svg_regression": "paused",
+  "fixed_params": {
+    "target_width_mm": 60.0,
+    "spacer_thick": 1.2,
+    "quantize_colors": 48,
+    "enable_cleanup": true,
+    "hue_weight": 0.0,
+    "chroma_gate": 15.0
+  },
+  "thresholds": {
+    "mask_solid_diff_ratio": 0.002,
+    "material_matrix_diff_ratio": 0.003,
+    "recipe_top10_coverage_abs_diff": 0.005,
+    "recipe_top10_distribution_l1": 0.02,
+    "bbox_extent_abs_diff_mm": 0.08,
+    "recipe_unique_count_abs_diff": 5
+  },
+  "cases": {
+    "high-fidelity__2c_bw": {
+      "case_id": "high-fidelity__2c_bw",
+      "mode": "high-fidelity",
+      "lut_id": "2c_bw",
+      "lut_rel": "luts/2c/Bambulab&PLA&BW&白-黑.npy",
+      "color_mode": "BW (Black & White)",
+      "preview_status": "[OK] Preview (600x528px, 12 colors) | Click image to place loop",
+      "generate_status": "Conversion complete (High-Fidelity)! Resolution: 600x528px",
+      "threemf_exists": true,
+      "glb_exists": true,
+      "bbox_extents_mm": [
+        60.0,
+        52.79999923706055,
+        2.0
+      ],
+      "effective_layers": 5,
+      "recipe_top10_coverage": 0.8419536893992837,
+      "recipe_top10_distribution": [
+        0.15239813185930007,
+        0.10921300554548458,
+        0.10388630417116884,
+        0.08906262557709653,
+        0.08576301760088585,
+        0.06817106167900484,
+        0.06207192163096184,
+        0.06122804354232339,
+        0.055517355312859985,
+        0.054642222480197886
+      ],
+      "recipe_unique_count": 14
+    },
+    "high-fidelity__4c_rybw": {
+      "case_id": "high-fidelity__4c_rybw",
+      "mode": "high-fidelity",
+      "lut_id": "4c_rybw",
+      "lut_rel": "luts/4c/Aliz&PLA&4色RYBW&20260211.npy",
+      "color_mode": "4-Color (RYBW)",
+      "preview_status": "[OK] Preview (600x528px, 45 colors) | Click image to place loop",
+      "generate_status": "Conversion complete (High-Fidelity)! Resolution: 600x528px",
+      "threemf_exists": true,
+      "glb_exists": true,
+      "bbox_extents_mm": [
+        60.0,
+        52.79999923706055,
+        2.0
+      ],
+      "effective_layers": 5,
+      "recipe_top10_coverage": 0.4231713742264451,
+      "recipe_top10_distribution": [
+        0.10414973701365386,
+        0.04993615102292312,
+        0.03911307966387755,
+        0.038943411053463474,
+        0.03870676799157015,
+        0.03836296580731004,
+        0.030933266656546082,
+        0.029312484930748416,
+        0.027155907593116813,
+        0.02655760249323558
+      ],
+      "recipe_unique_count": 45
+    },
+    "high-fidelity__4c_cmyw": {
+      "case_id": "high-fidelity__4c_cmyw",
+      "mode": "high-fidelity",
+      "lut_id": "4c_cmyw",
+      "lut_rel": "luts/4c/Aliz&PLA&4色CMYW&20260223.npy",
+      "color_mode": "4-Color (CMYW)",
+      "preview_status": "[OK] Preview (600x528px, 45 colors) | Click image to place loop",
+      "generate_status": "Conversion complete (High-Fidelity)! Resolution: 600x528px",
+      "threemf_exists": true,
+      "glb_exists": true,
+      "bbox_extents_mm": [
+        60.0,
+        52.79999923706055,
+        2.0
+      ],
+      "effective_layers": 5,
+      "recipe_top10_coverage": 0.46271755534322173,
+      "recipe_top10_distribution": [
+        0.12774260378807498,
+        0.07748051043461954,
+        0.06083066179687988,
+        0.038938946090031526,
+        0.030919871766250235,
+        0.029312484930748416,
+        0.027151442629684865,
+        0.024316190850396935,
+        0.023552682103533572,
+        0.022472160953001794
+      ],
+      "recipe_unique_count": 45
+    },
+    "high-fidelity__6c_rybw": {
+      "case_id": "high-fidelity__6c_rybw",
+      "mode": "high-fidelity",
+      "lut_id": "6c_rybw",
+      "lut_rel": "luts/6c/Aliz&PLA&RYBW&红-蓝-黄-绿-白-黑&20260211.npy",
+      "color_mode": "6-Color (RYBWGK 1296)",
+      "preview_status": "[OK] Preview (600x528px, 44 colors) | Click image to place loop",
+      "generate_status": "Conversion complete (High-Fidelity)! Resolution: 600x528px",
+      "threemf_exists": true,
+      "glb_exists": true,
+      "bbox_extents_mm": [
+        60.0,
+        52.79999923706055,
+        2.0
+      ],
+      "effective_layers": 5,
+      "recipe_top10_coverage": 0.43094934052490114,
+      "recipe_top10_distribution": [
+        0.12774260378807498,
+        0.03911307966387755,
+        0.038938946090031526,
+        0.03870676799157015,
+        0.038367430770741985,
+        0.034143575364117766,
+        0.030919871766250235,
+        0.029312484930748416,
+        0.027151442629684865,
+        0.026553137529803632
+      ],
+      "recipe_unique_count": 44
+    },
+    "high-fidelity__6c_cmyw": {
+      "case_id": "high-fidelity__6c_cmyw",
+      "mode": "high-fidelity",
+      "lut_id": "6c_cmyw",
+      "lut_rel": "luts/6c/Aliz&PLA&CMYW&品红-青-黄-绿-白-黑&20260223.npy",
+      "color_mode": "6-Color (CMYWGK 1296)",
+      "preview_status": "[OK] Preview (600x528px, 43 colors) | Click image to place loop",
+      "generate_status": "Conversion complete (High-Fidelity)! Resolution: 600x528px",
+      "threemf_exists": true,
+      "glb_exists": true,
+      "bbox_extents_mm": [
+        60.0,
+        52.79999923706055,
+        2.0
+      ],
+      "effective_layers": 5,
+      "recipe_top10_coverage": 0.46210139038961273,
+      "recipe_top10_distribution": [
+        0.12773367386121107,
+        0.048587732066474376,
+        0.03911307966387755,
+        0.038938946090031526,
+        0.03870676799157015,
+        0.038447800112517076,
+        0.03836296580731004,
+        0.034143575364117766,
+        0.030915406802818284,
+        0.027151442629684865
+      ],
+      "recipe_unique_count": 43
+    },
+    "high-fidelity__8c": {
+      "case_id": "high-fidelity__8c",
+      "mode": "high-fidelity",
+      "lut_id": "8c",
+      "lut_rel": "luts/8c/Aliz&PLA&8色红-黄-蓝-品红-青-白-绿-黑&20260213.npy",
+      "color_mode": "8-Color Max",
+      "preview_status": "[OK] Preview (600x528px, 47 colors) | Click image to place loop",
+      "generate_status": "Conversion complete (High-Fidelity)! Resolution: 600x528px",
+      "threemf_exists": true,
+      "glb_exists": true,
+      "bbox_extents_mm": [
+        60.0,
+        52.79999923706055,
+        2.0
+      ],
+      "effective_layers": 5,
+      "recipe_top10_coverage": 0.4181215005849102,
+      "recipe_top10_distribution": [
+        0.12774260378807498,
+        0.03911307966387755,
+        0.038938946090031526,
+        0.03870676799157015,
+        0.038367430770741985,
+        0.030919871766250235,
+        0.029312484930748416,
+        0.027151442629684865,
+        0.024316190850396935,
+        0.023552682103533572
+      ],
+      "recipe_unique_count": 47
+    },
+    "pixel__2c_bw": {
+      "case_id": "pixel__2c_bw",
+      "mode": "pixel",
+      "lut_id": "2c_bw",
+      "lut_rel": "luts/2c/Bambulab&PLA&BW&白-黑.npy",
+      "color_mode": "BW (Black & White)",
+      "preview_status": "[OK] Preview (142x125px, 16 colors) | Click image to place loop",
+      "generate_status": "Conversion complete (Pixel Art)! Resolution: 142x125px",
+      "threemf_exists": true,
+      "glb_exists": true,
+      "bbox_extents_mm": [
+        59.63999938964844,
+        52.5,
+        2.0
+      ],
+      "effective_layers": 5,
+      "recipe_top10_coverage": 0.8326699570132146,
+      "recipe_top10_distribution": [
+        0.1555484795414743,
+        0.12744785862123867,
+        0.09473013851297564,
+        0.07339595605795256,
+        0.07204266836491005,
+        0.07084859098869607,
+        0.06535583505811177,
+        0.0595446584938704,
+        0.05763413469192804,
+        0.056121636682057
+      ],
+      "recipe_unique_count": 18
+    },
+    "pixel__4c_rybw": {
+      "case_id": "pixel__4c_rybw",
+      "mode": "pixel",
+      "lut_id": "4c_rybw",
+      "lut_rel": "luts/4c/Aliz&PLA&4色RYBW&20260211.npy",
+      "color_mode": "4-Color (RYBW)",
+      "preview_status": "[OK] Preview (142x125px, 459 colors) | Click image to place loop",
+      "generate_status": "Conversion complete (Pixel Art)! Resolution: 142x125px",
+      "threemf_exists": true,
+      "glb_exists": true,
+      "bbox_extents_mm": [
+        59.63999938964844,
+        52.5,
+        2.0
+      ],
+      "effective_layers": 5,
+      "recipe_top10_coverage": 0.330122591943958,
+      "recipe_top10_distribution": [
+        0.1106511701958287,
+        0.04887756726635886,
+        0.02913548797962108,
+        0.02642891259353606,
+        0.023801942365865306,
+        0.01990128960356631,
+        0.018786817385766597,
+        0.017672345167966886,
+        0.017592740009552618,
+        0.017274319375895558
+      ],
+      "recipe_unique_count": 459
+    },
+    "pixel__4c_cmyw": {
+      "case_id": "pixel__4c_cmyw",
+      "mode": "pixel",
+      "lut_id": "4c_cmyw",
+      "lut_rel": "luts/4c/Aliz&PLA&4色CMYW&20260223.npy",
+      "color_mode": "4-Color (CMYW)",
+      "preview_status": "[OK] Preview (142x125px, 410 colors) | Click image to place loop",
+      "generate_status": "Conversion complete (Pixel Art)! Resolution: 142x125px",
+      "threemf_exists": true,
+      "glb_exists": true,
+      "bbox_extents_mm": [
+        59.63999938964844,
+        52.5,
+        2.0
+      ],
+      "effective_layers": 5,
+      "recipe_top10_coverage": 0.3681738576659767,
+      "recipe_top10_distribution": [
+        0.14050310460117815,
+        0.051186116860372555,
+        0.04784270020697341,
+        0.027304569336092977,
+        0.02141378761343735,
+        0.01711510905906703,
+        0.01639866263333864,
+        0.016159847158095843,
+        0.016159847158095843,
+        0.014090113039324947
+      ],
+      "recipe_unique_count": 423
+    },
+    "pixel__6c_rybw": {
+      "case_id": "pixel__6c_rybw",
+      "mode": "pixel",
+      "lut_id": "6c_rybw",
+      "lut_rel": "luts/6c/Aliz&PLA&RYBW&红-蓝-黄-绿-白-黑&20260211.npy",
+      "color_mode": "6-Color (RYBWGK 1296)",
+      "preview_status": "[OK] Preview (142x125px, 598 colors) | Click image to place loop",
+      "generate_status": "Conversion complete (Pixel Art)! Resolution: 142x125px",
+      "threemf_exists": true,
+      "glb_exists": true,
+      "bbox_extents_mm": [
+        59.63999938964844,
+        52.5,
+        2.0
+      ],
+      "effective_layers": 5,
+      "recipe_top10_coverage": 0.3569495303295654,
+      "recipe_top10_distribution": [
+        0.13532876930425092,
+        0.03765323992994746,
+        0.03574271612800509,
+        0.029055882821206813,
+        0.021015761821366025,
+        0.021015761821366025,
+        0.020697341187708964,
+        0.020458525712466168,
+        0.018468396752109536,
+        0.017513134851138354
+      ],
+      "recipe_unique_count": 598
+    },
+    "pixel__6c_cmyw": {
+      "case_id": "pixel__6c_cmyw",
+      "mode": "pixel",
+      "lut_id": "6c_cmyw",
+      "lut_rel": "luts/6c/Aliz&PLA&CMYW&品红-青-黄-绿-白-黑&20260223.npy",
+      "color_mode": "6-Color (CMYWGK 1296)",
+      "preview_status": "[OK] Preview (142x125px, 523 colors) | Click image to place loop",
+      "generate_status": "Conversion complete (Pixel Art)! Resolution: 142x125px",
+      "threemf_exists": true,
+      "glb_exists": true,
+      "bbox_extents_mm": [
+        59.63999938964844,
+        52.5,
+        2.0
+      ],
+      "effective_layers": 5,
+      "recipe_top10_coverage": 0.33426206018149973,
+      "recipe_top10_distribution": [
+        0.13214456296768032,
+        0.036379557395319215,
+        0.028021015761821366,
+        0.021891418563922942,
+        0.021811813405508678,
+        0.020697341187708964,
+        0.01990128960356631,
+        0.01958286896990925,
+        0.017990765801623947,
+        0.015841426524438783
+      ],
+      "recipe_unique_count": 519
+    },
+    "pixel__8c": {
+      "case_id": "pixel__8c",
+      "mode": "pixel",
+      "lut_id": "8c",
+      "lut_rel": "luts/8c/Aliz&PLA&8色红-黄-蓝-品红-青-白-绿-黑&20260213.npy",
+      "color_mode": "8-Color Max",
+      "preview_status": "[OK] Preview (142x125px, 968 colors) | Click image to place loop",
+      "generate_status": "Conversion complete (Pixel Art)! Resolution: 142x125px",
+      "threemf_exists": true,
+      "glb_exists": true,
+      "bbox_extents_mm": [
+        59.63999938964844,
+        52.5,
+        2.0
+      ],
+      "effective_layers": 5,
+      "recipe_top10_coverage": 0.28928514567743996,
+      "recipe_top10_distribution": [
+        0.11606432096799872,
+        0.0316032478904633,
+        0.02993153956376373,
+        0.023165101098551185,
+        0.02021971023722337,
+        0.01576182136602452,
+        0.015124980098710397,
+        0.012577615029453908,
+        0.012498009871039644,
+        0.012338799554211112
+      ],
+      "recipe_unique_count": 965
+    }
+  },
+  "generator_environment": {
+    "python": "3.12.13",
+    "system": "Darwin",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "opencv": "5.0.0",
+    "pillow": "12.3.0"
+  },
+  "reviewed_changes": [
+    {
+      "commit": "28d479c0bcced8e8e06cead94bcb4ba2003e43fc",
+      "reason": "Prefer achromatic LUT recipes for neutral inputs (LUM-20260618-002)."
+    },
+    {
+      "commit": "d9f29fb324fa037df233efa98f4e7b6116d1113e",
+      "reason": "Filter legacy 4-color blue/cyan outliers using the inferred raw channel instead of hard-coded channel 3."
+    }
+  ],
+  "revision_validation": {
+    "historical_replay": "Disabling only the two reviewed fixes reproduces all 12 prior material matrices exactly in the recorded environment.",
+    "geometry": "All 12 solid masks, effective layer counts and generated GLB extents are exactly unchanged.",
+    "updated_material_matrices": [
+      "high-fidelity__2c_bw",
+      "high-fidelity__4c_cmyw",
+      "high-fidelity__6c_cmyw",
+      "pixel__2c_bw",
+      "pixel__4c_cmyw",
+      "pixel__4c_rybw",
+      "pixel__6c_cmyw",
+      "pixel__6c_rybw",
+      "pixel__8c"
+    ],
+    "thresholds": "Unchanged from version 1.0.0."
+  }
+}

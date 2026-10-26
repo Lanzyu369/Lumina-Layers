@@ -1,210 +1,194 @@
-"""
-孤立像素清理模块（Isolated Pixel Cleanup）
+"""孤立像素清理模块（Isolated Pixel Cleanup）。
+Isolated pixel cleanup for the material matrix.
 
-在 LUT 颜色匹配之后、voxel matrix 构建之前，对 material_matrix 执行孤立像素检测与替换。
-孤立像素是指其 5 层材料堆叠编码与所有 8 邻域像素均不同的像素点，
-这些像素在打印时会产生不必要的换色操作。
+检测与 8 邻域全部不同的严格孤立像素（盐锡噪点），将其材料堆叠与
+RGB 替换为 8 邻域众数邻居的对应值。新版本不再依赖 LUT 标准化步骤：
+邻居像素本身就是由上游求解器（经典 LUT 匹配 / 预测匹配 / 材料档案
+求解器）写入的合法值，直接复制即可。这让函数同时适用于 LUT 模式、
+预测匹配模式和材料档案模式。
 
-核心思路：将每个像素的 5 层材料 ID 编码为单个整数（堆叠编码），
-通过 NumPy 向量化操作快速检测孤立像素，然后用邻域众数替换，
-同时同步更新 matched_rgb 以保持数据一致性。
+Replace strict 1-pixel isolates (pixels whose material stack differs from all
+8 neighbours) with the corresponding values from the 8-neighbour mode's
+neighbour pixel. The LUT-canonicalisation detour has been removed: neighbour
+pixels carry legal stacks/RGB by construction (they were written by the
+upstream solver), so direct copy is both simpler and pipeline-agnostic.
 """
 
 import numpy as np
 from collections import Counter
+from typing import Any
+
+from api.structured_logging import get_logger
+
+_log = get_logger(__name__)
 
 
-def _encode_stacks(material_matrix: np.ndarray, base: int) -> np.ndarray:
-    """
-    将 (H, W, N) 的材料矩阵编码为 (H, W) 的整数矩阵。
-
-    编码公式: layer0 * B^(N-1) + layer1 * B^(N-2) + ... + layer(N-1)
-    其中 B = base（材料 ID 的最大值 + 1）
-
-    Args:
-        material_matrix: (H, W, N) 材料堆叠矩阵
-        base: 编码基数，通常为 max(material_id) + 1
-
-    Returns:
-        (H, W) 整数矩阵，dtype 为 int64
-    """
+def _encode_stacks(material_matrix, base):
+    """将 (H, W, N) 的材料矩阵编码为 (H, W) 整数矩阵。"""
     if material_matrix.ndim != 3:
-        raise ValueError(f"material_matrix must be 3D (H, W, N), got shape={material_matrix.shape}")
-    layer_count = material_matrix.shape[2]
-    weights = np.array([base ** i for i in range(layer_count - 1, -1, -1)], dtype=np.int64)
-    encoded = np.sum(material_matrix.astype(np.int64) * weights, axis=2)
-    return encoded
+        raise ValueError(f"material_matrix must be 3D, got shape={material_matrix.shape}")
+    n = material_matrix.shape[2]
+    weights = np.array([base ** i for i in range(n - 1, -1, -1)], dtype=np.int64)
+    return np.sum(material_matrix.astype(np.int64) * weights, axis=2)
 
 
-def _detect_isolated(encoded: np.ndarray) -> np.ndarray:
-    """
-    检测孤立像素，返回 (H, W) 布尔掩码。
-
-    孤立像素 = 堆叠编码与所有 8 邻域均不同。
-    边界像素仅使用实际存在的邻居（3 个或 5 个）进行判定。
-    使用切片比较（非 np.roll），正确处理边界。
-
-    Args:
-        encoded: (H, W) 整数编码矩阵
-
-    Returns:
-        (H, W) 布尔掩码，True 表示孤立像素
-    """
+def _detect_isolated(encoded):
+    """检测孤立像素（与所有 8 邻域均不同），返回布尔掩码。"""
     H, W = encoded.shape
-
-    # 特殊情况：1x1 图像没有邻居，不判定为孤立
     if H <= 1 and W <= 1:
         return np.zeros((H, W), dtype=bool)
-
-    # neighbor_count[i,j] = 像素 (i,j) 的实际邻居数量
-    # diff_count[i,j] = 像素 (i,j) 与邻居不同的次数
-    neighbor_count = np.zeros((H, W), dtype=np.int32)
-    diff_count = np.zeros((H, W), dtype=np.int32)
-
-    # 8 个方向的偏移: (dy, dx)
-    directions = [(-1, -1), (-1, 0), (-1, 1),
-                  (0, -1),           (0, 1),
-                  (1, -1),  (1, 0),  (1, 1)]
-
-    for dy, dx in directions:
-        # 计算中心像素和邻居像素的切片范围
-        # 中心区域
-        c_y_start = max(0, -dy)
-        c_y_end = H - max(0, dy)
-        c_x_start = max(0, -dx)
-        c_x_end = W - max(0, dx)
-
-        # 邻居区域（偏移后）
-        n_y_start = c_y_start + dy
-        n_y_end = c_y_end + dy
-        n_x_start = c_x_start + dx
-        n_x_end = c_x_end + dx
-
-        center = encoded[c_y_start:c_y_end, c_x_start:c_x_end]
-        neighbor = encoded[n_y_start:n_y_end, n_x_start:n_x_end]
-
-        # 该方向上有邻居的像素，邻居计数 +1
-        neighbor_count[c_y_start:c_y_end, c_x_start:c_x_end] += 1
-        # 与邻居不同的像素，差异计数 +1
-        diff_count[c_y_start:c_y_end, c_x_start:c_x_end] += (center != neighbor).astype(np.int32)
-
-    # 孤立 = 与所有实际邻居都不同（且至少有一个邻居）
-    isolated = (diff_count == neighbor_count) & (neighbor_count > 0)
-    return isolated
+    nc = np.zeros((H, W), dtype=np.int32)
+    dc = np.zeros((H, W), dtype=np.int32)
+    for dy, dx in [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]:
+        cy0, cy1 = max(0, -dy), H - max(0, dy)
+        cx0, cx1 = max(0, -dx), W - max(0, dx)
+        c = encoded[cy0:cy1, cx0:cx1]
+        n = encoded[cy0+dy:cy1+dy, cx0+dx:cx1+dx]
+        nc[cy0:cy1, cx0:cx1] += 1
+        dc[cy0:cy1, cx0:cx1] += (c != n).astype(np.int32)
+    return (dc == nc) & (nc > 0)
 
 
-def _find_neighbor_mode(encoded: np.ndarray, isolated_mask: np.ndarray) -> np.ndarray:
-    """
-    对每个孤立像素，找到其 8 邻域中出现次数最多的堆叠编码。
-
-    统计 8 邻域中各堆叠编码出现次数，选择最多的作为替换值。
-    多个并列众数时确定性选择其中之一（Counter.most_common 的第一个）。
-
-    Args:
-        encoded: (H, W) 整数编码矩阵
-        isolated_mask: (H, W) 布尔掩码，True 表示孤立像素
-
-    Returns:
-        (H, W) 数组，孤立像素位置存储邻域众数编码，非孤立像素位置值为原编码
+def _find_neighbor_mode_with_source(encoded, isolated_mask):
+    """对每个孤立像素返回（众数编码，贡献该编码的邻居坐标）。
+    For each isolated pixel, return (mode_encoding, (ni, nj)) where (ni, nj)
+    is the location of one neighbour carrying that mode encoding. The caller
+    uses (ni, nj) to copy both the material stack and the RGB directly,
+    sidestepping the previous LUT-canonicalisation step.
     """
     H, W = encoded.shape
-    mode_map = encoded.copy()
-
-    directions = [(-1, -1), (-1, 0), (-1, 1),
-                  (0, -1),           (0, 1),
-                  (1, -1),  (1, 0),  (1, 1)]
-
-    # 获取孤立像素的坐标
-    isolated_coords = np.argwhere(isolated_mask)
-
-    for i, j in isolated_coords:
-        neighbors = []
-        for dy, dx in directions:
-            ni, nj = i + dy, j + dx
+    dirs = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
+    results: dict[tuple[int, int], tuple[int, tuple[int, int]]] = {}
+    for i, j in np.argwhere(isolated_mask):
+        i_i, j_i = int(i), int(j)
+        neighbour_entries: list[tuple[int, int, int]] = []
+        for dy, dx in dirs:
+            ni, nj = i_i + dy, j_i + dx
             if 0 <= ni < H and 0 <= nj < W:
-                neighbors.append(encoded[ni, nj])
-
-        if neighbors:
-            counter = Counter(neighbors)
-            # most_common(1) 返回出现次数最多的，确定性选择
-            mode_map[i, j] = counter.most_common(1)[0][0]
-
-    return mode_map
+                neighbour_entries.append((ni, nj, int(encoded[ni, nj])))
+        if not neighbour_entries:
+            continue
+        counts = Counter(entry[2] for entry in neighbour_entries)
+        mode_enc = counts.most_common(1)[0][0]
+        for ni, nj, enc in neighbour_entries:
+            if enc == mode_enc:
+                results[(i_i, j_i)] = (mode_enc, (ni, nj))
+                break
+    return results
 
 
 def cleanup_isolated_pixels(
-    material_matrix: np.ndarray,
-    matched_rgb: np.ndarray,
-    lut_rgb: np.ndarray,
-    ref_stacks: np.ndarray,
-) -> tuple:
-    """
-    检测并替换孤立像素。
-
-    流程：编码堆叠 → 检测孤立 → 邻域众数替换 → LUT 反查同步 RGB
-    单轮清理，不修改输入数组。
+    material_matrix,
+    matched_rgb,
+    lut_rgb=None,  # Deprecated no-op; kept for backward compatibility.
+    ref_stacks=None,  # Deprecated no-op; kept for backward compatibility.
+):
+    """孤立像素清理：与所有 8 邻域均不同的像素，直接复制邻居众数所在的
+    材料堆叠与 RGB，因此则不会凭空造调色板外的新值。
+    Replace strict 1-pixel isolates by copying the material stack and RGB
+    from the neighbour that contributed the 8-neighbour mode encoding. The
+    operation is palette-preserving by construction (we only ever reuse
+    values already present in the image) and therefore works uniformly in
+    LUT, predictive and material-archive pipelines.
 
     Args:
-        material_matrix: (H, W, N) 材料堆叠矩阵
-        matched_rgb: (H, W, 3) 匹配的 RGB 颜色
-        lut_rgb: (N, 3) LUT 颜色表
-        ref_stacks: (N, L) LUT 材料堆叠表
+        material_matrix: ``(H, W, N)`` integer material stack tensor.
+        matched_rgb: ``(H, W, 3)`` uint8 RGB image matched upstream.
+        lut_rgb: **Deprecated no-op**. Historical LUT canonicalisation
+            source; the function now copies directly from neighbour pixels,
+            which is valid because neighbour stacks/RGB are already the
+            canonical upstream output.
+        ref_stacks: **Deprecated no-op**. Historical LUT canonicalisation
+            source; retained so legacy positional callers keep working.
 
     Returns:
-        (cleaned_matched_rgb, cleaned_material_matrix) - 清理后的副本
+        ``(cleaned_rgb, cleaned_material_matrix)`` tuple with the same
+        shapes/dtypes as the inputs.
     """
-    # 创建副本，不修改输入
+    del lut_rgb, ref_stacks  # silence unused-arg; kwargs kept for API parity
+    cleaned_rgb, cleaned_mat, _cleaned_target = _cleanup_isolated_pixels(
+        material_matrix,
+        matched_rgb,
+    )
+    return cleaned_rgb, cleaned_mat
+
+
+def cleanup_isolated_pixels_with_target_map(
+    material_matrix: np.ndarray,
+    matched_rgb: np.ndarray,
+    target_rgb_map: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Clean isolated output pixels and preserve their final target ownership.
+
+    清理孤立输出像素，并同步复制来源邻居的目标色归属，使动态层数收益曲线
+    可以按最终打印矩阵重新加权。
+
+    Args:
+        material_matrix: ``(H, W, N)`` material stack tensor.
+            ``(H, W, N)`` 材料堆叠张量。
+        matched_rgb: ``(H, W, 3)`` simulated output colors.
+            ``(H, W, 3)`` 模拟输出颜色。
+        target_rgb_map: ``(H, W, 3)`` target-color ownership map.
+            ``(H, W, 3)`` 目标色归属图。
+
+    Returns:
+        Cleaned output colors, material stacks, and target-color map.
+        清理后的输出颜色、材料堆叠和目标色归属图。
+    """
+    target_map = np.asarray(target_rgb_map)
+    if target_map.shape != np.asarray(matched_rgb).shape:
+        raise ValueError(
+            "target_rgb_map must have the same shape as matched_rgb"
+        )
+    cleaned_rgb, cleaned_mat, cleaned_target = _cleanup_isolated_pixels(
+        material_matrix,
+        matched_rgb,
+        target_map,
+    )
+    if cleaned_target is None:  # pragma: no cover - guarded by target_map input
+        raise RuntimeError("cleaned target map is unavailable")
+    return cleaned_rgb, cleaned_mat, cleaned_target
+
+
+def _cleanup_isolated_pixels(
+    material_matrix: np.ndarray,
+    matched_rgb: np.ndarray,
+    target_rgb_map: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """Shared cleanup implementation with optional target ownership copying."""
+    import time
+
     cleaned_mat = material_matrix.copy()
     cleaned_rgb = matched_rgb.copy()
-
+    cleaned_target = target_rgb_map.copy() if target_rgb_map is not None else None
     H, W = material_matrix.shape[:2]
     total_pixels = H * W
 
-    # 步骤 1：编码堆叠
     base = int(material_matrix.max()) + 1 if material_matrix.size > 0 else 1
     encoded = _encode_stacks(material_matrix, base)
 
-    # 步骤 2：检测孤立像素
-    isolated_mask = _detect_isolated(encoded)
-    isolated_count = int(np.sum(isolated_mask))
+    t0 = time.time()
+    iso = _detect_isolated(encoded)
+    iso_count = int(np.sum(iso))
+    replaced = 0
+    if iso_count > 0:
+        mode_sources = _find_neighbor_mode_with_source(encoded, iso)
+        for (i, j), (mode_enc, (ni, nj)) in mode_sources.items():
+            cleaned_mat[i, j] = material_matrix[ni, nj]
+            cleaned_rgb[i, j] = matched_rgb[ni, nj]
+            if cleaned_target is not None and target_rgb_map is not None:
+                cleaned_target[i, j] = target_rgb_map[ni, nj]
+            encoded[i, j] = mode_enc
+            replaced += 1
+    ratio = (replaced / total_pixels * 100) if total_pixels > 0 else 0.0
+    extra: dict[str, Any] = {
+        "event": "isolated_pixels_cleaned",
+        "isolated_count": iso_count,
+        "merge_ratio_percent": round(ratio, 3),
+        "duration_ms": round((time.time() - t0) * 1000, 3),
+    }
+    if replaced != iso_count:
+        extra["merged_count"] = replaced
+    _log.info("Isolated pixels cleaned", extra=extra)
 
-    if isolated_count == 0:
-        print(f"[ISOLATED_CLEANUP] 未检测到孤立像素，跳过清理")
-        return cleaned_rgb, cleaned_mat
-
-    # 步骤 3：找到邻域众数
-    mode_map = _find_neighbor_mode(encoded, isolated_mask)
-
-    # 步骤 4：构建 LUT 编码 → 索引 的映射，用于反查
-    layer_count = ref_stacks.shape[1]
-    lut_encoded = _encode_stacks(ref_stacks.reshape(1, -1, layer_count), base).flatten()
-    # 编码 → LUT 索引的字典
-    encode_to_lut_idx = {}
-    for idx in range(len(lut_encoded)):
-        enc_val = int(lut_encoded[idx])
-        if enc_val not in encode_to_lut_idx:
-            encode_to_lut_idx[enc_val] = idx
-
-    # 步骤 5：替换孤立像素
-    replaced_count = 0
-    isolated_coords = np.argwhere(isolated_mask)
-
-    for i, j in isolated_coords:
-        new_enc = int(mode_map[i, j])
-        if new_enc in encode_to_lut_idx:
-            lut_idx = encode_to_lut_idx[new_enc]
-            cleaned_mat[i, j] = ref_stacks[lut_idx]
-            cleaned_rgb[i, j] = lut_rgb[lut_idx]
-            replaced_count += 1
-
-    # 输出统计信息
-    percentage = (replaced_count / total_pixels * 100) if total_pixels > 0 else 0
-    print(
-        f"[ISOLATED_CLEANUP] ✅ 清理完成: "
-        f"检测到 {isolated_count} 个孤立像素, "
-        f"成功合并 {replaced_count} 个, "
-        f"占总像素 {percentage:.2f}% "
-        f"(总像素={total_pixels})"
-    )
-
-    return cleaned_rgb, cleaned_mat
+    return cleaned_rgb, cleaned_mat, cleaned_target
