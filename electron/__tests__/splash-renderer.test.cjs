@@ -71,9 +71,17 @@ test('a slow startup retains every layer', async () => {
   assert.deepEqual(result.completed, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 });
 
-test('reduced motion still completes without replaying water waves', async () => {
+test('Windows reduced-motion settings do not turn startup waves into instant layer swaps', async () => {
   const result = await playback({ readyAt: 0, reduced: true });
-  assert.ok(result.fullAt < 100);
+  assert.deepEqual(result.completed, [4, 8, 10]);
+  assert.deepEqual(result.completedAt, [1600, 3200, 4800]);
+  assert.ok(result.finishAt >= result.fullAt + 1000);
+});
+
+test('Windows reduced-motion settings retain the active wave when the workspace becomes ready', async () => {
+  const result = await playback({ reduced: true });
+  assert.deepEqual(result.completed, [2, 5, 8, 10]);
+  assert.deepEqual(result.completedAt, [1600, 3200, 4800, 6400]);
 });
 
 test('actual checkpoints move pacing forward even when a cold-launch estimate is too slow', async () => {

@@ -9,4 +9,3 @@ p { margin: 8px 0 0; color: #64748b; font-size: 13px; line-height: 20px; }
 progress { appearance: none; width: 260px; height: 4px; border: 0; border-radius: 2px; overflow: hidden; margin-top: 32px; }
 progress::-webkit-progress-bar { background: #cbd5e1; }
 progress::-webkit-progress-value { background: #64748b; transition: width 240ms; }
-@media (prefers-reduced-motion: reduce) { progress::-webkit-progress-value { transition: none; } }

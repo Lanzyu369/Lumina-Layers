@@ -12,7 +12,6 @@ const layerCanvas = document.createElement('canvas');
 const layerContext = layerCanvas.getContext('2d');
 const progressBar = document.querySelector('progress');
 const status = document.querySelector('#status');
-const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const images = Array.from({ length: LAYERS }, (_, i) => {
   const image = new Image();
   image.src = `./splash-art/B${String(i + 1).padStart(2, '0')}.png`;
@@ -80,8 +79,8 @@ function tick() {
   if (!reveal && current < target) {
     const stride = readyStep ?? Math.max(1, Math.min(3, Math.ceil((target - current) / 2)));
     current = Math.min(target, current + stride);
-    if (reduced) base = current;
-    else reveal = { layer: current, progress: 0 };
+    // Keep the startup reveal consistent even when Windows disables system animations.
+    reveal = { layer: current, progress: 0 };
   }
   // Hold only after the actual final image is available; a failed asset cannot block startup.
   if (state.ready && base === LAYERS && finishStarted === null && imageAt(LAYERS)) finishStarted = now;
