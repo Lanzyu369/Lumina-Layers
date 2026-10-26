@@ -2,6 +2,7 @@
   "name": "lumina-electron",
   "version": "2.0.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "main": "main.cjs",
   "packageManager": "pnpm@10.33.2",
   "scripts": {
@@ -9,7 +10,7 @@
     "test": "node --test __tests__/*.test.cjs"
   },
   "devDependencies": {
-    "electron": "^35.0.0"
+    "electron": "^44.9.3"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

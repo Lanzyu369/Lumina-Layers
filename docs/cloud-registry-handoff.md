@@ -1,10 +1,10 @@
 # Lumina 云端耗材与 LUT Registry 交接文档
 
-本文记录当前云端 Registry 的已部署状态、团队连接方式、验证命令和后续维护规则。它面向开发者和测试同事，但不包含真实 token、服务器私有备份路径或密钥内容。
+本文保留 Registry 的历史兼容记录，并提供自建或已获授权服务的配置与运维参考。源码安装默认不连接在线耗材库；本文中的域名均为不可用的示例，不提供官方耗材库的真实地址或访问凭证。
 
-## 当前结论
+## 历史兼容记录
 
-截至 2026-07-09，云端 Registry 已同时承载两类公开只读 catalog：
+2026-07-09 的内部联调曾验证以下两类只读 catalog。下列数量属于历史记录，不代表当前服务的内容数量或匿名访问权限：
 
 - 耗材云库：`materials/catalog`，当前公开频道返回 `total_count=181`。
 - LUT 云库：`luts/catalog`，当前公开频道返回 `total_count=67`。
@@ -19,7 +19,7 @@
 - Lumina Materials PR #2：`Reconcile cloud LUT packages`，merge commit `1631031`。
 - Lumina Material Registry PR #2：`Normalize LUT registry package file hashes`，merge commit `ba6e642`。
 
-服务器当前已部署这轮 LUT Registry 兼容修复和 67 个 LUT 数据集。服务状态已验证为 active；后续如果需要严格审计“服务器 checkout 是否等于 merge commit”，应重新从 `origin/master` 做一次标准化发布，而不是继续依赖热更新后的工作树。
+当时的部署已应用这轮 LUT Registry 兼容修复和 67 个 LUT 数据集，服务状态验证为 active。后续部署应从已审查的提交构建和发布，单独核对服务器状态。
 
 ## 仓库职责
 
@@ -33,55 +33,55 @@
 
 ## 服务地址
 
-公开 Registry base URL：
+自备 Registry 的 base URL 示例；使用前必须替换为你自行部署或已获授权的地址：
 
 ```text
-http://154.17.28.23/api/material-registry/v1
+https://registry.example.invalid/api/material-registry/v1
 ```
 
-公开频道：
+频道示例：
 
 ```text
 official,community
 ```
 
-`official` 和 `community` 是公开只读频道，不需要 token。`team`、上传、审批、下架和恢复需要 Bearer token。真实 token 不写入公开文档、PR、issue 或日志；本地私有说明可放在 git-excluded 的 `docs/private/material-registry-developer-access.md`。
+频道的可见性和认证要求由服务部署方决定，不能仅凭 `official` 或 `community` 的名称判断是否允许匿名访问。按部署方要求配置 Bearer token，上传、审批、下架和恢复还需要相应角色权限。真实服务地址和 token 不写入公开文档、PR、issue 或日志；本地私有说明可放在 git-excluded 的 `docs/private/material-registry-developer-access.md`。
 
 ## Lumina Studio 连接配置
 
-普通只读使用者配置耗材云库：
+默认保持 `LUMINA_MATERIAL_REGISTRY_URL` 为空，不会启动云端耗材同步。需要连接自备或获授权的耗材库时，再显式配置：
 
 ```powershell
-$env:LUMINA_MATERIAL_REGISTRY_URL = "http://154.17.28.23/api/material-registry/v1"
+$env:LUMINA_MATERIAL_REGISTRY_URL = "https://registry.example.invalid/api/material-registry/v1"
 $env:LUMINA_MATERIAL_REGISTRY_CHANNELS = "official,community"
 ```
 
 配置 LUT 云库：
 
 ```powershell
-$env:LUMINA_LUT_REGISTRY_URL = "http://154.17.28.23/api/material-registry/v1"
+$env:LUMINA_LUT_REGISTRY_URL = "https://registry.example.invalid/api/material-registry/v1"
 $env:LUMINA_LUT_REGISTRY_CHANNELS = "official,community"
 ```
 
 如果没有单独配置 `LUMINA_LUT_REGISTRY_URL`，Studio 的 LUT 云库逻辑会回退使用 `LUMINA_MATERIAL_REGISTRY_URL`。为了排障清楚，团队测试时建议两组变量都显式设置。
 
-## 公开 catalog 验证
+## 自备服务的 catalog 验证
 
 PowerShell 验证耗材 catalog：
 
 ```powershell
-Invoke-RestMethod "http://154.17.28.23/api/material-registry/v1/materials/catalog?channel=official&channel=community&limit=1"
+Invoke-RestMethod "https://registry.example.invalid/api/material-registry/v1/materials/catalog?channel=official&channel=community&limit=1"
 ```
 
 PowerShell 验证 LUT catalog：
 
 ```powershell
-Invoke-RestMethod "http://154.17.28.23/api/material-registry/v1/luts/catalog?channel=official&channel=community&limit=1"
+Invoke-RestMethod "https://registry.example.invalid/api/material-registry/v1/luts/catalog?channel=official&channel=community&limit=1"
 ```
 
 注意 URL 里有 `&`，在 shell 中必须放进引号，否则后半段 query 可能被 shell 当成命令分隔符。
 
-当前期望：
+历史联调记录（自建实例的数据数量以实际部署为准）：
 
 - `materials/catalog` 返回 `channels=["official","community"]`，`total_count=181`。
 - `luts/catalog` 返回 `channels=["official","community"]`，`total_count=67`，并同时包含 `items` 和 `luts` 字段。
@@ -186,7 +186,7 @@ systemctl is-active caddy.service
 journalctl -u lumina-material-registry.service -n 100 --no-pager
 ```
 
-当前反向代理是 Caddy。不要默认按 nginx 排障；如果后续切回 nginx，再同步更新本文档。
+历史部署使用 Caddy；自建实例应按实际使用的反向代理排障。
 
 服务端代码更新后的最低检查：
 

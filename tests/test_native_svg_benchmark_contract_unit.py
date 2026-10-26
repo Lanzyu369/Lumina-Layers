@@ -12,11 +12,11 @@ import lumina_svg_core
 import shapely
 
 from scripts import benchmark_native_svg_analysis as benchmark
+from scripts import build_native_svg_supported_fixture as fixture_builder
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_PATH = REPO_ROOT / "progress" / "native-svg-fast-path-benchmark.json"
-SOURCE_PROXY_PATH = REPO_ROOT / "test_images" / "benchmark.svg"
+MANIFEST_PATH = REPO_ROOT / "progress" / "native-svg-synthetic-benchmark.json"
 SUPPORTED_FIXTURE_PATH = (
     REPO_ROOT
     / "native"
@@ -39,6 +39,41 @@ LUT_PATH = (
 )
 def _load_manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def test_supported_scale_fixture_is_reproducible_without_external_artwork() -> None:
+    payload = fixture_builder.build_fixture_payload()
+
+    assert payload == SUPPORTED_FIXTURE_PATH.read_bytes()
+    result = lumina_svg_core.analyze_svg_svg(payload.decode(), 111.0, 0.02, False)
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1024
+    assert result.visible.geometry_count == 1024
+
+
+def test_omitted_source_proxy_is_reported_as_unavailable() -> None:
+    record = benchmark._record_source_proxy_capability(None)
+
+    assert record["status"] == "unavailable"
+    assert record["source"] == "not_provided"
+    assert record["native_by_default_ready"] is False
+    assert record["reason_code"] is None
+
+
+def test_explicit_source_proxy_is_still_analyzed(tmp_path: Path) -> None:
+    source = tmp_path / "caller-provided.svg"
+    source.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
+        '<rect width="10" height="10" fill="#c02040"/></svg>',
+        encoding="utf-8",
+    )
+
+    record = benchmark._record_source_proxy_capability(source)
+
+    assert record["status"] == "supported"
+    assert record["byte_size"] == source.stat().st_size
+    assert record["native_by_default_ready"] is True
+    assert record["reason_code"] is None
 
 
 def test_windows_swap_counter_failure_is_reported_as_unavailable(monkeypatch):
@@ -75,7 +110,7 @@ def test_complete_vector_analysis_benchmark_contract() -> None:
     assert fixture["path"] == (
         "native/lumina-svg-core/benchmarks/supported_scale_fixture.svg"
     )
-    assert fixture["classification"] == "derived_supported_scale"
+    assert fixture["classification"] == "owned_synthetic_scale"
     assert fixture["byte_size"] == len(fixture_bytes)
     assert fixture["provenance"]["selection"][
         "overlap_policy"
@@ -205,16 +240,11 @@ def test_real_inputs_record_current_capability_without_identity_gates() -> None:
     manifest = _load_manifest()
 
     source_proxy = manifest["source_proxy"]
-    assert source_proxy["classification"] in {"real_proxy", "real_proxy_fallback"}
-    assert source_proxy["byte_size"] == SOURCE_PROXY_PATH.stat().st_size
-    assert source_proxy["status"] in {"supported", "unsupported"}
-    assert source_proxy["native_by_default_ready"] == (
-        source_proxy["status"] == "supported"
-    )
-    if source_proxy["status"] == "supported":
-        assert source_proxy["reason_code"] is None
-    else:
-        assert source_proxy["reason_code"]
+    assert source_proxy["classification"] == "real_proxy"
+    assert source_proxy["status"] == "unavailable"
+    assert source_proxy["source"] == "not_provided"
+    assert source_proxy["native_by_default_ready"] is False
+    assert source_proxy["reason_code"] is None
 
     real = manifest["real_r4c1"]
     assert real["classification"] == "real_r4c1"

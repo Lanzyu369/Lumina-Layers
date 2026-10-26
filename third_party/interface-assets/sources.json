@@ -1,0 +1,77 @@
+{
+  "checked_on": "2026-10-16",
+  "sources": [
+    {
+      "repo": "bambulab/BambuStudio",
+      "source_revision": "79df7ae309be398ed30c9f397c13c9911c2edc57",
+      "license_path": "LICENSE",
+      "license_blob": "dba13ed2ddf783ee8118c6a581dbf75305f816a3",
+      "license_sha256": "57c8ff33c9c0cfc3ef00e650a1cc910d7ee479a8bc509f6c9209a7c2a11399d6",
+      "retained_license": "third_party/interface-assets/AGPL-3.0.txt"
+    },
+    {
+      "repo": "OrcaSlicer/OrcaSlicer",
+      "source_revision": "109d09e0b8a25490ee0394f55769b1d735c36bba",
+      "license_path": "LICENSE.txt",
+      "license_blob": "dba13ed2ddf783ee8118c6a581dbf75305f816a3",
+      "license_sha256": "57c8ff33c9c0cfc3ef00e650a1cc910d7ee479a8bc509f6c9209a7c2a11399d6",
+      "retained_license": "third_party/interface-assets/AGPL-3.0.txt"
+    },
+    {
+      "repo": "Snapmaker/OrcaSlicer",
+      "source_revision": "89311782298309040ee28b9a183f33f0f5477b15",
+      "license_path": "LICENSE.txt",
+      "license_blob": "dba13ed2ddf783ee8118c6a581dbf75305f816a3",
+      "license_sha256": "57c8ff33c9c0cfc3ef00e650a1cc910d7ee479a8bc509f6c9209a7c2a11399d6",
+      "retained_license": "third_party/interface-assets/AGPL-3.0.txt"
+    },
+    {
+      "repo": "elegooofficial/ElegooSlicer",
+      "source_revision": "2d507e39a96ab9562b35d06b23ef5df8fe613297",
+      "license_path": "LICENSE.txt",
+      "license_blob": "dba13ed2ddf783ee8118c6a581dbf75305f816a3",
+      "license_sha256": "57c8ff33c9c0cfc3ef00e650a1cc910d7ee479a8bc509f6c9209a7c2a11399d6",
+      "retained_license": "third_party/interface-assets/AGPL-3.0.txt"
+    },
+    {
+      "repo": "ANYCUBIC-3D/AnycubicSlicerNext",
+      "source_revision": "6103ed8b511609658d00d0538cc7f0609cdb57da",
+      "license_path": "LICENSE.txt",
+      "license_blob": "dba13ed2ddf783ee8118c6a581dbf75305f816a3",
+      "license_sha256": "57c8ff33c9c0cfc3ef00e650a1cc910d7ee479a8bc509f6c9209a7c2a11399d6",
+      "retained_license": "third_party/interface-assets/AGPL-3.0.txt"
+    },
+    {
+      "repo": "FlashForge/Orca-Flashforge",
+      "source_revision": "c45cc8216c184574c36873314ae7caea67c7a1ad",
+      "license_path": "LICENSE.txt",
+      "license_blob": "dba13ed2ddf783ee8118c6a581dbf75305f816a3",
+      "license_sha256": "57c8ff33c9c0cfc3ef00e650a1cc910d7ee479a8bc509f6c9209a7c2a11399d6",
+      "retained_license": "third_party/interface-assets/AGPL-3.0.txt"
+    },
+    {
+      "repo": "prusa3d/PrusaSlicer",
+      "source_revision": "30ef59195e0f3ee6f270b185bb5f9fb5f349f81f",
+      "license_path": "LICENSE",
+      "license_blob": "70eec1ee036bb3d375349df21457cb1d149731d5",
+      "license_sha256": "282751b8c98ee9e445346eb57a992c9ecbe25ed8dd554df046777313e19b10f9",
+      "retained_license": "third_party/interface-assets/PrusaSlicer.LICENSE.txt"
+    },
+    {
+      "repo": "Ultimaker/Cura",
+      "source_revision": "5bea2f86153faed3a1c2d9081b8d6b753684678a",
+      "license_path": "LICENSE",
+      "license_blob": "07b1d92c0e9e07904bdf81c332b69a7df54bf127",
+      "license_sha256": "f361bfaa2b63576ba829b3fb608f3f8baf5c25df51ebaba8c3554a7f3108e87d",
+      "retained_license": "third_party/interface-assets/Cura.LICENSE.txt"
+    },
+    {
+      "repo": "QIDITECH/QIDIStudio",
+      "source_revision": "83be9f6c9beae62acb9047a0079e1acf6adce30d",
+      "license_path": "LICENSE",
+      "license_blob": "0ad25db4bd1d86c452db3f9602ccdbe172438f52",
+      "license_sha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
+      "retained_license": "third_party/interface-assets/QIDIStudio.LICENSE.txt"
+    }
+  ]
+}

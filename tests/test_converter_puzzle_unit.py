@@ -120,7 +120,9 @@ def _make_session() -> tuple[str, dict[str, Any]]:
     os.close(fd_img)
     fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
     os.close(fd_lut)
-    np.save(lut_path, np.zeros((1,), dtype=np.uint8))
+    # The route's native material preflight reads this LUT before scheduling.
+    # Use a valid standard-size RGB table, even though workers are stubbed.
+    np.save(lut_path, np.zeros((32, 3), dtype=np.uint8))
 
     preview_cache = {
         "matched_rgb": matched_rgb,
@@ -167,7 +169,7 @@ def _seed_puzzle_session(store: SessionStore, tmp_path: Path) -> str:
     image_path = tmp_path / "puzzle.png"
     lut_path = tmp_path / "palette.npy"
     Image.fromarray(matched_rgb).save(image_path)
-    np.save(lut_path, np.zeros((1,), dtype=np.uint8))
+    np.save(lut_path, np.zeros((32, 3), dtype=np.uint8))
 
     store.put(session_id, "image_path", str(image_path))
     store.put(session_id, "lut_path", str(lut_path))
@@ -428,8 +430,13 @@ def test_generate_puzzle_rejects_piece_missing_export_transform_metadata(
     assert "export transform metadata unavailable" in logged_error
 
 
-def test_generate_puzzle_inherits_dynamic_settings_and_maps_typed_error() -> None:
+def test_generate_puzzle_inherits_dynamic_settings_and_maps_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
     from core.material_dynamic_solver import DynamicMaterialCandidateError
+    from core import material_lut_provider, material_lut_synthesis
+
+    materials_dir = str(Path(__file__).parent / "fixtures" / "dynamic_material_materials")
+    monkeypatch.setattr(material_lut_provider, "MATERIALS_DIR", materials_dir)
+    monkeypatch.setattr(material_lut_synthesis, "MATERIALS_DIR", materials_dir)
 
     session_id, preview_cache = _make_session()
     preview_cache["quantized_image"] = np.array(preview_cache["matched_rgb"], copy=True)
@@ -438,7 +445,7 @@ def test_generate_puzzle_inherits_dynamic_settings_and_maps_typed_error() -> Non
         dtype=np.int32,
     )
     _test_store.put(session_id, "material_source", "material_archive")
-    _test_store.put(session_id, "selected_materials", ["mat-a", "mat-b"])
+    _test_store.put(session_id, "selected_materials", ["white", "blue"])
     _test_store.put(session_id, "material_layer_count", 10)
     _test_store.put(session_id, "material_dynamic_layer_count_enabled", True)
     _test_store.put(session_id, "material_min_layer_count", 6)
@@ -537,6 +544,8 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb(compe
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        material_types: dict[str, str | None],
+        native_filament_profiles: dict[str, str],
         enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         assembled_calls.append(
@@ -554,6 +563,8 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb(compe
                 ),
                 "slot_names": slot_names,
                 "overview_bytes": overview_png_bytes,
+                "material_types": material_types,
+                "native_filament_profiles": native_filament_profiles,
             }
         )
         with open(output_path, "wb") as handle:
@@ -619,6 +630,13 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb(compe
         for params in submitted_params
     )
     assert len(assembled_calls) == 1
+    assert assembled_calls[0]["material_types"] == {
+        name: "PLA BASIC" for name in ("White", "Cyan", "Magenta", "Yellow")
+    }
+    assert assembled_calls[0]["native_filament_profiles"] == {
+        name: "Bambu PLA Basic @BBL H2D 0.2 nozzle"
+        for name in ("White", "Cyan", "Magenta", "Yellow")
+    }
     assert assembled_calls[0]["piece_count"] == 6
     assert assembled_calls[0]["printer_id"] == "bambu-h2d"
     assert assembled_calls[0]["slicer"] == "BambuStudio"
@@ -1039,7 +1057,12 @@ def test_generate_puzzle_rejects_fridge_magnet_flag_even_with_empty_list() -> No
     assert "fridge magnet" in response.json()["detail"].lower()
 
 
-def test_generate_puzzle_artifact_cache_rejects_relief_height_below_manifest_depth(tmp_path: Path) -> None:
+def test_generate_puzzle_artifact_cache_rejects_relief_height_below_manifest_depth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from core import material_lut_provider, material_lut_synthesis
+
+    materials_dir = str(Path(__file__).parent / "fixtures" / "dynamic_material_materials")
+    monkeypatch.setattr(material_lut_provider, "MATERIALS_DIR", materials_dir)
+    monkeypatch.setattr(material_lut_synthesis, "MATERIALS_DIR", materials_dir)
     _test_store.clear_all()
     session_id, preview_cache = _make_session()
     preview_cache["material_matrix"] = np.zeros((80, 120, 10), dtype=np.uint8)
@@ -1052,7 +1075,7 @@ def test_generate_puzzle_artifact_cache_rejects_relief_height_below_manifest_dep
     _test_store.put(session_id, "preview_cache", cache_ref)
     _test_store.put(session_id, "lut_path", "__material_archive__")
     _test_store.put(session_id, "material_source", "material_archive")
-    _test_store.put(session_id, "selected_materials", ["mat-a", "mat-b"])
+    _test_store.put(session_id, "selected_materials", ["white", "blue"])
     _test_store.put(session_id, "material_layer_count", 5)
     _test_store.put(session_id, "material_layer_height_mm", 0.08)
     _mock_pool.submit = AsyncMock()
@@ -1112,6 +1135,8 @@ def test_generate_puzzle_resizes_heightmap_crop_to_worker_grid() -> None:
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        material_types: dict[str, str | None],
+        native_filament_profiles: dict[str, str],
         enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -1203,6 +1228,8 @@ def test_generate_puzzle_emits_hybrid_boundary_log_for_each_piece() -> None:
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        material_types: dict[str, str | None],
+        native_filament_profiles: dict[str, str],
         enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -1300,6 +1327,8 @@ def test_generate_puzzle_reuses_cached_layout_after_preview() -> None:
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        material_types: dict[str, str | None],
+        native_filament_profiles: dict[str, str],
         enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -1460,6 +1489,8 @@ def test_generate_puzzle_filters_fully_transparent_pieces_during_layout() -> Non
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        material_types: dict[str, str | None],
+        native_filament_profiles: dict[str, str],
         enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         with open(output_path, "wb") as handle:

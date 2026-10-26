@@ -1,5 +1,5 @@
-﻿import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { act, render, screen, waitFor, cleanup } from "@testing-library/react";
 import fc from "fast-check";
 import type { ReactNode } from "react";
 
@@ -141,4 +141,27 @@ describe("Startup health readiness", () => {
       { numRuns: 20 }
     );
   }, 30000);
+});
+
+// Once a workspace has opened, later health failures must not discard it.
+it("keeps the workspace mounted when a connected backend becomes unhealthy", async () => {
+  let healthStatus = "ok";
+  vi.mocked(apiClient.get).mockImplementation(async (url) => {
+    if (url !== "/health") throw new Error(`Unmocked request: ${url}`);
+    return { data: { status: healthStatus, version: "2.0", uptime_seconds: 0 } };
+  });
+  vi.useFakeTimers();
+  try {
+    await act(async () => { render(<App />); });
+    const menu = screen.getByTestId("header-menu-button");
+    expect(menu).toHaveAttribute("data-backend-status", "ok");
+    healthStatus = "unhealthy";
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.getByTestId("header-menu-button")).toBe(menu);
+    expect(menu).toHaveAttribute("data-backend-status", "fail");
+    expect(screen.queryByText("app_starting")).not.toBeInTheDocument();
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+  }
 });

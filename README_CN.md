@@ -1,508 +1,265 @@
 <p align="center">
-  <img src="logo.png" width="128" alt="Lumina Studio Logo">
+  <img src="electron/assets/icon.png" width="128" alt="Lumina Studio 标志">
 </p>
 
-<h1 align="center">Lumina Studio</h1>
+<h1 align="center">Lumina Studio 2.0</h1>
 
 <p align="center">
-  基于物理校准的多材料FDM色彩系统
-</p>
-
-<p align="center">
-  <a href="https://github.com/MOVIBALE/Lumina-Layers/stargazers">
-    <img src="https://img.shields.io/github/stars/MOVIBALE/Lumina-Layers?style=social" alt="Stars">
-  </a>
-  &nbsp;
-  <a href="https://github.com/MOVIBALE/Lumina-Layers/releases/latest">
-    <img src="https://img.shields.io/github/v/release/MOVIBALE/Lumina-Layers?label=最新版本" alt="Release">
-  </a>
-  &nbsp;
-  <a href="LICENSE">
-    <img src="https://img.shields.io/badge/协议-GPL%20v3.0-blue.svg" alt="License">
-  </a>
+  平面全彩 FDM 打印
 </p>
 
 <p align="center">
-  <a href="README.md">📖 English Version / 英文文档</a>
+  用耗材分层混色，还原画面的色彩与层次。
 </p>
 
----
-
-<h2 align="center">官方链接与社区</h2>
-
-<p align="center"><b>GitHub 仓库：</b></p>
 <p align="center">
-  <a href="https://github.com/MOVIBALE/Lumina-Layers">
-    <img src="https://img.shields.io/badge/GitHub-Lumina--Layers-181717?style=for-the-badge&logo=github" alt="GitHub">
+  <a href="README.md">English</a>
+  ·
+  <a href="#安装">源码运行</a>
+  ·
+  <a href="https://wiki.luminastudio.com.cn/">项目 Wiki</a>
+  ·
+  <a href="#用-20-可以做什么">软件功能</a>
+</p>
+
+<p align="center">
+  <a href="https://www.ifdian.net/a/MMMINNN">
+    <img height="54" src="https://img.shields.io/badge/爱发电-支持开发-946CE6?style=for-the-badge" alt="在爱发电支持 Lumina Studio">
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://www.patreon.com/c/lumina_studio">
+    <img height="54" src="https://img.shields.io/badge/Patreon-support%20Lumina-FF424D?style=for-the-badge&amp;logo=patreon&amp;logoColor=white" alt="在 Patreon 支持 Lumina Studio">
   </a>
 </p>
 
-<p align="center"><b>关注我们的 Bilibili：</b></p>
 <p align="center">
-  <a href="https://b23.tv/CCxxiKC">
-    <img src="https://img.shields.io/badge/Bilibili-Lumina%20Studio-00A1D6?style=for-the-badge&logo=bilibili&logoColor=white" alt="Bilibili">
-  </a>
+  <a href="https://www.luminastudio.com.cn/sponsors"><img src="https://img.shields.io/badge/查看-赞助与支持名单-7C3AED?style=flat-square" alt="查看赞助与支持名单"></a>
 </p>
 
-<p align="center"><b>加入 QQ 交流群：</b></p>
 <p align="center">
-  <a href="https://qm.qq.com/q/vocxOMTnj2">
-    <img src="https://img.shields.io/badge/QQ%20群-1065401448-EB1923?style=for-the-badge&logo=tencentqq&logoColor=white" alt="QQ Group">
-  </a>
+  <a href="https://www.luminastudio.com.cn/"><img src="https://img.shields.io/badge/官网-Lumina%20Studio-0EA5E9?style=flat-square" alt="官方网站"></a>
+  <a href="https://wiki.luminastudio.com.cn/"><img src="https://img.shields.io/badge/Wiki-使用指南-2563EB?style=flat-square" alt="项目 Wiki"></a>
+  <a href="https://b23.tv/CCxxiKC"><img src="https://img.shields.io/badge/Bilibili-Lumina%20Studio-00A1D6?style=flat-square&amp;logo=bilibili&amp;logoColor=white" alt="Bilibili"></a>
+  <a href="https://www.youtube.com/channel/UCyP2Euw9whk1j-MT8d652Kw"><img src="https://img.shields.io/badge/YouTube-Lumina%20Studio-FF0000?style=flat-square&amp;logo=youtube&amp;logoColor=white" alt="YouTube"></a>
+  <a href="https://qm.qq.com/q/vocxOMTnj2"><img src="https://img.shields.io/badge/QQ-交流群-12B7F5?style=flat-square" alt="QQ 交流群"></a>
+  <a href="https://discord.gg/57whRe3C8G"><img src="https://img.shields.io/badge/Discord-社区-5865F2?style=flat-square&amp;logo=discord&amp;logoColor=white" alt="Discord"></a>
 </p>
 
----
+<p align="center">
+  <a href="https://x.com/wLuF53gzlV98666"><img src="https://img.shields.io/badge/X-@wLuF53gzlV98666-000000?style=flat-square&amp;logo=x&amp;logoColor=white" alt="X"></a>
+  <a href="https://www.tiktok.com/@dy6kueohw5ii"><img src="https://img.shields.io/badge/TikTok-@dy6kueohw5ii-000000?style=flat-square&amp;logo=tiktok&amp;logoColor=white" alt="TikTok"></a>
+  <a href="https://bsky.app/profile/wluf53gzlv98666.bsky.social"><img src="https://img.shields.io/badge/Bluesky-Lumina%20Studio-0285FF?style=flat-square&amp;logo=bluesky&amp;logoColor=white" alt="Bluesky"></a>
+  <a href="https://mastodon.social/@wluf53gzlv98666"><img src="https://img.shields.io/badge/Mastodon-Lumina%20Studio-6364FF?style=flat-square&amp;logo=mastodon&amp;logoColor=white" alt="Mastodon"></a>
+</p>
 
-## 项目状态
+## 让打印效果更接近原图
 
-**当前版本**: v1.6.3  
-**协议**: GNU GPL v3.0  
-**性质**: 非营利性独立实现，开源社区项目
+Lumina Studio 2.0 通过多种耗材分层混色，让平面全彩 FDM 打印的色彩和明暗层次尽可能接近原图。
 
----
+它根据耗材的校准数据匹配分层配方。你可以对照原图查看预览，哪里颜色不满意就改哪里，也可以调整渐变和局部区域的配方，再导出 3MF 交给切片软件打印。
 
-## 灵感来源与技术声明
+你可以直接使用已有的 LUT 预设，也可以拍摄梯度色卡，建立自己的材料档案，再组合耗材、调整色层和层高。
 
-### 致谢先驱者
+## 用户实际打印效果
 
-本项目的存在离不开以下技术的公开与分享：
+<p align="center">
+  <img src="assets/readme/showcase-artwork-range.png" width="1000" alt="8 色和 18 色用户打印作品，包括装裱画和熊猫照片">
+</p>
 
-- **HueForge** - 首个将光学混色引入FDM社区的工具，证明了透明耗材分层叠加可通过光传递实现丰富色彩。
-- **AutoForge** - 自动化色彩匹配工作流，让多材料彩色打印变得易用。
-- **CMYK印刷理论** - 经典减色模型在3D打印中的逐层透射改编。
+<p align="center"><sub>从 8 色到 18 色的画面表现。标签沿用用户作品中的颜色标注。</sub></p>
 
-### 技术区别与定位
+<p align="center">
+  <img src="assets/readme/showcase-color-counts.png" width="1000" alt="8 色和 12 色用户打印作品，包括立式人物摆件和装裱作品">
+</p>
 
-传统工具依赖理论计算（如TD1/TD0透射距离值），但这些参数极易因各种客观原因差异而失效。
+<p align="center"><sub>不同耗材组合下的色彩、明暗和细节表现。</sub></p>
 
-**Lumina Studio采用"穷举法"路线**：
-1. 打印1024色物理校准板（4色×5层的全排列）
-2. 拍照扫描，提取真实RGB数据
-3. 建立"实际测试查找表"（LUT）
-4. 用最近邻算法匹配（类似于Bambulab的钥匙扣生成器的匹配）
+## 可以怎么玩
 
+照片、插画、像素图都可以用来创作。可以做装裱画、摆件、钥匙扣、冰箱贴，也可以结合结构设计，做些更特别的东西。
 
-### 现有技术（Prior Art）声明
+<p align="center">
+  <img src="assets/readme/showcase-creative-objects.png" width="1000" alt="像素角色平面作品和可活动的立体像素玩偶">
+</p>
 
-FDM多层叠色的核心原理已于2022-2023年间由HueForge等软件公开披露，属于**现有技术**（Prior Art）。
-Hueforge作者也明确，此类技术原理已经进入公共领域，在绝大部分国家和地区，如果专利局认真审核，原理性专利一定会被驳回。
-先驱者选择保持开放以帮助社区发展，因此该技术通常**不具备专利性**。
+<p align="center"><sub>配合结构设计和装配，像素角色还能做成可活动的玩偶。</sub></p>
 
-Lumina Studio一直将以开源，互助，非盈利性的定位保持下去，欢迎各位监督。
-- 本项目为开源非盈利项目，不会进行任何捆绑销售，并且不会将任何功能做成付费功能。
-- 如果你或你的企业希望支持项目持续发展，欢迎联系。赞助的产品等将仅用于软件的开发和测试优化。
-- 赞助仅代表对项目的支持，赞助行为不构成任何商业绑定。
-- 拒绝任何影响技术决策或开源协议的赞助合作。
-Lumina Studio并未参考任何申请的专利内容，因为该类专利大部分情况下只有说明书，并且短期内不会公开技术代码，盲目参考这些专利，会影响自身开发的思路。
-**特别感谢HueForge团队对开源的支持和理解！**
+<p align="center">
+  <img src="assets/readme/showcase-form-factors.png" width="1000" alt="折扇、洞洞板、拼图和夜光手机壳等创意应用">
+</p>
 
----
+<p align="center"><sub>折扇、洞洞板、拼图玩法和夜光颜色。</sub></p>
 
-## 生态开放
+<p align="center">
+  <img src="assets/readme/showcase-large-format.png" width="1000" alt="两件大尺寸彩色 FDM 猫咪作品">
+</p>
 
-### 关于 .npy 校准文件
+<p align="center"><sub>打印机放不下一整张，就分块打印，再拼起来或装框。</sub></p>
 
-所有校准预设（`.npy`文件）**完全免费开放**，遵循以下原则：
+这些都是 Lumina 用户打印出来的作品，色数沿用作者标注。照片已获许可用于项目展示，画面中原始作品的版权仍归各自创作者。来源见 [图片记录](assets/readme/SOURCES.md)。
 
-- **拒绝供应商锁定**：过去、现在、未来，我们**永远不会**强迫用户使用特定耗材品牌，也不会要求制造商生产符合要求的特定的"兼容耗材"。这违背开源精神。
-  
-- **社区共建**：欢迎所有用户、组织、耗材厂商提交PR，同步校准预设。你的打印机数据可以帮助他人。
-- 无需任何其他测试工具，只需要你有3D打印机和手机。
+## 用 2.0 可以做什么
 
-**数据开放 = 技术民主化**
+| 你想做的事 | 在 Lumina 里怎么做 |
+| --- | --- |
+| 还原画面的颜色和细节 | 选择适合画面的高保真、像素或 SVG 矢量模式。可以裁剪、处理透明背景，也可以先把位图转成矢量图，再对照原图看配色和三维效果。 |
+| 改掉不满意的颜色 | 点选颜色或圈出局部，替换颜色、改区域配方、调整渐变。改错了可以撤销；没做完就存成 JSON 工程或 PNG 分享卡，下次导入继续。 |
+| 用上自己的耗材 | 打印梯度色卡、拍照取色，在材料库里整理档案和调色板。固定色卡和现有 LUT 预设也都保留。 |
+| 复用常用的转换设置 | 把来源类型、耗材组合、尺寸、结构、叠层和涂层参数存成预设，下次直接套用。图片和局部编辑仍保存到 JSON 工程或 PNG 分享卡中。 |
+| 把图做成钥匙扣、冰箱贴等物件 | 添加挂孔、磁铁孔、描边或透明涂层，选择单面、双面、浮雕或掐丝等做法；能一起使用的选项取决于当前模式。 |
+| 在已有模型上放图案 | 打开模型覆面，选一个平面，把图案移到合适的位置，调整大小和角度后生成。 |
+| 做拼图或大尺寸作品 | 使用拼图、大画幅分块或批量转换，按打印机板面安排，再导出工程。 |
+| 试试别的创作工具 | 从创意工坊安装独立模块。目前有官方拼豆工作室，做完可以送回 Lumina 继续配色和打印。社区模块需要 Electron 桌面客户端，受信官方模块也能在浏览器中运行。 |
 
----
+界面有中文、英文和明暗主题。导出前可以看预览，打印前再去切片软件里确认耗材、工艺和摆放。
 
-## 许可协议
+## 先做一张试试
 
-### 核心协议：GNU GPL v3.0
+1. 准备好实际使用的耗材档案。可以导入已有档案，也可以打印梯度色卡、拍照后在「耗材提取」中提取并保存。
+2. 将「来源类型」设为「耗材档案」，选好这次要用的耗材组合，设置色层数和层高。
+3. 导入图片或 SVG，设好成品尺寸和建模方式，生成预览。
+4. 对照原图改颜色、配方和结构。要加透明涂层，就开启涂层并设置厚度；没做完可以先存 JSON 工程或 PNG 分享卡。
+5. 在设置里选好切片器、机型、喷嘴和板型，生成并下载 3MF 或分盘 ZIP。
+6. 用切片软件打开，核对耗材槽位、温度、层高、擦料塔和板面范围，再切片打印。
 
-- ✅ **开源与自由**：你可以自由地运行、研究、修改和分发本软件。
-- 🔄 **强传染性 (Copyleft)**：如果你修改了本软件并分发，你必须在 GPL v3.0 协议下公开你的源代码。
-- ❌ **禁止闭源**：严禁将本软件或其衍生作品闭源打包销售。
+第一次用，可以先用几种已经建档的耗材打个小样，看看颜色和层次的还原效果。以后换配色，可以重新组合已有档案；新增耗材时，再为它单独建档。
 
-### 商业使用与"小摊主"支持声明
+## 为什么需要校准
 
-**致独立创作者、小摊主及小微企业**：
+同样标着红色的两卷耗材，叠起来的效果可能差不少。层高、顺序、批次、打印参数和拍摄光线也都会影响结果，所以 Lumina 要先记录实际打出来的颜色，再用这些数据配色。
 
-GPL 协议允许并鼓励商业使用。我们特别支持大家通过劳动获取收益，你无需获得额外授权即可：
-- 使用本软件生成模型
-- 销售物理打印成品（如挂件、浮雕等）
-- 在夜市、市集或个人网店销售
+### 固定色卡与 LUT
 
-**去摆摊吧，靠手艺赚钱是你的权利！**
+<p align="center">
+  <img src="assets/readme/calibration-1x.png" width="520" alt="固定校准色卡的实物照片">
+</p>
 
----
+固定色卡的用法很直接：生成色卡，打印，拍照取色，存成 LUT。可以选择 2、4、6、8 色等预设组合。换了耗材组合或重要参数，通常要重新做一次色卡。
 
-Lumina Studio v1.5.4整合三大模块，统一界面：
+LUT 可以是 `.npy`、带键 `.json`、`.npz` 或 `.msgpack`。挑预设时也看一下耗材顺序、层高和色彩模式，和自己准备打印的条件对上。
 
-### 📐 模块1：校准板生成器
+拍摄和取色步骤可以参考 [项目 Wiki](https://wiki.luminastudio.com.cn/)。
 
-生成精密校准板，物理测试耗材混色。
+### 梯度色卡与材料档案
 
-- **多种色彩系统**：
-  - **4色（CMYW/RYBW）**：1024色（4种基础耗材×5层）
-  - **6色**：1296色（6种基础耗材×3层）- 扩展色域
-  - **8色**：2738色（8种基础耗材×2页）- 专业级广色域
-  - **黑白模式**：32级灰度，用于单色打印
-- **智能校准工作流**：
-  - 4色：单板，全排列
-  - 6色：单板，扩展调色板
-  - 8色：双页系统，带合并功能
-- **面朝下优化**：观察面直接接触打印平台，表面光滑
-- **实心背板**：自动生成不透明背板，确保色彩一致性和结构强度
-- **防重叠几何**：对体素应用0.02mm微缩，防止切片器线宽冲突
+<p align="center">
+  <img src="assets/readme/calibration-2x.png" width="720" alt="Lumina Studio 2.0 使用的梯度校准色卡">
+</p>
 
-### 🎨 模块2：颜色提取器
+梯度色卡先记录单种材料的数据，再把不同材料组合起来计算混色。这样换调色板时，就不用为每一种组合重新打印一整套固定色卡。材料档案可以在材料库里整理、导入和导出，选好后直接拿来配色。
 
-数字化你打印机的物理现实。
-
-- **计算机视觉**：透视变换+镜头畸变校正自动对齐网格
-- **多模式支持**：
-  - 4色（CMYW/RYBW）：标准校准
-  - 6色：扩展调色板提取
-  - 8色：双页提取，支持手动修正
-  - 黑白模式：灰度校准
-- **模式感知对齐**：角点标记遵循所选模式的正确颜色序列
-- **数字孪生**：从打印品提取RGB值，生成.npy LUT文件
-- **人工干预**：交互式探针工具，手动验证/修正特定色块读数
-- **8色工作流**：提取第1页 → 手动修正 → 提取第2页 → 合并为单个LUT
-
-### 💎 模块3：图像转换器
-
-使用校准数据将图像转换为可打印3D模型。
-
-- **KD树色彩匹配**：将图像像素映射到LUT中的实际可打印颜色
-- **实时3D预览**：交互式WebGL预览，显示真实匹配色彩，可旋转/缩放
-- **拼图模式**：支持 2D/3D 拼图叠线预览、规则/不规则拼图风格与 classic/easy-cut 连接器、按块尺寸/网格/目标片数控制布局，并将所有分块导出为一个组合 3MF 包
-- **钥匙扣挂孔生成器**：自动添加功能性挂孔
-  - 智能颜色检测（匹配附近模型颜色）
-  - 可定制尺寸（宽度、长度、孔径）
-  - 矩形底座+半圆顶部+空心孔洞几何
-  - 2D预览显示挂孔位置
-- **结构选项**：双面（钥匙扣）或单面（浮雕）模式
-- **模式互斥保护**：拼图模式会自动禁用大画幅切片和挂件环，避免导出出非法组合；背面刻号仍为预留能力，当前版本尚未写入导出几何
-- **智能背景移除**：自动透明度检测，可调容差
-- **正确的3MF命名**：对象按颜色命名（如"Cyan"、"Magenta"），而非"geometry_0"，便于切片器识别
-
----
-
-## 更新日志
-
-完整版本历史请查看 [CHANGELOG_CN.md](CHANGELOG_CN.md) / [CHANGELOG.md](CHANGELOG.md)。
-
----
-
-## 开发路线图
-
-### 阶段1：基础架构 ✅ 完成
-
-**目标**：像素艺术与照片级图形
-
-- ✅ 固定CMYW/RYBW混色
-- ✅ 两种建模模式（高保真/像素艺术）
-- ✅ 高保真模式RLE网格生成
-- ✅ 超高精度（10 px/mm，0.1mm/像素）
-- ✅ K-Means色彩量化架构
-- ✅ 实心背板生成
-- ✅ 闭环校准系统
-- ✅ 实时3D预览，真实色彩
-- ✅ 钥匙扣挂孔生成器
-- ✅ 动态语言切换（中英文）
-
-### 阶段2：漫画模式（单色） ✅ 完成
-
-**目标**：漫画面板、墨画、高对比度插图
-
-- ✅ 基于厚度的灰度黑白分层（类lithophane逻辑）
-- ✅ 模拟网点（Ben-Day dots）
-
-### 阶段3：动态调色板引擎 ✅ 完成
-
-**目标**：自适应色彩系统
-
-- ✅ 动态调色板支持（4/6/8色自动选择）
-- ✅ 智能色彩聚类算法
-- ✅ 自适应抖动算法
-- ✅ 感知色差优化
-
-### 阶段4：扩展色彩模式 ✅ 完成
-
-**目标**：专业多材料打印
-
-- ✅ 6色扩展模式（1296色）
-- ✅ 8色专业模式（2738色）
-- ✅ 黑白灰度模式（32级）
-- 🚧 拼豆（Perler bead）模式（进行中）
-
----
+拍照和计算都会有误差，颜色还需要靠实物确认。做大作品之前先打个小样，看看颜色和厚度是否合适。更多成品见 [用户作品集](https://www.bilibili.com/opus/1211359624212512770)。
 
 ## 安装
 
-### 克隆仓库
+下面是从源码运行的方法，可以在浏览器里用，也可以打开 Electron 桌面窗口。
+
+### 环境要求
+
+| 依赖 | 版本 |
+| --- | --- |
+| Python | 普通 64 位 CPython，推荐 **3.12**；支持 3.12–3.14。 |
+| Node.js | 推荐 **24.x**；22.x 需至少为 22.13。 |
+| pnpm | **10.33.2**，与仓库 `packageManager` 保持一致。 |
+
+先装好 [Python](https://www.python.org/downloads/)、[Node.js](https://nodejs.org/en/download) 和 [pnpm](https://pnpm.io/installation)。用 Corepack 管理 pnpm 的话，先启用它并选好上面的版本；有些 Node.js 安装不带 Corepack，需要单独准备。
+
+完整应用的预编译依赖覆盖以下平台：
+
+| 系统 | 架构与最低要求 |
+| --- | --- |
+| Windows | x64 |
+| Linux | x86-64，glibc 2.28 或更高 |
+| macOS | Apple Silicon（arm64），macOS 14 或更高 |
+
+Intel Mac、Linux ARM、Alpine/musl、Windows ARM、32 位和 free-threaded Python 目前还没有适配整套应用的预编译包，暂时不能按这套步骤直接安装。上表说明的是安装支持范围，各平台和机型的实机打印仍要分别验证。
+
+### 1. 获取 2.0 源码
 
 ```bash
-git clone https://github.com/lumina-layer-studio/Lumina-studio.git
-cd Lumina-studio
+git clone https://github.com/lumina-layer-studio/Lumina-Layers.git
+cd Lumina-Layers
 ```
 
-### 选项 1：本地安装
-
-先准备普通 64 位 **CPython 3.12～3.14**、**Node.js 24.x**（或不低于 22.13 的
-22.x）和 **pnpm 10.33.2**。使用项目固定的 pnpm 版本，安装方式见
-[Node 官方下载](https://nodejs.org/en/download)和 [pnpm 指南](https://pnpm.io/installation)。
-Lumina 保持私有，克隆前需具备仓库访问权限。
-
-整套应用必需依赖的预编译交集为 Windows x64、glibc 2.28+ 的 Linux x86-64、
-macOS 14+ 的 Apple Silicon。Intel Mac、Linux ARM、Alpine/musl、Windows ARM、
-32 位及自由线程 Python 不在这套 wheel 覆盖范围；不能用 SVG 单库范围代替本体范围。
-
-先创建新环境：
+### 2. 创建并激活 Python 环境
 
 ```bash
 python -m venv .venv
 ```
 
-按当前 shell 激活：
+macOS/Linux 若只有 `python3`，用 `python3 -m venv .venv` 创建。然后按当前终端激活：
 
-| Shell | 命令 |
+| 终端 | 命令 |
 | --- | --- |
-| Windows PowerShell | `.venv\Scripts\Activate.ps1` |
+| Windows PowerShell | `.\.venv\Scripts\Activate.ps1` |
 | macOS / Linux | `source .venv/bin/activate` |
 
-然后在仓库根目录安装并启动：
+### 3. 安装依赖并启动
+
+在已激活环境的仓库根目录执行：
 
 ```bash
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-# 开发/测试另装：python -m pip install -r requirements-dev.txt
-# 可选 PostgreSQL 后端另装：python -m pip install -r requirements-postgres.txt
 pnpm --dir frontend install --frozen-lockfile
 python start_all.py
 ```
 
-启动器会同时启动后端和前端。在浏览器中打开启动器显示的前端地址
-（默认：`http://localhost:4174`）。
+打开启动器显示的前端地址，默认是 `http://localhost:4174`；后端默认使用 `8000` 端口。退出时按启动器提示操作。
 
-SVG 分析固定使用独立项目发布的 `lumina-svg-core==0.3.4`（AGPLv3）。
-`requirements-native-svg.txt` 会从 PyPI 选择匹配 Python 3.12～3.14、
-系统和架构的安装包。Linux x86-64 要求 glibc 2.28+；Mac 的 Python 3.12/3.13
-包要求 macOS 12+，3.14 要求 macOS 14+。Lumina 要求匹配的原生预编译包；
-不支持的平台会在安装时明确失败，不会要求本地编译。
-详见[发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.4/docs/DISTRIBUTIONS.md)。
+源码运行默认不连接在线耗材库，本地耗材档案可离线使用。连接自建或已获授权的云库时，需要另外配置服务地址，见 [Registry 连接说明](docs/material-registry-connection.md)。
 
-本分支需要 `fatcat-metadata==0.1.1`，requirements 会自动从
-[PyPI 正式发行](https://pypi.org/project/fatcat-metadata/0.1.1/)
-选择匹配 wheel，公开的 Production writer 保持不变。普通源码运行无需额外克隆 SDK、准备本地 wheelhouse、
-应用源码补丁或编译 C++。维护者构建所用的来源提交由
-`scripts/fatcat_packaging_contract.py` 统一维护。曾安装同为 0.1.1 的审核候选包时，
-请用 `python -m pip install --force-reinstall --no-cache-dir --only-binary=:all: fatcat-metadata==0.1.1`
-替换为正式 PyPI 构建。详见
-[原生依赖安装指南](docs/desktop-electron.md#2-原生-3mf-依赖)。
+依赖中已固定 `lumina-svg-core==0.3.4` 和 `fatcat-metadata==0.1.2`，SVG、3MF 和材料元数据用到的原生包会一起装好，不用再克隆 SDK、找本地 wheelhouse、检出内部提交或编译 C++。如果安装时找不到匹配的 wheel，先核对上面的 Python、系统和架构要求。SVG 包的范围见 [发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.4/docs/DISTRIBUTIONS.md)；完整应用仍按上表安装，排障可看 [原生依赖与桌面运行指南](docs/desktop-electron.md)。
 
-Prusa 导出使用 **PrusaSlicer 3.0.0-alpha12** 预览版格式。在设置中选择 PrusaSlicer
-及对应设备；内置配置使用原生默认 0.4 mm 喷嘴和板型。多色模型需要 MMU 或足够的
-打印头。单件、材料档案、批量、拼图及用户模板图像已在原生软件中实际打开和切片。
-工艺、来源保留规则及限制见 [3MF 元数据导出说明](docs/3mf-metadata-export.md)。
+### 可选：桌面窗口
 
-### 选项 2：桌面客户端（Electron）
+完成上面的 Python 和前端依赖安装后执行：
 
 ```bash
-# 必需：桌面外壳会自动启动 Python 后端，但仍需先安装其依赖。
-python3 -m pip install -r requirements.txt
-
-# bash/zsh
-cd frontend && pnpm install && cd ..
-cd electron && pnpm install && cd ..
-cd electron && pnpm start
+pnpm --dir electron install --frozen-lockfile
+pnpm --dir electron start
 ```
 
-```powershell
-# Windows PowerShell 5.1 不支持"&&"，请逐行执行
-python -m pip install -r requirements.txt
-cd frontend; pnpm install; cd ..
-cd electron; pnpm install; cd ..
-cd electron; pnpm start
-```
+桌面窗口会启动自己的 Python 后端和前端，不需要同时运行 `start_all.py`。退出确认后会停止本次启动的进程。
 
-桌面外壳会自动拉起 Python 后端和 Vite 开发服务器，无需单独先跑启动器，但仍必须先安装上面的 Python 依赖。开发与故障排查见[桌面客户端（Electron）指南](docs/desktop-electron.md)。
+## 打印前，再看一眼
 
-### 配置
+- 确认耗材和层高与档案、预设一致。透明涂层会跟随模型的材料类型；混合材质或类型不明时默认使用 PLA。打印前在切片软件中核对实际透明耗材、温度和兼容性提示。
+- 模型覆面目前不能与大画幅分块一起导出；需要先选择其中一种方式。
+- 大模型的擦料塔或 brim 如果放不下，软件会保留警告，允许你先下载工程。拿到文件后还要在切片软件里调好位置，不能直接当作已经切片成功。
+- Prusa 导出目前对应 **PrusaSlicer 3.0.0-alpha12** 的预览格式，其他版本请先确认兼容性。细节见 [3MF 导出说明](docs/3mf-metadata-export.md)。
+- 保存 JSON 工程或 PNG 分享卡后可以继续编辑，重要工程也记得留好原图、预设和材料档案。
 
-Lumina Studio 会从 `.env.local` 读取本地环境变量覆盖项，请以 `.env.example` 为模板，不要把任何真实密钥提交到 GitHub。
+## 文档、社区与支持
 
-问题反馈会先保存在本机 `feedback/` 目录，再上传到 Lumina Studio 官方问题收集服务；客户端不保存任何邮箱或服务器凭据。可用 `LUMINA_FEEDBACK_SERVER_URL` 指向其他反馈服务，设为 `off` 则只保存在本机。反馈包含哪些内容见 [Bug Report Reproducibility](docs/bug-report-reproducibility.md)。
+使用教程和更新记录见 [项目 Wiki](https://wiki.luminastudio.com.cn/)；打印参数可参考 [多品牌切片设置教程](https://wiki.luminastudio.com.cn/zh/docs/tutorials/slicer-guide)。
 
----
+有作品想晒、有问题想聊，欢迎来上面的 QQ 或 Discord。遇到软件问题，尽量用内置反馈功能，把怎么操作的、用的版本和相关素材一起带上，这样我们更容易复现。报告会先存到本地 `feedback/`，再提交官方反馈服务；如果只想留在本机，在 `.env.local` 中设置 `LUMINA_FEEDBACK_SERVER_URL=off` 即可。配置模板见 [.env.example](.env.example)，报告内容见 [问题反馈说明](docs/bug-report-reproducibility.md)。
 
-## 使用指南
+Lumina Studio 是非营利性开源社区项目。如果这个工具帮到了你，也愿意支持我们继续做下去，可以通过爱发电或 Patreon 赞助。支持会用在开发、测试、文档、打包和社区维护上。支持名单和品牌适配情况见 [赞助与支持页面](https://www.luminastudio.com.cn/sponsors)。
 
-### 快速启动
+## 许可与商业使用
 
-```bash
-python start_all.py
-```
+2.0 自有软件代码采用 **AGPL-3.0-only**；独立模块、依赖和资源保留各自条款。完整说明见 [LICENSE](LICENSE)、[LICENSING.md](LICENSING.md) 和 [第三方资源声明](THIRD_PARTY_NOTICES.md)。
 
-安装好上述依赖后，此命令会启动后端和前端。在浏览器中打开启动器显示的前端地址。
+个人和企业均可免费使用软件。生成模型和实体打印件允许商业销售；公开分享或销售时按 [生成物条款](OUTPUT-TERMS.md) 标注 Lumina-Layers。指定闭源集成、生成物署名豁免可联系开发组另行取得书面授权，范围见 [商业授权说明](COMMERCIAL-LICENSE.md)。
 
----
+## 参与开发
 
-### 步骤1：生成校准板
+愿意帮忙的话，代码、测试结果、预设、材料校准数据、翻译和文档都欢迎。想改代码可以先看 [CONTEXT-MAP.md](CONTEXT-MAP.md)：后端用 Python + FastAPI，前端用 React + TypeScript，桌面窗口由 Electron 承载。跑测试要另外安装 `requirements-dev.txt`；普通本地使用不需要数据库，PostgreSQL 是可选项。
 
-1. 打开**📐 校准板**标签
-2. 选择色彩模式：
-   - **4色 RYBW**（红/黄/蓝/白）- 传统三原色，1024色
-   - **4色 CMYW**（青/品红/黄/白）- 印刷色彩，色域更广，1024色
-   - **6色** - 扩展调色板，1296色（需要6耗材打印机）
-   - **8色** - 专业模式，2738色（双页工作流）
-   - **黑白** - 灰度模式，32级
-3. 调整色块大小（默认：5mm）和间隙（默认：0.84mm）
-4. 点击**生成**并下载`.3mf`文件
-   - 4色/6色/黑白：单个文件
-   - 8色：两个文件（第1页和第2页）
+- [更新记录](CHANGELOG_CN.md)
+- [开发与测试说明](docs/test_operations.md)
+- [创意工坊模块开发](docs/workshop-module-development.md) 与 [公开 SDK](https://github.com/lumina-layer-studio/Lumina-Workshop-SDK)
 
-**打印设置**：
-
-- 层高：0.08mm（色彩层），背板可用0.2mm
-- 耗材槽位必须匹配所选模式
-
-| 模式 | 总颜色数 | 耗材槽位 |
-|------|---------|---------|
-| 4色 RYBW | 1024 | 白色、红色、黄色、蓝色 |
-| 4色 CMYW | 1024 | 白色、青色、品红、黄色 |
-| 6色 | 1296 | 白色、青色、品红、黄色、柠檬绿、黑色 |
-| 8色 | 2738 | 白色、青色、品红、黄色、柠檬绿、黑色（+2种） |
-| 黑白 | 32 | 黑色、白色 |
-
----
-
-### 步骤2：提取颜色
-
-1. 打印校准板并拍照（面朝上，均匀光照）
-2. 打开**🎨 颜色提取器**标签
-3. 选择与校准板相同的色彩模式
-4. 上传照片
-5. 按顺序点击四个角落色块（颜色因模式而异）：
-
-| 模式 | 左上角 | 右上角 | 右下角 | 左下角 |
-|------|--------|--------|--------|--------|
-| 4色 RYBW | ⬜ 白色 | 红色 | 蓝色 | 黄色 |
-| 4色 CMYW | ⬜ 白色 | 青色 | 品红 | 黄色 |
-| 6色 | ⬜ 白色 | 青色 | 品红 | 黄色 |
-| 8色 | ⬜ 白色 | 黄色 | 黑色 | 青色 |
-| 黑白 | ⬜ 白色 | 黑色 | 黑色 | 黑色 |
-
-6. 根据需要调整校正滑块（自动白平衡默认关闭、暗角、畸变）
-7. 点击**提取**
-8. **仅8色模式**：
-   - 提取第1页后，可以点击任意色块手动修正
-   - 用相同流程提取第2页
-   - 点击**合并8色页面**组合为最终LUT
-9. 下载`.npy` LUT文件
-
----
-
-### 步骤3：转换图像
-
-1. 打开**💎 图像转换器**标签
-2. 上传`.npy` LUT文件
-3. 上传图像
-4. 选择与LUT相同的色彩模式
-5. **选择建模模式**：
-   - **高保真（平滑）** - 推荐用于标志、照片、肖像、插画
-   - **像素艺术（方块）** - 推荐用于像素艺术和8bit风格图形
-6. 调整**色彩细节**滑块（8-256色，默认64）：
-   - 8-32色：极简风格，快速生成
-   - 64-128色：平衡细节与速度（推荐）
-   - 128-256色：照片级细节，生成较慢
-7. 点击**👁️ 生成预览**查看结果
-8. （可选）添加钥匙扣挂孔：
-   - 点击2D预览图上希望挂孔连接的位置
-   - 勾选"启用挂孔"复选框
-   - 调整挂孔宽度、长度和孔径
-   - 挂孔颜色将自动从附近像素检测
-9. 选择结构类型：
-   - **双面** - 用于钥匙扣（两面都有图像）
-   - **单面** - 用于浮雕/lithophane风格
-10. 点击**🚀 生成3MF**
-11. 在交互式3D查看器中预览
-12. 下载`.3mf`文件
-
----
-
-## 技术栈
-
-| 组件 | 技术 |
-|------|------|
-| 核心逻辑 | Python（NumPy用于体素操作） |
-| 几何引擎 | Trimesh（网格生成与导出） |
-| 后端API | FastAPI |
-| UI框架 | React + TypeScript |
-| 视觉栈 | OpenCV（透视与颜色提取） |
-| 色彩匹配 | SciPy KDTree |
-| 3D预览 | Three.js + React Three Fiber（GLB格式） |
-
----
-
-## 工作原理
-
-### 为什么需要校准
-
-理论TD值假设：
-- 耗材染料浓度完全一致
-- 所有材料喷嘴温度相同
-- 层间粘合均匀
-
-实际上，这些因素在以下情况下存在显著差异：
-- 不同耗材品牌/批次
-- 打印机型号和喷嘴设计
-- 环境湿度和温度
-
-基于LUT的方法通过测量实际打印颜色并在RGB空间中通过最近邻搜索匹配来解决这个问题。
-
----
-
-## 协议
-
-本项目采用 **GNU GPL v3.0** 开源协议。
-
-- ✅ **开源与自由**：你可以自由地运行、研究、修改和分发本软件。
-- 🔄 **强传染性 (Copyleft)**：如果你修改了本软件并分发，你必须在 GPL v3.0 协议下公开你的源代码。
-- ❌ **禁止闭源**：严禁将本软件或其衍生作品闭源打包销售。
-
-**商业使用与"小摊主"支持声明**：本项目支持并鼓励个人创作者、小摊主及小微企业通过劳动获取收益。你可以自由地使用本软件生成模型并销售物理打印成品，无需额外授权。
-
----
-
-## 致谢
-
-特别感谢：
-
-- **HueForge** - 在FDM打印中开创光学混色技术
-- **AutoForge** - 让多色工作流民主化
-- **[ChromaStack](https://github.com/borealis-zhe/ChromaStack)** - 专为FDM打印机设计的多色层叠模型生成器，利用透光叠加算法实现照片级光影效果
-- **[LD_ColorLayering](https://github.com/Luban-Daddy/LD_ColorLayering)** - H5网页应用，将图片转换为多色3D模型（3MF格式），支持多种颜色模式和层叠堆叠
-- **[ChromaPrint3D](https://github.com/Neroued/ChromaPrint3D)** - 将图片转换为多色3MF模型，支持Bambu Studio预设自动写入和耗材槽位自动匹配
-- **3D打印社区** - 持续创新
-
----
+感谢 HueForge、AutoForge，以及 [ChromaStack](https://github.com/borealis-zhe/ChromaStack)、[LD_ColorLayering](https://github.com/Luban-Daddy/LD_ColorLayering)、[ChromaPrint3D](https://github.com/Neroued/ChromaPrint3D) 等项目与 3D 打印社区的分享和贡献。项目使用的第三方代码、数据和资源以各自许可及署名声明为准。
 
 ## 贡献者
 
 <p align="center">
-  <a href="https://github.com/MOVIBALE/Lumina-Layers/graphs/contributors">
-    <img
-      src="https://contrib.rocks/image?repo=MOVIBALE/Lumina-Layers"
-      alt="贡献者头像墙"
-    />
+  <a href="https://github.com/lumina-layer-studio/Lumina-Layers/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=lumina-layer-studio/Lumina-Layers" alt="Lumina-Layers GitHub 贡献者头像墙">
   </a>
 </p>
 
-<p align="center">
-  由所有贡献者精心制作！<br />
-   贡献墙支持：<a href="https://contrib.rocks">contrib.rocks</a> 
-</p>
-
----
-
-⭐ 如果觉得有用，请给个Star！
+<p align="center">感谢所有提交代码、测试结果、预设、翻译和文档的贡献者。</p>

@@ -17,6 +17,7 @@ from scipy.optimize import linprog
 from scipy.spatial import ConvexHull
 
 from core.layered_meshing import build_labeled_surface_mesh
+from core.errors import NativeMaterialSelectionError
 from core.mesh_export_parts import (
     MeshExportPartRange,
     get_mesh_export_part_ranges,
@@ -665,6 +666,20 @@ def _metadata_values(parent: ET.Element) -> dict[str, str]:
     return {child.attrib["key"]: child.attrib["value"] for child in parent.findall("metadata")}
 
 
+def _assert_bambu_default_flush_volumes(
+    project: dict, *, material_count: int, toolhead_count: int,
+) -> None:
+    """Check native 140 mm³ load/unload volumes and each toolhead's matrix."""
+    assert project["flush_volumes_vector"] == ["140"] * (material_count * 2)
+    matrices = np.asarray(project["flush_volumes_matrix"], dtype=float).reshape(
+        toolhead_count, material_count, material_count,
+    )
+    expected = np.full((material_count, material_count), 280.0)
+    np.fill_diagonal(expected, 0.0)
+    for matrix in matrices:
+        np.testing.assert_array_equal(matrix, expected)
+
+
 def _add_rybw_meshes(writer: BambuStudio3MFWriter) -> None:
     for offset, (name, rgb) in enumerate(
         [
@@ -1034,12 +1049,12 @@ def test_flashstudio_selected_build_plate_updates_plate_sidecar(
     }
     _write_registry_fixture(
         registry_root,
-        source_profile_name="Flashforge Guider 3 Ultra 0.4 Nozzle",
+        source_profile_name="Flashforge Creator 5 Pro 0.4 nozzle",
         slicer_id="FlashStudio",
-        device_profile_id="FlashStudio:flashforge:flashforge-guider-3-ultra:0.4",
-        machine_profile_id="FlashStudio:flashforge:flashforge-guider-3-ultra",
+        device_profile_id="FlashStudio:flashforge:flashforge-creator-5-pro:0.4",
+        machine_profile_id="FlashStudio:flashforge:flashforge-creator-5-pro",
         source_version="02.01.01.00",
-        display_name="Flashforge Guider 3 Ultra",
+        display_name="Flashforge Creator 5 Pro",
         brand="Flashforge",
         vendor_key="Flashforge",
         build_plates=[plate],
@@ -1049,10 +1064,10 @@ def test_flashstudio_selected_build_plate_updates_plate_sidecar(
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
     writer = BambuStudio3MFWriter(
         str(tmp_path / "flash-selected-plate.3mf"),
-        printer_id="flashforge-guider-3-ultra",
+        printer_id="flashforge-creator-5-pro",
         slicer="FlashStudio",
         nozzle_size="0.4",
-        device_profile_id="FlashStudio:flashforge:flashforge-guider-3-ultra:0.4",
+        device_profile_id="FlashStudio:flashforge:flashforge-creator-5-pro:0.4",
         build_plate_id=plate["id"],
     )
 
@@ -1060,8 +1075,18 @@ def test_flashstudio_selected_build_plate_updates_plate_sidecar(
     writer.export()
     with zipfile.ZipFile(writer.output_path) as package:
         sidecar = json.loads(package.read("Metadata/plate_1.json"))
+        project = json.loads(package.read("Metadata/project_settings.config"))
+        model_text = package.read("3D/3dmodel.model").decode("utf-8")
+        entries = set(package.namelist())
 
     assert sidecar["bed_type"] == "hot_plate"
+    assert project["curr_bed_type"] == "High Temp Plate"
+    assert project["printer_settings_id"] == "Flashforge Creator 5 Pro 0.4 nozzle"
+    assert project["print_settings_id"] == "Lumina"
+    assert '<metadata name="Application">BambuStudio-02.06.00.51</metadata>' in model_text
+    assert "Metadata/filament_sequence.json" not in entries
+    assert "Metadata/cut_information.xml" not in entries
+    assert "Metadata/custom_gcode_per_layer.xml" not in entries
 
 
 def _export_two_mesh_registry_3mf(
@@ -1297,8 +1322,7 @@ def test_load_export_project_settings_uses_exact_fatcat_native_project(
     assert template["version"] == "02.08.02.61"
     assert "curr_bed_type" not in template
     assert template["filament_settings_id"] == ["Bambu PLA Basic @BBL H2D"]
-    assert "flush_volumes_matrix" not in template
-    assert "flush_volumes_vector" not in template
+    _assert_bambu_default_flush_volumes(template, material_count=1, toolhead_count=2)
     assert "type" not in template
     assert "instantiation" not in template
     assert "inherits" not in template
@@ -1444,7 +1468,7 @@ def test_load_export_project_settings_uses_exact_native_quarter_nozzle_source(
     )
 
     assert template["printer_settings_id"] == "Anycubic Kobra X 0.25 nozzle"
-    assert template["print_settings_id"] == "0.10mm Standard @Anycubic Kobra X 0.25 nozzle"
+    assert template["print_settings_id"] == "Lumina"
     assert template["default_print_profile"] == "0.10mm Standard @Anycubic Kobra X 0.25 nozzle"
     assert template["default_filament_profile"] == [
         "Anycubic PLA @Anycubic Kobra X 0.25 nozzle",
@@ -1759,9 +1783,7 @@ def test_flash_studio_creator_5_pro_uses_exact_native_profile_with_lumina_proces
     assert project["default_print_profile"] == (
         "0.20mm Standard @Flashforge AD5M Pro 0.4 Nozzle"
     )
-    assert project["print_settings_id"] == (
-        "0.20mm Standard @Flashforge AD5M Pro 0.4 Nozzle"
-    )
+    assert project["print_settings_id"] == "Lumina"
     assert project["auxiliary_fan"] == "1"
     assert project["bed_mesh_max"] == "99999,99999"
     assert project["bed_mesh_min"] == "-99999,-99999"
@@ -1817,7 +1839,7 @@ def test_flash_studio_creator_5_pro_uses_exact_native_profile_with_lumina_proces
         ),
     ],
 )
-def test_bundled_flash_studio_profiles_keep_machine_specific_nozzle_metadata(
+def test_bundled_flash_studio_guider_rejects_unprintable_native_material(
     tmp_path,
     printer_id,
     nozzle_size,
@@ -1839,25 +1861,27 @@ def test_bundled_flash_studio_profiles_keep_machine_specific_nozzle_metadata(
         device_profile_id=device_profile_id,
     )
     _add_rybw_meshes(writer)
-    writer.export()
+    from utils.fatcat_metadata import native_source_for_target
 
-    with zipfile.ZipFile(output_path, "r") as archive:
-        entries = set(archive.namelist())
-        project = json.loads(
-            archive.read("Metadata/project_settings.config").decode("utf-8")
-        )
-        model_text = archive.read("3D/3dmodel.model").decode("utf-8")
+    source = native_source_for_target(writer._select_metadata_target())
+    assert source["source_machine_profile_name"] == printer_settings_id
+    assert source["hardware_settings"]["printer_model"] == printer_model
+    assert source["hardware_settings"]["nozzle_diameter"] == nozzle_diameter
+    assert source["nozzle_uid"] == f"nozzle:{printer_variant}mm"
+    assert source["default_print_profile_name"] == default_print_profile
 
-    assert project["printer_model"] == printer_model
-    assert project["printer_settings_id"] == printer_settings_id
-    assert project["printer_variant"] == printer_variant
-    assert project["nozzle_diameter"] == nozzle_diameter
-    assert project["default_print_profile"] == default_print_profile
-    assert project["print_settings_id"] == default_print_profile
-    assert '<metadata name="Application">BambuStudio-02.06.00.51</metadata>' in model_text
-    assert "Metadata/filament_sequence.json" not in entries
-    assert "Metadata/cut_information.xml" not in entries
-    assert "Metadata/custom_gcode_per_layer.xml" not in entries
+    # The native G3U PLA profiles declare no compatible plate. Hardware being
+    # available must not allow writing an unprintable project or changing PLA.
+    with pytest.raises(NativeMaterialSelectionError) as error:
+        writer.export()
+    selection = error.value.material_selection
+    assert selection["machine_uid"] == "flashforge:guider-3-ultra"
+    assert selection["nozzle_uid"] == "nozzle:0.4mm"
+    assert selection["ready"] is False
+    assert selection["build_plates"] == []
+    assert selection["issues"][0]["code"] == "native_material_plate_incompatible"
+    assert selection["issues"][0]["material_type"] == "PLA"
+    assert not output_path.exists()
 
 
 def test_writer_base_template_uses_native_device_profile(tmp_path, monkeypatch) -> None:
@@ -2071,8 +2095,7 @@ def test_bambu_registry_x2d_uses_exact_native_project(tmp_path, monkeypatch) -> 
     assert template["filament_settings_id"] == [
         "Bambu PLA Basic @BBL X2D 0.4 nozzle"
     ]
-    assert "flush_volumes_matrix" not in template
-    assert "flush_volumes_vector" not in template
+    _assert_bambu_default_flush_volumes(template, material_count=1, toolhead_count=2)
     assert "type" not in template
     assert "instantiation" not in template
     assert "inherits" not in template
@@ -2122,8 +2145,7 @@ def test_bambu_a2_registry_uses_exact_native_project(tmp_path, monkeypatch) -> N
     assert template["different_settings_to_system"] == [
         "enable_prime_tower;filament_colour;filament_multi_colour"
     ]
-    assert "flush_volumes_matrix" not in template
-    assert "flush_volumes_vector" not in template
+    _assert_bambu_default_flush_volumes(template, material_count=1, toolhead_count=1)
     assert template["layer_height"] == "0.2"
     assert "type" not in template
     assert "instantiation" not in template
@@ -2200,8 +2222,7 @@ def test_bambu_registry_project_settings_can_trim_native_template_filament_slots
             assert len(settings[key]) == 4
         else:
             assert key not in settings
-    assert "flush_volumes_matrix" not in settings
-    assert "flush_volumes_vector" not in settings
+    _assert_bambu_default_flush_volumes(settings, material_count=4, toolhead_count=2)
     assert len(settings["different_settings_to_system"]) == 1
     assert settings["version"] == "02.08.02.61"
     assert settings["prime_tower_width"] == "35"
@@ -2231,8 +2252,7 @@ def test_bambu_h2c_extends_beyond_native_slots_without_group_vector_bloat() -> N
     # The H2C native profile exposes two nozzle variants and four drying-time values.
     assert len(settings["filament_extruder_variant"]) == 20
     assert len(settings["filament_dev_ams_drying_time"]) == 40
-    assert "flush_volumes_matrix" not in settings
-    assert "flush_volumes_vector" not in settings
+    _assert_bambu_default_flush_volumes(settings, material_count=10, toolhead_count=2)
 
 
 class TestAnycubicWriterMetadata:
@@ -2767,7 +2787,8 @@ class TestAnycubicWriterMetadata:
         assert project_settings["filament_settings_id"] == ["Snapmaker PLA Basic @U1"] * 4
         assert project_settings["default_print_profile"] == "0.08 Extra Fine @Snapmaker U1 (0.4 nozzle)"
         assert project_settings["default_filament_profile"] == ["Snapmaker PLA Basic @U1"] * 4
-        assert project_settings["inherits_group"] == ["0.08 Extra Fine @Snapmaker U1 (0.4 nozzle)"] + [""] * 5
+        assert project_settings["print_settings_id"] == "Lumina"
+        assert project_settings["inherits_group"] == [""] * 6
         assert project_settings["version"] == "2.2.4"
         assert project_settings["textured_plate_temp"] == ["65"] * 4
         assert project_settings["nozzle_temperature"] == ["220"] * 4
@@ -2816,7 +2837,8 @@ class TestAnycubicWriterMetadata:
         assert build_item.attrib["printable"] == "1"
         assert build_item.attrib["auto_drop"] == "1"
         assert project_settings["filament_settings_id"] == ["Snapmaker PLA Basic @U1"] * 8
-        assert project_settings["inherits_group"] == ["0.08 Extra Fine @Snapmaker U1 (0.4 nozzle)"] + [""] * 9
+        assert project_settings["print_settings_id"] == "Lumina"
+        assert project_settings["inherits_group"] == [""] * 10
         assert project_settings["default_filament_profile"] == ["Snapmaker PLA Basic @U1"] * 8
         assert project_settings["version"] == "2.2.4"
         assert project_settings["textured_plate_temp"] == ["65"] * 8
@@ -2948,9 +2970,19 @@ class TestAnycubicWriterMetadata:
     ) -> None:
         if slicer == "OrcaSlicer":
             # This exact nozzle source has compatible materials, but no PLA.
-            with pytest.raises(ValueError, match="no available native filament profile"):
+            with pytest.raises(
+                NativeMaterialSelectionError,
+                match="no available native filament profile",
+            ) as error:
                 load_export_project_settings("snapmaker-u1", slicer=slicer,
                     nozzle_size=nozzle_size, device_profile_id=device_profile_id)
+            selection = error.value.material_selection
+            assert selection["ready"] is False
+            assert selection["machine_uid"] == "snapmaker:u1"
+            assert selection["nozzle_uid"] == "nozzle:0.6mm"
+            assert selection["issues"][0]["code"] == "native_material_unavailable"
+            assert selection["materials"][0]["material_type"] == "PLA"
+            assert selection["materials"][0]["profiles"] == []
             return
         project = load_export_project_settings("snapmaker-u1", slicer=slicer,
             nozzle_size=nozzle_size, device_profile_id=device_profile_id)
