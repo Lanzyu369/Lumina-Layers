@@ -75,6 +75,8 @@ interface Scene3DProps {
   modelUrl?: string;
   /** Keep only the static frame while the primary tab indicator is moving. */
   deferInitialization?: boolean;
+  /** Pause rendering behind modal pages without discarding the scene state. */
+  suspended?: boolean;
 }
 
 export interface PreviewModelBounds {
@@ -784,7 +786,7 @@ function BatchPreviewModels({
   );
 }
 
-function Scene3D({ modelUrl, deferInitialization = false }: Scene3DProps) {
+function Scene3D({ modelUrl, deferInitialization = false, suspended = false }: Scene3DProps) {
   const { t } = useI18n();
   const themeColors = useThemeConfig();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1502,7 +1504,7 @@ function Scene3D({ modelUrl, deferInitialization = false }: Scene3DProps) {
 
       {!deferInitialization && <Canvas
         style={visibleSnapshot ? { visibility: "hidden" } : undefined}
-        frameloop="demand"
+        frameloop={suspended ? "never" : "demand"}
         camera={{
           position: [...DEFAULT_CAMERA_POSITION],
           fov: 45,

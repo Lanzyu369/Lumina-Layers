@@ -19,19 +19,19 @@ vi.mock('../integrations/electron', () => ({
 
 describe('desktop menu bridge', () => {
   beforeEach(() => { bridge.setApplicationMenuState.mockClear(); });
-  it('uses the latest workflow handler and disables unavailable or unmounted actions', () => {
+  it.each(['export', 'about'] as const)('dispatches the current %s handler only while registered', command => {
     const first = vi.fn();
     const second = vi.fn();
     const { rerender, unmount } = renderHook(({ handler, enabled }) =>
-      useApplicationMenuCommand('export', handler, enabled),
+      useApplicationMenuCommand(command, handler, enabled),
     { initialProps: { handler: first, enabled: true } });
-    act(() => bridge.listeners.forEach(listener => listener('export')));
+    act(() => bridge.listeners.forEach(listener => listener(command)));
     expect(first).toHaveBeenCalledTimes(1);
     rerender({ handler: second, enabled: true });
-    act(() => bridge.listeners.forEach(listener => listener('export')));
+    act(() => bridge.listeners.forEach(listener => listener(command)));
     expect(second).toHaveBeenCalledTimes(1);
     rerender({ handler: second, enabled: false });
-    act(() => bridge.listeners.forEach(listener => listener('export')));
+    act(() => bridge.listeners.forEach(listener => listener(command)));
     expect(second).toHaveBeenCalledTimes(1);
     expect(bridge.setApplicationMenuState).toHaveBeenLastCalledWith({ commands: {} });
     unmount();

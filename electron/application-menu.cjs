@@ -1,6 +1,6 @@
 const { stepInterfaceScalePreference } = require('./interface-scale.cjs');
 
-const COMMANDS = ['settings', 'import', 'export', 'report'];
+const COMMANDS = ['about', 'settings', 'import', 'export', 'report'];
 const DEFAULT_LABELS = {
   about: 'About Lumina Studio', settings: 'Settings…', services: 'Services',
   hide: 'Hide Lumina Studio', hideOthers: 'Hide Others', unhide: 'Show All', quit: 'Quit Lumina Studio',
@@ -42,7 +42,11 @@ function createApplicationMenu({ Menu, app, getWindow, getScale, openDocs, onErr
     });
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: 'Lumina Studio', submenu: [
-        { label: labels.about, click: () => app.showAboutPanel() }, command('settings', 'Command+,'), separator,
+        { label: labels.about, click: () => {
+          const window = getWindow();
+          if (enabled.about && window && !window.isDestroyed()) window.webContents.send('application-menu-command', 'about');
+          else app.showAboutPanel();
+        } }, command('settings', 'Command+,'), separator,
         role('services'), separator, role('hide'), role('hideOthers'), role('unhide'), separator, role('quit'),
       ] },
       { label: labels.file, submenu: [command('import', 'Command+O'), command('export', 'Command+Shift+S'), separator, role('close')] },

@@ -100,6 +100,16 @@ describe("HeaderMenu", () => {
     await expectClosed();
   });
 
+  it("opens About instead of a top-level Credits row and closes the menu", async () => {
+    const onOpenAbout = vi.fn();
+    renderMenu({ onOpenAbout });
+    fireEvent.click(trigger());
+    expect(screen.queryByRole("button", { name: "致谢" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关于 Lumina Studio" }));
+    expect(onOpenAbout).toHaveBeenCalledTimes(1);
+    await expectClosed();
+  });
+
   it("closes on Escape and returns focus to the trigger", async () => {
     renderMenu();
     fireEvent.click(trigger());

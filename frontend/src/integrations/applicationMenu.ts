@@ -3,7 +3,7 @@ import { useSettingsStore } from '../stores/settingsStore';
 import { translations } from '../i18n/translations';
 import { electronAPI } from './electron';
 
-type MenuCommand = 'settings' | 'import' | 'export' | 'report';
+type MenuCommand = 'about' | 'settings' | 'import' | 'export' | 'report';
 const handlers = new Map<MenuCommand, () => void>();
 
 function publishCommands(): void {
