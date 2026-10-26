@@ -940,7 +940,7 @@ describe("fetchLutList", () => {
 });
 
 describe("fetchLutCatalog", () => {
-  it("keeps the grouped legacy catalog and hides retired predictive DB options", async () => {
+  it("returns the grouped legacy catalog while hiding unavailable native sources", async () => {
     const mockData = {
       legacy_groups: [
         {
@@ -971,7 +971,7 @@ describe("fetchLutCatalog", () => {
     expect(mockGet).toHaveBeenCalledWith("/lut/catalog");
     expect(result).toEqual({ ...mockData, native_brand_groups: [] });
     expect(result.legacy_groups[0].items[0].name).toBe("lut-a");
-    expect(mockData.native_brand_groups[0].db_options[0].name).toBe("DB-A");
+    expect(result.native_brand_groups).toEqual([]);
   });
 });
 

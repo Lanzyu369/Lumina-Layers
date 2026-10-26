@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
-import { captureConversionParameters } from "../stores/conversionPreferences";
+import { captureConversionParameters, presetMatchesCurrent } from "../stores/conversionPreferences";
 
 export function bindConversionPreferences(): () => void {
   let adjustingImageSize = false;
@@ -10,7 +10,7 @@ export function bindConversionPreferences(): () => void {
     const current = useConverterStore.getState();
     const last = useSettingsStore.getState().conversionPreferences.last;
     if (!last || current.conversionParameterContext !== "defaults" || current.imageFile) return;
-    if (JSON.stringify(last) === JSON.stringify(captureConversionParameters(current))) return;
+    if (presetMatchesCurrent(last, captureConversionParameters(current))) return;
     current.restoreConversionDefaults();
   };
   restore();
@@ -25,7 +25,9 @@ export function bindConversionPreferences(): () => void {
     if (current.imageFile && !current.workshopSource && current.aspectRatio && current.aspectRatio !== previous.aspectRatio) {
       adjustingImageSize = true;
       try {
-        if (current.preferredSizeAxis === "height") current.setTargetHeightMm(current.target_height_mm);
+        // The image loader restores the remembered long edge. Anchor that
+        // edge so rounding the short edge cannot grow the saved size.
+        if (current.aspectRatio < 1) current.setTargetHeightMm(current.target_height_mm);
         else current.setTargetWidthMm(current.target_width_mm);
       } finally { adjustingImageSize = false; }
     }

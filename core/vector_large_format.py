@@ -45,6 +45,20 @@ _UNSUPPORTED_LARGE_FORMAT_ATTRS = {
 }
 
 
+def resolve_large_format_axis_count(total_mm: float, tile_mm: float) -> int:
+    """Count positive-width tiles without a floating-point phantom remainder."""
+    if not math.isfinite(total_mm) or total_mm <= 0:
+        raise ValueError("total_mm must be finite and positive")
+    if not math.isfinite(tile_mm) or tile_mm <= 0:
+        raise ValueError("tile_mm must be finite and positive")
+    count = max(1, math.ceil(total_mm / tile_mm))
+    # Division can round above an integer even when multiplication reaches the
+    # exact endpoint. Keep genuinely positive remainders, however small.
+    if count > 1 and (count - 1) * tile_mm >= total_mm:
+        count -= 1
+    return count
+
+
 def resolve_large_format_grid_shape(
     *,
     total_width_mm: float,
@@ -66,8 +80,8 @@ def resolve_large_format_grid_shape(
     for name, value in dimensions:
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"{name} must be finite and positive")
-    cols = max(1, math.ceil(total_width_mm / tile_width_mm))
-    rows = max(1, math.ceil(total_height_mm / tile_height_mm))
+    cols = resolve_large_format_axis_count(total_width_mm, tile_width_mm)
+    rows = resolve_large_format_axis_count(total_height_mm, tile_height_mm)
     return cols, rows
 
 

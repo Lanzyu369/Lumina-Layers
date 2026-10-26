@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import CalibrationPanel from "../components/CalibrationPanel";
 import { CalibrationColorMode } from "../api/types";
@@ -59,6 +59,18 @@ beforeEach(() => {
 });
 
 describe("CalibrationPanel", () => {
+  it("keeps a precise backing-thickness editor and unit below the external heading", () => {
+    render(<CalibrationPanel />);
+    const slider = screen.getByTestId("backing-thickness-slider");
+    const control = slider.parentElement!.parentElement!;
+    const input = within(control).getByRole("textbox");
+    expect(input).toHaveValue("1.20");
+    expect(within(control).getByText("mm")).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "1.48" } });
+    fireEvent.blur(input);
+    expect(useCalibrationStore.getState().backing_thickness).toBe(1.48);
+  });
+
   it("renders legacy LUT controls and no gradient-card workflow selector", () => {
     render(<CalibrationPanel />);
 

@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { BatchResponse } from "../../api/types";
 import { StructureMode, ColorMode, ModelingMode } from "../../api/types";
-import { readyMaterialSelection } from "../../__tests__/fixtures/nativeMaterialSelection";
 
 const notificationMocks = vi.hoisted(() => ({
   showBrowserCompletionNotification: vi.fn(),
@@ -9,8 +8,8 @@ const notificationMocks = vi.hoisted(() => ({
 
 // Mock the converter API module
 vi.mock("../../api/converter", () => ({
+  fetchExportMaterialSelection: vi.fn(async () => (await import("../../__tests__/fixtures/exportMaterialSelection")).READY_EXPORT_MATERIAL_SELECTION),
   convertBatch: vi.fn(),
-  fetchExportMaterialSelection: vi.fn(),
   // Provide stubs for other imports used by converterStore
   fetchLutList: vi.fn(),
   convertPreview: vi.fn(),
@@ -28,7 +27,7 @@ vi.mock("../../utils/browserNotifications", () => ({
 
 import { useConverterStore } from "../converter";
 import { useSettingsStore } from "../settingsStore";
-import { convertBatch, fetchExportMaterialSelection } from "../../api/converter";
+import { convertBatch } from "../../api/converter";
 
 const mockedConvertBatch = vi.mocked(convertBatch);
 
@@ -120,7 +119,6 @@ describe("submitBatch API 调用和状态管理", () => {
   beforeEach(() => {
     resetStore();
     vi.clearAllMocks();
-    vi.mocked(fetchExportMaterialSelection).mockResolvedValue(readyMaterialSelection());
   });
 
   // Requirement 4.1: submitBatch 调用 API 并传入正确的文件和参数
@@ -161,6 +159,7 @@ describe("submitBatch API 调用和状态管理", () => {
       auto_dynamic_range: false,
       separate_backing: false,
       backing_output: "same_project",
+      native_filament_profiles: undefined,
       enable_relief: false,
       enable_coating: false,
       coating_height_mm: 0.08,
@@ -168,7 +167,6 @@ describe("submitBatch API 调用和状态管理", () => {
       slicer: "OrcaSlicer",
       nozzle_size: "0.2",
       device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
-      native_filament_profiles: undefined,
       build_plate_id: "textured-pei-plate",
       enable_base_layer_height_modifier: false,
       enable_wipe_tower_auto_placement: false,

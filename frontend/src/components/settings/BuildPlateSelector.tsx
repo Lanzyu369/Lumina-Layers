@@ -64,10 +64,10 @@ export default function BuildPlateSelector({
   return (
     <div
       data-testid="build-plate-selector"
-      className="border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+      className="border-t panel-divider pt-5"
     >
       <div className="mb-3">
-        <h4 className="flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-slate-50">
+        <h4 className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
           <span>{label}</span>
           <HelpDot title={label} description={hint} />
         </h4>
@@ -96,13 +96,13 @@ export default function BuildPlateSelector({
               }}
               onClick={() => onSelect(plate.id)}
               onKeyDown={(event) => handleKeyDown(event, index)}
-              className={`group relative flex w-[clamp(11rem,14vw,20rem)] shrink-0 snap-start flex-col rounded-2xl p-3 text-left transition focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-950 ${
+              className={`group relative flex w-[clamp(11rem,14vw,20rem)] shrink-0 snap-start flex-col rounded-[10px] border border-transparent p-3 text-left transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)] ${
                 selected
-                  ? "bg-blue-500/10 ring-2 ring-inset ring-blue-500 dark:bg-blue-400/10 dark:ring-blue-400"
-                  : "bg-slate-100/70 ring-1 ring-inset ring-slate-200/80 hover:bg-slate-100 dark:bg-slate-800/55 dark:ring-slate-700/80 dark:hover:bg-slate-800"
+                  ? "bg-blue-500/10 text-blue-700 dark:bg-blue-400/10 dark:text-blue-200"
+                  : "bg-[var(--surface-well)] hover:border-[var(--surface-card-outline)] hover:bg-[var(--nav-chip-hover)]"
               }`}
             >
-              <span className="flex h-[clamp(6rem,10vw,14rem)] w-full items-center justify-center overflow-hidden rounded-xl bg-[var(--surface-panel-strong)] px-2 py-2 dark:bg-slate-950/35">
+              <span className="flex h-[clamp(6rem,10vw,14rem)] w-full items-center justify-center overflow-hidden rounded-lg px-2 py-2">
                 <img
                   src={plate.image_url}
                   alt=""

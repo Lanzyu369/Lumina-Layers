@@ -15,12 +15,11 @@ export type TutorialStepId =
   | "image-upload"
   | "color-source"
   | "source-legacy-lut"
-  | "source-inferred-lut"
   | "source-material-archive"
   | "output-size"
   | "preview"
   | "view-3d"
-  | "generate"
+  | "print-output"
   | "help";
 
 /** UI state a step needs before its anchor can be found. 步骤显示前需要的界面状态。 */
@@ -100,34 +99,6 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     prepare: BASIC_SETTINGS,
   },
   {
-    id: "source-legacy-lut",
-    anchor: "color-source",
-    titleKey: "tutorial_step_legacy_title",
-    bodyKey: "tutorial_step_legacy_body",
-    flowKeys: [
-      "tutorial_flow_legacy_print",
-      "tutorial_flow_legacy_extract",
-      "tutorial_flow_legacy_table",
-    ],
-    needKey: "tutorial_step_legacy_need",
-    fitKey: "tutorial_step_legacy_fit",
-    prepare: BASIC_SETTINGS,
-  },
-  {
-    id: "source-inferred-lut",
-    anchor: "color-source",
-    titleKey: "tutorial_step_inferred_title",
-    bodyKey: "tutorial_step_inferred_body",
-    flowKeys: [
-      "tutorial_flow_inferred_database",
-      "tutorial_flow_inferred_predict",
-      "tutorial_flow_inferred_table",
-    ],
-    needKey: "tutorial_step_inferred_need",
-    fitKey: "tutorial_step_inferred_fit",
-    prepare: BASIC_SETTINGS,
-  },
-  {
     id: "source-material-archive",
     anchor: "color-source",
     titleKey: "tutorial_step_material_title",
@@ -139,6 +110,20 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     ],
     needKey: "tutorial_step_material_need",
     fitKey: "tutorial_step_material_fit",
+    prepare: BASIC_SETTINGS,
+  },
+  {
+    id: "source-legacy-lut",
+    anchor: "color-source",
+    titleKey: "tutorial_step_legacy_title",
+    bodyKey: "tutorial_step_legacy_body",
+    flowKeys: [
+      "tutorial_flow_legacy_print",
+      "tutorial_flow_legacy_extract",
+      "tutorial_flow_legacy_table",
+    ],
+    needKey: "tutorial_step_legacy_need",
+    fitKey: "tutorial_step_legacy_fit",
     prepare: BASIC_SETTINGS,
   },
   {
@@ -171,10 +156,10 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     prepare: { tab: "converter", converterSubTab: "core" },
   },
   {
-    id: "generate",
-    anchor: "generate-button",
-    titleKey: "tutorial_step_generate_title",
-    bodyKey: "tutorial_step_generate_body",
+    id: "print-output",
+    anchor: "print-output",
+    titleKey: "tutorial_step_output_title",
+    bodyKey: "tutorial_step_output_body",
     prepare: ACTION_BAR,
   },
   {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import BasicSettings from "../components/sections/BasicSettings";
 import BedSizeSelector from "../components/sections/BedSizeSelector";
 import { useConverterStore } from "../stores/converter";
@@ -222,6 +222,9 @@ beforeEach(() => {
     color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
     target_width_mm: 80,
     target_height_mm: 80,
+    aspectRatio: null,
+    bedSizes: [],
+    largeFormatEnabled: false,
     spacer_thick: 0.64,
     structure_mode: StructureModeEnum.SINGLE_SIDED,
     modeling_mode: ModelingModeEnum.HIGH_FIDELITY,
@@ -301,26 +304,91 @@ function isMultipleOfStep(value: number, step: number): boolean {
 }
 
 describe("BasicSettings", () => {
-  it("shows exact fractional workshop dimensions without changing integer defaults", () => {
+  it.each([
+    [2, "宽度", "500", "250"],
+    [0.5, "高度", "150", "300"],
+  ])("keeps slider scales tied to the bed when aspect ratio is %s", (ratio, longEdgeLabel, width, height) => {
     useConverterStore.setState({
-      target_width_mm: 20.8,
-      target_height_mm: 62.4,
+      aspectRatio: ratio as number,
+      bedSizes: [
+        { label: "Large", printer_id: "large", width_mm: 500, height_mm: 300, is_default: false },
+      ],
+    });
+    useSettingsStore.getState().setPrinterModel("large");
+    render(<BasicSettings />);
+
+    const widthSlider = screen.getByRole("slider", { name: "宽度" });
+    const heightSlider = screen.getByRole("slider", { name: "高度" });
+    expect(widthSlider).toHaveAttribute("max", "500");
+    expect(heightSlider).toHaveAttribute("max", "300");
+
+    const longEdgeSlider = screen.getByRole("slider", { name: longEdgeLabel as string });
+    fireEvent.change(longEdgeSlider, { target: { value: longEdgeSlider.getAttribute("max") } });
+    expect(widthSlider).toHaveValue(width);
+    expect(heightSlider).toHaveValue(height);
+
+    const shortEdgeSlider = ratio === 2 ? heightSlider : widthSlider;
+    expect(Number((shortEdgeSlider as HTMLInputElement).value)).toBeLessThan(Number(shortEdgeSlider.getAttribute("max")));
+  });
+
+  it("updates both dimension controls when the configured printer changes", () => {
+    useConverterStore.setState({
+      bedSizes: [
+        { label: "Small", printer_id: "small", width_mm: 180, height_mm: 200, is_default: false },
+        { label: "Large", printer_id: "large", width_mm: 500, height_mm: 300, is_default: false },
+      ],
+    });
+    useSettingsStore.getState().setPrinterModel("small");
+    render(<BasicSettings />);
+    expect(screen.getByRole("slider", { name: "宽度" })).toHaveAttribute("max", "180");
+    expect(screen.getByRole("slider", { name: "高度" })).toHaveAttribute("max", "200");
+
+    act(() => useSettingsStore.getState().setPrinterModel("large"));
+    expect(screen.getByRole("slider", { name: "宽度" })).toHaveAttribute("max", "500");
+    expect(screen.getByRole("slider", { name: "高度" })).toHaveAttribute("max", "300");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "宽度 value" }), { target: { value: "600" } });
+    fireEvent.blur(screen.getByRole("textbox", { name: "宽度 value" }));
+    expect(useConverterStore.getState().target_width_mm).toBe(500);
+  });
+
+  it("shows one decimal place without rounding the stored dimensions on focus or confirmation", () => {
+    useConverterStore.setState({
+      target_width_mm: 58.125,
+      target_height_mm: 201.6666667,
     });
 
     render(<BasicSettings />);
 
     expect(
       screen.getByRole("slider", { name: "宽度" }),
-    ).toHaveAttribute("step", "0.1");
+    ).toHaveAttribute("step", "0.001");
     expect(
       screen.getByRole("textbox", { name: "宽度 value" }),
-    ).toHaveValue("20.8");
+    ).toHaveValue("58.1");
     expect(
       screen.getByRole("slider", { name: "高度" }),
-    ).toHaveAttribute("step", "0.1");
+    ).toHaveAttribute("step", "0.001");
     expect(
       screen.getByRole("textbox", { name: "高度 value" }),
-    ).toHaveValue("62.4");
+    ).toHaveValue("201.7");
+
+    const widthInput = screen.getByRole("textbox", { name: "宽度 value" });
+    const heightInput = screen.getByRole("textbox", { name: "高度 value" });
+    fireEvent.focus(widthInput);
+    fireEvent.blur(widthInput);
+    fireEvent.focus(heightInput);
+    fireEvent.keyDown(heightInput, { key: "Enter" });
+    fireEvent.blur(heightInput);
+    expect(useConverterStore.getState()).toMatchObject({
+      target_width_mm: 58.125,
+      target_height_mm: 201.6666667,
+    });
+
+    fireEvent.focus(widthInput);
+    fireEvent.change(widthInput, { target: { value: "58.2" } });
+    fireEvent.blur(widthInput);
+    expect(useConverterStore.getState().target_width_mm).toBe(58.2);
 
     act(() => {
       useConverterStore.setState({
@@ -334,7 +402,7 @@ describe("BasicSettings", () => {
     ).toHaveAttribute("step", "1");
     expect(
       screen.getByRole("textbox", { name: "宽度 value" }),
-    ).toHaveValue("80");
+    ).toHaveValue("80.0");
   });
 
   it("keeps large-format manual dimensions above the everyday slider range", () => {
@@ -348,8 +416,8 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
-    expect(screen.getByRole("slider", { name: "宽度" })).toHaveAttribute("max", "400");
-    expect(screen.getByRole("slider", { name: "高度" })).toHaveAttribute("max", "400");
+    expect(screen.getByRole("slider", { name: "宽度" })).toHaveAttribute("max", "256");
+    expect(screen.getByRole("slider", { name: "高度" })).toHaveAttribute("max", "256");
     expect(screen.getByRole("slider", { name: "切片宽度" })).toHaveAttribute("max", "500");
     expect(screen.getByRole("slider", { name: "切片高度" })).toHaveAttribute("max", "500");
 
@@ -358,7 +426,7 @@ describe("BasicSettings", () => {
     fireEvent.blur(widthInput);
 
     expect(useConverterStore.getState().target_width_mm).toBe(30000);
-    expect(widthInput).toHaveValue("30000");
+    expect(widthInput).toHaveValue("30000.0");
   });
 
   it("offers a preview-only cut outline toggle in large-format mode", () => {
@@ -368,7 +436,7 @@ describe("BasicSettings", () => {
     } as never);
     const { rerender } = render(<BasicSettings />);
     expect(
-      screen.queryByRole("checkbox", { name: "在预览中显示切割轮廓" }),
+      screen.queryByRole("switch", { name: "在预览中显示切割轮廓" }),
     ).not.toBeInTheDocument();
 
     act(() => {
@@ -386,7 +454,7 @@ describe("BasicSettings", () => {
     rerender(<BasicSettings />);
 
     expect(screen.getByText("3×2 = 6 (100×150mm)")).toBeInTheDocument();
-    const toggle = screen.getByRole("checkbox", { name: "在预览中显示切割轮廓" });
+    const toggle = screen.getByRole("switch", { name: "在预览中显示切割轮廓" });
     expect(toggle).toBeChecked();
 
     fireEvent.click(toggle);
@@ -395,41 +463,6 @@ describe("BasicSettings", () => {
     expect(state.largeFormatTileOverlayVisible).toBe(false);
     // Preview-only toggle must not invalidate an already generated download.
     expect(state.downloadUrl).toBe("/api/files/ready.zip");
-  });
-
-  it("blocks large format while model texture is enabled instead of showing a flat tile count", () => {
-    useConverterStore.setState({
-      modelSurfaceEnabled: true,
-      largeFormatEnabled: false,
-      target_width_mm: 60,
-      target_height_mm: 30,
-      tileWidthMm: 240,
-      tileHeightMm: 240,
-      previewPixelWidth: 9600,
-      previewPixelHeight: 4800,
-    } as never);
-
-    const { rerender } = render(<BasicSettings />);
-
-    expect(screen.getByRole("checkbox", { name: "大画幅模式" })).toBeDisabled();
-    expect(screen.getByText("模型贴图开启时，大画幅模式会被禁用。")).toBeInTheDocument();
-
-    // A restored or imported project can still carry both modes; the user must
-    // see the conflict and be able to turn large format off again.
-    act(() => {
-      useConverterStore.setState({ largeFormatEnabled: true } as never);
-    });
-    rerender(<BasicSettings />);
-
-    expect(screen.getByTestId("large-format-model-surface-conflict")).toHaveTextContent(
-      "大画幅模式不支持模型贴图",
-    );
-    expect(screen.queryByText(/^\d+×\d+ = \d+/)).not.toBeInTheDocument();
-    const toggle = screen.getByRole("checkbox", { name: "大画幅模式" });
-    expect(toggle).toBeEnabled();
-    fireEvent.click(toggle);
-    expect(useConverterStore.getState().largeFormatEnabled).toBe(false);
-    expect(useConverterStore.getState().modelSurfaceEnabled).toBe(true);
   });
 
   it("counts large-format rows from the backend-derived height", () => {
@@ -566,6 +599,57 @@ describe("BasicSettings", () => {
     expect(screen.queryByText("批量模式")).not.toBeInTheDocument();
   });
 
+  it("opens cropping repeatedly without enabling crop after upload", () => {
+    const file = new File(["img"], "edited.png", { type: "image/png" });
+    useConverterStore.setState({
+      imageFile: file,
+      imagePreviewUrl: "blob:edited-image",
+      enableCrop: false,
+    });
+    render(<BasicSettings />);
+
+    expect(screen.getByText("导入", { exact: true })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "裁切与旋转" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog")).getByRole("img")).toHaveAttribute(
+      "src", "blob:edited-image",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(useConverterStore.getState().imageFile).toBe(file);
+
+    fireEvent.click(screen.getByRole("button", { name: "裁切与旋转" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(useConverterStore.getState().enableCrop).toBe(false);
+    expect(useConverterStore.getState().imageFile).toBe(file);
+  });
+
+  it.each([
+    { imagePreviewUrl: null, isLoading: false, isCropping: false },
+    { imagePreviewUrl: "blob:image", isLoading: true, isCropping: false },
+    { imagePreviewUrl: "blob:image", isLoading: false, isCropping: true },
+  ])("disables cropping until the image is ready and idle: %o", (state) => {
+    useConverterStore.setState({
+      imageFile: new File(["img"], "photo.png", { type: "image/png" }),
+      ...state,
+    });
+    render(<BasicSettings />);
+    expect(screen.getByRole("button", { name: "裁切与旋转" })).toBeDisabled();
+  });
+
+  it("offers SVG rotation inside the tool without raster crop controls", () => {
+    useConverterStore.setState({
+      imageFile: new File(["<svg/>"], "drawing.svg", { type: "image/svg+xml" }),
+      imagePreviewUrl: "blob:drawing",
+    });
+    render(<BasicSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "裁切与旋转" }));
+    expect(screen.getByRole("button", { name: "向右旋转 90°" })).toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
+  });
+
   // Req 3.2: crop checkbox visible in SingleMode
   it("renders crop checkbox in SingleMode (imageFile set, batchFiles empty)", () => {
     const file = new File(["img"], "test.jpg", { type: "image/jpeg" });
@@ -593,6 +677,7 @@ describe("BasicSettings", () => {
     });
     render(<BasicSettings />);
     expect(screen.queryByText("上传后裁剪")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "裁切与旋转" })).not.toBeInTheDocument();
   });
 
   // UnifiedUploader is rendered (present in both modes)
@@ -600,11 +685,19 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
     // UnifiedUploader shows the translated upload hint in empty state
     expect(
-      screen.getByText("拖拽图片或 Lumina 项目文件（图片支持多选）"),
+      screen.getByText("拖拽图片或 Lumina 项目文件"),
     ).toBeInTheDocument();
   });
 
-  it("hides structure and backing-infill controls while model texture mode is enabled", () => {
+  it("lets users enable crop after upload before choosing an image", () => {
+    render(<BasicSettings />);
+    fireEvent.click(screen.getByRole("switch", { name: "上传后裁剪" }));
+    expect(useConverterStore.getState().enableCrop).toBe(true);
+    expect(screen.queryByRole("button", { name: "裁切与旋转" })).not.toBeInTheDocument();
+    expect(screen.queryByText("图像旋转")).not.toBeInTheDocument();
+  });
+
+  it("keeps structure and backing-infill controls visible but disabled in model texture mode", () => {
     useConverterStore.setState({
       structure_mode: StructureModeEnum.SINGLE_SIDED,
       modelSurfaceEnabled: true,
@@ -615,9 +708,33 @@ describe("BasicSettings", () => {
     expect(useConverterStore.getState().structure_mode).toBe(
       StructureModeEnum.SINGLE_SIDED,
     );
-    expect(screen.queryByText("结构模式")).not.toBeInTheDocument();
-    expect(screen.queryByRole("radio", { name: "双面" })).not.toBeInTheDocument();
-    expect(screen.queryByText("背板填充率")).not.toBeInTheDocument();
+    // The controls stay in place so the mode switch does not read as a
+    // vanished feature; they are disabled and explain themselves instead.
+    expect(screen.getByText("单面/双面打印")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "双面" })).toBeDisabled();
+    expect(screen.getByRole("slider", { name: "底板填充率" })).toBeDisabled();
+    expect(
+      screen.getByText("模型覆面只生成单面结构，无法切换结构模式。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "模型覆面开启时由模型本身决定背衬，填充率不可调整。",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("names every block of the column", () => {
+    render(<BasicSettings />);
+
+    for (const block of [
+      "导入",
+      "颜色设置",
+      "尺寸和底板",
+      "单面/双面打印",
+      "建模模式",
+    ]) {
+      expect(screen.getByText(block)).toBeInTheDocument();
+    }
   });
 
   it("lets users append one more image after a single image has a preview", async () => {
@@ -688,7 +805,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     expect(
-      screen.getByText(/文件已生成，可以下载。自动摆放未能确认/),
+      screen.getByText(/自动摆放未能确认模型、底边（brim）和擦料塔的安全位置/),
     ).toBeInTheDocument();
     expect(
       screen.queryByText("wipe_tower_manual_adjustment_required"),
@@ -698,12 +815,11 @@ describe("BasicSettings", () => {
   it("renders the source version selector and legacy LUT database panel in old mode", () => {
     render(<BasicSettings />);
 
-    expect(screen.getByText("来源类型")).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "传统 LUT" })).toBeInTheDocument();
+    expect(screen.getByText("色彩数据来源")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "经典 LUT" })).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "反推LUT" })).not.toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "耗材档案" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "LUT 品牌" })).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "LUT" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("lut-picker-trigger")).toBeInTheDocument();
+    expect(screen.getByText("选择LUT")).toBeInTheDocument();
   });
 
   it("keeps a Snapmaker LUT independent from the configured Bambu printer", async () => {
@@ -759,8 +875,10 @@ describe("BasicSettings", () => {
       </>,
     );
 
-    fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
-    fireEvent.click(screen.getByRole("option", { name: "snapmaker" }));
+    fireEvent.click(screen.getByTestId("lut-picker-trigger"));
+    // Brand sidebar opens inside the dialog; click snapmaker brand
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "snapmaker" }));
 
     await waitFor(() => {
       expect(useConverterStore.getState().selectedLegacyManufacturer)
@@ -768,7 +886,7 @@ describe("BasicSettings", () => {
     });
     expect(useSettingsStore.getState().printerModel).toBe("bambu-p1s");
     expect(useConverterStore.getState().bed_label).toBe("Bambu Lab P1S");
-    expect(screen.getByText("LUT 品牌")).toBeInTheDocument();
+    expect(screen.getAllByText("选择LUT").length).toBeGreaterThan(0);
     expect(screen.getByText("打印机热床")).toBeInTheDocument();
     expect(
       screen.getByText("Bambu Lab P1S · 256×256 毫米"),
@@ -815,7 +933,7 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
-    const dynamicToggle = screen.getByRole("checkbox", {
+    const dynamicToggle = screen.getByRole("switch", {
       name: /动态调整有效叠层数/,
     });
     expect(dynamicToggle).not.toBeChecked();
@@ -839,7 +957,7 @@ describe("BasicSettings", () => {
     expect(
       screen.getByRole("slider", { name: "最大有效叠层数" }),
     ).toHaveAttribute("max", "10");
-    expect(screen.getByText(/单一层数的缓存入口已隐藏/)).toBeInTheDocument();
+    expect(screen.queryByText(/单一层数的缓存入口已隐藏/)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "穷举缓存…" }),
     ).not.toBeInTheDocument();
@@ -883,7 +1001,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     expect(
-      screen.queryByRole("checkbox", { name: "动态调整有效叠层数" }),
+      screen.queryByRole("switch", { name: "动态调整有效叠层数" }),
     ).not.toBeInTheDocument();
   });
 
@@ -960,43 +1078,46 @@ describe("BasicSettings", () => {
   it("shows brand options from the loaded legacy details catalog", () => {
     render(<BasicSettings />);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
+    // Open the picker dialog and check brand options in the sidebar
+    fireEvent.click(screen.getByTestId("lut-picker-trigger"));
 
-    expect(screen.getByRole("option", { name: "Brand A" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Brand B" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "个人" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: "Brand A" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Brand B" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "个人" })).toBeInTheDocument();
   });
 
   it("enables grouped LUT choices after selecting a legacy brand", async () => {
     render(<BasicSettings />);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
-    fireEvent.click(screen.getByRole("option", { name: "Brand A" }));
+    // Open picker dialog and select a brand from the sidebar
+    fireEvent.click(screen.getByTestId("lut-picker-trigger"));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Brand A" }));
 
+    // Brand selection is immediate (sync store update)
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "LUT 品牌" }))
-        .toHaveTextContent("Brand A");
-      expect(screen.getByText(/品牌信息/)).toBeInTheDocument();
+      expect(useConverterStore.getState().selectedLegacyManufacturer)
+        .toBe("Brand A");
     });
-    expect(useConverterStore.getState().selectedLegacyManufacturer)
-      .toBe("Brand A");
     expect(useConverterStore.getState().legacyCatalogGroups).toHaveLength(3);
 
+    // LUT options should now appear in the dialog
     await waitFor(() => {
-      expect(screen.getByText(/品牌信息/)).toBeInTheDocument();
-      expect(screen.getAllByText(/数据库/).length).toBeGreaterThan(0);
+      expect(within(dialog).getByText("A 4C")).toBeInTheDocument();
+      expect(within(dialog).getByText("A 4C Alt")).toBeInTheDocument();
+      expect(within(dialog).getByText("A 8C")).toBeInTheDocument();
     });
-    const fourColor = screen.getByRole("checkbox", { name: "A 4C" });
-    const alternateFourColor = screen.getByRole("checkbox", {
-      name: "A 4C Alt",
-    });
-    const eightColor = screen.getByRole("checkbox", { name: "A 8C" });
-    expect(fourColor).toBeEnabled();
-    expect(alternateFourColor).toBeEnabled();
-    expect(eightColor).toBeEnabled();
 
-    fireEvent.click(fourColor);
-    fireEvent.click(eightColor);
+    const fourColor = within(dialog).getAllByRole("checkbox").find((el) => el.textContent?.includes("A 4C") && !el.textContent?.includes("Alt"));
+    const eightColor = within(dialog).getAllByRole("checkbox").find((el) => el.textContent?.includes("A 8C"));
+    expect(fourColor).toBeDefined();
+    expect(eightColor).toBeDefined();
+
+    fireEvent.click(fourColor!);
+    fireEvent.click(eightColor!);
+    // Confirm selection
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认" }));
 
     await waitFor(() => {
       expect(useConverterStore.getState().lut_names).toEqual([
@@ -1006,20 +1127,76 @@ describe("BasicSettings", () => {
     });
   });
 
+  it("applies cross-brand LUTs together and leaves applied selection intact on cancel", async () => {
+    useConverterStore.setState({
+      lut_name: "Brand A - A4",
+      lut_names: ["Brand A - A4"],
+      selectedLegacyManufacturer: "Brand A",
+      sessionId: "existing-preview",
+    });
+    render(<BasicSettings />);
+    fireEvent.click(screen.getByTestId("lut-picker-trigger"));
+    let dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Brand B" }));
+    expect(useConverterStore.getState().sessionId).toBe("existing-preview");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /B BW/ }));
+    expect(useConverterStore.getState().lut_names).toEqual(["Brand A - A4"]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认" }));
+    await waitFor(() => {
+      expect(useConverterStore.getState().lut_names)
+        .toEqual(["Brand A - A4", "Brand B - BW"]);
+    });
+    const trigger = screen.getByTestId("lut-picker-trigger");
+    expect(trigger).toHaveTextContent("A 4C");
+    expect(trigger).toHaveTextContent("已选 2 个 LUT");
+    fireEvent.click(trigger);
+    dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Brand B" }));
+    expect(within(dialog).getByRole("checkbox", { name: /B BW/ }))
+      .toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /B BW/ }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(useConverterStore.getState().lut_names)
+      .toEqual(["Brand A - A4", "Brand B - BW"]);
+  });
+
   it("submits the LUTManager name when a catalog LUT path maps to a shorter legacy LUT name", async () => {
+    // Ensure clean slate so staged starts empty
+    useConverterStore.setState({
+      lut_name: "",
+      lut_names: [],
+      selectedLegacyManufacturer: "",
+    } as never);
+
     render(<BasicSettings />);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
-    fireEvent.click(screen.getByRole("option", { name: "Brand A" }));
+    // Open picker dialog and select Brand A from sidebar
+    fireEvent.click(screen.getByTestId("lut-picker-trigger"));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Brand A" }));
 
-    const fourColor = await screen.findByRole("checkbox", { name: "A 4C" });
-    fireEvent.click(fourColor);
+    // Wait for A 4C option to appear (not Alt)
+    await waitFor(() => {
+      expect(within(dialog).getAllByRole("checkbox").some(
+        (el) => el.textContent?.includes("A 4C") && !el.textContent?.includes("Alt"),
+      )).toBe(true);
+    });
+
+    // Click only "A 4C" (not Alt); staged starts empty so this adds it
+    const allCheckboxes = within(dialog).getAllByRole("checkbox");
+    const fourColor = allCheckboxes.find(
+      (el) => el.textContent?.includes("A 4C") && !el.textContent?.includes("Alt"),
+    );
+    expect(fourColor).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(fourColor!);
+    expect(fourColor).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认" }));
 
     await waitFor(() => {
       expect(useConverterStore.getState().lut_name).toBe("Brand A - A4");
     });
-    expect(fourColor).toBeChecked();
-    expect(screen.getByText(/数据库/).parentElement).toHaveTextContent("A 4C");
+    expect(screen.getByTestId("lut-picker-trigger")).toHaveTextContent("A 4C");
   });
 
   it("hides LUT choices until LUTManager names are mapped", () => {
@@ -1032,7 +1209,11 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
-    expect(screen.queryByRole("checkbox", { name: "A 4C" })).not.toBeInTheDocument();
+    // No LUT options shown on trigger (no chips)
+    const trigger = screen.getByTestId("lut-picker-trigger");
+    expect(trigger).not.toHaveTextContent("A 4C");
+    // Open the dialog to confirm loading hint
+    fireEvent.click(trigger);
     expect(screen.getByText("品牌目录加载中…")).toBeInTheDocument();
     expect(useConverterStore.getState().lut_name).toBe("");
   });
@@ -1046,10 +1227,45 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
+    // Hydration still syncs the picker brand; the summary describes selected LUTs.
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "LUT 品牌" }))
-        .toHaveTextContent("Brand B");
+      expect(useConverterStore.getState().selectedLegacyManufacturer).toBe("Brand B");
     });
+  });
+
+  it("blocks large format while model texture is enabled instead of showing a flat tile count", () => {
+    useConverterStore.setState({
+      modelSurfaceEnabled: true,
+      largeFormatEnabled: false,
+      target_width_mm: 60,
+      target_height_mm: 30,
+      tileWidthMm: 240,
+      tileHeightMm: 240,
+      previewPixelWidth: 9600,
+      previewPixelHeight: 4800,
+    } as never);
+
+    const { rerender } = render(<BasicSettings />);
+
+    expect(screen.getByRole("switch", { name: "大画幅模式" })).toBeDisabled();
+    expect(screen.getByText("模型贴图开启时，大画幅模式会被禁用。")).toBeInTheDocument();
+
+    // A restored or imported project can still carry both modes; the user must
+    // see the conflict and be able to turn large format off again.
+    act(() => {
+      useConverterStore.setState({ largeFormatEnabled: true } as never);
+    });
+    rerender(<BasicSettings />);
+
+    expect(screen.getByTestId("large-format-model-surface-conflict")).toHaveTextContent(
+      "大画幅模式不支持模型贴图",
+    );
+    expect(screen.queryByText(/^\d+×\d+ = \d+/)).not.toBeInTheDocument();
+    const toggle = screen.getByRole("switch", { name: "大画幅模式" });
+    expect(toggle).toBeEnabled();
+    fireEvent.click(toggle);
+    expect(useConverterStore.getState().largeFormatEnabled).toBe(false);
+    expect(useConverterStore.getState().modelSurfaceEnabled).toBe(true);
   });
 
   it("resets a restored native source without displaying predictive controls", async () => {
@@ -1070,7 +1286,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     expect(screen.queryByRole("combobox", { name: "品牌" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: "模型辅助匹配" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "模型辅助匹配" })).not.toBeInTheDocument();
     expect(screen.queryByText("DB-B")).not.toBeInTheDocument();
     await waitFor(() => {
       expect(useConverterStore.getState()).toMatchObject({
@@ -1079,7 +1295,7 @@ describe("BasicSettings", () => {
       });
     });
     expect(useConverterStore.getState().imageFile).toBe(imageFile);
-    expect(screen.getByRole("combobox", { name: "LUT 品牌" })).toBeInTheDocument();
+    expect(screen.getByTestId("lut-picker-trigger")).toBeInTheDocument();
   });
 
   it("clears predictive packages restored through the legacy LUT path", async () => {
@@ -1101,7 +1317,7 @@ describe("BasicSettings", () => {
   it("anchors the thickness slider to the 0.08mm layer grid", () => {
     render(<BasicSettings />);
 
-    const slider = screen.getByRole("slider", { name: "厚度" }) as HTMLInputElement;
+    const slider = screen.getByRole("slider", { name: "底板厚度" }) as HTMLInputElement;
     const min = Number(slider.min);
     const max = Number(slider.max);
     const step = Number(slider.step);
@@ -1118,7 +1334,7 @@ describe("BasicSettings", () => {
   it("snaps manually entered thickness to the exported 0.08mm layer grid", async () => {
     render(<BasicSettings />);
 
-    const input = screen.getByRole("textbox", { name: "厚度 value" });
+    const input = screen.getByRole("textbox", { name: "底板厚度 value" });
     fireEvent.change(input, { target: { value: "0.3" } });
     fireEvent.keyDown(input, { key: "Enter" });
 
@@ -1158,7 +1374,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     expect(
-      screen.getByRole("checkbox", { name: /大画幅模式/ }),
+      screen.getByRole("switch", { name: /大画幅模式/ }),
     ).toBeDisabled();
     expect(
       screen.getByRole("radio", { name: "单面" }),

@@ -37,7 +37,7 @@ class PaletteEntrySchema(BaseModel):
 
 class LutCatalogItem(BaseModel):
     """Single catalog item for legacy LUT sources.
-    传统 LUT 源的单条目录项。
+    经典 LUT 源的单条目录项。
     """
 
     name: str = Field(..., description="LUT 显示名称")
@@ -47,7 +47,7 @@ class LutCatalogItem(BaseModel):
 
 class LutCatalogGroup(BaseModel):
     """Grouped legacy LUT catalog entries.
-    分组后的传统 LUT 目录。
+    分组后的经典 LUT 目录。
     """
 
     group_name: str = Field(..., description="分组名称")
@@ -85,7 +85,7 @@ class LutSourceCatalogResponse(BaseModel):
     同时包含传统源和原生品牌分组的目录响应。
     """
 
-    legacy_groups: list[LutCatalogGroup] = Field(default_factory=list, description="传统 LUT 分组")
+    legacy_groups: list[LutCatalogGroup] = Field(default_factory=list, description="经典 LUT 分组")
     native_brand_groups: list[NativeBrandCatalogGroup] = Field(default_factory=list, description="原生品牌分组")
 
 
@@ -223,8 +223,8 @@ class LutSourceSelection(BaseModel):
         "legacy_single",
         description="源类型：legacy_single | legacy_multi | native_bundle",
     )
-    lut_name: str | None = Field(None, description="传统 LUT 名称")
-    lut_names: list[str] = Field(default_factory=list, description="传统 LUT 名称列表")
+    lut_name: str | None = Field(None, description="经典 LUT 名称")
+    lut_names: list[str] = Field(default_factory=list, description="经典 LUT 名称列表")
     material_type: str | None = Field(None, description="原生材料类型")
     vendor: str | None = Field(None, description="原生厂商")
     db_names: list[str] = Field(default_factory=list, description="原生 DB 文件名列表")
@@ -233,7 +233,7 @@ class LutSourceSelection(BaseModel):
     @classmethod
     def normalize_lut_names(cls, value: object) -> list[str]:
         """Normalize legacy LUT name lists from JSON and form-compatible shapes.
-        规范化 JSON/form 兼容形态的传统 LUT 名称列表。
+        规范化 JSON/form 兼容形态的经典 LUT 名称列表。
         """
 
         if value is None:

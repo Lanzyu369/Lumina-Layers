@@ -68,6 +68,21 @@ describe("Auto-Batch Multiselect Property-Based Tests", () => {
     resetStore();
   });
 
+  it("keeps JFIF files when selecting and appending a batch without MIME metadata", () => {
+    const files = [
+      new File(["image"], "first.jfif"),
+      new File(["image"], "second.JFIF", { type: "application/octet-stream" }),
+    ];
+    const additional = new File(["image"], "third.jfif");
+
+    useConverterStore.getState().handleFilesSelect(files);
+    expect(useConverterStore.getState().batchMode).toBe(true);
+    expect(useConverterStore.getState().batchFiles).toEqual(files);
+
+    useConverterStore.getState().addBatchFiles([additional]);
+    expect(useConverterStore.getState().batchFiles).toEqual([...files, additional]);
+  });
+
   // **Validates: Requirements 2.3, 4.1**
   describe("Property 1: batchMode 状态不变量", () => {
     it("batchMode always equals batchFiles.length > 0 after any sequence of operations", () => {

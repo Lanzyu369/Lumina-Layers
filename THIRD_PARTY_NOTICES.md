@@ -75,3 +75,11 @@ Sergej Majboroda, from <https://polyhaven.com/a/studio_small_09>, under
 [CC0](https://polyhaven.com/license). Its SHA-256 is
 `e7cfda5f4e98e623db12b8bfd0184e048488e4855d9c83e2751fb44a32e80c45`, matching
 the official 1K HDR download.
+
+## MiSans interface fonts
+
+The four MiSans WOFF2 files in `frontend/public/fonts/misans/` are provided by
+Xiaomi Inc. and retain the MiSans Font Intellectual Property License Agreement,
+not the root software license. The bundled [license agreement](frontend/public/fonts/misans/LICENSE.pdf)
+and [notice](frontend/public/fonts/misans/NOTICE.txt) accompany the fonts.
+Official source: <https://hyperos.mi.com/font/zh/download/>.

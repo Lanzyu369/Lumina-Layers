@@ -23,7 +23,7 @@ describe("HelpDot accessibility names", () => {
       </I18nProvider>,
     );
 
-    const checkbox = screen.getByRole("checkbox", {
+    const checkbox = screen.getByRole("switch", {
       name: "启用外轮廓",
     });
     expect(checkbox).toHaveAttribute("type", "checkbox");

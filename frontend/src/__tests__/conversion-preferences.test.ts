@@ -17,6 +17,28 @@ describe("conversion preferences", () => {
   });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+  it("defaults to material archives when no preferences are saved", () => {
+    const stop = bindConversionPreferences();
+    try {
+      expect(useConverterStore.getState().source_version).toBe("material");
+    } finally { stop(); }
+  });
+
+  it.each(["legacy", "material"] as const)("restores a remembered %s source", async (source) => {
+    const stop = bindConversionPreferences();
+    useConverterStore.getState().setSourceVersion(source);
+    stop();
+    const stored = localStorage.getItem("lumina-settings")!;
+    useSettingsStore.setState({ ...DEFAULT_SETTINGS });
+    localStorage.setItem("lumina-settings", stored);
+    await useSettingsStore.persist.rehydrate();
+    useConverterStore.setState({ ...DEFAULT_STATE });
+    const stopAgain = bindConversionPreferences();
+    try {
+      expect(useConverterStore.getState().source_version).toBe(source);
+    } finally { stopAgain(); }
+  });
+
   it("restores saved inputs after reconnecting without persisting session data", async () => {
     const stop = bindConversionPreferences();
     useConverterStore.getState().setStructureMode(StructureMode.SINGLE_SIDED);
@@ -67,6 +89,25 @@ describe("conversion preferences", () => {
     stop();
   });
 
+  it.each([
+    [500, 500, 450], [180, 180, 180], [500, 300, 450],
+  ])("fits saved defaults after the real %i × %i mm printer bed loads", (bedWidth, bedHeight, expectedSize) => {
+    const original = captureConversionParameters(useConverterStore.getState());
+    const stop = bindConversionPreferences();
+    try {
+      useSettingsStore.getState().hydrateDeviceSettingsFromBackend({
+        conversion_preferences: { last: { ...original, size_mm: 450 }, presets: [] },
+      });
+      expect(useSettingsStore.getState().conversionPreferences.last?.size_mm).toBe(450);
+      expect(useConverterStore.getState().target_width_mm).toBe(450);
+      useConverterStore.setState({ bedSizes: [{ label: "Selected printer", width_mm: bedWidth,
+        height_mm: bedHeight, is_default: true, printer_id: useSettingsStore.getState().printerModel }] });
+      useConverterStore.getState().setBedLabel("Selected printer");
+      expect(useConverterStore.getState().target_width_mm).toBe(expectedSize);
+      expect(useSettingsStore.getState().conversionPreferences.last?.size_mm).toBe(expectedSize);
+    } finally { stop(); }
+  });
+
   it("does not replace defaults while importing or editing an existing project", () => {
     const stop = bindConversionPreferences();
     useConverterStore.getState().setTargetWidthMm(225);
@@ -83,6 +124,20 @@ describe("conversion preferences", () => {
   });
 
   it.each([90, 180, 270] as const)("keeps imported printing parameters when rotating the project's SVG by %i degrees", async (degrees) => {
+    const pendingLoads: Array<{ naturalWidth: number; naturalHeight: number; onload: (() => void) | null }> = [];
+    vi.stubGlobal("Image", class {
+      naturalWidth = 160;
+      naturalHeight = 100;
+      onload: (() => void) | null = null;
+      set src(_value: string) { pendingLoads.push(this); }
+    });
+    const finishImageLoad = (width: number, height: number) => {
+      expect(pendingLoads).toHaveLength(1);
+      const image = pendingLoads.shift()!;
+      image.naturalWidth = width;
+      image.naturalHeight = height;
+      image.onload!();
+    };
     const stop = bindConversionPreferences();
     try {
       useConverterStore.getState().setTargetWidthMm(225);
@@ -95,13 +150,17 @@ describe("conversion preferences", () => {
       ], "project.svg", { type: "image/svg+xml" });
       useConverterStore.getState().importRecipeState({ target_width_mm: 93, target_height_mm: 58.125,
         structure_mode: StructureMode.SINGLE_SIDED, base_spacer_thick: 3, spacer_thick: 3 }, source);
+      finishImageLoad(160, 100);
 
       await useConverterStore.getState().rotateImageForExport(degrees);
+      const swapsAxes = degrees !== 180;
+      finishImageLoad(swapsAxes ? 100 : 160, swapsAxes ? 160 : 100);
 
       const rotated = useConverterStore.getState();
       expect(rotated.imageFile).not.toBe(source);
       expect(await rotated.imageFile!.text()).toContain(`rotate(${degrees})`);
-      expect(rotated).toMatchObject({ target_width_mm: 93, target_height_mm: 58.125,
+      expect(rotated).toMatchObject({ target_width_mm: swapsAxes ? 58.125 : 93,
+        target_height_mm: swapsAxes ? 93 : 58.125,
         structure_mode: StructureMode.SINGLE_SIDED, base_spacer_thick: 3, spacer_thick: 3,
         conversionParameterContext: "project", error: null });
       expect(useSettingsStore.getState().conversionPreferences).toEqual(remembered);
@@ -109,21 +168,58 @@ describe("conversion preferences", () => {
       // A second edit still belongs to this project; a newly selected file does not,
       // even if its filename and bytes match the imported source.
       await rotated.rotateImageForExport(90);
-      expect(useConverterStore.getState()).toMatchObject({ target_width_mm: 93,
+      finishImageLoad(swapsAxes ? 160 : 100, swapsAxes ? 100 : 160);
+      expect(useConverterStore.getState()).toMatchObject({ target_width_mm: swapsAxes ? 93 : 58.125,
+        target_height_mm: swapsAxes ? 58.125 : 93,
         structure_mode: StructureMode.SINGLE_SIDED, base_spacer_thick: 3, conversionParameterContext: "project" });
       useConverterStore.getState().setImageFile(new File([await source.text()], source.name, { type: source.type }));
+      finishImageLoad(160, 100);
       expect(useConverterStore.getState()).toMatchObject({ target_width_mm: 225,
         structure_mode: StructureMode.DOUBLE_SIDED, base_spacer_thick: 1.2, conversionParameterContext: "defaults" });
       expect(useSettingsStore.getState().conversionPreferences.selectedPresetId).toBe(remembered.selectedPresetId);
     } finally { stop(); }
   });
 
-  it("uses the last manually edited dimension as the size rule for new images", async () => {
+  it.each([
+    [160, 100, 93, 58.125],
+    [60, 200, 60.5, 201.6666667],
+  ])("preserves exact project dimensions through four loaded quarter turns (%i × %i pixels)", async (pixelWidth, pixelHeight, width, height) => {
+    const pendingLoads: Array<{ naturalWidth: number; naturalHeight: number; onload: (() => void) | null }> = [];
+    vi.stubGlobal("Image", class {
+      naturalWidth = pixelWidth;
+      naturalHeight = pixelHeight;
+      onload: (() => void) | null = null;
+      set src(_value: string) { pendingLoads.push(this); }
+    });
+    const source = new File([
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${pixelWidth} ${pixelHeight}"><rect width="30" height="50"/></svg>`,
+    ], "precise.svg", { type: "image/svg+xml" });
+    useConverterStore.getState().importRecipeState({ target_width_mm: width, target_height_mm: height }, source);
+    pendingLoads.shift()!.onload!();
+    await useConverterStore.getState().rotateImageForExport(180);
+    pendingLoads.shift()!.onload!();
+    expect(useConverterStore.getState()).toMatchObject({ target_width_mm: width, target_height_mm: height });
+    for (let turn = 1; turn <= 4; turn += 1) {
+      await useConverterStore.getState().rotateImageForExport(90);
+      expect(pendingLoads).toHaveLength(1);
+      const image = pendingLoads.shift()!;
+      image.naturalWidth = turn % 2 ? pixelHeight : pixelWidth;
+      image.naturalHeight = turn % 2 ? pixelWidth : pixelHeight;
+      image.onload!();
+      expect(useConverterStore.getState()).toMatchObject({
+        target_width_mm: turn % 2 ? height : width,
+        target_height_mm: turn % 2 ? width : height,
+        conversionParameterContext: "project",
+      });
+    }
+  });
+
+  it("remembers the final long edge regardless of the manually edited dimension", async () => {
     const stop = bindConversionPreferences();
     useConverterStore.setState({ aspectRatio: 2 });
     useConverterStore.getState().setTargetHeightMm(100);
     const saved = useSettingsStore.getState().conversionPreferences.last!;
-    expect(saved).toMatchObject({ size_axis: "height", size_mm: 100 });
+    expect(saved).toMatchObject({ size_axis: "long_edge", size_mm: 200 });
     vi.stubGlobal("Image", class {
       naturalWidth = 100;
       naturalHeight = 200;
@@ -132,8 +228,112 @@ describe("conversion preferences", () => {
     });
     useConverterStore.getState().setImageFile(new File(["image"], "new.png", { type: "image/png" }));
     await Promise.resolve();
-    expect(useConverterStore.getState()).toMatchObject({ target_height_mm: 100, target_width_mm: 50 });
+    expect(useConverterStore.getState()).toMatchObject({ target_height_mm: 200, target_width_mm: 100 });
     stop();
+  });
+
+  it("keeps the remembered long edge when a new image changes orientation", async () => {
+    const stop = bindConversionPreferences();
+    try {
+      useConverterStore.getState().setTargetHeightMm(150);
+      vi.stubGlobal("Image", class {
+        naturalWidth = 200;
+        naturalHeight = 100;
+        onload: (() => void) | null = null;
+        set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+      });
+      useConverterStore.getState().setImageFile(new File(["image"], "wide.png", { type: "image/png" }));
+      await Promise.resolve();
+      expect(useConverterStore.getState()).toMatchObject({
+        target_width_mm: 150, target_height_mm: 75,
+      });
+    } finally { stop(); }
+  });
+
+  it("keeps a remembered height as the exact long edge when a new landscape image has a rounded short edge", async () => {
+    const stop = bindConversionPreferences();
+    try {
+      useConverterStore.getState().setTargetHeightMm(225);
+      vi.stubGlobal("Image", class {
+        naturalWidth = 160;
+        naturalHeight = 100;
+        onload: (() => void) | null = null;
+        set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+      });
+      useConverterStore.getState().setImageFile(new File(["image"], "wide.png", { type: "image/png" }));
+      await Promise.resolve();
+      expect(useConverterStore.getState()).toMatchObject({ target_width_mm: 225, target_height_mm: 141 });
+      expect(useSettingsStore.getState().conversionPreferences.last?.size_mm).toBe(225);
+    } finally { stop(); }
+  });
+
+  it.each([
+    [1.5, 150, 100], [2 / 3, 100, 150], [1, 150, 150],
+  ])("applies the same long edge at aspect ratio %s", (ratio, width, height) => {
+    const parameters = { ...captureConversionParameters(useConverterStore.getState()), size_mm: 150 };
+    useConverterStore.setState({ aspectRatio: ratio });
+    applyConversionParameters(useConverterStore.getState, parameters);
+    expect(useConverterStore.getState()).toMatchObject({ target_width_mm: width, target_height_mm: height });
+  });
+
+  it("captures identical sizes independently of the last edited axis", () => {
+    useConverterStore.setState({ aspectRatio: 1.5 });
+    useConverterStore.getState().setTargetWidthMm(150);
+    const fromWidth = captureConversionParameters(useConverterStore.getState());
+    useConverterStore.getState().setTargetHeightMm(100);
+    expect(captureConversionParameters(useConverterStore.getState())).toEqual(fromWidth);
+  });
+
+  it.each(["width", "height"])("migrates old %s presets without losing their saved value", axis => {
+    const old = { ...captureConversionParameters(useConverterStore.getState()), size_axis: axis, size_mm: 180 };
+    const restored = normalizeConversionPreferences({ last: old, presets: [{ id: "old", name: "Old", parameters: old }] });
+    expect(restored.last).toMatchObject({ size_axis: "long_edge", size_mm: 180 });
+    expect(restored.presets[0].parameters).toEqual(restored.last);
+  });
+
+  it("constrains a preset's long edge to the bed while preserving image proportions", () => {
+    const parameters = { ...captureConversionParameters(useConverterStore.getState()), size_mm: 400 };
+    useConverterStore.setState({ aspectRatio: 2, bedSizes: [{ label: "Default bed", width_mm: 256,
+      height_mm: 256, is_default: true, printer_id: useSettingsStore.getState().printerModel }] });
+    applyConversionParameters(useConverterStore.getState, parameters);
+    expect(useConverterStore.getState()).toMatchObject({ target_width_mm: 256, target_height_mm: 128 });
+  });
+
+  it("excludes optional settings by default and preserves them when applying or updating", () => {
+    useConverterStore.setState({ enable_cleanup: false, enable_outline: true, outline_width: 3,
+      enable_coating: true, coating_height_mm: 0.12 });
+    const saved = useConverterStore.getState().saveConversionPreset("Base only");
+    if (!("id" in saved)) throw new Error("Save failed");
+    const parameters = useSettingsStore.getState().conversionPreferences.presets[0].parameters;
+    for (const key of ["enable_cleanup", "enable_outline", "outline_width", "enable_coating", "coating_height_mm"]) {
+      expect(parameters).not.toHaveProperty(key);
+    }
+    useConverterStore.setState({ enable_cleanup: true, enable_outline: false, outline_width: 5,
+      enable_coating: false, coating_height_mm: 0.04 });
+    useConverterStore.getState().applyConversionPreset(saved.id);
+    expect(useConverterStore.getState()).toMatchObject({ enable_cleanup: true, enable_outline: false,
+      outline_width: 5, enable_coating: false, coating_height_mm: 0.04 });
+    useConverterStore.getState().updateConversionPreset(saved.id);
+    expect(useSettingsStore.getState().conversionPreferences.presets[0].parameters).not.toHaveProperty("enable_coating");
+  });
+
+  it.each(["advanced", "outline", "coating"] as const)("round-trips only the selected %s group", group => {
+    useConverterStore.setState({ enable_cleanup: false, chroma_gate: 12, enable_outline: true,
+      outline_width: 3, enable_coating: true, coating_height_mm: 0.12 });
+    const result = useConverterStore.getState().saveConversionPreset("Selected", {
+      advanced: group === "advanced", outline: group === "outline", coating: group === "coating",
+    });
+    if (!("id" in result)) throw new Error("Save failed");
+    const restored = normalizeConversionPreferences(JSON.parse(JSON.stringify(useSettingsStore.getState().conversionPreferences)));
+    useSettingsStore.getState().setConversionPreferences(restored);
+    useConverterStore.setState({ enable_cleanup: true, chroma_gate: 20, enable_outline: false,
+      outline_width: 5, enable_coating: false, coating_height_mm: 0.04 });
+    useConverterStore.getState().applyConversionPreset(result.id);
+    expect(useConverterStore.getState()).toMatchObject({
+      enable_cleanup: group !== "advanced", chroma_gate: group === "advanced" ? 12 : 20,
+      enable_outline: group === "outline", outline_width: group === "outline" ? 3 : 5,
+      enable_coating: group === "coating", coating_height_mm: group === "coating" ? 0.12 : 0.04,
+    });
   });
 
   it("keeps factory inputs when the first action is importing someone else's project", () => {

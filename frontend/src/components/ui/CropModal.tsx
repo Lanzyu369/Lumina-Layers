@@ -1,10 +1,16 @@
+import CloseButton from "./CloseButton";
 import "cropperjs/dist/cropper.css";
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import ReactCropper from "react-cropper";
 import type { ReactCropperElement } from "react-cropper";
+import { ArrowUturnLeftIcon, ArrowUturnRightIcon } from "@heroicons/react/24/outline";
 import { useI18n } from "../../i18n/context";
+import type { ImageRotationDegrees } from "../../utils/imageRotation";
+import Button from "./Button";
+import { compactFieldClass, cx } from "./panelPrimitives";
+import { wheelZoomDelta, wheelZoomFactor } from "../../utils/wheelZoom";
 
 // ========== Types ==========
 
@@ -13,6 +19,7 @@ export interface CropData {
   y: number;
   width: number;
   height: number;
+  rotation: 0 | ImageRotationDegrees;
 }
 
 export interface CropModalProps {
@@ -22,6 +29,7 @@ export interface CropModalProps {
   onUseOriginal: () => void;
   onClose: () => void;
   isLoading?: boolean;
+  allowCrop?: boolean;
 }
 
 // ========== Constants ==========
@@ -50,9 +58,11 @@ export function CropModal({
   onUseOriginal,
   onClose,
   isLoading = false,
+  allowCrop = true,
 }: CropModalProps) {
   const { t } = useI18n();
   const cropperRef = useRef<ReactCropperElement>(null);
+  const cropAreaRef = useRef<HTMLDivElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
@@ -63,6 +73,13 @@ export function CropModal({
   const [cropY, setCropY] = useState(0);
   const [cropW, setCropW] = useState(0);
   const [cropH, setCropH] = useState(0);
+  const [rotation, setRotation] = useState<0 | ImageRotationDegrees>(0);
+
+  useEffect(() => {
+    if (!open) return;
+    setRotation(0);
+    setActiveRatio(NaN);
+  }, [open, imageSrc]);
 
   // Track whether manual input is in progress to avoid feedback loops
   const isManualInputRef = useRef(false);
@@ -124,6 +141,28 @@ export function CropModal({
 
   // ---------- Cropper callbacks ----------
 
+  useEffect(() => {
+    const area = cropAreaRef.current;
+    if (!open || !area) return;
+    const handleWheel = (event: WheelEvent) => {
+      const cropper = cropperRef.current?.cropper;
+      if (!cropper) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const delta = wheelZoomDelta(event.deltaY, event.deltaMode, area.clientHeight);
+      if (delta === 0) return;
+      const canvas = cropper.getCanvasData();
+      if (!(canvas.naturalWidth > 0) || !(canvas.width > 0)) return;
+      const rect = (area.querySelector(".cropper-container") ?? area).getBoundingClientRect();
+      cropper.zoomTo(canvas.width / canvas.naturalWidth * wheelZoomFactor(delta), {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      });
+    };
+    area.addEventListener("wheel", handleWheel, { passive: false });
+    return () => area.removeEventListener("wheel", handleWheel);
+  }, [open]);
+
   const handleCropEvent = useCallback(() => {
     if (isManualInputRef.current) return;
     const cropper = cropperRef.current?.cropper;
@@ -161,6 +200,29 @@ export function CropModal({
   }, []);
 
   // ---------- Manual coordinate input ----------
+
+  const handleRotate = (delta: number) => {
+    const cropper = cropperRef.current?.cropper;
+    if (!cropper || isLoading) return;
+    const next = ((rotation + delta + 360) % 360) as 0 | ImageRotationDegrees;
+    // Refit the selection to the rotated image instead of clipping its edges.
+    cropper.clear();
+    cropper.rotateTo(next);
+    const canvas = cropper.getCanvasData();
+    const container = cropper.getContainerData();
+    const zoom = Math.min(container.width / canvas.naturalWidth, container.height / canvas.naturalHeight);
+    cropper.zoomTo(zoom);
+    cropper.setCanvasData({
+      left: (container.width - canvas.naturalWidth * zoom) / 2,
+      top: (container.height - canvas.naturalHeight * zoom) / 2,
+    });
+    if (allowCrop) {
+      cropper.crop();
+      cropper.setData({ x: 0, y: 0, width: canvas.naturalWidth, height: canvas.naturalHeight });
+    }
+    setRotation(next);
+    handleCropEvent();
+  };
 
   const syncManualInput = useCallback(
     (field: "x" | "y" | "width" | "height", raw: string) => {
@@ -200,8 +262,9 @@ export function CropModal({
       y: data.y,
       width: data.width,
       height: data.height,
+      rotation,
     });
-  }, [onConfirm]);
+  }, [onConfirm, rotation]);
 
   // ---------- Render ----------
 
@@ -221,39 +284,28 @@ export function CropModal({
         aria-modal="true"
         aria-label={t("crop_modal_title")}
         onClick={(e) => e.stopPropagation()}
-        className="relative flex max-h-[90vh] w-full max-w-3xl flex-col rounded-lg bg-slate-50 shadow-2xl outline-none dark:bg-slate-800"
+        className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-y-auto overscroll-y-contain rounded-2xl bg-slate-50 outline-none dark:bg-slate-900"
       >
         {/* Title bar */}
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
           <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100">
             {t("crop_modal_title")}
           </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
-            aria-label={t("crop_modal_close")}
-          >
-            <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path
-                fillRule="evenodd"
-                d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-                clipRule="evenodd"
-              />
-            </svg>
-          </button>
+          <CloseButton label={t("crop_modal_close")} onClick={onClose} />
         </div>
 
         {/* Cropper area */}
-        <div className="min-h-0 flex-1 overflow-hidden px-4 py-3">
+        <div ref={cropAreaRef} className="h-[42vh] shrink-0 overflow-hidden px-4 py-3">
           <ReactCropper
             ref={cropperRef}
             src={imageSrc}
             style={{ height: "100%", maxHeight: "50vh", width: "100%" }}
             viewMode={1}
-            dragMode="crop"
+            dragMode={allowCrop ? "crop" : "move"}
+            autoCrop={allowCrop}
             autoCropArea={1}
             responsive={true}
+            zoomOnWheel={false}
             guides={true}
             crop={handleCropEvent}
             ready={handleReady}
@@ -265,36 +317,42 @@ export function CropModal({
           <span>
             {t("crop_modal_original")}: {naturalWidth} × {naturalHeight} {t("common_unit_px")}
           </span>
-          <span>
+          {allowCrop && <span>
             {t("crop_modal_selection")}: {cropW} × {cropH} {t("common_unit_px")}
-          </span>
+          </span>}
         </div>
 
         {/* Aspect ratio presets */}
-        <div className="flex flex-wrap gap-1.5 px-4 py-2">
+        <div className="flex flex-wrap gap-2 px-4 py-2">
+          <Button label={t("crop_modal_rotate_left")} variant="secondary" size="sm"
+            leadingIcon={<ArrowUturnLeftIcon className="size-4" />}
+            onClick={() => handleRotate(-90)} disabled={isLoading} />
+          <Button label={t("crop_modal_rotate_right")} variant="secondary" size="sm"
+            leadingIcon={<ArrowUturnRightIcon className="size-4" />}
+            onClick={() => handleRotate(90)} disabled={isLoading} />
+        </div>
+        {!allowCrop && <p className="px-4 py-2 text-sm text-slate-500 dark:text-slate-400">{t("crop_modal_svg_rotation_only")}</p>}
+        {allowCrop && <div className="flex flex-wrap gap-1.5 px-4 py-2">
           {ASPECT_RATIO_PRESETS.map((preset) => {
             const isActive =
               (isNaN(activeRatio) && isNaN(preset.value)) ||
               activeRatio === preset.value;
             return (
-              <button
+              <Button
                 key={preset.label}
-                type="button"
+                label={preset.label === "crop_modal_free" ? t("crop_modal_free") : preset.label}
+                variant="ghost"
+                size="sm"
+                active={isActive}
+                disabled={isLoading}
                 onClick={() => handleAspectRatioChange(preset.value)}
-                className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-                  isActive
-                    ? "bg-blue-600 text-white"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
-                }`}
-              >
-                {preset.label === "crop_modal_free" ? t("crop_modal_free") : preset.label}
-              </button>
+              />
             );
           })}
-        </div>
+        </div>}
 
         {/* Manual coordinate inputs */}
-        <div className="flex flex-wrap gap-3 px-4 py-2">
+        {allowCrop && <div className="grid grid-cols-2 gap-3 px-4 py-2 sm:grid-cols-4">
           {(
             [
               { label: t("crop_modal_axis_x"), value: cropX, field: "x" },
@@ -303,7 +361,7 @@ export function CropModal({
               { label: t("crop_height"), value: cropH, field: "height" },
             ] as const
           ).map((item) => (
-            <label key={item.label} className="flex items-center gap-1.5 text-xs">
+            <label key={item.label} className="flex min-w-0 flex-col gap-1.5 text-xs">
               <span className="text-slate-600 dark:text-slate-400">
                 {item.label}
               </span>
@@ -311,52 +369,28 @@ export function CropModal({
                 type="number"
                 min={0}
                 value={item.value}
+                disabled={isLoading}
                 onChange={(e) => syncManualInput(item.field, e.target.value)}
-                className="w-20 rounded border border-slate-300 bg-slate-50 px-2 py-1 text-xs text-slate-800 outline-none focus:border-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200"
+                className={cx(compactFieldClass, "py-1 text-xs")}
               />
             </label>
           ))}
-        </div>
+        </div>}
 
         {/* Bottom buttons */}
         <div className="flex items-center justify-end gap-3 border-t border-slate-200 px-4 py-3 dark:border-slate-700">
-          <button
-            type="button"
+          <Button
+            label={t("crop_modal_use_original")}
+            variant="secondary"
             onClick={onUseOriginal}
             disabled={isLoading}
-            className="rounded-md bg-slate-600 px-4 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {t("crop_modal_use_original")}
-          </button>
-          <button
-            type="button"
+          />
+          <Button
+            label={t("crop_modal_confirm")}
             onClick={handleConfirm}
-            disabled={isLoading}
-            className="flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {isLoading && (
-              <svg
-                className="h-4 w-4 animate-spin"
-                viewBox="0 0 24 24"
-                fill="none"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                />
-              </svg>
-            )}
-            {t("crop_modal_confirm")}
-          </button>
+            loading={isLoading}
+            variant="primary"
+          />
         </div>
       </div>
     </div>,

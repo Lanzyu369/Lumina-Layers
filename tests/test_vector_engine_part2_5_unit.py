@@ -360,6 +360,33 @@ def test_vector_parse_clip_artifact_carries_stable_provenance(tmp_path):
     ) is None
 
 
+def test_vector_artifact_before_conditioned_arc_parser_is_rebuilt(tmp_path):
+    source = tmp_path / "source.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+    cache_key = vector_engine._vector_parse_clip_cache_key(
+        str(source), target_width_mm=10.0, sampling_precision=0.02,
+        expand_stroke_to_fill=False, gradient_color_bands=None,
+    )
+    geometry = box(0, 0, 1, 1)
+    payload = pickle.loads(vector_engine._serialize_vector_parse_clip_cache(
+        cache_key, {
+            "shape_data": [{"poly": geometry, "color": (255, 0, 0)}],
+            "clipped_shapes": [{"geometry": geometry, "color": (255, 0, 0)}],
+            "silhouette": geometry, "scale_factor": 1.0, "bbox": (0, 0, 1, 1),
+        },
+    ))
+    # Even with matching source/native runtime, a former successful legacy
+    # parse may contain geometry corrupted by acos-rounded short arcs.
+    payload["schema"] = "lumina_vector_parse_clip_cache_v5"
+    artifact = tmp_path / "old_parse_clip.pkl"
+    artifact.write_bytes(pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
+
+    assert vector_engine._load_vector_parse_clip_cache_artifact(str(artifact), cache_key) is None
+    assert vector_engine._load_vector_parse_clip_cache_artifact_by_provenance(
+        str(artifact), payload["provenance"],
+    ) is None
+
+
 def test_vector_cache_reloads_same_path_size_and_restored_timestamp(tmp_path):
     source = tmp_path / "overwritten.svg"
     source.write_bytes(b"<svg>A</svg>")

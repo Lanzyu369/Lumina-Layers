@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readyMaterialSelection } from "./fixtures/nativeMaterialSelection";
 
 const api = vi.hoisted(() => ({
   preview: vi.fn(), generate: vi.fn(), batch: vi.fn(),
@@ -7,10 +6,10 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("../api/converter", async () => ({
   ...await vi.importActual<typeof import("../api/converter")>("../api/converter"),
+  fetchExportMaterialSelection: vi.fn(async () => (await import("./fixtures/exportMaterialSelection")).READY_EXPORT_MATERIAL_SELECTION),
   convertPreview: api.preview,
   convertGenerate: api.generate,
   convertBatch: api.batch,
-  fetchExportMaterialSelection: vi.fn(),
   fetchGradientGroups: vi.fn().mockResolvedValue({ status: "ok", groups: [] }),
   getEditorSelection: vi.fn().mockResolvedValue(null),
 }));
@@ -20,7 +19,6 @@ vi.mock("../api/system", async () => ({
 }));
 
 import { ModelingMode } from "../api/types";
-import { fetchExportMaterialSelection } from "../api/converter";
 import { DEFAULT_STATE, useConverterStore } from "../stores/converter";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 import { exportConverterRecipe } from "../recipe/exportRecipe";
@@ -61,7 +59,6 @@ function wrapRecipe(base = exportConverterRecipe(useConverterStore.getState(), D
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(fetchExportMaterialSelection).mockResolvedValue(readyMaterialSelection());
   localStorage.clear();
   useSettingsStore.setState({ ...DEFAULT_SETTINGS });
   useConverterStore.setState({
@@ -122,8 +119,7 @@ describe("source SVG compensation product contract", () => {
     let resolve!: (value: ReturnType<typeof previewResponse>) => void;
     api.preview.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     const pending = useConverterStore.getState().submitPreview();
-    await Promise.resolve();
-    expect(api.preview).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(api.preview).toHaveBeenCalledOnce());
     useConverterStore.getState().setSvgHoleMaxAreaMm2(1);
     resolve(previewResponse());
     await pending;
@@ -193,8 +189,7 @@ describe("source SVG compensation product contract", () => {
     let resolve!: (value: ReturnType<typeof previewResponse>) => void;
     api.preview.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     const pending = useConverterStore.getState().submitPreview();
-    await Promise.resolve();
-    expect(api.preview).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(api.preview).toHaveBeenCalledOnce());
     useConverterStore.getState().setTargetWidthMm(220);
     resolve(previewResponse());
     await pending;
@@ -298,7 +293,7 @@ describe("source SVG compensation product contract", () => {
 
   it("discards an earlier batch response when vector mode restores saved compensation", async () => {
     useConverterStore.getState().setSvgHoleMaxAreaMm2(1.25);
-    useConverterStore.setState({ ...DEFAULT_STATE, lut_name: "test-lut", lut_names: ["test-lut"] });
+    useConverterStore.setState({ ...DEFAULT_STATE, source_version: "legacy", lut_name: "test-lut", lut_names: ["test-lut"] });
     useConverterStore.getState().handleFilesSelect([svgFile(), svgFile()]);
     let resolve!: (value: object) => void;
     api.batch.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));

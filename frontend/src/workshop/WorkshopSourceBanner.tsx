@@ -1,4 +1,5 @@
 import { useI18n } from "../i18n/context";
+import { StatusBanner } from "../components/ui/panelPrimitives";
 import type {
   WorkshopColorLibrary,
   WorkshopRecipeSource,
@@ -28,9 +29,9 @@ export default function WorkshopSourceBanner({
     );
 
   return (
-    <section
+    <StatusBanner
+      tone="info"
       aria-label={t("workshop_source_banner_title")}
-      className="rounded-lg border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] p-3"
     >
       <div className="text-xs font-semibold text-slate-800 dark:text-slate-100">
         {t("workshop_source_banner_title")}
@@ -68,6 +69,6 @@ export default function WorkshopSourceBanner({
       <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
         {t("workshop_source_banner_guidance")}
       </p>
-    </section>
+    </StatusBanner>
   );
 }

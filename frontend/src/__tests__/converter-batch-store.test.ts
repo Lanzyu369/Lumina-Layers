@@ -1,12 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { BatchResponse } from "../api/types";
 import { StructureMode, ColorMode, ModelingMode } from "../api/types";
-import { readyMaterialSelection } from "./fixtures/nativeMaterialSelection";
 
 // Mock the converter API module
 vi.mock("../api/converter", () => ({
+  fetchExportMaterialSelection: vi.fn(async () => (await import("./fixtures/exportMaterialSelection")).READY_EXPORT_MATERIAL_SELECTION),
   convertBatch: vi.fn(),
-  fetchExportMaterialSelection: vi.fn(),
   fetchLutList: vi.fn(),
   convertPreview: vi.fn(),
   convertGenerate: vi.fn(),
@@ -17,7 +16,7 @@ vi.mock("../api/converter", () => ({
 }));
 
 import { useConverterStore } from "../stores/converter";
-import { convertBatch, fetchExportMaterialSelection } from "../api/converter";
+import { convertBatch } from "../api/converter";
 
 const mockedConvertBatch = vi.mocked(convertBatch);
 
@@ -33,6 +32,7 @@ function resetStore(overrides: Record<string, unknown> = {}): void {
     batchLoading: false,
     batchResult: null,
     error: null,
+    source_version: "legacy",
     lut_name: "test-lut",
     target_width_mm: 60,
     spacer_thick: 1.2,
@@ -67,7 +67,6 @@ describe("submitBatch modelUrl 与 batchResult 状态管理", () => {
   beforeEach(() => {
     resetStore();
     vi.clearAllMocks();
-    vi.mocked(fetchExportMaterialSelection).mockResolvedValue(readyMaterialSelection());
   });
 
   it.each([true, false])("forwards coating and compensation settings for multiple SVGs: %s", async (enabled) => {

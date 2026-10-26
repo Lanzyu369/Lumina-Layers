@@ -25,6 +25,7 @@ EXPECTED_MIME: dict[str, str] = {
     ".json": "application/json",
     ".png": "image/png",
     ".jpg": "image/jpeg",
+    ".jfif": "image/jpeg",
     ".heic": "image/heic",
     ".heif": "image/heif",
     ".svg": "image/svg+xml",

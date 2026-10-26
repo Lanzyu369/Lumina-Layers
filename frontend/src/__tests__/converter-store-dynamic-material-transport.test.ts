@@ -1,10 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readyMaterialSelection } from "./fixtures/nativeMaterialSelection";
 
 const mocks = vi.hoisted(() => ({
   convertPreview: vi.fn(),
   convertGenerate: vi.fn(),
-  fetchExportMaterialSelection: vi.fn(),
   convertBatch: vi.fn(),
   replaceColorsBatch: vi.fn(),
   applyRecipeOverride: vi.fn(),
@@ -19,9 +17,9 @@ vi.mock("../api/converter", async () => {
   );
   return {
     ...actual,
+    fetchExportMaterialSelection: vi.fn(async () => (await import("./fixtures/exportMaterialSelection")).READY_EXPORT_MATERIAL_SELECTION),
     convertPreview: mocks.convertPreview,
     convertGenerate: mocks.convertGenerate,
-    fetchExportMaterialSelection: mocks.fetchExportMaterialSelection,
     convertBatch: mocks.convertBatch,
     replaceColorsBatch: mocks.replaceColorsBatch,
     applyRecipeOverride: mocks.applyRecipeOverride,
@@ -137,7 +135,6 @@ function seedMaterialState(dynamicEnabled = true): void {
 describe("dynamic material request transport", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.fetchExportMaterialSelection.mockResolvedValue(readyMaterialSelection());
     useConverterStore.setState({ ...DEFAULT_STATE } as never);
     useSettingsStore.setState({ ...DEFAULT_SETTINGS });
     mocks.fetchGradientGroups.mockResolvedValue({ status: "ok", groups: [] });

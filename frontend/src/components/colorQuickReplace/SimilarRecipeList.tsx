@@ -68,7 +68,7 @@ export function RecipeLayerChips({
           <span
             key={`${layer}-${index}`}
             title={`${layer + 1}. ${label}`}
-            className="inline-flex h-4 min-w-4 items-center justify-center rounded-[4px] border border-slate-300/80 px-0.5 text-[9px] font-semibold leading-none text-slate-600 dark:border-slate-600/80 dark:text-slate-300"
+            className="inline-flex h-4 min-w-4 items-center justify-center rounded-md border border-slate-300/80 px-0.5 text-[9px] font-semibold leading-none text-slate-600 dark:border-slate-600/80 dark:text-slate-300"
             style={channel?.hex ? { backgroundColor: channel.hex } : undefined}
           >
             {channel?.hex ? "" : label.slice(0, 1).toUpperCase()}
@@ -135,7 +135,7 @@ export default function SimilarRecipeList({
             </div>
             <Button
               label={t("quick_replace_recipe_apply")}
-              variant="secondary"
+              variant="primary"
               size="sm"
               disabled={!canApply || busy}
               onClick={() => onApply(item)}

@@ -32,7 +32,7 @@ describe("ReliefSettings", () => {
   it("allows vector mode to enable the existing relief controls", () => {
     render(<ReliefSettings />);
 
-    const checkbox = screen.getByRole("checkbox", { name: "启用浮雕" });
+    const checkbox = screen.getByRole("switch", { name: "启用浮雕" });
     expect(checkbox).toBeEnabled();
     const label = checkbox.closest("label");
     if (!label) throw new Error("Relief checkbox label is missing");
@@ -65,7 +65,7 @@ describe("ReliefSettings", () => {
     render(<ReliefSettings />);
 
     expect(
-      screen.getByRole("checkbox", { name: /启用浮雕/ }),
+      screen.getByRole("switch", { name: /启用浮雕/ }),
     ).toBeDisabled();
   });
 
@@ -78,7 +78,7 @@ describe("ReliefSettings", () => {
     render(<ReliefSettings />);
 
     expect(
-      screen.getByRole("checkbox", { name: /启用浮雕/ }),
+      screen.getByRole("switch", { name: /启用浮雕/ }),
     ).toBeDisabled();
   });
 
@@ -94,14 +94,14 @@ describe("ReliefSettings", () => {
       lutColorsLutName: "legacy-five",
     } as never);
     render(<ReliefSettings />);
-    fireEvent.click(screen.getByRole("checkbox", { name: "启用浮雕" }));
+    fireEvent.click(screen.getByRole("switch", { name: "启用浮雕" }));
     expect(screen.getByRole("slider", { name: "最大高度" })).toBeInTheDocument();
 
     act(() => {
       useConverterStore.getState().setLutName("legacy-five");
     });
 
-    const checkbox = screen.getByRole("checkbox", { name: /启用浮雕/ });
+    const checkbox = screen.getByRole("switch", { name: /启用浮雕/ });
     expect(checkbox).toBeDisabled();
     expect(checkbox).not.toBeChecked();
     expect(screen.queryByRole("slider", { name: "最大高度" })).toBeNull();

@@ -6,7 +6,9 @@ import json
 import hashlib
 import logging
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import httpx
 import pytest
@@ -140,6 +142,56 @@ def _registry_install_catalog() -> dict[str, object]:
             }
         ],
     }
+
+
+@pytest.mark.parametrize(
+    ("operation", "method", "path"),
+    [
+        ("list_material_registry_catalog", "GET", "/api/material-sync/catalog"),
+        ("refresh_material_sync_from_registry", "POST", "/api/material-sync/refresh"),
+        ("list_material_registry_catalog", "POST", "/api/material-sync/install-from-registry"),
+        ("install_material_registry_package", "POST", "/api/material-sync/install-from-registry"),
+    ],
+)
+def test_local_api_responds_while_registry_request_is_waiting(
+    monkeypatch: pytest.MonkeyPatch, operation: str, method: str, path: str
+) -> None:
+    """A stalled cloud request must not prevent local API responses."""
+    entered = Event()
+    release = Event()
+
+    def unavailable_registry(*args: object, **kwargs: object) -> None:
+        entered.set()
+        if not release.wait(timeout=10):
+            raise RuntimeError("Test registry wait expired")
+        raise RuntimeError("Material registry catalog request failed")
+
+    monkeypatch.setenv("LUMINA_MATERIAL_SYNC_STARTUP_REFRESH", "false")
+    monkeypatch.setenv("LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S", "0")
+    monkeypatch.setattr(
+        "api.routers.material_sync.list_material_registry_catalog",
+        lambda **kwargs: _registry_install_catalog(),
+    )
+    monkeypatch.setattr(f"api.routers.material_sync.{operation}", unavailable_registry)
+    with _client() as client, ThreadPoolExecutor(max_workers=2) as executor:
+        payload = {
+            "material_id": "mat_cloud_test",
+            "revision_id": "rev_cloud_test",
+            "package_url": "/v1/packages/material_package.zip",
+            "package_sha256": "a" * 64,
+        }
+        cloud = executor.submit(
+            client.request, method, path,
+            **({"json": payload} if path.endswith("install-from-registry") else {}),
+        )
+        try:
+            assert entered.wait(timeout=5), "Cloud request did not reach the registry"
+            local = executor.submit(client.get, "/api/health")
+            assert local.result(timeout=2).status_code == 200
+            assert not cloud.done(), "Cloud request should still be waiting"
+        finally:
+            release.set()
+        assert cloud.result(timeout=5).status_code == 502
 
 
 def _write_v2_material_package(
@@ -3161,6 +3213,7 @@ def test_material_sync_status_lists_installed_package_and_local_presence(
         "local_exists": True,
         "material_file_exists": True,
         "available_revisions": [],
+        "revision_history": [],
     }
 
 

@@ -23,7 +23,7 @@ describe("coating toggle and thickness", () => {
   it("enables coating without a material selector or library request", () => {
     render(<CoatingSettings />);
     expect(screen.queryByRole("slider")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("checkbox", { name: /coating_enable/ }));
+    fireEvent.click(screen.getByRole("switch", { name: /coating_enable/ }));
     expect(useConverterStore.getState().enable_coating).toBe(true);
     expect(screen.getByRole("slider")).toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
@@ -35,9 +35,9 @@ describe("coating toggle and thickness", () => {
     render(<CoatingSettings />);
     fireEvent.change(screen.getByRole("slider"), { target: { value: "0.12" } });
     expect(useConverterStore.getState().coating_height_mm).toBe(0.12);
-    fireEvent.click(screen.getByRole("checkbox", { name: /coating_enable/ }));
+    fireEvent.click(screen.getByRole("switch", { name: /coating_enable/ }));
     expect(screen.queryByRole("slider")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("checkbox", { name: /coating_enable/ }));
+    fireEvent.click(screen.getByRole("switch", { name: /coating_enable/ }));
     expect(screen.getByRole("slider")).toHaveValue("0.12");
   });
 

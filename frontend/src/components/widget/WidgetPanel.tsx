@@ -1,26 +1,25 @@
 /**
- * Widget panel component with drag, collapse animation, and frosted glass effect.
- * Widget 面板组件，支持拖拽、折叠动画和毛玻璃效果。
+ * Widget panel component with drag, collapse animation, and a translucent background.
+ * Widget 面板组件，支持拖拽、折叠动画和半透明背景。
  *
  * Uses ResizeObserver on the content area to measure expanded height.
- * Content is always in the DOM but hidden via height:0 + contentVisibility:hidden
- * when collapsed, allowing scrollHeight measurement without double-instantiating
- * children while letting the browser skip layout for hidden content.
+ * Content stays laid out until the collapse animation finishes, then is hidden
+ * via height:0 + contentVisibility:hidden without unmounting children.
  * The outer motion.div animates its own height with overflow:hidden to clip,
  * so the content reveal is driven by a single animation source and stays in
  * sync with sibling position shifts (computed from cached expandedHeight).
  * 使用 ResizeObserver 在内容区域测量展开高度。
- * 折叠时内容始终保留在 DOM 中（height:0 + contentVisibility:hidden），
- * 避免 double-instantiating 子组件，同时让浏览器跳过隐藏内容的布局。
+ * 收起动画结束后才隐藏内容，子组件始终保留在 DOM 中，避免重置表单状态。
  * 外层 motion.div 通过 height 动画 + overflow:hidden 裁剪来控制内容可见
  * 区域，展开效果由单一动画源驱动，与同级组件位置避让同步（使用缓存
  * 的 expandedHeight 计算位置，不依赖动画中间态的 DOM 高度）。
  */
 
-import React, { Component, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import React, { Component, useCallback, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { motion } from 'framer-motion';
 import { WidgetHeader } from './WidgetHeader';
+import { WIDGET_TRANSITION } from './widgetMotion';
 import { useWidgetStore } from '../../stores/widgetStore';
 import { COLLAPSED_HEIGHT, WIDGET_PANEL_RADIUS, WIDGET_WIDTH } from '../../utils/widgetUtils';
 import type { WidgetId } from '../../types/widget';
@@ -60,7 +59,7 @@ function WidgetErrorFallback({ onRetry }: { onRetry: () => void }) {
     <div className="p-4 text-center text-sm text-red-500">
       <p>{t('widget_error')}</p>
       <button
-        className="mt-2 px-3 py-1 text-xs bg-red-100 dark:bg-red-900/30 rounded hover:bg-red-200"
+        className="action-control mt-2 px-3 py-1 text-xs rounded"
         onClick={onRetry}
       >
         {t('widget_retry')}
@@ -84,12 +83,12 @@ interface WidgetPanelProps {
  * 分属性过渡配置，实现快速响应的 Widget 动画。
  *
  * - left/top: fast ease-out tween for position shifts (被挤走时快速滑动)
- * - height: stiff spring for expand/collapse (展开/折叠用硬弹簧)
+ * - height: the same tween as the dock's clipping boundary
  */
 const TRANSITION_CONFIG = {
-  left: { type: 'tween' as const, duration: 0.2, ease: 'easeOut' as const },
-  top: { type: 'tween' as const, duration: 0.2, ease: 'easeOut' as const },
-  height: { type: 'tween' as const, duration: 0.2, ease: 'easeOut' as const },
+  left: WIDGET_TRANSITION,
+  top: WIDGET_TRANSITION,
+  height: WIDGET_TRANSITION,
 };
 
 export const WidgetPanel = React.memo(function WidgetPanel({
@@ -103,6 +102,7 @@ export const WidgetPanel = React.memo(function WidgetPanel({
   const toggleCollapse = useWidgetStore((s) => s.toggleCollapse);
   const setExpandedHeight = useWidgetStore((s) => s.setExpandedHeight);
   const isActiveDragWidget = useWidgetStore((s) => s.activeWidgetId === widgetId);
+  const [contentHidden, setContentHidden] = useState(widget?.collapsed ?? true);
 
   // Content area ref — used by ResizeObserver to measure expanded height
   const contentRef = useRef<HTMLDivElement>(null);
@@ -114,17 +114,19 @@ export const WidgetPanel = React.memo(function WidgetPanel({
   // Dispatch custom event when height animation completes so workspace
   // can do a final recalculation with accurate DOM heights.
   const handleAnimationComplete = useCallback(() => {
+    setContentHidden(useWidgetStore.getState().widgets[widgetId]?.collapsed ?? true);
     window.dispatchEvent(new CustomEvent('widget-animation-complete'));
-  }, []);
+  }, [widgetId]);
 
   // Measure content height via ResizeObserver on the visible content area.
-  // Content is always in the DOM (hidden via height:0 when collapsed),
-  // so scrollHeight remains measurable without a separate hidden div.
+  // Restore and measure content before the first expanded frame. Never
+  // overwrite its cached height with the collapsed/dragging content size.
   // Debounced to avoid rapid setExpandedHeight calls that cascade into
   // full workspace re-renders (each call creates a new widget object ref).
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = contentRef.current;
-    if (!el) return;
+    if (!el || !widget?.visible || widget.collapsed || isActiveDragWidget) return;
+    setContentHidden(false);
 
     let timer: ReturnType<typeof setTimeout> | null = null;
     const update = () => {
@@ -144,7 +146,7 @@ export const WidgetPanel = React.memo(function WidgetPanel({
       observer.disconnect();
       if (timer) clearTimeout(timer);
     };
-  }, [widgetId, setExpandedHeight]);
+  }, [widgetId, widget?.visible, widget?.collapsed, isActiveDragWidget, setExpandedHeight]);
 
   // Defensive: a missing store entry (stale same-version persisted layout)
   // is treated as invisible instead of crashing on property access.
@@ -152,6 +154,7 @@ export const WidgetPanel = React.memo(function WidgetPanel({
   if (!widget || !widget.visible) return null;
 
   const isBeingDragged = isActiveDragWidget && !!transform;
+  const hideContent = isBeingDragged || (widget.collapsed && contentHidden);
   const targetHeight = isBeingDragged
     ? COLLAPSED_HEIGHT
     : (widget.collapsed ? COLLAPSED_HEIGHT : widget.expandedHeight);
@@ -211,7 +214,7 @@ export const WidgetPanel = React.memo(function WidgetPanel({
         animate={animateTarget}
         transition={transition}
         onAnimationComplete={handleAnimationComplete}
-        className={`border border-slate-200/80 shadow-[var(--shadow-control)] will-change-transform bg-slate-50/80 dark:bg-slate-950/80`}
+        className="panel-card will-change-transform"
       >
         <WidgetHeader
           widgetId={widgetId}
@@ -223,11 +226,12 @@ export const WidgetPanel = React.memo(function WidgetPanel({
         />
         <div
           ref={contentRef}
+          inert={widget.collapsed || isBeingDragged}
           onPointerDown={(e) => e.stopPropagation()}
           style={{
-            height: widget.collapsed || isBeingDragged ? 0 : 'auto',
+            height: hideContent ? 0 : 'auto',
             overflow: 'hidden',
-            ...(widget.collapsed || isBeingDragged
+            ...(hideContent
               ? { visibility: 'hidden' as const, contentVisibility: 'hidden' as const }
               : {}),
           }}

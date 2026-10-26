@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import App from "../App";
+import { useSettingsStore } from "../stores/settingsStore";
 import { useWidgetStore } from "../stores/widgetStore";
 
 vi.mock("../api/client", () => ({
@@ -24,11 +25,6 @@ vi.mock("../components/Scene3D", () => ({
 
 import apiClient from "../api/client";
 
-async function renderReadyApp() {
-  render(<App />);
-  await screen.findByTestId("health-badge-ok");
-}
-
 describe("Widget Workspace Layout", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -39,26 +35,31 @@ describe("Widget Workspace Layout", () => {
       data: { status: "ok", version: "2.0", uptime_seconds: 100 },
     });
     useWidgetStore.getState().resetLayout();
+    useSettingsStore.setState({ headerNavAlignment: "center" });
   });
 
   it('preserves "Lumina Studio 2" header', async () => {
-    await renderReadyApp();
+    render(<App />);
+    await screen.findByTestId("tab-converter");
     expect(screen.getByText("Lumina Studio 2")).toBeInTheDocument();
   });
 
   it("renders widget workspace with Scene3D", async () => {
-    await renderReadyApp();
+    render(<App />);
+    await screen.findByTestId("tab-converter");
     expect(screen.getByTestId("scene3d-mock")).toBeInTheDocument();
   });
 
   it("renders panel controls toggle button in header", async () => {
-    await renderReadyApp();
+    render(<App />);
+    await screen.findByTestId("tab-converter");
     // Widget toggles are now inside a dropdown menu
     expect(screen.getByTestId("panel-controls-toggle")).toBeInTheDocument();
   });
 
   it("renders the full main-app top-level navigation", async () => {
-    await renderReadyApp();
+    render(<App />);
+    await screen.findByTestId("tab-converter");
     expect(screen.getByTestId("tab-converter")).toBeInTheDocument();
     expect(screen.getByTestId("tab-lut-management")).toBeInTheDocument();
     expect(screen.getByTestId("tab-material-management")).toBeInTheDocument();
@@ -68,7 +69,8 @@ describe("Widget Workspace Layout", () => {
   });
 
   it("places Creative Workshop between Vectorizer and Settings", async () => {
-    await renderReadyApp();
+    render(<App />);
+    await screen.findByTestId("tab-converter");
 
     const primaryTabs = screen
       .getAllByRole("button")
@@ -85,21 +87,86 @@ describe("Widget Workspace Layout", () => {
     ]);
   });
 
-  it("keeps the top-level navigation in the legacy centered header column", async () => {
-    await renderReadyApp();
+  it("keeps the top-level navigation in the centered header column by default", async () => {
+    render(<App />);
+    await screen.findByTestId("tab-converter");
 
     const converterTab = screen.getByTestId("tab-converter");
     const nav = converterTab.closest("nav");
     const header = nav?.closest("header");
     const tabWrapper = nav?.parentElement;
 
-    expect(header).toHaveClass("lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]");
-    expect(header).not.toHaveClass("lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]");
+    expect(header).toHaveClass("grid-cols-[auto_minmax(0,1fr)_auto]");
+    expect(tabWrapper).toHaveClass("col-start-2", "row-start-1", "justify-center");
     expect(tabWrapper).not.toHaveClass("w-full");
+    // Centering spacers flank both strips so the rows share one centre line.
+    expect(nav?.previousElementSibling).toHaveAttribute("aria-hidden", "true");
+    expect(nav?.nextElementSibling).toHaveAttribute("aria-hidden", "true");
+    const subTabs = screen.getByTestId("subtab-converter-core").closest("nav");
+    expect(subTabs?.previousElementSibling).toHaveAttribute("aria-hidden", "true");
+    expect(subTabs?.nextElementSibling).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByTestId("sub-tab-row")).toHaveClass("justify-center");
+  });
+
+  it("left-aligns both navigation rows when the setting asks for it", async () => {
+    useSettingsStore.setState({ headerNavAlignment: "left" });
+    render(<App />);
+    await screen.findByTestId("tab-converter");
+
+    const nav = screen.getByTestId("tab-converter").closest("nav");
+    const header = nav?.closest("header");
+    const tabWrapper = nav?.parentElement;
+
+    expect(header).toHaveClass("grid-cols-[auto_minmax(0,1fr)_auto]");
+    expect(tabWrapper).toHaveClass("col-start-2", "row-start-1", "justify-start");
+    expect(nav?.previousElementSibling).toHaveStyle({ display: "none" });
+    expect(nav?.nextElementSibling).toHaveStyle({ display: "none" });
+    expect(screen.getByTestId("sub-tab-row")).toHaveClass("justify-start");
+  });
+
+  it("keeps the sub tabs while the alignment setting changes", async () => {
+    render(<App />);
+    await screen.findByTestId("tab-converter");
+    const primaryTabs = screen.getByTestId("tab-converter").closest("nav");
+    const subTabs = screen.getByTestId("subtab-converter-core").closest("nav");
+
+    act(() => useSettingsStore.getState().setHeaderNavAlignment("left"));
+    expect(screen.getByTestId("sub-tab-row")).toHaveClass("justify-start");
+    expect(screen.getByTestId("subtab-converter-core")).toBeVisible();
+
+    act(() => useSettingsStore.getState().setHeaderNavAlignment("center"));
+    expect(screen.getByTestId("sub-tab-row")).toHaveClass("justify-center");
+    expect(screen.getByTestId("subtab-converter-core")).toBeVisible();
+
+    // The same strips stay mounted, keeping their scroll position and focus.
+    expect(screen.getByTestId("tab-converter").closest("nav")).toBe(primaryTabs);
+    expect(screen.getByTestId("subtab-converter-core").closest("nav")).toBe(subTabs);
+  });
+
+  it("applies the stored dark theme to the page", async () => {
+    useSettingsStore.setState({ theme: "dark" });
+    try {
+      render(<App />);
+    await screen.findByTestId("tab-converter");
+      expect(document.documentElement).toHaveClass("dark");
+    } finally {
+      useSettingsStore.setState({ theme: "light" });
+      document.documentElement.classList.remove("dark");
+    }
+  });
+
+  it("shows the brand title next to the logo while the header has room", async () => {
+    render(<App />);
+    await screen.findByTestId("tab-converter");
+
+    const title = screen.getByTestId("header-brand-title");
+    expect(title).toHaveTextContent("Lumina Studio 2");
+    expect(title).not.toHaveClass("max-w-0");
   });
 
   it("renders local LUT and material secondary tabs in the main app", async () => {
-    await renderReadyApp();
+    render(<App />);
+    await screen.findByTestId("tab-converter");
 
     fireEvent.click(screen.getByTestId("tab-lut-management"));
     expect(screen.getByTestId("subtab-lut-library")).toBeInTheDocument();

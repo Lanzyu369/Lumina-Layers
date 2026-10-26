@@ -27,7 +27,7 @@ describe("KeychainLoopSettings", () => {
     render(<KeychainLoopSettings />);
 
     expect(
-      screen.getByRole("checkbox", { name: "添加挂件环" }),
+      screen.getByRole("switch", { name: "添加挂件环" }),
     ).toBeDisabled();
   });
 });

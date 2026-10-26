@@ -1,3 +1,5 @@
+import CloseButton from "./CloseButton";
+import DisclosureChevron from "./DisclosureChevron";
 import {
   ChevronDownIcon,
   MagnifyingGlassIcon,
@@ -549,13 +551,7 @@ export default function MaterialPickerDialog({
             {formatMessage(t("basic_material_picker_profile_count"), {
               count: displayProfiles.length,
             })}
-            <ChevronDownIcon
-              className={cx(
-                "h-4 w-4 transition-transform",
-                expanded && "rotate-180",
-              )}
-              aria-hidden="true"
-            />
+            <DisclosureChevron expanded={expanded} />
           </button>
         </div>
 
@@ -702,14 +698,7 @@ export default function MaterialPickerDialog({
                 {t("basic_material_picker_dialog_subtitle")}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={onCancel}
-              aria-label={t("basic_material_picker_close")}
-              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)] dark:hover:bg-slate-800 dark:hover:text-slate-200"
-            >
-              <XMarkIcon className="h-5 w-5" aria-hidden="true" />
-            </button>
+            <CloseButton label={t("basic_material_picker_close")} onClick={onCancel} />
           </header>
 
           <div className="border-b border-slate-200/80 px-4 py-3 dark:border-slate-700/80 sm:px-6">
@@ -812,7 +801,7 @@ export default function MaterialPickerDialog({
               <p className="px-4 pb-2 pt-4 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
                 {t("basic_material_picker_brand_filter_label")}
               </p>
-              <div className="dock-scrollbar min-h-0 space-y-1 overflow-y-auto px-2 pb-4">
+              <div className="dock-scrollbar min-h-0 space-y-1 overflow-y-auto overscroll-y-contain px-2 pb-4">
                 {brandOptions.map((option) => {
                   const selected = brandKey === option.key;
                   return (
@@ -949,6 +938,7 @@ export default function MaterialPickerDialog({
                   label={t("basic_material_picker_done")}
                   onClick={handleDone}
                   size="sm"
+                  variant="primary"
                 />
               </div>
             </div>
@@ -981,12 +971,15 @@ export default function MaterialPickerDialog({
             }}
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <h3
-              id={confirmTitleId}
-              className="text-lg font-semibold text-slate-900 dark:text-slate-50"
-            >
-              {t("basic_material_picker_mixed_confirm_title")}
-            </h3>
+            <div className="flex items-start justify-between gap-3">
+              <h3
+                id={confirmTitleId}
+                className="text-lg font-semibold text-slate-900 dark:text-slate-50"
+              >
+                {t("basic_material_picker_mixed_confirm_title")}
+              </h3>
+              <CloseButton label={t("common_close")} onClick={() => setShowMixedConfirmation(false)} />
+            </div>
             <p
               id={confirmDescriptionId}
               className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300"
@@ -1008,7 +1001,7 @@ export default function MaterialPickerDialog({
               <button
                 type="button"
                 onClick={() => onConfirm(staged)}
-                className="min-h-10 rounded-xl bg-amber-500 px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-400 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)]"
+                className="action-control action-control-primary min-h-9 rounded-lg px-4 text-sm font-semibold"
               >
                 {t("basic_material_picker_mixed_continue")}
               </button>

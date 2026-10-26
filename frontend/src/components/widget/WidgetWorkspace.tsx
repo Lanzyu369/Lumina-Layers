@@ -8,7 +8,7 @@
  * 在拖拽结束时计算吸附，并管理 z-index 分层以与 Three.js 共存。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -21,7 +21,8 @@ import type {
   DragMoveEvent,
   DragEndEvent,
 } from '@dnd-kit/core';
-import { AnimatePresence } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
+import { WIDGET_TRANSITION } from './widgetMotion';
 import { useWidgetStore, WIDGET_REGISTRY, CONVERTER_SUB_TAB_WIDGET_MAP } from '../../stores/widgetStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { computeSnap, computeStackPositions, resolveResponsiveWidgetWidth, resolveWidgetHeight, WIDGET_WIDTH, COLLAPSED_HEIGHT, STACK_GAP, WIDGET_PANEL_RADIUS } from '../../utils/widgetUtils';
@@ -265,7 +266,14 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
       observeWidgets();
       debouncedRecalc();
     });
-    mutationObs.observe(container, { childList: true, subtree: true });
+    // Only widget membership changes require rebuilding the observation list.
+    // Content size changes are already covered by ResizeObserver; observing
+    // the whole workspace also rescanned the docks when the 3D canvas changed.
+    for (const dock of [leftDockRef.current, rightDockRef.current]) {
+      if (dock?.firstElementChild) {
+        mutationObs.observe(dock.firstElementChild, { childList: true });
+      }
+    }
     observeWidgets();
 
     return () => {
@@ -278,7 +286,6 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   useEffect(() => {
     window.addEventListener('resize', recalculateStacks);
     window.addEventListener('widget-animation-complete', recalculateStacks);
-    recalculateStacks(); // run once on mount for correct initial positions
 
     return () => {
       window.removeEventListener('resize', recalculateStacks);
@@ -286,16 +293,8 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
     };
   }, [recalculateStacks]);
 
-  // Recalculate stack positions when any widget's collapsed state or
-  // expandedHeight changes. Uses a one-frame debounce (16ms) so that
-  // sibling position shifts start in near-sync with the expand/collapse
-  // animation while still coalescing rapid layout changes.
-  // resolveWidgetHeight returns the cached expandedHeight (not the
-  // mid-animation DOM height) so the first recalculation is correct.
-  // 当任何 Widget 的 collapsed 状态或 expandedHeight 变化时重算堆叠位置。
-  // 使用一帧防抖（16ms），使同级组件位置避让与展开/折叠动画近同步开始，
-  // 同时合并快速布局变化。resolveWidgetHeight 返回缓存的 expandedHeight
-  // （而非动画中间态的 DOM 高度），确保首次重算位置正确。
+  // Commit sibling targets before paint so their movement starts with the
+  // panel and dock height animations, including rapid direction reversals.
   const layoutKey = useWidgetStore(
     useCallback(
       (s: { widgets: Record<WidgetId, { collapsed: boolean; expandedHeight: number }> }) =>
@@ -311,9 +310,8 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
     )
   );
 
-  useEffect(() => {
-    const timer = setTimeout(() => recalculateStacks(), 16);
-    return () => clearTimeout(timer);
+  useLayoutEffect(() => {
+    recalculateStacks();
   }, [layoutKey, activeTab, recalculateStacks]);
 
   // Auto-detect backdrop-filter support and disable blur if unsupported
@@ -604,19 +602,22 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
           />
 
           {/* Left Dock Layer — z-30 */}
-          <div
+          <motion.div
             ref={leftDockRef}
-              className="dock-scrollbar dock-scrollbar-hover absolute inset-y-0 left-0 z-30 overflow-x-hidden"
+            initial={false}
+            animate={{ height: leftStackHeight }}
+            transition={{ height: WIDGET_TRANSITION }}
+            className="dock-scrollbar dock-scrollbar-hover absolute top-0 left-0 z-30 max-h-full overflow-x-hidden overscroll-y-contain"
             onScroll={() => lockDockHorizontalScroll('left')}
             data-testid="left-dock"
             style={{
               width: dockScrollWidth,
-              pointerEvents: 'none',
+              pointerEvents: 'auto',
               overflowX: 'hidden',
               overscrollBehaviorX: 'none',
             }}
           >
-            <div className="relative min-h-full" style={{ height: leftStackHeight }}>
+            <motion.div className="relative min-h-full" initial={false} animate={{ height: leftStackHeight }} transition={{ height: WIDGET_TRANSITION }}>
               {leftRegistry.map((config) => {
                 const ContentComponent = WIDGET_CONTENT_MAP[config.id];
                 return (
@@ -631,23 +632,26 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
                   </WidgetPanel>
                 );
               })}
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
 
           {/* Right Dock Layer — z-30 */}
-          <div
+          <motion.div
             ref={rightDockRef}
-              className="dock-scrollbar dock-scrollbar-hover absolute inset-y-0 right-0 z-30 overflow-x-hidden"
+            initial={false}
+            animate={{ height: rightStackHeight }}
+            transition={{ height: WIDGET_TRANSITION }}
+            className="dock-scrollbar dock-scrollbar-hover absolute top-0 right-0 z-30 max-h-full overflow-x-hidden overscroll-y-contain"
             onScroll={() => lockDockHorizontalScroll('right')}
             data-testid="right-dock"
             style={{
               width: dockScrollWidth,
-              pointerEvents: 'none',
+              pointerEvents: 'auto',
               overflowX: 'hidden',
               overscrollBehaviorX: 'none',
             }}
           >
-            <div className="relative min-h-full" style={{ height: rightStackHeight }}>
+            <motion.div className="relative min-h-full" initial={false} animate={{ height: rightStackHeight }} transition={{ height: WIDGET_TRANSITION }}>
               {rightRegistry.map((config) => {
                 const ContentComponent = WIDGET_CONTENT_MAP[config.id];
                 return (
@@ -662,14 +666,14 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
                   </WidgetPanel>
                 );
               })}
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
 
           {/* DragOverlay — z-40 */}
           <DragOverlay>
             {activeWidgetId ? (
               <div
-                className="z-40 border border-slate-200/80 bg-slate-50/92 opacity-90 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-950/92"
+                className="panel-card z-40 opacity-90"
                 style={{ width: widgetWidth, height: COLLAPSED_HEIGHT, borderRadius: WIDGET_PANEL_RADIUS }}
               >
                 <div className="px-3 py-2 text-sm font-medium text-slate-600 dark:text-slate-300">
