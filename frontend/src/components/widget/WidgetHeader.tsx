@@ -1,4 +1,3 @@
-import DisclosureChevron from "../ui/DisclosureChevron";
 /**
  * Widget header component with drag handle, collapse toggle, and ARIA support.
  * Widget 标题栏组件，支持拖拽手柄、折叠切换和 ARIA 无障碍。
@@ -39,7 +38,6 @@ export function WidgetHeader({
       aria-expanded={!collapsed}
       aria-label={t(titleKey)}
       tabIndex={0}
-      className="flex items-center justify-between bg-slate-100/50 px-3 py-1.5 cursor-grab active:cursor-grabbing select-none touch-none dark:bg-[var(--surface-well)]"
       onDoubleClick={onToggleCollapse}
       onKeyDown={handleKeyDown}
       {...dragListeners}
@@ -59,7 +57,6 @@ export function WidgetHeader({
         onPointerDown={(e) => e.stopPropagation()}
         className="ghost-control ml-1 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-slate-500 dark:text-slate-400"
       >
-        <DisclosureChevron expanded={!collapsed} />
       </button>
     </div>
   );

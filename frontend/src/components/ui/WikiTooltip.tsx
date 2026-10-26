@@ -25,7 +25,6 @@ import {
 import { AnimatePresence, motion } from "framer-motion";
 import { useI18n } from "../../i18n/context";
 import { buildWikiDocUrl, type WikiDocPath } from "../../utils/wikiDocs";
-import { bindVerticalWheelScrollChain } from "../../utils/wheelScrollChain";
 
 interface WikiTooltipProps {
   /** Trigger element to wrap */
@@ -94,17 +93,6 @@ export default function WikiTooltip({
       flip(),
       shift({ padding: 8 }),
     ],
-    whileElementsMounted: (reference, floating, update) => {
-      const stopPositioning = autoUpdate(reference, floating, update);
-      const stopWheel = bindVerticalWheelScrollChain(
-        floating,
-        reference instanceof Element ? reference : reference.contextElement ?? null,
-      );
-      return () => {
-        stopPositioning();
-        stopWheel();
-      };
-    },
   });
 
   // 2. useHover — delay + safe hover bridge
@@ -186,7 +174,6 @@ export default function WikiTooltip({
             target="_blank"
             rel="noopener noreferrer"
             onClick={handleWikiClick}
-            className="pointer-events-auto text-xs text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 mt-2 inline-flex items-center gap-1"
           >
             {t("wiki_tooltip_link")}
           </a>

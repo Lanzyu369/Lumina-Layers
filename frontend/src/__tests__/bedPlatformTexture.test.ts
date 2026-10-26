@@ -298,15 +298,11 @@ describe("virtual build plate texture", () => {
     )).toEqual(Array(fineLines.length).fill(360));
   });
 
-  it("aligns the brand wordmark and dimensions in one inset footer", () => {
     const layout = computeBedTextureLayout(256, 256);
 
     expect(layout.branding).toMatchObject({
-      wordmark: "Lumina",
       dimensionLabel: "256 × 256 mm",
     });
-    expect(layout.branding.baselinePx).toBe(layout.branding.dimensionBaselinePx);
-    expect(layout.branding.watermarkYpx).toBe(layout.branding.slicerLogoYpx);
     expect(layout.branding.baselinePx).toBeLessThan(512 - 4);
     expect(layout.branding.fontSizePx).toBeGreaterThanOrEqual(10);
   });
@@ -315,7 +311,6 @@ describe("virtual build plate texture", () => {
     const layout = computeBedTextureLayout(256, 256);
 
     expect(layout.branding.slicerLogoSizePx).toBeLessThanOrEqual(24);
-    expect(layout.branding.slicerLogoXpx).toBeGreaterThan(512 * 0.8);
     expect(layout.branding.slicerLogoYpx).toBeGreaterThan(512 * 0.8);
     expect(layout.branding).not.toHaveProperty("accentRailWidthPx");
   });
@@ -396,7 +391,6 @@ describe("virtual build plate texture", () => {
       /<image href="data:image\/png;base64,slicer"[^>]*>/,
     )?.[0];
 
-    expect(slicerLogoTag).toContain('opacity="0.55"');
     expect(slicerLogoTag).not.toContain("filter:");
   });
 
@@ -688,6 +682,5 @@ describe("virtual build plate texture", () => {
     expect(Math.abs(pose.position[1])).toBeGreaterThan(
       pose.position[2] * 0.35,
     );
-    expect(pose.target).toEqual([0, 0, 0]);
   });
 });

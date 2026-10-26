@@ -4,40 +4,6 @@
  * Contains all zh/en translation key-value pairs
  */
 export const translations: Record<string, Record<"zh" | "en", string>> = {
-  common_close: { zh: "关闭", en: "Close" },
-  cloud_library_update: { zh: "更新", en: "Update" },
-  cloud_library_results: { zh: "匹配结果", en: "Matching results" },
-  cloud_library_loading_index: { zh: "正在加载完整目录，搜索结果尚不完整…", en: "Loading the full catalog; search results are not complete yet…" },
-  desktop_menu_about: { zh: "关于 Lumina Studio", en: "About Lumina Studio" },
-  desktop_menu_settings: { zh: "设置…", en: "Settings…" },
-  desktop_menu_services: { zh: "服务", en: "Services" },
-  desktop_menu_hide: { zh: "隐藏 Lumina Studio", en: "Hide Lumina Studio" },
-  desktop_menu_hideOthers: { zh: "隐藏其他", en: "Hide Others" },
-  desktop_menu_unhide: { zh: "显示全部", en: "Show All" },
-  desktop_menu_quit: { zh: "退出 Lumina Studio", en: "Quit Lumina Studio" },
-  desktop_menu_file: { zh: "文件", en: "File" },
-  desktop_menu_import: { zh: "导入图片 / SVG / 分享卡…", en: "Import image / SVG / share card…" },
-  desktop_menu_export: { zh: "保存已生成文件…", en: "Save generated file…" },
-  desktop_menu_close: { zh: "关闭窗口", en: "Close Window" },
-  desktop_menu_edit: { zh: "编辑", en: "Edit" },
-  desktop_menu_undo: { zh: "撤销文本编辑", en: "Undo Text Edit" },
-  desktop_menu_redo: { zh: "重做文本编辑", en: "Redo Text Edit" },
-  desktop_menu_cut: { zh: "剪切", en: "Cut" },
-  desktop_menu_copy: { zh: "复制", en: "Copy" },
-  desktop_menu_paste: { zh: "粘贴", en: "Paste" },
-  desktop_menu_selectAll: { zh: "全选", en: "Select All" },
-  desktop_menu_view: { zh: "显示", en: "View" },
-  desktop_menu_zoomIn: { zh: "放大界面", en: "Zoom In" },
-  desktop_menu_zoomOut: { zh: "缩小界面", en: "Zoom Out" },
-  desktop_menu_resetZoom: { zh: "实际大小（100%）", en: "Actual Size (100%)" },
-  desktop_menu_togglefullscreen: { zh: "切换全屏", en: "Toggle Full Screen" },
-  desktop_menu_window: { zh: "窗口", en: "Window" },
-  desktop_menu_minimize: { zh: "最小化", en: "Minimize" },
-  desktop_menu_zoom: { zh: "缩放窗口", en: "Zoom Window" },
-  desktop_menu_front: { zh: "前置全部窗口", en: "Bring All to Front" },
-  desktop_menu_help: { zh: "帮助", en: "Help" },
-  desktop_menu_docs: { zh: "Lumina Studio 使用文档", en: "Lumina Studio Documentation" },
-  desktop_menu_report: { zh: "反馈问题…", en: "Report a Problem…" },
   conversion_preset_inline_label: { zh: "预设", en: "Preset" },
   conversion_preset_project: { zh: "当前项目参数", en: "Current project settings" },
   conversion_preset_invalid_name: { zh: "请输入 1–40 个字符的名称", en: "Enter a name with 1–40 characters" },
@@ -51,21 +17,15 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   conversion_preset_name: { zh: "预设名称", en: "Preset name" },
   conversion_preset_name_hint: { zh: "例如：日常单面板画", en: "e.g. Everyday single-sided art" },
   conversion_preset_duplicate: { zh: "已有同名预设，请换一个名称", en: "A preset with this name already exists" },
-  conversion_preset_long_edge: { zh: "长边", en: "Long edge" },
-  conversion_preset_include: { zh: "保存内容", en: "Settings to save" },
-  conversion_preset_scope: { zh: "尺寸记录长边；未勾选的设置在应用时保持当前值。", en: "Size records the long edge. Unchecked settings keep their current values when applying the preset." },
   conversion_preset_cancel: { zh: "取消", en: "Cancel" },
   conversion_preset_confirm: { zh: "保存预设", en: "Save preset" },
   conversion_preset_material: { zh: "耗材档案", en: "Material archive" },
-  conversion_preset_lut: { zh: "经典 LUT", en: "Classic LUT" },
   conversion_preset_single: { zh: "单面", en: "Single-sided" },
   conversion_preset_double: { zh: "双面", en: "Double-sided" },
   conversion_preset_rename: { zh: "重命名当前预设", en: "Rename current preset" },
   conversion_preset_delete: { zh: "删除当前预设", en: "Delete current preset" },
   conversion_preset_delete_hint: { zh: "删除“{name}”？当前正在使用的参数会保留。", en: "Delete “{name}”? Your current parameters will be kept." },
-  conversion_preset_layer_height: { zh: "层高", en: "Layer height" },
   conversion_preset_layers: { zh: "层", en: "layers" },
-  conversion_preset_dynamic: { zh: "动态", en: "Dynamic" },
   conversion_preset_fixed: { zh: "固定", en: "Fixed" },
   conversion_preset_coating_on: { zh: "涂层开启", en: "Coating on" },
   conversion_preset_coating_off: { zh: "涂层关闭", en: "Coating off" },
@@ -77,9 +37,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "尚未确认项目局部编辑的恢复结果，原项目数据已保留，请重新预览。",
     en: "The restored project edits could not be confirmed. Your project data is preserved; run preview again.",
   },
-  native_material_edit_button: { zh: "耗材配置…", en: "Filament settings…" },
-  native_material_edit_title: { zh: "耗材配置", en: "Filament settings" },
-  native_material_close: { zh: "关闭", en: "Close" },
   native_material_edit_description: {
     zh: "为每种材料选择切片软件中的耗材预设和兼容打印板。保存后用于下次生成，不会立即生成文件。",
     en: "Choose a slicer filament preset for each material and a compatible build plate. These choices will be saved for the next generation without generating a file now.",
@@ -3205,8 +3162,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Clear backend temporary files and cached data",
   },
   "settings.cache_summary": {
-    zh: "清除转换过程中产生的临时文件和缓存数据，回收存储空间。",
-    en: "Remove temporary files and cached data created during conversion to reclaim storage space.",
   },
   "settings.cache_cleared": {
     zh: "缓存已清除",
@@ -3447,10 +3402,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.template_excluded": {
     zh: "支持图像、矢量、材料档案、大幅分块和模型覆面导出。批量、拼图、校准和色块生成请先选择内置配置。",
     en: "Supports image, vector, material-archive, large-format and model-surface exports. Select built-in settings for batch, puzzle, calibration and swatch generation.",
-  },
-  "settings.template_active_scope_hint": {
-    zh: "当前已选自定义模板；批量、拼图、校准和色块生成需先切回内置配置。",
-    en: "A custom template is selected. Switch to built-in settings before batch, puzzle, calibration or swatch generation.",
   },
   "settings.template_missing_option": {
     zh: "所选模板在本机不可用",
@@ -5068,12 +5019,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Color Mode",
   },
   basic_source_version_label: {
-    zh: "色彩数据来源",
-    en: "Color Data Source",
   },
   basic_source_version_hint: {
-    zh: "选择配色数据从哪里来：\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。\n• 经典 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。",
-    en: "Choose where the color data comes from:\n• Material Archive: freely combine materials you created in Material Extraction.\n• Classic LUT: data measured from actually printed color charts — most reliable.",
   },
   basic_source_version_legacy: {
     zh: "经典 LUT",
@@ -5650,18 +5597,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_lut_picker_open: {
     zh: "选择 LUT 数据库…",
     en: "Choose LUT databases…",
-  },
-  basic_lut_picker_change: {
-    zh: "更换",
-    en: "Change",
-  },
-  basic_lut_picker_selection_summary: {
-    zh: "已选 {count} 个 LUT",
-    en: "{count} LUTs selected",
-  },
-  basic_lut_picker_more_selected: {
-    zh: "另 {count} 个",
-    en: "+{count} more",
   },
   basic_lut_picker_title: {
     zh: "选择 LUT",
@@ -7234,8 +7169,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Detecting slicers...",
   },
   slicer_not_detected: {
-    zh: "未检测到切片软件，仍可下载 3MF 文件。",
-    en: "No slicer detected. You can still download the 3MF file.",
   },
   slicer_toggle_list: {
     zh: "切换切片软件列表",
@@ -7250,8 +7183,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Current export format targets {expected}, but the action bar is set to {actual}",
   },
   slicer_preferred_missing: {
-    zh: "未检测到 {name}，仍可下载 3MF 文件后手动打开。",
-    en: "{name} was not detected. You can still download the 3MF file and open it manually.",
   },
 
   // ==================== Crop Modal ====================
@@ -7560,14 +7491,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   five_color_selected: {
     zh: "已选颜色 {n}: {name}",
     en: "Selected color {n}: {name}",
-  },
-  five_color_viewing_face: {
-    zh: "观赏面",
-    en: "Viewing Face",
-  },
-  five_color_bottom_face: {
-    zh: "底面",
-    en: "Bottom",
   },
   five_color_slot_empty: {
     zh: "颜色槽 {n}: 空",
@@ -8981,20 +8904,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Please read these instructions before printing to ensure smooth operation later.",
   },
   mat_gradient_generate_notice_dual_print: {
-    zh: "每种耗材需要打印两张梯度卡：白底、黑底各一张。",
-    en: "Each material requires printing two gradient cards: one with a white base and one with a black base.",
-  },
-  mat_gradient_generate_notice_config: {
-    zh: "请按打印层高生成并保存配置文件包（ZIP），提取梯度卡时需要导入。使用在线模型也需要此配置包。",
-    en: "Generate and save the configuration ZIP for your print layer height. Import it when extracting gradient cards, including cards printed from online models.",
   },
   mat_gradient_generate_notice_online_model: {
-    zh: "也可从 MakerWorld 下载模型，请确认模型层高与所选层高一致。下载获得的积分将用于 Lumina 社区抽奖。",
-    en: "Models are also available on MakerWorld. Check that the model layer height matches your selection. Download points support Lumina community giveaways.",
-  },
-  mat_gradient_model_open_error: {
-    zh: "无法打开模型页面，请重试或复制链接到浏览器中打开。",
-    en: "Could not open the model page. Try again or copy the link into your browser.",
   },
   mat_gradient_generate_online_model_link: {
     zh: "梯度卡在线模型",
@@ -9570,8 +9481,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Import LUT File",
   },
   lut_library_search_placeholder: {
-    zh: "搜索名称、品牌、类型、颜色模式…",
-    en: "Search names, brands, types, color modes…",
   },
   lut_library_loading: {
     zh: "正在加载本地 LUT...",
@@ -9897,16 +9806,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "本地文件缺失",
     en: "Local files missing",
   },
-  mat_sync_history_hint: { zh: "按本地安装时间查看版本，选择要恢复的版本。", en: "Versions are listed by local installation date. Select a version to restore." },
-  mat_sync_history_unknown_date: { zh: "日期未知", en: "Date unknown" },
-  mat_sync_history_current: { zh: "当前使用", en: "Current" },
-  mat_sync_history_previous: { zh: "历史版本", en: "Previous version" },
-  mat_sync_history_empty: { zh: "暂无可恢复的本地历史版本", en: "No local history available to restore" },
-  mat_sync_history_close: { zh: "关闭", en: "Close" },
-  mat_sync_history_restore: { zh: "恢复所选版本", en: "Restore selected version" },
   mat_sync_local_section_title: {
-    zh: "本地历史版本",
-    en: "Local Version History",
   },
   mat_sync_local_section_hint: {
     zh: "更新耗材后会保留旧版本；如果新版本效果不理想，可以一键回滚。",
@@ -10157,34 +10057,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Fit Error",
   },
   mat_gradient_library_layer_height_label: {
-    zh: "采集层高",
-    en: "Calibration Layer Height",
   },
-  mat_gradient_library_details: {
-    zh: "详细信息",
-    en: "Details",
-  },
-  mat_gradient_library_type_missing: { zh: "类型未填写", en: "Type not specified" },
-  mat_gradient_library_calibration: { zh: "标定信息", en: "Calibration" },
-  mat_gradient_library_usage: { zh: "使用记录", en: "Usage" },
-  mat_gradient_library_files: { zh: "文件信息", en: "File information" },
-  mat_gradient_library_browse_summary: { zh: "耗材库 · {count} 个耗材", en: "Material library · {count} materials" },
-  mat_gradient_library_selection_start: { zh: "选择耗材", en: "Select materials" },
-  mat_gradient_library_collapse_all: { zh: "全部收起", en: "Collapse all" },
-  mat_gradient_library_expand_all: { zh: "全部展开", en: "Expand all" },
-  library_pin_hint: { zh: "每次进入仓库时自动展开", en: "Expand automatically whenever you open the library" },
-  lut_library_inventory_summary: { zh: "{count}个 LUT · {brands}个品牌", en: "{count} LUTs · {brands} brands" },
-  lut_library_analyze_btn: { zh: "查看完整 LUT 分析", en: "Open full LUT analysis" },
-  mat_gradient_library_search: { zh: "搜索耗材名称、品牌、类型…", en: "Search materials, brands, types…" },
-  mat_gradient_library_inventory_summary: { zh: "{count}种耗材 · {brands}个品牌", en: "{count} materials · {brands} brands" },
-  mat_gradient_library_search_empty: { zh: "没有找到匹配的耗材，试试其他关键词。", en: "No matching materials. Try another search." },
-  mat_gradient_library_reorder_hint: { zh: "拖拽调整品牌顺序，也可用上下方向键调整", en: "Drag to reorder brands, or use the up and down arrow keys" },
-  mat_gradient_library_brand_count: { zh: "{count}种", en: "{count} types" },
-  mat_gradient_library_pin_brand: { zh: "固定展开 {brand}", en: "Pin {brand} open" },
-  mat_gradient_library_unpin_brand: { zh: "取消固定 {brand}", en: "Unpin {brand}" },
-  mat_gradient_library_pin_hint: { zh: "每次进入耗材库时自动展开", en: "Expand automatically whenever you open the library" },
-  mat_gradient_library_unpin_hint: { zh: "取消默认展开", en: "Stop expanding by default" },
-  mat_gradient_library_selection_done: { zh: "完成选择", en: "Done selecting" },
   mat_gradient_library_edit_btn: {
     zh: "编辑信息",
     en: "Edit Details",
@@ -10739,8 +10612,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Step 2: Choose a color source",
   },
   tutorial_step_source_body: {
-    zh: "多色打印的原理是：几种耗材按不同顺序和层数叠在一起，透出不同的颜色。软件需要知道「你的打印机和耗材能叠出哪些颜色」，才能为图片的每个颜色找到最接近的叠法。\n\n「颜色来源」就是这份颜色数据从哪里来。有耗材档案和经典 LUT 两种方式，接下来按这个顺序介绍。",
-    en: "Multi-color printing works by stacking a few filaments in different orders and layer counts, so light passing through them shows different colors. The software needs to know which colors your printer and filaments can actually produce, so it can find the closest stack for every color in your picture.\n\nThe color source is where that color data comes from. There are two options: Material Archive and Classic LUT, explained in that order next.",
   },
   tutorial_step_legacy_title: {
     zh: "经典 LUT：实拍色卡",

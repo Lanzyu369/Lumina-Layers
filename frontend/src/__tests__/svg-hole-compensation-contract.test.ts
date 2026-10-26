@@ -293,7 +293,6 @@ describe("source SVG compensation product contract", () => {
 
   it("discards an earlier batch response when vector mode restores saved compensation", async () => {
     useConverterStore.getState().setSvgHoleMaxAreaMm2(1.25);
-    useConverterStore.setState({ ...DEFAULT_STATE, source_version: "legacy", lut_name: "test-lut", lut_names: ["test-lut"] });
     useConverterStore.getState().handleFilesSelect([svgFile(), svgFile()]);
     let resolve!: (value: object) => void;
     api.batch.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));

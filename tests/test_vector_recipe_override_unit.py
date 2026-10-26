@@ -1,6 +1,5 @@
 """Regression: SVG-native vector generate must honour recipe overrides.
 
-Covers the user-reported bug "经典 LUT 矢量图 + 自定义配色添加多层：
 前端预览能看到，3MF 模型里没有". The vector branch used to call
 ``analyze_svg`` → ``build_mesh`` from scratch and silently ignored
 ``recipe_overrides`` / the user-extended ``color_layers``, so edits made

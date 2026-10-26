@@ -113,20 +113,6 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     prepare: BASIC_SETTINGS,
   },
   {
-    id: "source-legacy-lut",
-    anchor: "color-source",
-    titleKey: "tutorial_step_legacy_title",
-    bodyKey: "tutorial_step_legacy_body",
-    flowKeys: [
-      "tutorial_flow_legacy_print",
-      "tutorial_flow_legacy_extract",
-      "tutorial_flow_legacy_table",
-    ],
-    needKey: "tutorial_step_legacy_need",
-    fitKey: "tutorial_step_legacy_fit",
-    prepare: BASIC_SETTINGS,
-  },
-  {
     id: "output-size",
     anchor: "output-size",
     titleKey: "tutorial_step_size_title",

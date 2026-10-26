@@ -37,7 +37,6 @@ const MIN_QR_SIZE_PX = 96;
 const MIN_FONT_PX = 12;
 const BASE_FONT_FLOOR_PX = 14;
 
-const FONT_STACK = '"MiSans", sans-serif';
 
 export interface ShareCardFooterLayout {
   /** Side length of the QR code in px. */

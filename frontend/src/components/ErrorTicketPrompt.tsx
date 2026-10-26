@@ -1,4 +1,3 @@
-import CloseButton from "./ui/CloseButton";
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
 
@@ -56,7 +55,6 @@ export function ErrorTicketPrompt({
         >
           {t("error_ticket_prompt_title")}
         </h2>
-        <CloseButton label={t("error_ticket_prompt_close")} onClick={onDismiss} data-testid="error-ticket-prompt-close" />
       </div>
       <p
         data-testid="error-ticket-prompt-message"
@@ -90,7 +88,6 @@ export function ErrorTicketPrompt({
           label={t("error_ticket_prompt_submit")}
           size="sm"
           onClick={onReport}
-          variant="primary"
         />
       </div>
     </div>,

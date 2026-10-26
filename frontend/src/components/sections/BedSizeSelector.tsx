@@ -36,7 +36,6 @@ export default function BedSizeSelector() {
           type="button"
           onClick={() => setActiveTab("settings")}
           aria-label={t("bed_size_change_aria")}
-          className="action-control shrink-0 rounded-lg px-2 py-1 text-[clamp(0.65rem,0.85vw,0.75rem)] font-medium"
         >
           {t("bed_size_change")}
         </button>

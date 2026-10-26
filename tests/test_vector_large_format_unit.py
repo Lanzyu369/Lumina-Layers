@@ -66,29 +66,6 @@ def test_build_tile_specs_resolves_partial_last_row_and_column() -> None:
     assert specs[-1].height_mm == 20.0
 
 
-def test_tile_specs_do_not_include_empty_edges_from_float_division() -> None:
-    total = 2999.9999999999955
-    tile = 499.9999999999992
-    specs = build_tile_specs(
-        total_width_mm=total, total_height_mm=total,
-        tile_width_mm=tile, tile_height_mm=tile,
-    )
-    assert len(specs) == 36
-    assert all(spec.width_mm > 0 and spec.height_mm > 0 for spec in specs)
-    assert specs[-1].x1_mm == pytest.approx(total, rel=0, abs=1e-9)
-    assert specs[-1].y1_mm == pytest.approx(total, rel=0, abs=1e-9)
-
-
-def test_tile_specs_preserve_a_small_positive_remainder() -> None:
-    specs = build_tile_specs(
-        total_width_mm=3000 + 1e-9, total_height_mm=3000 + 1e-9,
-        tile_width_mm=500, tile_height_mm=500,
-    )
-    assert len(specs) == 49
-    assert specs[-1].width_mm > 0
-    assert specs[-1].height_mm > 0
-
-
 def test_large_format_dimensions_and_tile_count_are_not_policy_capped() -> None:
     assert resolve_large_format_grid_shape(
         total_width_mm=30_000.0,

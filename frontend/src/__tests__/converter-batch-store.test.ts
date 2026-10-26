@@ -32,7 +32,6 @@ function resetStore(overrides: Record<string, unknown> = {}): void {
     batchLoading: false,
     batchResult: null,
     error: null,
-    source_version: "legacy",
     lut_name: "test-lut",
     target_width_mm: 60,
     spacer_thick: 1.2,

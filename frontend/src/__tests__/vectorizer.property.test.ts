@@ -70,7 +70,6 @@ import { translations } from "../i18n/translations";
 // ============================================================
 // Property 4: 缩放/平移同步一致性
 // ============================================================
-// Zoom/pan behavior is covered against the real hook in usePanZoom.test.tsx.
 
 // ============================================================
 // Property 5: 下载 URL 构建正确性

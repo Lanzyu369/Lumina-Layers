@@ -4,59 +4,6 @@ import { BED_OUTER_RADIUS_MM } from "./bedPlatformTexture";
 const MIN_VISIBLE_BED_THICKNESS_MM = 3.2;
 const FALLBACK_BED_THICKNESS_MM = 2.6;
 
-export const BED_SURFACE_MATERIAL_INDEX = 0;
-export const BED_BODY_MATERIAL_INDEX = 1;
-
-/** Keep the printed artwork on upward-facing flat faces only. */
-function groupBedFacesByMaterial(geometry: THREE.BufferGeometry): void {
-  const position = geometry.getAttribute("position");
-  const index = geometry.getIndex();
-  const count = index?.count ?? position.count;
-  const surfaceIndices: number[] = [];
-  const bodyIndices: number[] = [];
-  const a = new THREE.Vector3();
-  const b = new THREE.Vector3();
-  const c = new THREE.Vector3();
-  const normal = new THREE.Vector3();
-
-  for (let offset = 0; offset < count; offset += 3) {
-    const ia = index ? index.getX(offset) : offset;
-    const ib = index ? index.getX(offset + 1) : offset + 1;
-    const ic = index ? index.getX(offset + 2) : offset + 2;
-    a.fromBufferAttribute(position, ia);
-    b.fromBufferAttribute(position, ib).sub(a);
-    c.fromBufferAttribute(position, ic).sub(a);
-    normal.crossVectors(b, c).normalize();
-    const target = normal.z > 0.999 ? surfaceIndices : bodyIndices;
-    target.push(ia, ib, ic);
-  }
-
-  // Batch each material into one draw call, including unordered native STL faces.
-  geometry.setIndex(surfaceIndices.concat(bodyIndices));
-  geometry.clearGroups();
-  if (surfaceIndices.length > 0) {
-    geometry.addGroup(0, surfaceIndices.length, BED_SURFACE_MATERIAL_INDEX);
-  }
-  if (bodyIndices.length > 0) {
-    geometry.addGroup(surfaceIndices.length, bodyIndices.length, BED_BODY_MATERIAL_INDEX);
-  }
-}
-
-/** The underside and rim have no artwork, even when viewed from below. */
-export function createBedPlatformMesh(geometry: THREE.BufferGeometry) {
-  const surface = new THREE.MeshStandardMaterial({
-    roughness: 0.68,
-    metalness: 0.12,
-    side: THREE.FrontSide,
-  });
-  const body = new THREE.MeshStandardMaterial({
-    roughness: 0.68,
-    metalness: 0.12,
-    side: THREE.DoubleSide,
-  });
-  return new THREE.Mesh(geometry, [surface, body]);
-}
-
 export interface BedPreviewCameraPose {
   position: readonly [number, number, number];
   target: readonly [number, number, number];
@@ -116,7 +63,6 @@ export function computeBedPreviewCameraPose(
   const fitDistance = (radius / Math.sin(halfFovRadians)) * 1.2;
   return {
     position: [0, -fitDistance * 0.42, fitDistance * 0.91],
-    target: [0, 0, 0],
     fitDistance,
   };
 }
@@ -241,7 +187,6 @@ function centerGeometryAndMapTopUv(
   }
   geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
   geometry.computeVertexNormals();
-  groupBedFacesByMaterial(geometry);
   return geometry;
 }
 

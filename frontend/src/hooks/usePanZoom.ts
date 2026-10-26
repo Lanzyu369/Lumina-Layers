@@ -1,5 +1,4 @@
 import { useState, useRef, useCallback, type MouseEvent } from "react";
-import { wheelZoomFactor } from "../utils/wheelZoom";
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 20;
@@ -21,7 +20,6 @@ export function usePanZoom() {
   const zoom = useCallback(
     (mouseX: number, mouseY: number, deltaY: number) => {
       const prev = scaleRef.current;
-      const next = clampScale(prev * wheelZoomFactor(deltaY));
       if (next === prev) return;
 
       const ratio = next / prev;

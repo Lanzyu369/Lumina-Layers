@@ -1,4 +1,3 @@
-import CloseButton from "./ui/CloseButton";
 import { useEffect } from "react";
 import { useLutManagerStore } from "../stores/lutManagerStore";
 import { useI18n } from "../i18n/context";
@@ -223,7 +222,6 @@ export default function LutManagerPanel() {
               data-testid="error-message"
               tone="error"
               action={
-                <CloseButton label={t("lut_manager_close_error")} onClick={clearError} />
               }
             >
               {error}

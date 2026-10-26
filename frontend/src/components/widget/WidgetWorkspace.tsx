@@ -607,7 +607,6 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
             initial={false}
             animate={{ height: leftStackHeight }}
             transition={{ height: WIDGET_TRANSITION }}
-            className="dock-scrollbar dock-scrollbar-hover absolute top-0 left-0 z-30 max-h-full overflow-x-hidden overscroll-y-contain"
             onScroll={() => lockDockHorizontalScroll('left')}
             data-testid="left-dock"
             style={{
@@ -641,7 +640,6 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
             initial={false}
             animate={{ height: rightStackHeight }}
             transition={{ height: WIDGET_TRANSITION }}
-            className="dock-scrollbar dock-scrollbar-hover absolute top-0 right-0 z-30 max-h-full overflow-x-hidden overscroll-y-contain"
             onScroll={() => lockDockHorizontalScroll('right')}
             data-testid="right-dock"
             style={{

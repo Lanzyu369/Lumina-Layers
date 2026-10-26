@@ -1,4 +1,3 @@
-import DisclosureChevron from "../ui/DisclosureChevron";
 /**
  * ColorQuickReplacePanel — quick recolor card in the Color Adjustment page.
  * 「颜色调整」页中的快速换色卡片。
@@ -118,17 +117,14 @@ export default function ColorQuickReplacePanel() {
   const { eyedropperActive, toggleEyedropper } = useTargetEyedropper(handleTargetChange, expanded);
 
   return (
-    <section className={cx(cardClass, "color-tools-panel flex flex-col gap-3 px-4 py-3")} data-testid="color-quick-replace-panel">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">{t("quick_replace_title")}</h3>
         <button
           type="button"
           aria-expanded={expanded}
-          aria-label={t(expanded ? "quick_replace_collapse" : "quick_replace_expand")}
           onClick={() => setExpanded((value) => !value)}
           className="rounded-full px-2 py-0.5 text-[11px] text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
         >
-          <DisclosureChevron expanded={expanded} />
         </button>
       </div>
 
@@ -349,7 +345,6 @@ function RecipeSuggestionBody({
   return (
     <>
       <p className="text-[11px] text-slate-500 dark:text-slate-400">{t("quick_replace_recipe_layers_hint")}</p>
-      <div className="dock-scrollbar max-h-72 overflow-y-auto overscroll-y-contain pr-1">
         <SimilarRecipeList items={items} channels={channels} canApply={canApply} busy={busy} onApply={onApply} />
       </div>
     </>

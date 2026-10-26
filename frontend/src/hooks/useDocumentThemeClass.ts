@@ -1,6 +1,5 @@
 import { useLayoutEffect } from "react";
 import { useSettingsStore } from "../stores/settingsStore";
-import { electronAPI } from "../integrations/electron";
 
 /**
  * Mirror the persisted theme onto the root element's ``dark`` class.
@@ -19,6 +18,5 @@ export function useDocumentThemeClass(): void {
 
   useLayoutEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
-    if (electronAPI?.platform === "win32") electronAPI.setTitlebarTheme?.(theme);
   }, [theme]);
 }

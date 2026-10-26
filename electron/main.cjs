@@ -17,13 +17,11 @@ const nodeNet = require("net");
 const fs = require("fs");
 const path = require("path");
 const { saveGeneratedFile } = require("./generated-file-save.cjs");
-const { createApplicationMenu } = require("./application-menu.cjs");
 const {
   createGeneratedFileDirectoryState,
   pickGeneratedFileDirectory,
   resolveDefaultSavePath,
   setGeneratedFileDirectory,
-  isTrustedMainFrameSender,
 } = require("./generated-file-directory.cjs");
 const { assertPortsAvailable, selectBackendEndpoint, commitBackendEndpoint, validateHealthResponse } = require("./backend-endpoint.cjs");
 const {
@@ -393,9 +391,7 @@ if (!gotLock) {
 // ═══════════════════════════════════════════════════════════
 
 let win = null;
-let trafficLightButtonHeight = null;
 let interfaceScale = null;
-let applicationMenu = null;
 const generatedFileDirectory = createGeneratedFileDirectoryState();
 let splashWin = null;
 let isQuitting = false;
@@ -568,7 +564,6 @@ function closeSplash() {
 }
 
 function createWindow() {
-  trafficLightButtonHeight = null;
   interfaceScale = createInterfaceScaleController({
     screen,
     stateFile: path.join(app.getPath("userData"), "interface-scale.json"),
@@ -579,18 +574,6 @@ function createWindow() {
   const windowOptions = {
     ...placement.bounds,
     title: "Lumina Studio 2",
-    // Keep macOS traffic lights while the renderer paints the title bar.
-    ...(process.platform === "darwin" ? {
-      titleBarStyle: "hidden",
-      titleBarOverlay: true,
-      // With zero vertical margin, WCO reports the actual native button height.
-      trafficLightPosition: { x: 16, y: 0 },
-    } : {}),
-    ...(process.platform === "win32" ? {
-      titleBarStyle: "hidden",
-      autoHideMenuBar: true,
-      titleBarOverlay: { color: "#e2e8f0", symbolColor: "#334155", height: 40 },
-    } : {}),
     icon: fs.existsSync(ICON_PATH) ? ICON_PATH : undefined,
     webPreferences: {
       contextIsolation: true,
@@ -616,11 +599,6 @@ function createWindow() {
     win.show();
   });
 
-  applicationMenu?.rebuild();
-  win.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
-    if (isMainFrame && !isInPlace) applicationMenu?.reset();
-  });
-  win.webContents.on("render-process-gone", () => applicationMenu?.reset());
 
   win.webContents.setWindowOpenHandler(({ url, referrer }) => {
     const openerUrl = referrer?.url || null;
@@ -762,35 +740,6 @@ function createWindow() {
 //  IPC handlers
 // ═══════════════════════════════════════════════════════════
 
-ipcMain.on("application-menu-state", (event, payload) => {
-  if (isTrustedMainFrameSender(event, win, `${FRONTEND_URL}/`)) applicationMenu?.update(payload);
-});
-
-ipcMain.on("set-titlebar-theme", (event, theme) => {
-  if (process.platform !== "win32" || !isTrustedMainFrameSender(event, win, `${FRONTEND_URL}/`)) return;
-  if (theme !== "light" && theme !== "dark") return;
-  win.setTitleBarOverlay(theme === "dark"
-    ? { color: "#020617", symbolColor: "#cbd5e1" }
-    : { color: "#e2e8f0", symbolColor: "#334155" });
-});
-
-ipcMain.handle("align-traffic-lights", (event, centerY, controlsHeight) => {
-  if (process.platform !== "darwin" || !isTrustedMainFrameSender(event, win, `${FRONTEND_URL}/`)) return null;
-  if (typeof centerY !== "number" || !Number.isFinite(centerY) || centerY < 0 || centerY > 200) return null;
-  const zoom = win.webContents.getZoomFactor();
-  if (trafficLightButtonHeight === null) {
-    if (typeof controlsHeight !== "number" || !Number.isFinite(controlsHeight) || controlsHeight <= 0 || controlsHeight > 200) return null;
-    // Capture before the first move: subsequent WCO heights include our margins.
-    trafficLightButtonHeight = controlsHeight * zoom;
-  }
-  // CSS pixels become window points through page zoom, not devicePixelRatio.
-  win.setWindowButtonPosition({
-    x: 16,
-    y: Math.max(0, Math.round(centerY * zoom - trafficLightButtonHeight / 2)),
-  });
-  return null;
-});
-
 ipcMain.on("set-language", (_event, lang) => {
   if (lang === "zh" || lang === "en") {
     currentLang = lang;
@@ -800,18 +749,6 @@ ipcMain.on("set-language", (_event, lang) => {
 
 ipcMain.handle("get-app-version", () => {
   return app.getVersion();
-});
-
-ipcMain.handle("open-gradient-model", async (event, url) => {
-  const modelUrls = [
-    "https://makerworld.com.cn/zh/models/2394753-lumina2-0-ti-xing-xiao-se-se-qia-0-08ceng-gao-15ce#profileId-2721317",
-    "https://makerworld.com.cn/zh/models/2400920-can-shu-hua-lumina-2-0ti-du-se-qia-zi-ding-yi-shou#profileId-2729620",
-  ];
-  if (!isTrustedMainFrameSender(event, win, trustedMainFrameUrl) || !modelUrls.includes(url)) {
-    throw new Error("Model external link denied.");
-  }
-  await shell.openExternal(url);
-  return { opened: true };
 });
 
 ipcMain.handle("open-wiki", async (event, url) => {
@@ -976,17 +913,6 @@ app.whenReady().then(async () => {
     } catch (err) {
       logErr(`Dock icon set failed: ${err.message}`);
     }
-  }
-
-  if (IS_MAC) {
-    applicationMenu = createApplicationMenu({
-      Menu, app, getWindow: () => win, getScale: () => interfaceScale,
-      onError: (error) => logErr(`Menu import could not open: ${error.message}`),
-      openDocs: () => { void shell.openExternal(`https://wiki.luminastudio.com.cn/${currentLang}/`).catch((error) => logErr(`Documentation could not open: ${error.message}`)); },
-    });
-    applicationMenu.rebuild();
-  } else {
-    Menu.setApplicationMenu(null);
   }
 
   createSplash();

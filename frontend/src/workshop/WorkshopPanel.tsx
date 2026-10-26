@@ -17,7 +17,6 @@ import {
   type WorkshopManagerApi,
 } from "../api/workshop";
 import Button from "../components/ui/Button";
-import CloseButton from "../components/ui/CloseButton";
 import {
   PanelIntro,
   StatusBanner,
@@ -440,21 +439,18 @@ function InstalledCard({
               }
               onClick={onOpenCandidate}
               disabled={!module.enabled || !candidateOpenAllowed}
-              variant="secondary"
               className="flex-1"
             />
           ) : null}
           {detail ? (
             <Button
               label={t("workshop.manager.details")}
-              variant="secondary"
               onClick={() => onDetails(detail.details_url)}
             />
           ) : null}
           {update ? (
             <Button
               label={t("workshop.manager.update")}
-              variant="secondary"
               onClick={() => onUpdate(update)}
               loading={busy}
             />
@@ -462,7 +458,6 @@ function InstalledCard({
           {module.previous_version ? (
             <Button
               label={t("workshop.manager.rollback")}
-              variant="secondary"
               onClick={onRollback}
               loading={busy}
             />
@@ -474,17 +469,14 @@ function InstalledCard({
                   ? "workshop.manager.disable"
                   : "workshop.manager.enable",
               )}
-              variant="secondary"
               onClick={onToggle}
               loading={busy}
             />
           ) : null}
           <Button
             label={t("workshop.manager.uninstall")}
-            variant="secondary"
             onClick={onUninstall}
             disabled={busy}
-            tone="danger"
           />
         </div>
       )}
@@ -1262,7 +1254,6 @@ export function WorkshopPanel({
                 label={t(
                   "workshop.manager.recipeModuleDiscover",
                 )}
-                variant="secondary"
                 onClick={() => openView("discover")}
               />
             </div>
@@ -1337,7 +1328,6 @@ export function WorkshopPanel({
               action={
                 <Button
                   label={t("workshop.manager.retry")}
-                  variant="secondary"
                   size="sm"
                   onClick={() => void loadCatalog()}
                 />
@@ -1481,7 +1471,6 @@ export function WorkshopPanel({
                   label={t("workshop.manager.installGithub")}
                   onClick={() => void installGithub()}
                   loading={busyModuleId === "github-install"}
-                  variant="primary"
                 />
               </div>
             </section>
@@ -1508,17 +1497,6 @@ export function WorkshopPanel({
           )}
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
         >
-          <section className="panel-section w-full max-w-lg rounded-[28px] p-5 shadow-2xl" style={{ background: "var(--surface-panel-strong)" }}>
-            <div className="flex items-start justify-between gap-3">
-              <h2 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
-                {t(
-                  permissionPrompt.kind === "staged"
-                    ? "workshop.manager.permissionInstallTitle"
-                    : "workshop.manager.permissionTitle",
-                )}
-              </h2>
-              <CloseButton label={t("common_close")} onClick={() => setPermissionPrompt(null)} />
-            </div>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
               {t(
                 permissionPrompt.kind === "staged"
@@ -1565,7 +1543,6 @@ export function WorkshopPanel({
                   setPermissionPrompt(null);
                   prompt.confirm();
                 }}
-                variant="primary"
               />
             </div>
           </section>
@@ -1579,13 +1556,6 @@ export function WorkshopPanel({
           aria-label={t("workshop.manager.uninstallTitle")}
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
         >
-          <section className="panel-section w-full max-w-lg rounded-[28px] p-5 shadow-2xl" style={{ background: "var(--surface-panel-strong)" }}>
-            <div className="flex items-start justify-between gap-3">
-              <h2 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
-                {t("workshop.manager.uninstallTitle")}
-              </h2>
-              <CloseButton label={t("common_close")} onClick={() => setUninstallPrompt(null)} />
-            </div>
             <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
               {t("workshop.manager.uninstallDescription")}
             </p>
@@ -1612,7 +1582,6 @@ export function WorkshopPanel({
               <Button
                 label={t("workshop.manager.confirmUninstall")}
                 onClick={() => void confirmUninstall()}
-                tone="danger"
               />
             </div>
           </section>

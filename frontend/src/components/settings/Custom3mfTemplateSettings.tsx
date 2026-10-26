@@ -10,8 +10,6 @@ import Button from "../ui/Button";
 import Dropdown from "../ui/Dropdown";
 import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
 
-const IMPORT_TEMPLATE_OPTION = "__import_3mf_template__";
-
 export default function Custom3mfTemplateSettings() {
   const { t } = useI18n();
   const nameId = useId();
@@ -96,28 +94,15 @@ export default function Custom3mfTemplateSettings() {
     { value: "", label: t("settings.template_builtin") },
     ...templates.map((item) => ({ value: item.id, label: item.name })),
     ...(missing ? [{ value: selectedId, label: t("settings.template_missing_option") }] : []),
-    { value: IMPORT_TEMPLATE_OPTION, label: t(file ? "settings.template_change_file" : "settings.template_choose_file") },
   ];
 
   return (
     <div className="space-y-3 border-t panel-divider pt-5">
       <Dropdown
         label={t("settings.template_title")}
-        tooltip={[
-          t("settings.template_summary"),
-          t("settings.template_hint"),
-          ...(!selected ? [t("settings.template_excluded")] : []),
-        ].join("\n\n")}
         value={selectedId ?? ""}
         disabled={busy}
         options={options}
-        onChange={(id) => {
-          if (id === IMPORT_TEMPLATE_OPTION) {
-            fileInput.current?.click();
-            return;
-          }
-          select(id || null);
-        }}
       />
       {selected && (
         <p className="text-xs text-slate-600 dark:text-slate-300">
@@ -129,11 +114,6 @@ export default function Custom3mfTemplateSettings() {
         </p>
       )}
       {missing && <StatusBanner tone="warning">{t("settings.template_missing")}</StatusBanner>}
-      {selected && (
-        <p role="status" className="text-xs leading-5 text-slate-500 dark:text-slate-400">
-          {t("settings.template_active_scope_hint")}
-        </p>
-      )}
       <input
         ref={fileInput}
         aria-label={t("settings.template_file")}
@@ -147,21 +127,17 @@ export default function Custom3mfTemplateSettings() {
           setErrorDetail(null);
         }}
       />
-      {(file || selected) && <div className="flex min-w-0 flex-wrap items-center gap-3">
         <span className="min-w-0 flex-1 break-all text-sm text-slate-600 dark:text-slate-300" aria-live="polite">
           {file?.name}
         </span>
         {selected && (
           <Button
             label={t("settings.template_delete")}
-            variant="secondary"
             size="sm"
             disabled={busy}
             onClick={() => void remove()}
-            tone="danger"
           />
         )}
-      </div>}
       {file && (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <label htmlFor={nameId} className="block min-w-0 flex-1 space-y-1.5 text-sm">
@@ -176,7 +152,6 @@ export default function Custom3mfTemplateSettings() {
               onChange={(event) => setName(event.target.value)}
             />
           </label>
-          <Button label={t("settings.template_import")} loading={busy} onClick={() => void upload()} variant="primary" />
         </div>
       )}
       {error && <StatusBanner tone="error">{t(error)}{errorDetail ? ` ${errorDetail}` : ""}</StatusBanner>}

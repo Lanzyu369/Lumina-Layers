@@ -1038,7 +1038,6 @@ class LUTManager:
     def _legacy_multi_compatibility_signature(cls, metadata: LUTMetadata) -> dict[str, Any]:
         """Return the runtime compatibility shape for legacy_multi LUTs.
 
-        返回经典多选 LUT 的运行时兼容形状。
 
         The signature intentionally excludes color_mode and palette contents:
         multi-select combines 2/4/6/8-color legacy LUTs into a wider runtime

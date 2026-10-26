@@ -1,4 +1,3 @@
-import CloseButton from "./ui/CloseButton";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
@@ -319,7 +318,6 @@ function LuminanceCurve({
   return (
     <svg
       viewBox="0 0 200 100"
-      className="h-24 w-full rounded-2xl border border-slate-200/80 bg-slate-100/70 dark:border-slate-700/80 dark:bg-slate-900/50"
       role="img"
       aria-label={ariaLabel}
     >
@@ -1359,7 +1357,6 @@ export function ColorcheckerConfirmDialogInner({
               <div className="grid gap-3 sm:grid-cols-3">
                 <Button
                   label={t("ext_cc_auto_detect_btn")}
-                  variant="secondary"
                   onClick={() => void runAutoDetect()}
                   disabled={!imageFile || !activeSourceFileId || !referenceSelectionReady || autoDetecting || sourcePreparing}
                   loading={autoDetecting}
@@ -1367,7 +1364,6 @@ export function ColorcheckerConfirmDialogInner({
                 />
                 <Button
                   label={t("ext_cc_warp_btn")}
-                  variant="secondary"
                   onClick={() => void runWarpPreview()}
                   disabled={!imageFile || !activeSourceFileId || !imageSize || !referenceSelectionReady || corners.length !== 4 || warping}
                   loading={warping}
@@ -1431,7 +1427,6 @@ export function ColorcheckerConfirmDialogInner({
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                   <Button
                     label={t("ext_cc_reference_upload_btn")}
-                    variant="secondary"
                     size="sm"
                     loading={referenceUploading}
                     onClick={() => referenceInputRef.current?.click()}
@@ -1439,12 +1434,10 @@ export function ColorcheckerConfirmDialogInner({
                   />
                   <Button
                     label={t("ext_cc_reference_delete_btn")}
-                    variant="secondary"
                     size="sm"
                     disabled={!selectedCustomReference || referenceUploading}
                     onClick={handleDeleteSelectedReference}
                     className="w-full sm:w-auto"
-                    tone="danger"
                   />
                   <input
                     ref={referenceInputRef}
@@ -1720,7 +1713,6 @@ export function ColorcheckerModalShell({
   onClose: () => void;
   children: React.ReactNode;
 }) {
-  const { t } = useI18n();
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1750,8 +1742,6 @@ export function ColorcheckerModalShell({
         onClick={(event) => event.stopPropagation()}
         className="relative flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-[24px]"
       >
-        <div className="absolute right-4 top-4 z-10"><CloseButton label={t("announcement_close")} onClick={onClose} /></div>
-        <div className="min-h-0 flex-1 overflow-auto overscroll-y-contain">{children}</div>
       </div>
     </div>,
     document.body,

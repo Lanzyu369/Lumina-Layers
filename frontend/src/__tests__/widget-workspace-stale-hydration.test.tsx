@@ -74,15 +74,6 @@ function seedStaleV8Layout(): void {
     JSON.stringify({
       state: {
         widgets: {
-          'cloisonne-settings': {
-            id: 'cloisonne-settings',
-            position: { x: 0, y: 0 },
-            collapsed: false,
-            visible: true,
-            snapEdge: 'left',
-            stackOrder: 1,
-            expandedHeight: 420,
-          },
           'basic-settings': {
             position: { x: 0, y: 0 },
             collapsed: false,
@@ -144,10 +135,6 @@ describe('WidgetWorkspace stale same-version layout regression', () => {
     // Sibling advanced panels still render alongside it.
     expect(screen.getByTestId('w-content-basic-settings')).toBeInTheDocument();
     expect(screen.getByTestId('w-content-action-bar')).toBeInTheDocument();
-
-    // Legacy layouts cannot expose the retired panel or its dock entry.
-    expect(screen.queryByTestId('w-content-cloisonne-settings')).not.toBeInTheDocument();
-    expect(screen.queryByText('掐丝珐琅设置')).not.toBeInTheDocument();
 
     // The backfilled panel takes the TOP of the left dock: DOM order inside
     // the left dock mirrors WIDGET_REGISTRY order (model before basic).

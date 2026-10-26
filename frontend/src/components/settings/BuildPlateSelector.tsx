@@ -64,10 +64,8 @@ export default function BuildPlateSelector({
   return (
     <div
       data-testid="build-plate-selector"
-      className="border-t panel-divider pt-5"
     >
       <div className="mb-3">
-        <h4 className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
           <span>{label}</span>
           <HelpDot title={label} description={hint} />
         </h4>
@@ -96,13 +94,9 @@ export default function BuildPlateSelector({
               }}
               onClick={() => onSelect(plate.id)}
               onKeyDown={(event) => handleKeyDown(event, index)}
-              className={`group relative flex w-[clamp(11rem,14vw,20rem)] shrink-0 snap-start flex-col rounded-[10px] border border-transparent p-3 text-left transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)] ${
                 selected
-                  ? "bg-blue-500/10 text-blue-700 dark:bg-blue-400/10 dark:text-blue-200"
-                  : "bg-[var(--surface-well)] hover:border-[var(--surface-card-outline)] hover:bg-[var(--nav-chip-hover)]"
               }`}
             >
-              <span className="flex h-[clamp(6rem,10vw,14rem)] w-full items-center justify-center overflow-hidden rounded-lg px-2 py-2">
                 <img
                   src={plate.image_url}
                   alt=""

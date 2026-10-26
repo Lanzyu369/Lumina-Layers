@@ -3492,7 +3492,6 @@ class TestNativeBundlePaletteOverride:
     (e.g. RYBWGK — White/Blue/Red/Green/Yellow/Black) never reached the 3MF
     and the filament_colour array came out as CMY-flavored garbage.
 
-    回归测试：若未修复此问题，当用户从经典 CMYW LUT 切到反推 LUT 而未
     手动调整 ``color_mode`` 时，3MF 会继承过时的 UI 颜色模式预设 (SIX_COLOR
     / CMYW) 作为槽位名称和预览颜色，bundle 自带的调色板 (RYBWGK) 无法
     进入 3MF，``filament_colour`` 便退化为 CMY 配色。

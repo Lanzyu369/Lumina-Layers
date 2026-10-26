@@ -454,7 +454,6 @@ class LuminaImageProcessor:
         longer requires the LUT ``ref_stacks`` to be present, so the
         predictive-mode silent-skip that used to make this checkbox a
         no-op has been removed.
-        无论经典 LUT 匹配还是预测匹配路径，只要处于高保真模式且勾选了
         清理开关就会运行；新版清理函数不再依赖 LUT ``ref_stacks``，
         因此预测匹配路径下也能生效（原先是静默跳过）。
         """
