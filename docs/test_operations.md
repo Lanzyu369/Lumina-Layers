@@ -1,6 +1,6 @@
 # Test Operations Guide
 
-Set up the native runtime using [desktop-electron.md](desktop-electron.md), then install test tools with `python -m pip install -r requirements-dev.txt`. PostgreSQL integration is optional: it uses `requirements-postgres.txt` and an explicitly configured disposable database.
+Set up the native runtime using [desktop-electron.md](desktop-electron.md), then install test tools with `python -m pip install -r requirements-dev.txt`. PostgreSQL integration is optional: it uses `api/requirements-postgres.txt` and an explicitly configured disposable database.
 
 ## Choose checks for the change
 

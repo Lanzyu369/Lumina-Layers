@@ -18,20 +18,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_runtime_requirement_selects_the_published_034_release() -> None:
-    native_requirements = (
-        ROOT / "requirements-native-svg.txt"
-    ).read_text(encoding="utf-8")
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     requirement_lines = [
         line.strip()
-        for line in native_requirements.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
+        for line in requirements.splitlines()
+        if line.strip().startswith("lumina-svg-core")
     ]
     assert requirement_lines == [
         "lumina-svg-core==0.3.4",
     ]
-
-    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
-    assert "-r requirements-native-svg.txt" in requirements.splitlines()
 
 
 def test_installed_runtime_is_the_released_034_package() -> None:

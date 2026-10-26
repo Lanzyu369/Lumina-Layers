@@ -22,14 +22,13 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
-            requirements-glb-v2.txt
-            requirements-3mf-native.txt
+            core/requirements-glb-v2.txt
 
       - name: Prepare native 3MF wheelhouse
         uses: ./.github/actions/prepare-3mf-native-wheels
 
       - name: Install geometry dependencies
-        run: python -m pip install -r requirements-dev.txt -r requirements-glb-v2.txt
+        run: python -m pip install -r requirements-dev.txt
 
       - name: Exercise layered geometry and 3MF writer contracts
         run: >-
@@ -57,14 +56,13 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
-            requirements-glb-v2.txt
-            requirements-3mf-native.txt
+            core/requirements-glb-v2.txt
 
       - name: Prepare native 3MF wheelhouse
         uses: ./.github/actions/prepare-3mf-native-wheels
 
       - name: Install geometry dependencies
-        run: python -m pip install -r requirements-dev.txt -r requirements-glb-v2.txt
+        run: python -m pip install -r requirements-dev.txt
 
       - name: Exercise production geometry and writer contracts
         run: >-

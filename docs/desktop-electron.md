@@ -87,11 +87,10 @@ python scripts/build_3mf_native_wheels.py `
 `requirements.txt` 中的其余应用依赖。
 
 SVG 运行时固定使用独立项目发布的 `lumina-svg-core==0.3.4`（AGPLv3）。
-`requirements-native-svg.txt` 会从公开 PyPI 选择匹配 Python、系统和架构的安装包。
+`requirements.txt` 会从公开 PyPI 选择匹配 Python、系统和架构的安装包。
 支持 Python 3.12～3.14；Linux x86-64 要求 glibc 2.28+，Mac 的 Python 3.12/3.13
 安装包要求 macOS 12+，3.14 要求 macOS 14+。完整 Lumina 应用仍要求 macOS 14+，
-由全部原生依赖的支持交集决定。已有开发环境可单独执行
-`python -m pip install --upgrade -r requirements-native-svg.txt`。
+由全部原生依赖的支持交集决定。已有开发环境也按下面的统一依赖安装命令更新。
 
 ## 3. 环境准备
 
@@ -113,9 +112,9 @@ pnpm --dir frontend install --frozen-lockfile
 pnpm --dir electron install --frozen-lockfile
 ```
 
-运行测试时另外安装 `requirements-dev.txt`；仅在明确启用 PostgreSQL 后端时安装 `requirements-postgres.txt`，配置方法见 [server-mode-scaffold.md](server-mode-scaffold.md)。
+运行测试时另外安装 `requirements-dev.txt`；仅在明确启用 PostgreSQL 后端时安装 `api/requirements-postgres.txt`，配置方法见 [server-mode-scaffold.md](server-mode-scaffold.md)。
 
-`frontend/` 和 `electron/` 分别安装依赖；pnpm 版本由各目录的 `packageManager` 固定。Electron 安装时会下载当前平台的运行时，其安装脚本已在 `onlyBuiltDependencies` 中允许。`requirements-glb-v2.txt` 是可选光栅预览依赖。
+`frontend/` 和 `electron/` 分别安装依赖；pnpm 版本由各目录的 `packageManager` 固定。Electron 安装时会下载当前平台的运行时，其安装脚本已在 `onlyBuiltDependencies` 中允许。`core/requirements-glb-v2.txt` 是可选光栅预览依赖。
 
 ## 4. 启动与退出
 

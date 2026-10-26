@@ -38,7 +38,7 @@ def test_neroued_requirement_selects_first_zero_copy_release() -> None:
 
 
 def test_native_requirement_pins_the_public_sdk_without_a_python_marker() -> None:
-    requirements = (ROOT / "requirements-3mf-native.txt").read_text(encoding="utf-8")
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     requirement = next(
         Requirement(line.strip())
         for line in requirements.splitlines()
@@ -132,7 +132,7 @@ def test_ci_pins_the_fatcat_0100_source_revision() -> None:
     assert "--get FATCAT_SOURCE_COMMIT" in action
     assert "--get FATCAT_WRITER_SOURCE_COMMIT" in action
     assert f"{FATCAT_DISTRIBUTION}=={FATCAT_VERSION}" in (
-        ROOT / "requirements-3mf-native.txt"
+        ROOT / "requirements.txt"
     ).read_text(encoding="utf-8")
 
 

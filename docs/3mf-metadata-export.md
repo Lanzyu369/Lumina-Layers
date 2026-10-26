@@ -92,7 +92,7 @@ The writer uses `neroued-3mf==0.4.0+fatcat.production.1`, built from a fixed
 public source commit without a Lumina patch. Its generic Production APIs are
 submitted in [upstream PR #17](https://github.com/Neroued/neroued_3mf/pull/17).
 The [temporary GitHub Release](https://github.com/MOVIBALE/neroued_3mf/releases/tag/fatcat-production-1)
-provides matching CPython 3.12–3.14 wheels through `requirements-3mf-native.txt`.
+provides matching CPython 3.12–3.14 wheels through `requirements.txt`.
 The writer will switch to an official upstream version after acceptance and release.
 
 写包库使用固定公开源码构建的 `neroued-3mf==0.4.0+fatcat.production.1`，

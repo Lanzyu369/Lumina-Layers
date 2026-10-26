@@ -2,7 +2,7 @@
 
 > Historical 0.3.0 source and benchmark snapshot. Lumina Studio now installs
 > the independent repository's [0.3.2 PyPI release](https://pypi.org/project/lumina-svg-core/0.3.2/)
-> through `requirements-native-svg.txt`. Engine development and wheel builds
+> through `requirements.txt`. Engine development and wheel builds
 > belong to that repository; this snapshot remains for existing benchmark
 > fixtures and compatibility checks.
 
