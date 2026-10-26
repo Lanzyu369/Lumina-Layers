@@ -18,6 +18,16 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Use descriptive names and explicit Python type hints. Prefer NumPy/vectorized operations in hot paths.
 - Read, edit, and save text as UTF-8; prefer `apply_patch` and re-read changed non-ASCII text to catch encoding damage.
 
+## Pull Requests and AI Assistance
+
+- Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md). Explain the problem, the resulting behavior, and the checks actually run. Keep routine descriptions short; include more detail when needed to assess correctness or risk.
+- Every PR must state whether AI was used. This includes help with investigation, implementation, tests, documentation, translation, review, or the PR description itself. If no AI was used, write `None` in the AI assistance section.
+- When AI was used, name each actual model and the tool used to access it. A tool or provider name alone (such as Codex, ChatGPT, or Copilot) is not a model identity. Use the identity supplied by the runtime or contributor; if the exact model or variant is unavailable, say `Unknown (via <tool>)` or identify the known model family and state that the exact variant is unknown. Do not guess.
+- Describe each model's role concretely: for example, investigating the failure, implementing a named fix, writing regression tests, reviewing the diff, or drafting the description. Distinguish AI assistance from work checked by the contributor.
+- Explain how the AI-assisted output was verified. Report actual commands, manual checks, outcomes, and any checks not run; an AI review alone is not evidence that the change works. Refer to the Validation section rather than repeating test logs.
+- An agent drafting or updating a PR must fill in this disclosure for its own contribution and other known AI contributions. Keep it accurate as the scope changes. Do not invent another model's identity, a human review, or a passing test. Do not include private prompts or chat transcripts.
+- The person submitting the PR remains responsible for understanding and reviewing the full diff, checking the result, and responding to review. Maintainers may request missing disclosure or verification before proceeding with review.
+
 ## Architecture and Data
 
 - Keep reusable business logic in `core/`, validation/session handling/error translation in API routes, and CPU-heavy work in workers. Worker entry points must be top-level and picklable; pass scalars and file paths across processes.
@@ -71,5 +81,5 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 
 - Keep secrets, machine-local settings, generated caches, logs, and transient artifacts out of commits. Use Conventional Commits for titles; no fixed language order is required.
 - Preserve unrelated dirty work. Before destructive Git operations, save an external backup including untracked files; do not rely on stash alone. Execute and verify such operations separately; get agreement before overwriting someone else's work.
-- When publishing changes, use a fresh topic branch and a PR against `dev-refactor`. Never push or force-push directly to `dev-refactor` or `main`; use `--force-with-lease` for any necessary topic-branch force-push.
+- When publishing changes, use a fresh topic branch. Target `main` for public `Lumina-Layers` PRs and `dev-refactor` for private `Lumina-studio` PRs, unless a maintainer explicitly specifies another target. Never push or force-push directly to `dev-refactor` or `main`; use `--force-with-lease` for any necessary topic-branch force-push.
 - Stop long-running processes started by the task unless the user wants them kept running. Use the project wrappers (`start_all.py --kill`, `scripts/run_vitest.py`) where appropriate, check for leftovers, and leave unrelated processes alone.
