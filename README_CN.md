@@ -148,6 +148,14 @@ LUT 可以是 `.npy`、带键 `.json`、`.npz` 或 `.msgpack`。挑预设时也�
 
 拍照和计算都会有误差，颜色还需要靠实物确认。做大作品之前先打个小样，看看颜色和厚度是否合适。更多成品见 [用户作品集](https://www.bilibili.com/opus/1211359624212512770)。
 
+## 源码预览版（Nightly）
+
+想试最新改动，可以到 [源码预览版](https://github.com/lumina-layer-studio/Lumina-Layers/releases?q=nightly-&expanded=true) 下载。PR 经维护者审核合并后，同一提交的主分支 CI 全部通过才会自动发布。
+
+每版都有独立标签、提交编号和更新说明。下载发布页下方的 **Source code (zip)** 或 **Source code (tar.gz)**，解压后按下面的步骤安装运行。这里不提供安装包或便携版。
+
+预览版可能仍有问题，重要工程先备份；反馈时带上发布页的提交编号。CI 失败时不会发布新版本，上一版仍然可用。
+
 ## 安装
 
 下面是从源码运行的方法，可以在浏览器里用，也可以打开 Electron 桌面窗口。

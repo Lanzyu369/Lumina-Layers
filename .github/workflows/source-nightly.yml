@@ -1,0 +1,55 @@
+name: Publish source nightly
+
+on:
+  workflow_run:
+    workflows:
+      - Layered Mesh Geometry
+      - Native SVG release integration
+      - Verify Workshop release chain
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-source-nightly
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'lumina-layer-studio/Lumina-Layers' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      # Use the trusted default-branch workflow revision, never a PR checkout.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Publish only after all checks pass for the same main commit
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const { publishSourceNightly } = require('./.github/scripts/source-nightly.cjs');
+            const result = await publishSourceNightly({
+              repository: `${context.repo.owner}/${context.repo.repo}`,
+              event: context.payload,
+              request: async (method, path, params = {}) => {
+                const response = await github.request(`${method} /repos/{owner}/{repo}${path}`, {
+                  ...context.repo, ...params,
+                });
+                return response.data;
+              },
+            });
+            core.info(JSON.stringify(result));
+            await core.summary.addHeading('Source nightly').addRaw(
+              result.published ? `Published ${result.url}` : result.reason
+            ).write();
