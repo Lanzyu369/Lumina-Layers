@@ -66,8 +66,6 @@ Lumina Studio 2.0 通过多种耗材分层混色，让平面全彩 FDM 打印的
   <img src="assets/readme/showcase-artwork-range.png" width="1000" alt="8 色和 18 色用户打印作品，包括装裱画和熊猫照片">
 </p>
 
-<p align="center"><sub>从 8 色到 18 色的画面表现。标签沿用用户作品中的颜色标注。</sub></p>
-
 <p align="center">
   <img src="assets/readme/showcase-color-counts.png" width="1000" alt="8 色和 12 色用户打印作品，包括立式人物摆件和装裱作品">
 </p>
