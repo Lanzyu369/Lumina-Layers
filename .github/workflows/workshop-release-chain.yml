@@ -1,9 +1,12 @@
 name: Verify Workshop release chain
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches:
       - dev-refactor
+      - main
     paths:
       - ".github/workflows/workshop-release-chain.yml"
       - "assets/workshop-registry/**"

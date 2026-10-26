@@ -1,6 +1,8 @@
 name: Layered Mesh Geometry
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [dev-refactor, main]
   workflow_dispatch:
