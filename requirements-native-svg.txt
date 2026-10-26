@@ -1,3 +1,0 @@
-# Published PyPI native SVG runtime (AGPL-3.0-only).
-# Application binary-wheel requirements are declared in requirements.txt.
-lumina-svg-core==0.3.4

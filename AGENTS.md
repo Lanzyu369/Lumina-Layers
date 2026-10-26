@@ -66,7 +66,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 ## Setup and Checks
 
 - Use Python 3.12 for the current native SVG dependency. Install backend dependencies with `python -m pip install -r requirements.txt`; native 3MF setup is in [desktop-electron.md](docs/desktop-electron.md).
-- Tests additionally need `python -m pip install -r requirements-dev.txt`. PostgreSQL is optional and uses `requirements-postgres.txt`; ordinary local runs do not need a database.
+- Tests additionally need `python -m pip install -r requirements-dev.txt`. PostgreSQL is optional and uses `api/requirements-postgres.txt`; ordinary local runs do not need a database.
 - Use pnpm, pinned by `packageManager`, for `frontend/` and `electron/`; enable it with `corepack enable`. Do not use npm/yarn.
 - Start with `python api_server.py` or `python start_all.py`; frontend development uses `pnpm dev`.
 - Backend tests use pytest/Hypothesis; all backend files named `test_*.py` are collected, including integration tests. Frontend tests use Vitest/fast-check.
