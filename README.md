@@ -66,8 +66,6 @@ Use an existing LUT preset, or photograph gradient cards to build your own mater
   <img src="assets/readme/showcase-artwork-range.png" width="1000" alt="User prints labelled as 8 and 18 colours, including framed artwork and a panda photograph">
 </p>
 
-<p align="center"><sub>Examples labelled from 8 to 18 colours by their makers.</sub></p>
-
 <p align="center">
   <img src="assets/readme/showcase-color-counts.png" width="1000" alt="User prints labelled as 8 and 12 colours, including standing character cut-outs and framed artwork">
 </p>
