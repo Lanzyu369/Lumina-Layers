@@ -154,6 +154,8 @@ Try recent changes from the [source previews](https://github.com/lumina-layer-st
 
 Each preview has its own tag, commit SHA, and release notes. Download **Source code (zip)** or **Source code (tar.gz)** from the release page, extract it, and follow the installation steps below. No installer or portable application is provided.
 
+For a downloaded archive, open a terminal in the extracted directory and start at installation step 2. Skip the Git clone step so you keep using the selected preview commit.
+
 Previews may still have bugs. Back up important projects and include the release's commit SHA when reporting a problem. Failed checks do not publish a new preview; the previous one remains available.
 
 ## Installation

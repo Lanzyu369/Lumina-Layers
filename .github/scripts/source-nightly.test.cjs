@@ -1,6 +1,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
 const { REQUIRED_WORKFLOWS, publishSourceNightly } = require('./source-nightly.cjs');
 const sha = 'a'.repeat(40);
 const repository = 'lumina-layer-studio/Lumina-Layers';
@@ -120,6 +122,28 @@ test('older completion cannot publish over newer main, including advancement dur
   };
   assert.equal((await g.run({ request })).published, false);
   assert.equal(g.state.writes.length, 0);
+});
+
+test('a late older completion cannot replace the pending publication of current main', async () => {
+  const workflow = readFileSync(join(__dirname, '../workflows/source-nightly.yml'), 'utf8');
+  const group = workflow.match(/^  group: (.+)$/m)?.[1];
+  assert.ok(group, 'The publication workflow must declare its concurrency group');
+  const current = fixture();
+  const older = fixture();
+  older.event.workflow_run.head_sha = 'b'.repeat(40);
+
+  // GitHub retains only the last pending event within each concurrency group.
+  // Read the real group expression so reverting to one global group loses current.
+  const pending = new Map();
+  for (const run of [current, older]) {
+    const key = group.replace(/\$\{\{\s*github\.event\.workflow_run\.head_sha\s*\}\}/g,
+      run.event.workflow_run.head_sha);
+    pending.set(key, run);
+  }
+  for (const run of pending.values()) await run.run();
+  assert.equal(current.state.writes.length, 1);
+  assert.equal(current.state.writes[0].params.target_commitish, sha);
+  assert.equal(older.state.writes.length, 0);
 });
 
 test('duplicate completion is idempotent and never edits existing releases or tags', async () => {

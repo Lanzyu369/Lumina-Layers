@@ -13,7 +13,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish-source-nightly
+  # Older commits must not replace a newer commit's pending publication.
+  group: publish-source-nightly-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 jobs:
