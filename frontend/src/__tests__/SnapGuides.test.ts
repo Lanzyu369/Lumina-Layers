@@ -4,11 +4,11 @@ import { WIDGET_WIDTH } from "../utils/widgetUtils";
 
 describe("resolvePreviewLineLeft", () => {
   it("anchors right-edge highlights to the effective workspace width", () => {
-    expect(resolvePreviewLineLeft("right", 1000, WIDGET_WIDTH)).toBe(650);
+    expect(resolvePreviewLineLeft("right", 1000, WIDGET_WIDTH)).toBe(642);
   });
 
   it("falls back to the left edge when preview targets the left dock", () => {
-    expect(resolvePreviewLineLeft("left", 1000, WIDGET_WIDTH)).toBe(0);
+    expect(resolvePreviewLineLeft("left", 1000, WIDGET_WIDTH)).toBe(8);
   });
 
   it("clamps to zero for narrow workspaces", () => {

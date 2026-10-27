@@ -3,7 +3,9 @@
  * Migrated from core/i18n.py TEXTS dictionary
  * Contains all zh/en translation key-value pairs
  */
+import splashTranslations from '../../../electron/splash-text.json';
 export const translations: Record<string, Record<"zh" | "en", string>> = {
+  ...splashTranslations,
   common_close: { zh: "关闭", en: "Close" },
   cloud_library_update: { zh: "更新", en: "Update" },
   cloud_library_results: { zh: "匹配结果", en: "Matching results" },

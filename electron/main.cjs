@@ -16,6 +16,13 @@ const http = require("http");
 const nodeNet = require("net");
 const fs = require("fs");
 const path = require("path");
+const { createLauncherStartup } = require('./launcher-startup.cjs');
+const { createSplashController } = require('./splash-controller.cjs');
+const launcherStartup = createLauncherStartup();
+if (launcherStartup.enabled) {
+  launcherStartup.checkpoint(0);
+  app.on('will-quit', () => launcherStartup.failed());
+}
 const { saveGeneratedFile } = require("./generated-file-save.cjs");
 const { createApplicationMenu } = require("./application-menu.cjs");
 const {
@@ -398,6 +405,7 @@ let interfaceScale = null;
 let applicationMenu = null;
 const generatedFileDirectory = createGeneratedFileDirectoryState();
 let splashWin = null;
+let splashController = null;
 let isQuitting = false;
 let quitConfirmationPending = false;
 let trustedMainFrameUrl = null;
@@ -542,25 +550,14 @@ function installWorkshopSessionSecurity() {
 }
 
 function createSplash() {
-  splashWin = new BrowserWindow({
-    width: 480,
-    height: 320,
-    frame: false,
-    transparent: true,
-    resizable: false,
-    center: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    icon: fs.existsSync(ICON_PATH) ? ICON_PATH : undefined,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-  splashWin.loadFile(path.join(__dirname, "splash.html"));
+  splashController = createSplashController({ BrowserWindow, ipcMain, app,
+    language: currentLang, onProgress: value => launcherStartup.checkpoint(value) });
+  splashWin = splashController.window;
 }
 
 function closeSplash() {
+  splashController?.close();
+  splashController = null;
   if (splashWin && !splashWin.isDestroyed()) {
     splashWin.close();
     splashWin = null;
@@ -607,13 +604,20 @@ function createWindow() {
 
   win = new BrowserWindow(windowOptions);
   interfaceScale.attach(win);
-  // Maximize before loading the page. The page relays out its pinned panels
-  // when the window resizes, and doing that while it is still loading leaves
-  // the right-hand panels one panel width past the window edge.
-  if (placement.maximize) win.maximize();
+  // macOS maximize() also reveals a hidden window. Defer it until the splash finishes.
+  const mainWindow = win;
   win.once("ready-to-show", () => {
-    closeSplash();
-    win.show();
+    void (async () => {
+      await splashController?.complete();
+      if (mainWindow.isDestroyed()) return;
+      if (placement.maximize) mainWindow.maximize();
+      await launcherStartup.present(mainWindow);
+      closeSplash();
+    })().catch(error => {
+      logErr(`Window presentation failed: ${error.message}`);
+      closeSplash();
+      if (!mainWindow.isDestroyed()) mainWindow.show();
+    });
   });
 
   applicationMenu?.rebuild();
@@ -1008,6 +1012,7 @@ app.whenReady().then(async () => {
   }
 
   // ── Start backend ──
+  splashController?.checkpoint(2);
   let backendProc;
   const python = findPython();
   const apiServer = path.join(ROOT_DIR, "api_server.py");
@@ -1034,6 +1039,7 @@ app.whenReady().then(async () => {
   try {
     await waitForHealth(backendEndpoint.healthUrl, HEALTH_TIMEOUT_MS, backendProc);
     logOk("Backend is healthy");
+    splashController?.checkpoint(5);
     commitBackendEndpoint({
       portFile: path.join(app.getPath("userData"), "backend-port.json"),
       endpoint: backendEndpoint,
@@ -1079,6 +1085,7 @@ app.whenReady().then(async () => {
   installWorkshopSessionSecurity();
 
   // ── Create main window ──
+  splashController?.checkpoint(7);
   createWindow();
 }).catch(error => {
   logErr(`Desktop startup failed: ${error.code || error.message}`);

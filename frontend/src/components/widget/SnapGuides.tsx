@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import type { RefObject } from 'react';
-import { SNAP_THRESHOLD, WIDGET_PANEL_RADIUS } from '../../utils/widgetUtils';
+import { SNAP_THRESHOLD, STACK_GAP, WIDGET_PANEL_RADIUS } from '../../utils/widgetUtils';
 import type { WidgetId } from '../../types/widget';
 
 interface InsertPreviewState {
@@ -59,8 +59,8 @@ export function resolvePreviewLineLeft(
   widgetWidth: number
 ): number {
   return edge === 'right'
-    ? Math.max(0, effectiveWidth - widgetWidth)
-    : 0;
+    ? Math.max(0, effectiveWidth - widgetWidth - STACK_GAP)
+    : STACK_GAP;
 }
 
 function getWidgetBounds(

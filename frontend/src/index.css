@@ -383,12 +383,6 @@ body.lumina-canvas-orbiting [data-widget-id] {
   animation: material-picker-card-select 180ms ease-out;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .material-picker-card-select-effect {
-    animation: none;
-  }
-}
-
 .panel-surface {
   background: var(--surface-panel);
   border: 0;
@@ -716,13 +710,6 @@ body.lumina-canvas-orbiting [data-widget-id] {
   }
   to {
     stroke-dashoffset: -4;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .selection-marching-ants--white,
-  .selection-marching-ants--black {
-    animation: none;
   }
 }
 

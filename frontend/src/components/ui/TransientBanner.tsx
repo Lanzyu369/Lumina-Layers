@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import { motion } from "framer-motion";
 import { StatusBanner } from "./panelPrimitives";
 
 const READABLE_MS = 5000;
@@ -38,7 +38,6 @@ export default function TransientBanner({
   const ref = useRef<HTMLDivElement>(null);
   const dismiss = useRef(onDismiss);
   dismiss.current = onDismiss;
-  const reduced = useReducedMotion();
   const [gap, setGap] = useState(0);
 
   useEffect(() => {
@@ -68,7 +67,7 @@ export default function TransientBanner({
   if (text === null || phase === "gone") return null;
   return <motion.div ref={ref} initial={false} data-phase={phase}
     animate={{ opacity: phase === "visible" ? 1 : 0, height: phase === "collapse" ? 0 : "auto", marginBottom: phase === "collapse" ? -gap : 0 }}
-    transition={{ opacity: { duration: reduced ? 0 : FADE_MS / 1000 }, height: { duration: reduced ? 0 : COLLAPSE_MS / 1000 }, marginBottom: { duration: reduced ? 0 : COLLAPSE_MS / 1000 } }}
+    transition={{ opacity: { duration: FADE_MS / 1000 }, height: { duration: COLLAPSE_MS / 1000 }, marginBottom: { duration: COLLAPSE_MS / 1000 } }}
     className="min-h-0 overflow-hidden">
     <StatusBanner data-testid={testId} role="status" tone={tone} action={action}>{text}</StatusBanner>
   </motion.div>;

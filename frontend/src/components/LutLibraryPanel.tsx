@@ -193,7 +193,7 @@ export default function LutLibraryPanel() {
     <motion.aside initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}
       data-testid="lut-library-panel" className="lut-library-workspace flex h-full min-h-0 w-full flex-col overflow-hidden">
       <div data-testid="lut-library-toolbar" style={{ borderBottomColor: scrolled ? "var(--surface-divider)" : "transparent" }}
-        className="z-10 flex shrink-0 flex-col gap-3 border-b bg-slate-50 px-3 py-3 transition-colors duration-200 motion-reduce:transition-none sm:px-5 xl:flex-row xl:items-center xl:justify-between dark:bg-slate-950">
+        className="z-10 flex shrink-0 flex-col gap-3 border-b bg-slate-50 px-3 py-3 transition-colors duration-200 sm:px-5 xl:flex-row xl:items-center xl:justify-between dark:bg-slate-950">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
           <div className="relative min-w-48 flex-1 xl:max-w-sm">
             <svg aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg>

@@ -134,11 +134,14 @@ describe('SelectionOutlineOverlay GPU lifecycle', () => {
       expect.any(Number), expect.any(Number), 300);
   });
 
-  it('keeps the outline still when reduced motion is enabled', () => {
-    vi.mocked(window.matchMedia).mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as MediaQueryList);
+  it.each([false, true])('keeps the outline moving with system reduced motion set to %s', (reduced) => {
+    vi.mocked(window.matchMedia).mockReturnValue({ matches: reduced, addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as MediaQueryList);
     render(<SelectionOutlineOverlay {...props} />);
     nextFrame(250);
     expect(gpu.draw).toHaveBeenLastCalledWith(viewport.imageScreenRect, 100, 100, 400, 300,
-      expect.any(Number), expect.any(Number), 0);
+      expect.any(Number), expect.any(Number), 250);
+    nextFrame(500);
+    expect(gpu.draw).toHaveBeenLastCalledWith(viewport.imageScreenRect, 100, 100, 400, 300,
+      expect.any(Number), expect.any(Number), 500);
   });
 });
