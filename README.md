@@ -148,6 +148,16 @@ Gradient cards record a material's data first, then profiles are combined to cal
 
 Photography and calculation both have some error, so check the colour on a real print. A small sample is a good way to check colour and thickness before starting a large piece. More finished work is in the [users' gallery](https://www.bilibili.com/opus/1211359624212512770).
 
+## Source Nightly
+
+Try recent changes from the [source previews](https://github.com/lumina-layer-studio/Lumina-Layers/releases?q=nightly-&expanded=true). A preview is published automatically after a maintainer reviews and merges a PR and all main-branch CI workflows pass for that commit.
+
+Each preview has its own tag, commit SHA, and release notes. Download **Source code (zip)** or **Source code (tar.gz)** from the release page, extract it, and follow the installation steps below. No installer or portable application is provided.
+
+For a downloaded archive, open a terminal in the extracted directory and start at installation step 2. Skip the Git clone step so you keep using the selected preview commit.
+
+Previews may still have bugs. Back up important projects and include the release's commit SHA when reporting a problem. Failed checks do not publish a new preview; the previous one remains available.
+
 ## Installation
 
 Run the source in a browser or in the Electron desktop window.
