@@ -173,6 +173,7 @@ export default function LuminaBoxMaterialPanel() {
       <section className={`${cardClass} space-y-5 p-5`}>
         <div className="flex flex-wrap items-center justify-between gap-3" data-testid="box-material-toolbar">
           <div className="flex flex-wrap items-center gap-3">
+            <Button label={t("lumina_box_material_view_library")} variant="secondary" onClick={navigation.showLibrary} />
             {formMode ? <>
             <Button label={t("lumina_box_material_new")} variant={formMode === "material" ? "primary" : "secondary"} disabled={selectionLocked || formMode === "material"} onClick={() => beginMaterial()} />
             <Button label={t("lumina_box_backing_collect")} variant={formMode === "backing" || !formMode && backing ? "primary" : "secondary"}
@@ -300,6 +301,7 @@ export default function LuminaBoxMaterialPanel() {
           <p className="font-medium">{awaitingOpposite
             ? t("lumina_box_backing_awaiting").replace("{name}", oppositeMaterial?.name ?? backingWorkflow?.opposite_name ?? "")
             : t("lumina_box_backing_saved")}</p>
+          {!awaitingOpposite ? <Button label={t("lumina_box_material_view_library")} variant="secondary" onClick={navigation.showLibrary} /> : null}
           {awaitingOpposite ? <Button label={t(symbol === "W" ? "lumina_box_continue_black" : "lumina_box_continue_white")} disabled={selectionLocked || !oppositeMaterial}
             onClick={() => oppositeMaterial && void openBacking(oppositeMaterial)} /> : null}
         </div>

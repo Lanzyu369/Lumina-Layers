@@ -71,6 +71,7 @@ def build_surface_footprint(
         bounds_height_mm=float(maxy - miny),
         area_mm2=float(merged.area),
         hole_count=len(merged.interiors),
+        face_indices=tuple(int(index) for index in face_indices),
     )
 
 

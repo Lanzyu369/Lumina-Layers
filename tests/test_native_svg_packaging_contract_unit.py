@@ -17,32 +17,26 @@ from core.native_svg_adapter import NativeSvgFallback, NativeSvgGeometry
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_runtime_requirement_selects_the_published_031_release() -> None:
-    native_requirements = (
-        ROOT / "requirements-native-svg.txt"
-    ).read_text(encoding="utf-8")
+def test_runtime_requirement_selects_the_published_034_release() -> None:
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     requirement_lines = [
         line.strip()
-        for line in native_requirements.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
+        for line in requirements.splitlines()
+        if line.strip().startswith("lumina-svg-core")
     ]
     assert requirement_lines == [
-        "--find-links https://github.com/lumina-layer-studio/lumina-svg-core/releases/expanded_assets/v0.3.1",
-        "lumina-svg-core==0.3.1",
+        "lumina-svg-core==0.3.4",
     ]
 
-    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
-    assert "-r requirements-native-svg.txt" in requirements.splitlines()
 
-
-def test_installed_runtime_is_the_released_031_package() -> None:
+def test_installed_runtime_is_the_released_034_package() -> None:
     import lumina_svg_core
 
-    assert lumina_svg_core.__version__ == "0.3.1"
+    assert lumina_svg_core.__version__ == "0.3.4"
     if lumina_svg_core.__source_revision__ == "unknown":
         assert lumina_svg_core.__source_dirty__ is None
     else:
-        assert lumina_svg_core.__source_revision__ == "50c1dd5b57c15b4cccb3c51c08134aea01338a42"
+        assert lumina_svg_core.__source_revision__ == "7056fc837eb993ea40134d98f306c1c8a3081958"
         assert lumina_svg_core.__source_dirty__ is False
     assert lumina_svg_core.RESULT_SCHEMA_VERSION == 4
 

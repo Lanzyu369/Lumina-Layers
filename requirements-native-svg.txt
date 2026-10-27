@@ -1,4 +1,0 @@
-# Published native SVG runtime (AGPL-3.0-only). Pip selects the matching
-# Python/OS/architecture wheel, or the release source archive when necessary.
---find-links https://github.com/lumina-layer-studio/lumina-svg-core/releases/expanded_assets/v0.3.1
-lumina-svg-core==0.3.1

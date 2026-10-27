@@ -539,9 +539,10 @@ def test_cleanup_session_files_preserves_regeneration_input_paths(
             assert field_path in remaining_temp_paths
         assert os.path.exists(old_matched_rgb_path) is False
         assert old_matched_rgb_path not in remaining_temp_paths
-        non_generate_path = current_artifact_paths["preview_rgba"]
-        assert os.path.exists(non_generate_path) is False
-        assert non_generate_path not in remaining_temp_paths
+        # The current manifest is also needed by continued editing/project save.
+        active_preview_path = current_artifact_paths["preview_rgba"]
+        assert os.path.exists(active_preview_path) is True
+        assert active_preview_path in remaining_temp_paths
     finally:
         cleanup_paths = {
             image_path,

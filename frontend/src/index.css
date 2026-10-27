@@ -1,16 +1,79 @@
 @import "tailwindcss";
 
 @theme {
+  --font-sans: "MiSans", sans-serif;
   --shadow-glow-yellow: none;
   --shadow-glow-blue: none;
   --shadow-glass-panel: none;
 }
 
+@font-face {
+  font-family: "MiSans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/misans/MiSans-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "MiSans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/misans/MiSans-Medium.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "MiSans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/misans/MiSans-Semibold.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "MiSans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/misans/MiSans-Bold.woff2") format("woff2");
+}
+
 @custom-variant dark (&:where(.dark, .dark *));
 
+@layer base {
+  /* UI labels must not start text selections during clicks or dragging. */
+  body {
+    font-family: var(--font-sans);
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Keep editable fields and diagnostic output available for copying.
+   * Tailwind select-text/select-all utilities can opt other content in. */
+  input,
+  textarea,
+  [contenteditable=""],
+  [contenteditable="true"],
+  [contenteditable="plaintext-only"],
+  pre,
+  code {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+.desktop-titlebar {
+  -webkit-app-region: drag;
+}
+
+.desktop-titlebar .desktop-titlebar-controls {
+  -webkit-app-region: no-drag;
+}
+
 :root {
-  --surface-panel: transparent;
-  --surface-panel-strong: rgba(255, 255, 255, 0.98);
+  --surface-panel: var(--color-slate-50);
+  --surface-panel-strong: var(--color-slate-50);
   --surface-section: transparent;
   --surface-section-muted: rgba(255, 255, 255, 0.46);
   --surface-scrim: rgba(15, 23, 42, 0.56);
@@ -21,6 +84,24 @@
   --surface-card-outline: rgba(148, 163, 184, 0.38);
   --surface-well: rgba(100, 116, 139, 0.09);
   --surface-divider: rgba(148, 163, 184, 0.32);
+  --nav-chip-active: rgba(255, 255, 255, 0.96);
+  --nav-chip-hover: rgba(100, 116, 139, 0.08);
+  --nav-tab-selected-bg: #529bff;
+  --nav-tab-selected-text: #ffffff;
+  --button-bg: #ffffff;
+  --button-hover: #f5f5f7;
+  --button-pressed: #e9e9ed;
+  --button-border: rgb(0 0 0 / 0.14);
+  --button-text: #313135;
+  --button-primary: #0071e3;
+  --button-primary-hover: #0068d1;
+  --button-primary-pressed: #005fbe;
+  --button-disabled-bg: #ececf0;
+  --button-disabled-text: #939398;
+  --button-danger: #c42b27;
+  --shadow-nav-chip:
+    0 1px 2px rgba(15, 23, 42, 0.1),
+    0 0 0 0.5px rgba(15, 23, 42, 0.05);
   --shadow-card:
     0 1px 2px rgba(15, 23, 42, 0.05),
     0 20px 44px -32px rgba(15, 23, 42, 0.3);
@@ -93,6 +174,21 @@
   --surface-card-outline: rgba(100, 116, 139, 0.5);
   --surface-well: rgba(148, 163, 184, 0.1);
   --surface-divider: rgba(100, 116, 139, 0.45);
+  --nav-chip-active: rgba(148, 163, 184, 0.18);
+  --nav-chip-hover: rgba(148, 163, 184, 0.08);
+  --nav-tab-selected-bg: #0a84ff;
+  --button-bg: #353538;
+  --button-hover: #414145;
+  --button-pressed: #29292c;
+  --button-border: rgb(255 255 255 / 0.14);
+  --button-text: #f0f0f2;
+  --button-primary: #0071e3;
+  --button-primary-hover: #087cf0;
+  --button-primary-pressed: #0068d1;
+  --button-disabled-bg: #29292d;
+  --button-disabled-text: #77777e;
+  --button-danger: #ff827b;
+  --shadow-nav-chip: none;
   --shadow-card:
     0 1px 2px rgba(0, 0, 0, 0.3),
     0 20px 44px -32px rgba(0, 0, 0, 0.6);
@@ -122,8 +218,153 @@ body.lumina-canvas-orbiting [data-widget-id] {
   pointer-events: none !important;
 }
 
+/* Global shadow kill-switch. Tailwind draws `ring-*` with box-shadow, so any
+ * element that also carries a `shadow-*` utility loses its focus ring too.
+ * Keep `shadow-` out of class strings on interactive controls; use `outline`
+ * or `border` for focus styling inside `.ghost-control` below.
+ * 全局阴影开关：Tailwind 的 `ring-*` 靠 box-shadow 实现，因此凡是类名里同时
+ * 含 `shadow-` 的元素，焦点环也会被一起清掉。交互控件的类名里不要出现
+ * `shadow-`；幽灵控件的聚焦样式一律走 outline / border。 */
 :where([class*="shadow-"], [style*="box-shadow"]) {
   box-shadow: none !important;
+}
+
+/* Ordinary operations use neutral controls. Only the area's main commit uses
+ * action-control-primary; both shared and raw buttons follow these tokens. */
+.action-control {
+  border: 1px solid var(--button-border);
+  background-color: var(--button-bg);
+  color: var(--button-text);
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.action-control svg { color: inherit; }
+
+.action-control:hover:not(:disabled):not([aria-disabled="true"]) {
+  background-color: var(--button-hover);
+}
+
+.action-control:active:not(:disabled):not([aria-disabled="true"]) {
+  background-color: var(--button-pressed);
+}
+
+.action-control-primary {
+  border-color: transparent;
+  background-color: var(--button-primary);
+  color: white;
+}
+
+.action-control-primary:hover:not(:disabled):not([aria-disabled="true"]) {
+  background-color: var(--button-primary-hover);
+}
+
+.action-control-primary:active:not(:disabled):not([aria-disabled="true"]) {
+  background-color: var(--button-primary-pressed);
+}
+
+.action-control[data-tone="danger"] { color: var(--button-danger); }
+
+.action-control:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.action-control:disabled,
+.action-control[aria-disabled="true"] {
+  border-color: transparent;
+  background-color: var(--button-disabled-bg);
+  color: var(--button-disabled-text);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+/* Ghost control: no boundary at rest, boundary appears on hover / focus.
+ * Used by ghost Buttons, toolbar icon buttons, dialog close buttons and
+ * collapse headers. 幽灵控件：静止时无边界，悬停或聚焦时才出现细边框与浅底。
+ * The 1px border is always present (transparent at rest) so nothing reflows.
+ * 1px 边框始终存在（静止时透明），悬停不会引起尺寸跳动。 */
+.ghost-control {
+  border: 1px solid transparent;
+  background-color: transparent;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    outline-color 150ms ease;
+}
+
+.ghost-control:hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--surface-card-outline);
+  background-color: var(--nav-chip-hover);
+  color: rgb(15 23 42);
+}
+
+.dark .ghost-control:hover:not(:disabled):not([aria-disabled="true"]) {
+  color: rgb(241 245 249);
+}
+
+.ghost-control:focus-visible {
+  border-color: var(--surface-card-outline);
+  background-color: var(--nav-chip-hover);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.ghost-control:active:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--surface-card-outline);
+  background-color: var(--surface-well);
+}
+
+/* Toggled-on ghost control (e.g. the active selection tool). Boundary stays
+ * hidden; the fill carries the state. 开启态：不画边框，用淡蓝底表达选中。 */
+.ghost-control[aria-pressed="true"],
+.ghost-control[data-active="true"] {
+  border-color: transparent;
+  background-color: var(--nav-chip-active);
+  color: rgb(29 78 216);
+}
+
+.dark .ghost-control[aria-pressed="true"],
+.dark .ghost-control[data-active="true"] {
+  color: rgb(147 197 253);
+}
+
+.ghost-control[aria-pressed="true"]:hover:not(:disabled):not([aria-disabled="true"]),
+.ghost-control[data-active="true"]:hover:not(:disabled):not([aria-disabled="true"]) {
+  background-color: var(--surface-well);
+}
+
+.ghost-control:disabled,
+.ghost-control[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* Destructive ghost control: red text, border and fill on hover. */
+.ghost-control[data-tone="danger"] {
+  color: var(--surface-text-muted);
+}
+
+.ghost-control[data-tone="danger"]:hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--error-border);
+  background-color: var(--error-soft);
+  color: rgb(185 28 28);
+}
+
+.dark .ghost-control[data-tone="danger"]:hover:not(:disabled):not([aria-disabled="true"]) {
+  color: rgb(252 165 165);
+}
+
+.ghost-control[data-tone="danger"]:active:not(:disabled):not([aria-disabled="true"]) {
+  background-color: var(--error-soft);
+}
+
+/* Touch devices have no hover, so a boundary-less control reads as plain
+ * text. Show a faint resting border there. 触屏没有悬停，静止时给一圈极淡边框。 */
+@media (hover: none) {
+  .ghost-control:not([aria-pressed="true"]):not([data-active="true"]) {
+    border-color: var(--surface-outline);
+  }
 }
 
 @keyframes material-picker-card-select {
@@ -140,12 +381,6 @@ body.lumina-canvas-orbiting [data-widget-id] {
 
 .material-picker-card-select-effect {
   animation: material-picker-card-select 180ms ease-out;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .material-picker-card-select-effect {
-    animation: none;
-  }
 }
 
 .panel-surface {
@@ -178,13 +413,166 @@ body.lumina-canvas-orbiting [data-widget-id] {
   box-shadow: var(--shadow-card);
 }
 
+/* Page-sized panels retain card geometry without using a white card fill. */
+.panel-card.panel-default-surface {
+  background: var(--surface-panel-strong);
+}
+
+.dark .panel-card.panel-default-surface {
+  background: var(--surface-card);
+}
+
 .panel-well {
   background: var(--surface-well);
   border: 1px solid transparent;
 }
 
+/* A light field stays distinct from the continuous settings-group surface. */
+.settings-group .slider-value-field {
+  background: var(--surface-card);
+}
+
+.settings-choice-group > fieldset > div:first-child > span:first-child {
+  font-weight: 600;
+  color: var(--color-slate-800);
+}
+
+.dark .settings-choice-group > fieldset > div:first-child > span:first-child {
+  color: var(--color-slate-100);
+}
+
 .panel-divider {
   border-color: var(--surface-divider);
+}
+
+/* Settings use a continuous split view; only individual controls have shells. */
+.settings-workspace {
+  background: var(--surface-panel);
+}
+
+.settings-sidebar {
+  background: var(--color-slate-200);
+}
+
+.dark .settings-sidebar {
+  background: var(--surface-section-muted);
+}
+
+.settings-content .panel-card {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* Material browsing uses tonal separation instead of elevated white cards. */
+.material-library-workspace,
+.lut-library-workspace {
+  background: var(--color-slate-50);
+  box-shadow: none;
+}
+
+.dark .material-library-workspace,
+.dark .lut-library-workspace {
+  background: var(--color-slate-950);
+}
+
+.material-library-workspace .panel-card,
+.lut-library-workspace .panel-card {
+  background: var(--color-slate-100);
+  border-color: var(--color-slate-200);
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.dark .material-library-workspace .panel-card,
+.dark .lut-library-workspace .panel-card {
+  background: var(--color-slate-800);
+  border-color: var(--color-slate-700);
+}
+
+.material-library-group:hover,
+.material-library-card:hover {
+  background: var(--color-slate-200);
+}
+
+.dark .material-library-group:hover,
+.dark .material-library-workspace .material-library-card:hover,
+.dark .lut-library-workspace .material-library-card:hover {
+  background: var(--color-slate-700);
+}
+
+.material-library-card-name {
+  color: var(--color-slate-900);
+}
+
+.material-library-card-meta {
+  color: var(--color-slate-600);
+}
+
+.dark .material-library-card-name {
+  color: var(--color-slate-50);
+}
+
+.dark .material-library-card-meta {
+  color: var(--color-slate-400);
+}
+
+.material-library-workspace .material-library-card:is([aria-expanded="true"], [aria-pressed="true"]),
+.lut-library-workspace .material-library-card[aria-expanded="true"] {
+  background: var(--color-slate-200);
+  border-color: var(--color-slate-300);
+}
+
+.dark .material-library-workspace .material-library-card:is([aria-expanded="true"], [aria-pressed="true"]),
+.dark .lut-library-workspace .material-library-card[aria-expanded="true"] {
+  background: var(--color-slate-700);
+  border-color: var(--color-slate-500);
+}
+
+.material-library-card:focus-visible,
+.material-library-group:focus-visible {
+  outline: 2px solid var(--color-blue-500);
+  outline-offset: 3px;
+}
+
+/* The color editor is a continuous workstation divided into columns and rows. */
+.panel-card.color-tools-panel {
+  background: var(--color-slate-50);
+}
+
+.dark .panel-card.color-tools-panel {
+  background: var(--color-slate-950);
+}
+
+.color-adjustment-workspace .panel-card {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.ghost-control.selection-tool-control {
+  background-color: var(--color-slate-100);
+  color: var(--color-slate-900);
+}
+
+.ghost-control.selection-tool-control[aria-pressed="true"],
+.ghost-control.selection-tool-control:hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--color-slate-300);
+  background-color: var(--color-slate-200);
+  color: var(--color-slate-900);
+}
+
+.dark .ghost-control.selection-tool-control {
+  background-color: var(--color-slate-800);
+  color: var(--color-slate-100);
+}
+
+.dark .ghost-control.selection-tool-control[aria-pressed="true"],
+.dark .ghost-control.selection-tool-control:hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--color-slate-600);
+  background-color: var(--color-slate-700);
+  color: var(--color-slate-100);
 }
 
 .surface-divider {
@@ -221,48 +609,77 @@ body.lumina-canvas-orbiting [data-widget-id] {
   border-left-color: rgb(239, 68, 68);
 }
 
-.dock-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.22) transparent;
+/* Apply to every scroll container, including dialogs rendered outside #root. */
+:root {
+  --scrollbar-thumb: rgba(110, 110, 115, 0.42);
+  --scrollbar-thumb-hover: rgba(110, 110, 115, 0.68);
 }
 
-.dock-scrollbar::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+.dark {
+  --scrollbar-thumb: rgba(161, 161, 166, 0.42);
+  --scrollbar-thumb-hover: rgba(161, 161, 166, 0.68);
 }
 
-.dock-scrollbar::-webkit-scrollbar-thumb {
-  background-color: rgba(148, 163, 184, 0.22);
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+}
+
+::-webkit-scrollbar-thumb {
+  min-width: 32px;
+  min-height: 32px;
+  border: 1px solid transparent;
   border-radius: 9999px;
+  background-color: var(--scrollbar-thumb);
+  background-clip: padding-box;
 }
 
-.dock-scrollbar:hover {
-  scrollbar-color: rgba(59, 130, 246, 0.55) transparent;
+:hover::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
-.dock-scrollbar:hover::-webkit-scrollbar-thumb {
-  background-color: rgba(59, 130, 246, 0.55);
+/* Standard scrollbar properties override Chromium's custom thumb geometry. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+
+  :hover {
+    scrollbar-color: var(--scrollbar-thumb-hover) transparent;
+  }
 }
 
 .dock-scrollbar-hover {
-  overflow-y: hidden;
-}
-
-.dock-scrollbar-hover:hover,
-.dock-scrollbar-hover:focus-within {
+  /* Keep the same native scroller when the pointer crosses widgets or portals. */
   overflow-y: auto;
 }
 
-.dark .dock-scrollbar {
-  scrollbar-color: rgba(148, 163, 184, 0.2) transparent;
+.dock-scrollbar-hover:not(:hover):not(:focus-within)::-webkit-scrollbar-thumb {
+  background-color: transparent;
 }
 
-.dark .dock-scrollbar:hover {
-  scrollbar-color: rgba(96, 165, 250, 0.5) transparent;
+@supports not selector(::-webkit-scrollbar) {
+  .dock-scrollbar-hover:not(:hover):not(:focus-within) {
+    scrollbar-color: transparent transparent;
+  }
 }
 
-.dark .dock-scrollbar:hover::-webkit-scrollbar-thumb {
-  background-color: rgba(96, 165, 250, 0.5);
+.scrollbar-hidden {
+  scrollbar-width: none;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
 }
 
 .selection-marching-ants {
@@ -293,13 +710,6 @@ body.lumina-canvas-orbiting [data-widget-id] {
   }
   to {
     stroke-dashoffset: -4;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .selection-marching-ants--white,
-  .selection-marching-ants--black {
-    animation: none;
   }
 }
 
@@ -402,3 +812,7 @@ body.lumina-canvas-orbiting [data-widget-id] {
     8px -8px,
     -8px 0px;
 }
+/* Native disclosure semantics with the same indicator as controlled sections. */
+.disclosure-summary::-webkit-details-marker { display: none; }
+.disclosure-summary::marker { content: ""; }
+details[open] > .disclosure-summary > .disclosure-chevron { transform: rotate(90deg); }

@@ -262,7 +262,9 @@ describe("ExtractorPanel 单元测试", () => {
 
     render(<ExtractorPanel />);
 
-    fireEvent.click(screen.getByRole("switch"));
+    fireEvent.click(
+      screen.getByRole("switch", { name: /8色完整版提取|Full 8-Color Extraction/ }),
+    );
 
     const pageSelect = screen.getByTestId("page-select");
     const combobox = within(pageSelect).getByRole("combobox");

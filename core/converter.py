@@ -345,6 +345,9 @@ def convert_image_to_3d(
     backing_infill_density_percent: int = 100,
     enable_wipe_tower_auto_placement: bool = True,
     custom_3mf_template_id: Optional[str] = None,
+    coating_material: Optional[Dict[str, str]] = None,
+    backing_output: str = "same_project",
+    native_filament_profiles: Optional[Dict[str, str]] = None,
     height_identity_rgb_path: Optional[str] = None,
     original_matched_rgb_path: Optional[str] = None,
     original_material_matrix_path: Optional[str] = None,
@@ -389,7 +392,7 @@ def convert_image_to_3d(
         material_backing_material_index: Optional selected-material index used
             as the backing color when ``material_source`` is
             ``"material_archive"``. Native and legacy LUT flows ignore it.
-            (耗材档案模式下作为底板颜色的已选耗材索引；传统 LUT 与反推 LUT
+            (耗材档案模式下作为底板颜色的已选耗材索引；经典 LUT 与反推 LUT
             流程会忽略该值)
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to 3MF export.
@@ -492,6 +495,8 @@ def convert_image_to_3d(
         "free_color_set": free_color_set,
         "enable_coating": enable_coating,
         "coating_height_mm": coating_height_mm,
+        "coating_material": coating_material,
+        "backing_output": backing_output,
         "hue_weight": hue_weight,
         "chroma_gate": chroma_gate,
         "matched_rgb_path": matched_rgb_path,
@@ -512,6 +517,7 @@ def convert_image_to_3d(
         "nozzle_size": nozzle_size,
         "device_profile_id": device_profile_id,
         "build_plate_id": build_plate_id,
+        "native_filament_profiles": dict(native_filament_profiles or {}),
         "custom_3mf_template_id": custom_3mf_template_id,
         "enable_base_layer_height_modifier": enable_base_layer_height_modifier,
         "center_on_bed": center_on_bed,
@@ -793,6 +799,9 @@ def generate_final_model(
     backing_infill_density_percent: int = 100,
     enable_wipe_tower_auto_placement: bool = True,
     custom_3mf_template_id: Optional[str] = None,
+    coating_material: Optional[Dict[str, str]] = None,
+    backing_output: str = "same_project",
+    native_filament_profiles: Optional[Dict[str, str]] = None,
     height_identity_rgb_path: Optional[str] = None,
     original_matched_rgb_path: Optional[str] = None,
     original_material_matrix_path: Optional[str] = None,
@@ -953,6 +962,7 @@ def generate_final_model(
         svg_hole_compensation_enabled=svg_hole_compensation_enabled,
         svg_hole_max_area_mm2=svg_hole_max_area_mm2,
         svg_hole_max_width_mm=svg_hole_max_width_mm,
+        native_filament_profiles=native_filament_profiles,
         backing_infill_density_percent=backing_infill_density_percent,
         blur_kernel=0,
         smooth_sigma=10,
@@ -977,6 +987,8 @@ def generate_final_model(
         free_color_set=free_color_set,
         enable_coating=enable_coating,
         coating_height_mm=coating_height_mm,
+        coating_material=coating_material,
+        backing_output=backing_output,
         hue_weight=hue_weight,
         chroma_gate=chroma_gate,
         matched_rgb_path=matched_rgb_path,

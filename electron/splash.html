@@ -1,56 +1,20 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self'">
   <title>Lumina Studio</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      width: 480px;
-      height: 320px;
-      background: #1a1a2e;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      overflow: hidden;
-      border-radius: 12px;
-    }
-    .logo {
-      font-size: 32px;
-      font-weight: 700;
-      color: #e0e0e0;
-      letter-spacing: 2px;
-      margin-bottom: 8px;
-    }
-    .logo span {
-      color: #6c63ff;
-    }
-    .subtitle {
-      font-size: 13px;
-      color: #888;
-      margin-bottom: 32px;
-      letter-spacing: 1px;
-    }
-    .loader {
-      width: 40px;
-      height: 40px;
-      border: 3px solid rgba(108, 99, 255, 0.2);
-      border-top: 3px solid #6c63ff;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-    }
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-  </style>
+  <link rel="stylesheet" href="./splash.css">
 </head>
 <body>
-  <div class="logo">Lumina <span>Studio</span></div>
-  <div class="subtitle">Multi-Material Color Workflow</div>
-  <div class="loader"></div>
+  <main>
+    <div id="art"><canvas aria-label="Lumina"></canvas></div>
+    <h1>Lumina Layers</h1>
+    <p id="version"></p>
+    <progress max="10" value="0"></progress>
+    <p id="status" role="status"></p>
+  </main>
+  <script type="module" src="./splash-renderer.mjs"></script>
 </body>
 </html>

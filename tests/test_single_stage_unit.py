@@ -6078,6 +6078,7 @@ def test_generate_material_swatch_cleans_output_when_registry_fails(
                 SimpleNamespace(
                     directory_name="pla-basic",
                     name="PLA Basic",
+                    material_type="PLA",
                     estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
                 )
             ],
@@ -6138,6 +6139,7 @@ def test_generate_material_swatch_hides_export_failure_detail(
                 SimpleNamespace(
                     directory_name="pla-basic",
                     name="PLA Basic",
+                    material_type="PLA",
                     estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
                 )
             ],
@@ -6211,6 +6213,7 @@ def test_generate_material_swatch_preserves_download_when_preview_registration_f
                 SimpleNamespace(
                     directory_name="pla-basic",
                     name="PLA Basic",
+                    material_type="PLA",
                     estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
                 )
             ],
@@ -6297,6 +6300,7 @@ def test_generate_material_swatch_preserves_download_when_preview_encoding_fails
                 SimpleNamespace(
                     directory_name="pla-basic",
                     name="PLA Basic",
+                    material_type="PLA",
                     estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
                 )
             ],

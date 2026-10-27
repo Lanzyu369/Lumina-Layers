@@ -29,7 +29,6 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
     "advanced-settings",
     "relief-settings",
     "outline-settings",
-    "cloisonne-settings",
     "coating-settings",
     "keychain-loop",
     "fridge-magnet-settings",
@@ -60,7 +59,7 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
 // ===== Converter sub-tab → Widget 映射 =====
 // 核心设置：只有基础设置、操作栏、高级设置 3 个面板，专注于 3MF 生成所需的主要参数。
 // 颜色调整：dock 中不显示任何 widget；改由 Color2DOverlay 全屏接管。
-// 高级功能：可访问全部 10 个 widget，承载所有进阶可选功能。
+// 高级功能：仅列出向用户开放的面板；掐丝珐琅保留数据兼容，但不提供 UI 入口。
 export const CONVERTER_SUB_TAB_WIDGET_MAP: Record<ConverterSubTabId, readonly WidgetId[]> = {
   core: ["basic-settings", "action-bar", "advanced-settings"],
   color: [],
@@ -70,7 +69,6 @@ export const CONVERTER_SUB_TAB_WIDGET_MAP: Record<ConverterSubTabId, readonly Wi
     "advanced-settings",
     "relief-settings",
     "outline-settings",
-    "cloisonne-settings",
     "coating-settings",
     "keychain-loop",
     "fridge-magnet-settings",
@@ -155,7 +153,7 @@ export const DEFAULT_LAYOUT: Record<WidgetId, WidgetLayoutState> = {
     id: "cloisonne-settings",
     position: { x: 0, y: 0 },
     collapsed: true,
-    visible: true,
+    visible: false,
     snapEdge: "right",
     stackOrder: 5,
     expandedHeight: EXPANDED_HEIGHT,
@@ -420,7 +418,7 @@ function _promoteModelSurfaceEntry(
 export const useWidgetStore = create<WidgetStore>()(
   subscribeWithSelector(
     persist(
-      (set) => ({
+      (set, get) => ({
       widgets: { ...DEFAULT_LAYOUT },
       isDragging: false,
       activeWidgetId: null,
@@ -473,31 +471,24 @@ export const useWidgetStore = create<WidgetStore>()(
       setWidgetPositions: (
         positions: Partial<Record<WidgetId, { x: number; y: number }>>,
       ) => {
-        set((state) => {
-          const entries = Object.entries(positions) as [
-            WidgetId,
-            { x: number; y: number },
-          ][];
-          if (entries.length === 0) return state;
-
-          let changed = false;
-          const widgets = { ...state.widgets };
-
-          for (const [id, position] of entries) {
-            const current = widgets[id];
-            if (
-              !current ||
-              (current.position.x === position.x &&
-                current.position.y === position.y)
-            ) {
-              continue;
-            }
-            widgets[id] = { ...current, position };
-            changed = true;
+        const widgets = get().widgets;
+        let nextWidgets: typeof widgets | undefined;
+        for (const [id, position] of Object.entries(positions) as [
+          WidgetId,
+          { x: number; y: number },
+        ][]) {
+          const current = widgets[id];
+          if (
+            !current ||
+            (current.position.x === position.x && current.position.y === position.y)
+          ) {
+            continue;
           }
-
-          return changed ? { widgets } : state;
-        });
+          nextWidgets ??= { ...widgets };
+          nextWidgets[id] = { ...current, position };
+        }
+        // Even set(state => state) serializes the persisted layout.
+        if (nextWidgets) set({ widgets: nextWidgets });
       },
 
       /**
@@ -594,9 +585,8 @@ export const useWidgetStore = create<WidgetStore>()(
        * 更新 Widget 预测量的展开高度。
        */
       setExpandedHeight: (id: WidgetId, height: number) => {
+        if (get().widgets[id].expandedHeight === height) return;
         set((state) => {
-          // Only update if height actually changed to avoid unnecessary re-renders
-          if (state.widgets[id].expandedHeight === height) return state;
           return {
             widgets: {
               ...state.widgets,

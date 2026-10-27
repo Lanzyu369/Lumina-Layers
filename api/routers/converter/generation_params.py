@@ -31,6 +31,8 @@ def build_common_generation_params(request: ConvertGenerateRequest) -> dict:
         "wire_height_mm": request.wire_height_mm,
         "enable_coating": request.enable_coating,
         "coating_height_mm": request.coating_height_mm,
+        "coating_material": request.coating_material.model_dump() if request.coating_material else None,
+        "backing_output": request.backing_output,
         "hue_weight": request.hue_weight,
         "chroma_gate": request.chroma_gate,
         "printer_id": request.printer_id,
@@ -38,6 +40,7 @@ def build_common_generation_params(request: ConvertGenerateRequest) -> dict:
         "nozzle_size": request.nozzle_size,
         "device_profile_id": request.device_profile_id,
         "build_plate_id": request.build_plate_id,
+        "native_filament_profiles": dict(request.native_filament_profiles),
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "enable_wipe_tower_auto_placement": request.enable_wipe_tower_auto_placement,
     }

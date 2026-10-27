@@ -320,7 +320,9 @@ def run(ctx: dict) -> dict:
     PipelineContext 输入键 / Input keys:
         - scene (trimesh.Scene): 当前 3D 场景
         - valid_slot_names (list[str]): 已有的有效槽位名称
-        - full_matrix (np.ndarray): (Z, H, W) 体素矩阵
+        - full_matrix (np.ndarray): (Z, H, W) signed material label planes.
+        - voxel_z_edges (np.ndarray | None): Z+1 logical boundaries belonging
+          only to full_matrix, not independent coating or outline volumes.
         - mask_solid (np.ndarray): (H, W) bool 实体掩码
         - matched_rgb (np.ndarray): (H, W, 3) 匹配后的 RGB
         - target_h (int): 图像高度（像素）
@@ -353,6 +355,9 @@ def run(ctx: dict) -> dict:
     scene = ctx["scene"]
     valid_slot_names = ctx["valid_slot_names"]
     full_matrix = ctx["full_matrix"]
+    volume_kwargs = (
+        {"z_edges": ctx["voxel_z_edges"]} if ctx.get("voxel_z_edges") is not None else {}
+    )
     mask_solid = ctx["mask_solid"]
     matched_rgb = ctx["matched_rgb"]
     target_h = ctx["target_h"]
@@ -423,7 +428,7 @@ def run(ctx: dict) -> dict:
         _s08_t_backing = time.perf_counter()
         _log.debug(f"Attempting to generate separate backing mesh (mat_id=-2)...")
         try:
-            backing_mesh = mesher.generate_mesh(full_matrix, mat_id=-2, height_px=target_h)
+            backing_mesh = mesher.generate_mesh(full_matrix, mat_id=-2, height_px=target_h, **volume_kwargs)
 
             _log.debug(f"Backing mesh result: {backing_mesh}")
             if backing_mesh is not None:
@@ -438,6 +443,7 @@ def run(ctx: dict) -> dict:
                 backing_name = "Backing"
                 backing_mesh.visual.face_colors = base_aux_color
                 backing_mesh.metadata["name"] = backing_name
+                backing_mesh.metadata["lumina_print_role"] = "backing"
                 if base_aux_material_name:
                     backing_mesh.metadata["bambu_material_name"] = base_aux_material_name
                 preview_colors[backing_name] = base_aux_color
@@ -464,7 +470,7 @@ def run(ctx: dict) -> dict:
         _s08_t_wire = time.perf_counter()
         _log.debug(f"Generating cloisonné wire mesh (mat_id=-3)...")
         try:
-            wire_mesh = mesher.generate_mesh(full_matrix, mat_id=-3, height_px=target_h)
+            wire_mesh = mesher.generate_mesh(full_matrix, mat_id=-3, height_px=target_h, **volume_kwargs)
             if wire_mesh is not None and len(wire_mesh.vertices) > 0:
                 wire_mesh.apply_transform(transform)
                 wire_mesh.visual.face_colors = [218, 165, 32, 255]  # Gold colour
@@ -507,7 +513,7 @@ def run(ctx: dict) -> dict:
                     )
                     # Replace all non-air values with a single ID (0) for meshing
                     fc_matrix = np.where(fc_matrix >= 0, 0, -1)
-                    fc_mesh = mesher.generate_mesh(fc_matrix, 0, target_h)
+                    fc_mesh = mesher.generate_mesh(fc_matrix, 0, target_h, **volume_kwargs)
                     if fc_mesh and len(fc_mesh.vertices) > 0:
                         fc_mesh.apply_transform(transform)
                         fc_mesh.visual.face_colors = [r_fc, g_fc, b_fc, 255]
@@ -646,9 +652,11 @@ def run(ctx: dict) -> dict:
                         coating_mesh,
                         coating_sources,
                     )
-                coating_mesh.visual.face_colors = [200, 200, 200, 80]  # Semi-transparent grey
+                coating_material = ctx["resolved_coating_material"]
+                coating_mesh.visual.face_colors = [*coating_material.rgb, 255]
                 coating_name = "Coating"
                 coating_mesh.metadata["name"] = coating_name
+                coating_mesh.metadata["bambu_material_name"] = coating_material.name
                 scene.add_geometry(coating_mesh, node_name=coating_name, geom_name=coating_name)
                 valid_slot_names.append(coating_name)
                 _log.debug(f"Coating added as standalone '{coating_name}' ({coating_layers} layers)")

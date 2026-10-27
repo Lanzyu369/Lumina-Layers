@@ -1,6 +1,8 @@
 name: Native SVG release integration
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [dev-refactor, main]
     paths:
@@ -16,10 +18,9 @@ on:
       - "docs/native-svg-fast-path-validation.md"
       - "progress/native-svg-fast-path-benchmark.json"
       - "progress/native-svg-slicer-reality.json"
-      - "requirements-native-svg.txt"
       - "requirements.txt"
-      - "requirements-glb-v2.txt"
-      - "requirements-3mf-native.txt"
+      - "requirements-dev.txt"
+      - "core/requirements-glb-v2.txt"
       - "scripts/build_3mf_native_wheels.py"
       - ".github/actions/prepare-3mf-native-wheels/**"
       - "api_server.py"
@@ -47,44 +48,63 @@ jobs:
             runner: macos-15-intel
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Check out the exact published SVG release tests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: lumina-layer-studio/lumina-svg-core
+          ref: 7056fc837eb993ea40134d98f306c1c8a3081958
+          path: .ci-svg-core-034
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Download and verify the published runtime wheel
         shell: bash
         run: |
-          python -m pip download --no-index --only-binary=:all: --no-deps -r requirements-native-svg.txt --dest wheelhouse
           python - <<'PY'
           import hashlib
+          import json
+          import subprocess
+          import sys
           from pathlib import Path
           from urllib.request import urlopen
 
+          requirement, = [
+              line.strip() for line in Path("requirements.txt").read_text().splitlines()
+              if line.strip().startswith("lumina-svg-core==")
+          ]
+          subprocess.run([
+              sys.executable, "-m", "pip", "download",
+              "--index-url", "https://pypi.org/simple", "--only-binary=:all:",
+              "--no-deps", requirement, "--dest", "wheelhouse",
+          ], check=True)
           wheel, = Path("wheelhouse").glob("*.whl")
           version = wheel.name.split("-")[1]
-          url = f"https://github.com/lumina-layer-studio/lumina-svg-core/releases/download/v{version}/SHA256SUMS"
+          url = f"https://pypi.org/pypi/lumina-svg-core/{version}/json"
           with urlopen(url, timeout=60) as response:
-              checksums = dict(line.split("  ", 1)[::-1] for line in response.read().decode("utf-8").splitlines())
+              release = json.load(response)
+          published = next(item for item in release["urls"] if item["filename"] == wheel.name)
           with wheel.open("rb") as source:
-              assert hashlib.file_digest(source, "sha256").hexdigest() == checksums[wheel.name]
+              assert hashlib.file_digest(source, "sha256").hexdigest() == published["digests"]["sha256"]
           print(f"Verified published wheel: {wheel.name}")
           PY
-          python native/lumina-svg-core/tools/verify_wheel.py wheelhouse/*.whl --contents-only
+          python .ci-svg-core-034/tools/verify_wheel.py wheelhouse/*.whl --contents-only
       - name: Install and exercise the published runtime
         shell: bash
         run: |
-          python -m pip install --force-reinstall wheelhouse/*.whl pytest "shapely>=2,<3"
-          python native/lumina-svg-core/tools/verify_wheel.py --installed
-          # Preserve geometry compatibility coverage; upstream owns source/build contracts.
-          (cd native/lumina-svg-core && LUMINA_SVG_REPLAY_THREADS=4 python -m pytest tests --ignore=tests/test_distribution_contract.py -q)
+          python -m pip install --force-reinstall wheelhouse/*.whl pytest "shapely>=2,<3" cmake==4.3.4
+          python .ci-svg-core-034/tools/verify_wheel.py --installed
+          # The vendored source is a frozen 0.3.0 snapshot, not the released runtime.
+          (cd .ci-svg-core-034 && LUMINA_SVG_REPLAY_THREADS=4 python -m pytest tests -q)
           python - <<'PY'
           from pathlib import Path
           import lumina_svg_core
 
-          assert lumina_svg_core.__version__ == "0.3.1"
-          assert lumina_svg_core.__source_revision__ == "50c1dd5b57c15b4cccb3c51c08134aea01338a42"
+          assert lumina_svg_core.__version__ == "0.3.4"
+          assert lumina_svg_core.__source_revision__ == "7056fc837eb993ea40134d98f306c1c8a3081958"
           assert lumina_svg_core.__source_dirty__ is False
           assert lumina_svg_core.RESULT_SCHEMA_VERSION == 4
-          fixture = Path("native/lumina-svg-core/tests/fixtures/fill_rules_transforms.svg")
+          fixture = Path(".ci-svg-core-034/tests/fixtures/fill_rules_transforms.svg")
           result = lumina_svg_core.analyze_svg(fixture, 111.0, 0.02)
           assert result.status == "supported", result.reason_code
           assert result.raw.geometry_count > 0
@@ -111,16 +131,13 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
-            requirements-glb-v2.txt
-            requirements-3mf-native.txt
-            requirements-native-svg.txt
+            core/requirements-glb-v2.txt
       - name: Prepare native 3MF wheelhouse
         uses: ./.github/actions/prepare-3mf-native-wheels
       - name: Install Lumina test dependencies
         run: >-
           python -m pip install
           -r requirements-dev.txt
-          -r requirements-glb-v2.txt
       - name: Exercise native product workflows
         env:
           LUMINA_SVG_REPLAY_THREADS: "4"

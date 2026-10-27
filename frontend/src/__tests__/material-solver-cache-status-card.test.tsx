@@ -413,7 +413,7 @@ describe("MaterialSolverCacheStatusCard", () => {
     const runtimeSection = await screen.findByTestId(
       "material-solver-runtime-section",
     );
-    const runtimeBuildButton = within(runtimeSection).getByRole("button");
+    const runtimeBuildButton = within(runtimeSection).getByRole("button", { name: translations.basic_material_runtime_build_button.zh });
     expect(runtimeBuildButton).not.toBeDisabled();
 
     await act(async () => {

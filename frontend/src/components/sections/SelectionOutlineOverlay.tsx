@@ -19,7 +19,6 @@ export default function SelectionOutlineOverlay(props: Props) {
   const rendererRef = useRef<SelectionOutlineRenderer | null>(null);
   const latestPropsRef = useRef(props);
   const [gpuReady, setGpuReady] = useState(false);
-  const reducedMotionRef = useRef(false);
   const geometry = useMemo(() => buildSelectionOutlineGeometry(
     props.contours, props.contourWidth / props.pixelWidth, props.pixelHeight,
   ), [props.contours, props.contourWidth, props.pixelWidth, props.pixelHeight]);
@@ -82,7 +81,7 @@ export default function SelectionOutlineOverlay(props: Props) {
     if (canvas.width !== bufferWidth) canvas.width = bufferWidth;
     if (canvas.height !== bufferHeight) canvas.height = bufferHeight;
     renderer.draw(viewport.imageScreenRect, pixelWidth, pixelHeight, width, height,
-      bufferWidth, bufferHeight, reducedMotionRef.current ? 0 : time);
+      bufferWidth, bufferHeight, time);
   }, []);
 
   // Draw viewport changes before paint so the outline never trails the image
@@ -93,10 +92,6 @@ export default function SelectionOutlineOverlay(props: Props) {
 
   useEffect(() => {
     if (!gpuReady) return;
-    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const updateMotion = () => { reducedMotionRef.current = media.matches; };
-    updateMotion();
-    media.addEventListener('change', updateMotion);
     let frame = 0;
     const draw = (time: number) => {
       if (!rendererRef.current) return;
@@ -106,7 +101,6 @@ export default function SelectionOutlineOverlay(props: Props) {
     frame = requestAnimationFrame(draw);
     return () => {
       cancelAnimationFrame(frame);
-      media.removeEventListener('change', updateMotion);
     };
   }, [gpuReady, drawLatestFrame]);
 

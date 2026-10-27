@@ -42,6 +42,7 @@ export default function CalibrationPanel() {
     previewImageUrl,
     layerImageUrls,
     statusMessage,
+    warnings,
     setColorMode,
     setBlockSize,
     setGap,
@@ -189,6 +190,18 @@ export default function CalibrationPanel() {
             </StatusBanner>
           )}
 
+          {lastSubmittedWorkflow === "legacy" &&
+            downloadUrl &&
+            warnings.includes("wipe_tower_manual_adjustment_required") && (
+              <StatusBanner
+                data-testid="calibration-placement-warning"
+                tone="warning"
+                title={t("wipe_tower_manual_adjustment_title")}
+              >
+                {t("wipe_tower_manual_adjustment_warning")}
+              </StatusBanner>
+            )}
+
           {lastSubmittedWorkflow === "legacy" && error && (
             <StatusBanner data-testid="error-message" tone="error">
               {error}
@@ -225,7 +238,7 @@ export default function CalibrationPanel() {
                   data-testid="preview-image"
                   src={previewImageUrl}
                   alt={t("cal_preview_alt")}
-                  className="w-full rounded-[24px] border border-slate-200/80 object-contain shadow-[var(--shadow-control)] dark:border-slate-700/80 max-h-[60vh] bg-slate-50 dark:bg-slate-900"
+                  className="w-full rounded-[24px] border border-slate-200/80 object-contain shadow-[var(--shadow-control)] dark:border-slate-700/80 max-h-[60vh] bg-slate-100 dark:bg-slate-900"
                 />
                 
                 {activeLayerImages.length > 0 && (

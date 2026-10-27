@@ -4,19 +4,14 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { BugReportButton } from "../BugReportButton";
 
 describe("BugReportButton", () => {
-  it("renders with translated aria label and a styled tooltip instead of a native title", () => {
+  it("renders as a labelled menu row without a native title", () => {
     render(<BugReportButton onClick={() => {}} />);
 
-    const button = screen.getByRole("button", { name: "反馈问题" });
-    expect(button).toBeInTheDocument();
-    // DESIGN.md forbids native ``title`` tooltips; the hint must come from
-    // the styled HeaderTooltip wrapper instead.
-    // DESIGN.md 禁止原生 ``title`` 提示；提示必须来自样式化的
-    // HeaderTooltip 包装组件。
-    expect(button).not.toHaveAttribute("title");
-    const tooltip = screen.getByText("向开发者发送 bug 反馈");
-    expect(tooltip).toHaveAttribute("aria-hidden", "true");
-    expect(tooltip.className).toContain("opacity-0");
+    const item = screen.getByRole("button", { name: "反馈问题" });
+    expect(item).toHaveTextContent("反馈问题");
+    // DESIGN.md forbids native ``title`` tooltips on header controls.
+    // DESIGN.md 禁止顶栏控件使用原生 ``title`` 提示。
+    expect(item).not.toHaveAttribute("title");
   });
 
   it("invokes onClick when pressed", () => {

@@ -191,6 +191,7 @@ describe("native serial desktop bridge", () => {
     renderer.send = () => {};
     let api;
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../preload.cjs"), "utf8"), {
+      process: { platform: "darwin" },
       require: () => ({ ipcRenderer: renderer, contextBridge: { exposeInMainWorld: (_name, value) => { api = value; } } }),
     });
     await api.nativeSerial.requestPort();

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import apiClient from "../api/client";
-import { fetchLutDetails, fetchLutDetailsCatalog } from "../api/lut";
+import { fetchLutCatalog, fetchLutDetails, fetchLutDetailsCatalog } from "../api/lut";
 
 vi.mock("../api/client", () => ({
   default: {
@@ -16,6 +16,32 @@ beforeEach(() => {
 });
 
 describe("lut details api", () => {
+  it("keeps legacy entries but hides native brand bundles in the converter catalog", async () => {
+    const legacy = { group_name: "Printed", items: [] };
+    mockGet.mockResolvedValueOnce({ data: {
+      legacy_groups: [legacy],
+      native_brand_groups: [{ brand_key: "bambulab_pla" }],
+    } });
+
+    const result = await fetchLutCatalog();
+
+    expect(result.legacy_groups).toEqual([legacy]);
+    expect(result.native_brand_groups).toEqual([]);
+  });
+
+  it("hides predictive LUTs from all consumers of the grouped library catalog", async () => {
+    const kinds = ["legacy_lookup", "colordb_backed", "predictive_stage_model", "predictive_package"];
+    mockGet.mockResolvedValueOnce({ data: { groups: [
+      { manufacturer: "Mixed", items: kinds.map((source_kind) => ({ name: source_kind, source_kind })) },
+      { manufacturer: "Predictive only", items: [{ name: "hidden", source_kind: "predictive_package" }] },
+    ] } });
+
+    const result = await fetchLutDetailsCatalog();
+
+    expect(result.groups.map((group) => group.manufacturer)).toEqual(["Mixed"]);
+    expect(result.groups[0].items.map((item) => item.name)).toEqual(["legacy_lookup"]);
+  });
+
   it("fetchLutDetailsCatalog loads the grouped catalog", async () => {
     mockGet.mockResolvedValueOnce({
       data: {

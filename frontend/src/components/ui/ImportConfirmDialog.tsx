@@ -1,3 +1,4 @@
+import CloseButton from "./CloseButton";
 import { createPortal } from "react-dom";
 import { useI18n } from "../../i18n/context";
 import Button from "./Button";
@@ -53,18 +54,11 @@ export default function ImportConfirmDialog({
           <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100">
             {t("recipe_import_title")}
           </h2>
-          <button
-            type="button"
-            className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
-            onClick={onCancel}
-            aria-label={t("recipe_import_cancel")}
-          >
-            ✕
-          </button>
+          <CloseButton label={t("common_close")} onClick={onCancel} />
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div className="flex-1 overflow-y-auto overscroll-y-contain px-5 py-4">
           {/* Cover preview */}
           {recipe.cover && (
             <div className="mb-4 flex justify-center">
@@ -121,12 +115,16 @@ export default function ImportConfirmDialog({
 
             {conv && (
               <>
-                <dt className="text-slate-500 dark:text-slate-400">
-                  {t("recipe_import_lut_label")}
-                </dt>
-                <dd className="text-slate-800 dark:text-slate-200">
-                  {conv.base.lut.name}
-                </dd>
+                {(conv.source?.source_version ?? "legacy") === "legacy" && (
+                  <>
+                    <dt className="text-slate-500 dark:text-slate-400">
+                      {t("recipe_import_lut_label")}
+                    </dt>
+                    <dd className="text-slate-800 dark:text-slate-200">
+                      {conv.base.lut.name}
+                    </dd>
+                  </>
+                )}
 
                 <dt className="text-slate-500 dark:text-slate-400">
                   {t("recipe_import_color_mode_label")}

@@ -57,6 +57,24 @@ def test_spa_html_type_is_explicit(static_client: TestClient, url: str) -> None:
     assert response.headers["content-type"].startswith("text/html")
 
 
+@pytest.mark.parametrize("url", ["/", "/settings", "/index.html"])
+def test_spa_entry_does_not_persist_across_runtime_updates(
+    static_client: TestClient, tmp_path: Path, url: str,
+) -> None:
+    previous = static_client.get(url)
+    assert previous.headers.get("cache-control") == "no-store"
+
+    current_html = '<script type="module" src="/assets/current.js"></script>'
+    (tmp_path / "dist" / "index.html").write_text(current_html, encoding="utf-8")
+    upgraded = static_client.get(url, headers={
+        "If-None-Match": previous.headers["etag"],
+        "If-Modified-Since": previous.headers["last-modified"],
+    })
+    assert upgraded.status_code == 200
+    assert upgraded.text == current_html
+    assert upgraded.headers.get("cache-control") == "no-store"
+
+
 def test_assets_preserve_bytes_cache_head_and_non_script_types(
     static_client: TestClient,
 ) -> None:

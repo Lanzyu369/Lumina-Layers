@@ -34,7 +34,7 @@ describe("PuzzleSettings", () => {
     render(<PuzzleSettings />);
 
     expect(
-      screen.getByRole("checkbox", { name: "启用拼图模式" }),
+      screen.getByRole("switch", { name: "启用拼图模式" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("combobox", { name: "拼图风格" }),
@@ -57,7 +57,7 @@ describe("PuzzleSettings", () => {
 
     render(<PuzzleSettings />);
 
-    expect(screen.getByText("打印前必须手动调整擦料塔")).toBeInTheDocument();
+    expect(screen.getByText("打印前请手动检查摆放")).toBeInTheDocument();
     expect(
       screen.queryByText("wipe_tower_manual_adjustment_required"),
     ).not.toBeInTheDocument();

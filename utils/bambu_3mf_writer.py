@@ -769,6 +769,7 @@ class Slicer3MFWriter:
         preserve_template_filament_slots: Optional[bool] = None,
         custom_3mf_template_id: Optional[str] = None,
         material_types: Mapping[str, str | None] | None = None,
+        native_filament_profiles: Mapping[str, str] | None = None,
     ):
         """Initialize a writer for an exact native target or saved user project.
         初始化使用精确原生目标或已保存用户项目的 3MF 写入器。
@@ -841,6 +842,7 @@ class Slicer3MFWriter:
             defaults, settings, aliases=process_setting_aliases(self.slicer),
         )
         self._material_types = dict(material_types or {})
+        self._native_filament_profiles = dict(native_filament_profiles or {})
         self.device_profile_id = str(device_profile_id or "").strip() or None
         self.build_plate_id = str(build_plate_id or "").strip() or None
         (
@@ -1129,6 +1131,7 @@ class Slicer3MFWriter:
                 "name": name,
                 "colour": f"#{red:02X}{green:02X}{blue:02X}",
                 "material_type": self._material_types.get(name),
+                "native_filament_profile_name": self._native_filament_profiles.get(name),
             }
             for name, (red, green, blue) in material_palette
         ]
@@ -1241,7 +1244,7 @@ class Slicer3MFWriter:
         ]
         if missing_production_methods:
             raise RuntimeError(
-                "Fat Cat requires patched neroued-3mf production UUID APIs: "
+                "Fat Cat requires neroued-3mf Production layout and UUID APIs: "
                 + ", ".join(missing_production_methods)
             )
 
@@ -1309,10 +1312,13 @@ class Slicer3MFWriter:
             project_layout=project_layout,
         )
         # Patching tower fields preserves the bed and layer facts reused below.
-        if self.enable_wipe_tower_auto_placement:
+        tower_changes = (
+            _build_wipe_tower_patch_settings(placement)
+            if self.enable_wipe_tower_auto_placement else {}
+        )
+        if tower_changes:
             final_project = patch_wipe_tower(
-                final_project,
-                _build_wipe_tower_patch_settings(placement),
+                final_project, tower_changes,
                 composed_project["wipe_tower_dialect"],
             )
         build_item_properties = composed_project.get("build_item_properties")
@@ -1349,7 +1355,7 @@ class Slicer3MFWriter:
             )
             builder.add_build_item(
                 assembly_id, n3mf.Transform.translation(*build_translation),
-                **build_item_properties,
+                attributes=build_item_properties,
             )
         else:
             for obj_id in object_ids:
@@ -1363,7 +1369,7 @@ class Slicer3MFWriter:
             for index, object_id in enumerate(object_ids):
                 builder.add_build_item(
                     object_id, uuid=str(uuid.uuid4()) if index == 0 else "",
-                    **build_item_properties,
+                    attributes=build_item_properties,
                 )
             plan = builder.plan_production_layout()
             planned_object_ids = tuple(
@@ -1575,7 +1581,7 @@ class Slicer3MFWriter:
         self._wipe_tower_placement_cache = placement
         if placement.requires_manual_adjustment:
             log.warning(
-                "No collision-free model and wipe-tower layout fits the selected bed",
+                "Automatic layout could not verify a safe model and wipe-tower placement",
                 extra={
                     "event": "wipe_tower_manual_adjustment_required",
                     "error_type": "WipeTowerPlacementUnavailable",
@@ -1588,6 +1594,8 @@ class Slicer3MFWriter:
                     "slicer": self.slicer,
                     "model_width_mm": round(request.model_bounds.width, 3),
                     "model_depth_mm": round(request.model_bounds.height, 3),
+                    "layout_reason": placement.reason,
+                    "placement_available": placement.placement_available,
                 },
             )
         else:
@@ -1637,7 +1645,7 @@ class Slicer3MFWriter:
                 project_layout=project_layout,
             )
         )
-        if placement is not None:
+        if placement is not None and placement.placement_available:
             translate_x, translate_y = placement.model_translation
         else:
             model_center = (bounds_min + bounds_max) / 2.0
@@ -1877,14 +1885,24 @@ def read_wipe_tower_placement_warnings(
     """
 
     metadata_path = template_import_parts("BambuStudio")["wipe_tower_placement"]
+
+    def package_warnings(package: zipfile.ZipFile) -> list[str]:
+        if metadata_path not in package.namelist():
+            return []
+        return read_placement_warnings(package.read(metadata_path).decode("utf-8"))
+
     try:
         with zipfile.ZipFile(os.fspath(threemf_path), "r") as package:
-            if metadata_path not in package.namelist():
-                return []
-            payload = package.read(metadata_path).decode("utf-8")
+            warnings = package_warnings(package)
+            # Independent plate downloads carry complete native 3MF projects.
+            # Surface warnings from each project through the same API contract.
+            for name in package.namelist():
+                if name.lower().endswith(".3mf"):
+                    with zipfile.ZipFile(io.BytesIO(package.read(name))) as project:
+                        warnings.extend(package_warnings(project))
     except (OSError, zipfile.BadZipFile, KeyError, UnicodeDecodeError):
         return []
-    return read_placement_warnings(payload)
+    return list(dict.fromkeys(warnings))
 
 
 def export_scene_with_slicer_metadata(
@@ -1913,6 +1931,8 @@ def export_scene_with_slicer_metadata(
     preserve_template_filament_slots: Optional[bool] = None,
     custom_3mf_template_id: Optional[str] = None,
     material_types: Mapping[str, str | None] | None = None,
+    native_filament_profiles: Mapping[str, str] | None = None,
+    backing_output: str = "same_project",
 ):
     """Export a Trimesh scene as the selected slicer's native 3MF project.
     将 Trimesh 场景导出为所选切片软件的原生 3MF 工程。
@@ -1980,6 +2000,28 @@ def export_scene_with_slicer_metadata(
         raise ValueError("[BAMBU_3MF] Scene is None")
     if not slot_names:
         raise ValueError("[BAMBU_3MF] slot_names is empty - no exportable objects")
+    if backing_output == "separate_project":
+        from functools import partial
+        from core.export_plates import export_separate_backing_projects
+
+        return export_separate_backing_projects(
+            scene, output_path, project_slot_names=project_slot_names or [],
+            base_height_mm=base_height_mm, color_height_mm=color_height_mm,
+            exporter=partial(
+                export_scene_with_slicer_metadata, preview_colors=preview_colors,
+                settings=settings, color_mode=color_mode, printer_id=printer_id,
+                slicer=slicer, nozzle_size=nozzle_size, watermark=watermark,
+                enable_base_layer_height_modifier=enable_base_layer_height_modifier,
+                enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
+                enable_relief=enable_relief, face_orientation=face_orientation,
+                backing_infill_density_percent=backing_infill_density_percent,
+                cover_source=cover_source, device_profile_id=device_profile_id,
+                build_plate_id=build_plate_id, custom_3mf_template_id=custom_3mf_template_id,
+                material_types=material_types, native_filament_profiles=native_filament_profiles,
+            ),
+        )
+    if backing_output != "same_project":
+        raise ValueError("Unknown backing output mode")
 
     resolved_project_slot_names = [str(name) for name in (project_slot_names or []) if str(name)]
     palette_color_count = len(resolved_project_slot_names) if resolved_project_slot_names else len(slot_names)
@@ -2018,6 +2060,7 @@ def export_scene_with_slicer_metadata(
         preserve_template_filament_slots=preserve_template_filament_slots,
         custom_3mf_template_id=custom_3mf_template_id,
         material_types=material_types,
+        native_filament_profiles=native_filament_profiles,
         enable_relief=bool(enable_relief),
         enable_base_layer_height_modifier=bool(enable_base_layer_height_modifier),
         enable_wipe_tower_auto_placement=bool(enable_wipe_tower_auto_placement),

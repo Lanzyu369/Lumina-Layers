@@ -16,8 +16,8 @@ not record source paths, hashes, or file sizes.
 
 ## Parser contract
 
-`lumina-svg-core` 0.3.1 exposes result schema 4. Studio installs the published
-AGPL-3.0-only runtime through `requirements-native-svg.txt`; the standalone
+`lumina-svg-core` 0.3.2 exposes result schema 4. Studio installs the published
+AGPL-3.0-only PyPI runtime through `requirements.txt`; the standalone
 repository owns engine development and wheel builds. Studio CI verifies the
 published wheel hashes, geometry compatibility and source application workflows.
 A supported document returns:

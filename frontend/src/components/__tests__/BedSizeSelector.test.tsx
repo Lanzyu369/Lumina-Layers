@@ -44,8 +44,8 @@ describe("BedSizeSelector printer context", () => {
 
   it("distinguishes the LUT brand from the configured printer bed", () => {
     expect(translations.basic_lut_manufacturer_label).toEqual({
-      zh: "LUT 品牌",
-      en: "LUT Brand",
+      zh: "选择LUT",
+      en: "Select LUT",
     });
 
     renderSelector();

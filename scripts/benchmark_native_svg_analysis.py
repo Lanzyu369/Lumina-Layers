@@ -66,7 +66,6 @@ ALPHA_COMPOSITING_FIXTURE = (
     / "benchmarks"
     / "alpha_compositing_fixture.svg"
 )
-SOURCE_PROXY = REPO_ROOT / "test_images" / "benchmark.svg"
 LARGE_REGRESSION_MINIMUM_BYTES = 50 * 1024 * 1024
 
 
@@ -706,8 +705,17 @@ def _record_real_r4c1(path: Path | None) -> dict[str, Any]:
     return record
 
 
-def _record_source_proxy_capability(path: Path) -> dict[str, Any]:
+def _record_source_proxy_capability(path: Path | None) -> dict[str, Any]:
     """Run the source proxy directly and record its current native outcome."""
+
+    if path is None:
+        return {
+            "classification": "real_proxy",
+            "status": "unavailable",
+            "source": "not_provided",
+            "reason_code": None,
+            "native_by_default_ready": False,
+        }
 
     started = time.perf_counter()
     outcome = native_svg_adapter.analyze_native_svg(
@@ -859,7 +867,7 @@ def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
         provenance = json.loads(
             SUPPORTED_SCALE_PROVENANCE.read_text(encoding="utf-8")
         )
-        fixture_classification = "derived_supported_scale"
+        fixture_classification = str(provenance["classification"])
     else:
         provenance = None
         fixture_classification = "explicit_supported_fixture"
@@ -899,7 +907,7 @@ def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "output": alpha_output,
         },
         "source_proxy": _record_source_proxy_capability(
-            args.source_proxy.resolve()
+            args.source_proxy.resolve() if args.source_proxy is not None else None
         ),
         "real_r4c1": _record_real_r4c1(args.real_r4c1),
         "large_regression": _large_regression_record(
@@ -937,7 +945,7 @@ def main() -> None:
     parser.add_argument(
         "--source-proxy",
         type=Path,
-        default=SOURCE_PROXY,
+        help="Optional real SVG supplied by the caller; no third-party artwork is bundled.",
     )
     parser.add_argument(
         "--lut",
@@ -969,7 +977,7 @@ def main() -> None:
         "--output",
         type=Path,
         default=(
-            REPO_ROOT / "progress" / "native-svg-fast-path-benchmark.json"
+            REPO_ROOT / "progress" / "native-svg-synthetic-benchmark.json"
         ),
     )
     args = parser.parse_args()

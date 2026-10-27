@@ -122,7 +122,7 @@ export function resolveColorMatchingWeights(
 export function getMaterialArchiveReliefMinimumTotalHeight(
   state: MaterialArchiveReliefMinimumState,
 ): number {
-  if (state.source_version !== "material") {
+  if (!isMaterialArchiveSourceVersion(state.source_version)) {
     return RELIEF_MIN_EXTRA_HEIGHT_MM;
   }
   const layerCount = state.materialDynamicLayerCountEnabled

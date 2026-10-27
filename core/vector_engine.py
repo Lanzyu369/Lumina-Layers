@@ -23,6 +23,9 @@ import io
 import pickle
 import warnings
 import math
+import tempfile
+from contextlib import contextmanager
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
@@ -90,6 +93,7 @@ from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 from core import geos_buffer_fast
 from core import native_svg_adapter
+from core.svg_arc_geometry import parse_svg_document, parse_svg_path
 from core.svg_coordinate_domain import (
     PRINT_GRID_KEY,
     SVG_COORDINATE_CONTRACT_VERSION,
@@ -142,6 +146,10 @@ _MASK_SUPERSAMPLE = 4
 _ARC_SAMPLE_POSITIONS_10 = np.linspace(0.1, 1.0, 10)
 _ARC_SAMPLE_POSITIONS_10.setflags(write=False)
 _ARC_SAMPLE_POSITIONS_10_TUPLE = tuple(float(value) for value in _ARC_SAMPLE_POSITIONS_10)
+# Additional cubic approximation uses 1% of the existing legacy flatten
+# tolerance, before later viewport/clip mappings. It does not change that
+# pipeline's existing sampling or promise a total physical-error bound.
+_SVG_ARC_APPROXIMATION_BUDGET_RATIO = 0.01
 _VECTOR_LARGE_DISTANCE_WARN_LIMIT = 8
 _VECTOR_SPATIAL_GROUP_CHUNK_BYTES = 64 * 1024 * 1024
 
@@ -1914,7 +1922,9 @@ def _try_parse_strict_top_level_path_svg(processor, svg_path, target_width_mm):
         if not path_data:
             continue
         try:
-            path_obj = Path(path_data)
+            path_obj = parse_svg_path(
+                path_data, tolerance * _SVG_ARC_APPROXIMATION_BUDGET_RATIO,
+            )
         except VECTOR_HANDLED_ERRORS:
             return None
 
@@ -2062,7 +2072,7 @@ def _try_parse_strict_top_level_path_svg(processor, svg_path, target_width_mm):
 _LuminaImageProcessor = None
 _VECTOR_PARSE_CLIP_CACHE = {}
 _VECTOR_PARSE_CLIP_CACHE_MAX = 8
-_VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA = "lumina_vector_parse_clip_cache_v5"
+_VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA = "lumina_vector_parse_clip_cache_v6"
 
 
 def _vector_parse_clip_cache_key(
@@ -2471,30 +2481,11 @@ def apply_recipe_overrides_to_analysis(
 
     # --- Build a global virtual-material registry (dedupe by name+hex) ---
     lut_palette_length = int(analysis.num_channels)
-    virtual_registry: list[dict] = []
-    virtual_lookup: dict[tuple, int] = {}
-    per_region_virtual_maps: dict[str, dict[int, int]] = {}
-    for item in recipe_overrides:
-        if not isinstance(item, dict):
-            continue
-        rid = str(item.get("region_id", "")).strip()
-        local_map: dict[int, int] = {}
-        for local_idx, vm in enumerate(item.get("virtual_materials") or []):
-            if not isinstance(vm, dict):
-                continue
-            name = str(vm.get("name") or "").strip()
-            hex_value = str(vm.get("hex") or "").strip()
-            if not name or not hex_value:
-                continue
-            key = (name.lower(), hex_value.lower())
-            gidx = virtual_lookup.get(key)
-            if gidx is None:
-                gidx = lut_palette_length + len(virtual_registry)
-                virtual_registry.append({"name": name, "hex": hex_value})
-                virtual_lookup[key] = gidx
-            local_map[lut_palette_length + local_idx] = gidx
-        if rid:
-            per_region_virtual_maps[rid] = local_map
+    from core.recipe_virtual_materials import build_virtual_material_registry
+
+    virtual_registry, per_region_virtual_maps = build_virtual_material_registry(
+        recipe_overrides, lut_palette_length,
+    )
 
     # --- Compute effective target layer count ---
     recipe_max_len = max(
@@ -3826,6 +3817,7 @@ class VectorProcessor:
         self.fridge_magnets: list = []
         self.enable_coating = False
         self.coating_height_mm = 0.08
+        self.coating_material = None
         self.enable_outline = False
         self.outline_width_mm = 0.0
         self.expand_stroke_to_fill = False
@@ -5617,7 +5609,9 @@ class VectorProcessor:
                     "meshes": coating_meshes,
                     "mat_id": max(num_channels, len(slot_names)),
                 }
-            preview_colors[coating_name] = [200, 200, 200, 80]
+            meshes_by_slot[coating_name]["export_material"] = self.coating_material
+            preview_colors[coating_name] = ([*self.coating_material.rgb, 255]
+                                            if self.coating_material else [200, 200, 200, 80])
         stage_timings["coating_s"] = time.perf_counter() - t0
         stage_timings["vector_mesh_rss_after_coating_bytes"] = int(
             get_process_rss_bytes() or 0
@@ -5691,9 +5685,13 @@ class VectorProcessor:
             if mirror_transform is not None:
                 transform_layered_mesh(combined, mirror_transform)
 
-            color_val = preview_colors.get(mat_id, preview_colors.get(name, [255, 255, 255, 255]))
+            export_material = data.get("export_material")
+            color_val = ([*export_material.rgb, 255] if export_material else
+                         preview_colors.get(mat_id, preview_colors.get(name, [255, 255, 255, 255])))
             combined.visual.face_colors = color_val
             combined.metadata["name"] = name
+            if export_material:
+                combined.metadata["bambu_material_name"] = export_material.name
             scene.add_geometry(combined, geom_name=name)
 
         stage_timings["assemble_s"] = time.perf_counter() - t0
@@ -7347,12 +7345,16 @@ class VectorProcessor:
         )
         if svg_parse_source is None:
             svg_parse_source = svg_path
+        arc_tolerance = (
+            self.sampling_precision / max(target_width_mm / 100.0, 0.01)
+            * _SVG_ARC_APPROXIMATION_BUDGET_RATIO
+        )
         try:
-            svg = SVG.parse(svg_parse_source)
+            svg = parse_svg_document(svg_parse_source, arc_tolerance)
         except VECTOR_HANDLED_ERRORS as e:
             if svg_parse_source is not svg_path:
                 try:
-                    svg = SVG.parse(svg_path)
+                    svg = parse_svg_document(svg_path, arc_tolerance)
                     parsed_root = None
                 except VECTOR_HANDLED_ERRORS as fallback_error:
                     raise ValueError(f"Failed to parse SVG: {fallback_error}") from fallback_error
@@ -7864,8 +7866,9 @@ class VectorProcessor:
             _resolve_clip_fragment_percentages(fragment, resolved_viewport)
 
             try:
-                clip_svg = SVG.parse(
-                    io.BytesIO(ET.tostring(fragment, encoding="utf-8"))
+                clip_svg = parse_svg_document(
+                    io.BytesIO(ET.tostring(fragment, encoding="utf-8")),
+                    arc_tolerance,
                 )
             except VECTOR_HANDLED_ERRORS as exc:
                 raise ValueError("Failed to resolve SVG clip path") from exc
@@ -9293,12 +9296,40 @@ class VectorProcessor:
         transform_layered_mesh(mesh, transform)
 
 
+@contextmanager
+def _surface_svg_source(svg_path: str | os.PathLike) -> Iterator[str]:
+    """Omit generated display-only gap lines without discarding author strokes."""
+    try:
+        root = ET.parse(svg_path).getroot()
+    except ET.ParseError as exc:
+        raise ValueError("Invalid surface artwork SVG.") from exc
+    removed = False
+    for parent in root.iter():
+        for child in list(parent):
+            if (
+                _tag_local_name(child) == "path"
+                and "qq3d-gap-filler" in child.get("class", "").split()
+                and child.get("fill", "").strip().lower() == "none"
+                and child.get("id") is None
+            ):
+                parent.remove(child)
+                removed = True
+    if not removed:
+        yield str(svg_path)
+        return
+
+    with tempfile.TemporaryDirectory(prefix="lumina-surface-svg-") as directory:
+        filtered_path = os.path.join(directory, "artwork.svg")
+        ET.ElementTree(root).write(filtered_path, encoding="utf-8", xml_declaration=True)
+        yield filtered_path
+
+
 def parse_svg_geometry(
     svg_path: str | os.PathLike,
     *,
     target_width_mm: float,
 ) -> tuple[list[dict[str, Any]], float, tuple[float, float, float, float]]:
-    """Parse native SVG shapes without constructing a LUT-backed processor.
+    """Parse visible SVG paint without constructing a LUT-backed processor.
 
     在不构造 LUT 匹配器的情况下解析原生 SVG 几何。
 
@@ -9313,10 +9344,24 @@ def parse_svg_geometry(
         图形数据、解析比例和源边界。
     """
 
-    if float(target_width_mm) <= 0.0:
-        raise ValueError("target_width_mm must be positive.")
+    if not math.isfinite(float(target_width_mm)) or float(target_width_mm) <= 0.0:
+        raise ValueError("target_width_mm must be positive and finite.")
     processor = VectorProcessor.__new__(VectorProcessor)
     processor._init_runtime_defaults()
-    processor.expand_stroke_to_fill = False
-    processor._parse_expand_stroke_to_fill = False
-    return processor._parse_svg(str(svg_path), float(target_width_mm))
+    with _surface_svg_source(svg_path) as source:
+        outcome = native_svg_adapter.analyze_native_svg(
+            source,
+            float(target_width_mm),
+            processor.sampling_precision,
+            expand_stroke_to_fill=True,
+        )
+        if isinstance(outcome, native_svg_adapter.NativeSvgGeometry):
+            return (
+                [{"poly": item["geometry"], "color": item["color"]}
+                 for item in outcome.clipped_shapes],
+                outcome.scale_factor,
+                outcome.bbox,
+            )
+        # Only explicit whole-document fallback may select the legacy parser.
+        processor._parse_expand_stroke_to_fill = True
+        return processor._parse_svg(source, float(target_width_mm))

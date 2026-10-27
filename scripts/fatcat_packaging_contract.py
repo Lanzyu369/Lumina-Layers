@@ -15,23 +15,21 @@ from typing import Any
 FATCAT_DISTRIBUTION = "fatcat-metadata"
 FATCAT_MODULE = "fatcat_metadata"
 FATCAT_ADAPTER_MODULE = "fatcat_metadata_neroued"
-FATCAT_VERSION = "0.1.0+lumina.1"
+FATCAT_VERSION = "0.1.2"
 FATCAT_REPOSITORY = "https://github.com/MOVIBALE/fatcat-metadata"
-FATCAT_SOURCE_COMMIT = "63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b"
-FATCAT_PATCH = "reference/fatcat-patches/fatcat-native-export-compatibility.patch"
+FATCAT_SOURCE_COMMIT = "acdf8abdf00560759ecdf660eb080bb2083fd5bb"
 FATCAT_LEGACY_DISTRIBUTION = "lumina-3mf-metadata-cpp"
 FATCAT_WRITER_DISTRIBUTION = "neroued-3mf"
-FATCAT_WRITER_VERSION = "0.4.0+fatcat.b7"
-FATCAT_WRITER_REPOSITORY = "https://github.com/neroued/neroued_3mf.git"
-FATCAT_WRITER_SOURCE_COMMIT = "331ac6fa62a719f0dddacf9f005861b187d54f0c"
-FATCAT_WRITER_PATCH = "reference/neroued-patches/neroued-3mf-v0.4.0-b7.patch"
-FATCAT_WRITER_PATCH_SHA256 = "4de017a151791b036b54758c805a0f2528154ff1adfb9dbe596ef2250ca849d4"
+FATCAT_WRITER_VERSION = "0.4.0+fatcat.production.1"
+FATCAT_WRITER_REPOSITORY = "https://github.com/MOVIBALE/neroued_3mf.git"
+FATCAT_WRITER_SOURCE_COMMIT = "a6043434d6cd9a2a76553ffdcdf0dda081d9b19c"
 FATCAT_REQUIRED_ENTRY_POINTS = (
     "metadata_target",
     "metadata_resource_specs",
     "native_project_source_catalog",
     "list_native_fields",
     "compose_project_settings",
+    "resolve_project_materials",
     "compose_model_metadata",
     "patch_wipe_tower",
     "read_source_metadata",
@@ -67,7 +65,7 @@ def validate_fatcat_packaging_contract(
 ) -> Path:
     """Validate native package identity and return its bundled data root.
 
-    校验 Fat Cat 与补丁 writer 的版本、公开入口和随包数据，并返回数据根目录。
+    校验 Fat Cat 与 Production writer 的版本、公开入口和随包数据，并返回数据根目录。
 
     Args:
         fatcat_module: Imported ``fatcat_metadata`` module. 已导入的元数据模块。
@@ -82,7 +80,7 @@ def validate_fatcat_packaging_contract(
     """
 
     if writer_module is None:
-        raise RuntimeError("patched neroued writer module is unavailable")
+        raise RuntimeError("neroued writer module is unavailable")
 
     try:
         fatcat_version = metadata.version(FATCAT_DISTRIBUTION)
@@ -98,7 +96,7 @@ def validate_fatcat_packaging_contract(
         )
     if writer_version != FATCAT_WRITER_VERSION:
         raise RuntimeError(
-            "native 3MF export requires the patched neroued writer "
+            "native 3MF export requires the pinned Production writer "
             f"{FATCAT_WRITER_VERSION}, got {writer_version}"
         )
 
@@ -139,6 +137,5 @@ if __name__ == "__main__":
         "FATCAT_REPOSITORY", "FATCAT_SOURCE_COMMIT",
         "FATCAT_WRITER_DISTRIBUTION", "FATCAT_WRITER_VERSION",
         "FATCAT_WRITER_REPOSITORY", "FATCAT_WRITER_SOURCE_COMMIT",
-        "FATCAT_WRITER_PATCH",
     ))
     print(globals()[parser.parse_args().get])

@@ -10,7 +10,6 @@ import pytest
 import trimesh
 
 from config import list_printer_profiles
-from core.errors import WipeTowerLayoutError
 from core.machine_registry import load_machine_registry, resolve_machine_registry_root
 from core.wipe_tower_placement import (
     Rect,
@@ -714,7 +713,7 @@ def test_kobra_3_v2_reserves_anycubic_native_tower_envelope() -> None:
     assert placement.tower_bounds.left - model_brim_right >= 8.0 - 1e-6
 
 
-def test_impossible_automatic_layout_rejects_colliding_export(tmp_path: Path) -> None:
+def test_impossible_automatic_layout_exports_with_warning_and_preserves_tower(tmp_path: Path) -> None:
     output_path = tmp_path / "manual-adjustment-required.3mf"
     writer = BambuStudio3MFWriter(
         str(output_path),
@@ -722,12 +721,24 @@ def test_impossible_automatic_layout_rejects_colliding_export(tmp_path: Path) ->
         slicer="OrcaSlicer",
     )
     _add_material_boxes(writer, width=179.0, depth=179.0)
+    writer.enable_wipe_tower_auto_placement = False
+    baseline = _project_settings(writer)
+    writer.enable_wipe_tower_auto_placement = True
 
-    with pytest.raises(
-        WipeTowerLayoutError, match="cannot fit the model and wipe tower",
-    ):
-        writer.export()
-    assert not output_path.exists()
+    writer.export()
+
+    assert output_path.exists()
+    assert read_wipe_tower_placement_warnings(output_path) == ["wipe_tower_manual_adjustment_required"]
+    with zipfile.ZipFile(output_path) as package:
+        settings = json.loads(package.read("Metadata/project_settings.config"))
+        placement = json.loads(package.read("Metadata/lumina_wipe_tower_placement.json"))
+    assert placement["requires_manual_adjustment"] is True
+    assert placement["adapted"] is False
+    assert placement["placement_applied"] is False
+    for key in ("enable_prime_tower", "prime_tower_width", "wipe_tower_x", "wipe_tower_y", "wipe_tower_rotation_angle"):
+        assert settings.get(key) == baseline.get(key)
+    for entry in writer.objects:
+        assert entry.mesh.extents[:2] == pytest.approx([179.0, 179.0])
 
 
 def test_safe_export_embeds_no_manual_warning(tmp_path: Path) -> None:
@@ -744,7 +755,7 @@ def test_safe_export_embeds_no_manual_warning(tmp_path: Path) -> None:
     assert read_wipe_tower_placement_warnings(output_path) == []
 
 
-def test_missing_printable_area_rejects_automatic_export(
+def test_missing_printable_area_exports_with_manual_warning(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -759,6 +770,6 @@ def test_missing_printable_area_rejects_automatic_export(
     template.pop("printable_area", None)
     writer._custom_template = template
 
-    with pytest.raises(WipeTowerLayoutError, match="requires a printable area"):
-        writer.export()
-    assert not output_path.exists()
+    writer.export()
+    assert output_path.exists()
+    assert read_wipe_tower_placement_warnings(output_path) == ["wipe_tower_manual_adjustment_required"]

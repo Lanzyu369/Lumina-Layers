@@ -1,3 +1,4 @@
+import DisclosureChevron from "../ui/DisclosureChevron";
 /**
  * Widget header component with drag handle, collapse toggle, and ARIA support.
  * Widget 标题栏组件，支持拖拽手柄、折叠切换和 ARIA 无障碍。
@@ -38,13 +39,14 @@ export function WidgetHeader({
       aria-expanded={!collapsed}
       aria-label={t(titleKey)}
       tabIndex={0}
-      className="flex items-center justify-between px-3 py-1.5 cursor-grab active:cursor-grabbing select-none touch-none"
+      className="flex items-center justify-between bg-slate-100/50 px-3 py-1.5 cursor-grab active:cursor-grabbing select-none touch-none dark:bg-[var(--surface-well)]"
       onDoubleClick={onToggleCollapse}
       onKeyDown={handleKeyDown}
       {...dragListeners}
       {...dragAttributes}
     >
-      <span className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
+      {/* A subtle gray surface separates the header while the title stays light. */}
+      <span className="truncate text-sm font-normal tracking-tight text-slate-800 dark:text-slate-50">
         {t(titleKey)}
       </span>
       <button
@@ -55,9 +57,9 @@ export function WidgetHeader({
           onToggleCollapse();
         }}
         onPointerDown={(e) => e.stopPropagation()}
-        className="ml-1 flex-shrink-0 w-7 h-7 flex items-center justify-center rounded hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors text-slate-500 dark:text-slate-400"
+        className="ghost-control ml-1 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-slate-500 dark:text-slate-400"
       >
-        <span className="text-xs">{collapsed ? '\u25B6' : '\u25BC'}</span>
+        <DisclosureChevron expanded={!collapsed} />
       </button>
     </div>
   );

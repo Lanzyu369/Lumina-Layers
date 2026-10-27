@@ -211,7 +211,6 @@ export function WorkshopFrame({
   const hostRef = useRef<WorkshopRpcHost | null>(null);
   const detachPortRef = useRef<(() => void) | null>(null);
   const handshakeAcceptedRef = useRef(false);
-  const frameLoadedRef = useRef(false);
   const failureHandledRef = useRef(false);
   const mountedRef = useRef(true);
   const prepareCandidateRef = useRef(prepareCandidate);
@@ -322,7 +321,6 @@ export function WorkshopFrame({
     sessionCandidateRef.current = sessionCandidate;
     mountedRef.current = true;
     handshakeAcceptedRef.current = false;
-    frameLoadedRef.current = false;
     failureHandledRef.current = false;
     setRuntimeDocument(null);
     setFailureReason(null);
@@ -433,7 +431,6 @@ export function WorkshopFrame({
     ) {
       return;
     }
-    frameLoadedRef.current = true;
     setPhase("handshaking");
     clearHandshakeTimer();
     handshakeTimerRef.current = setTimeout(() => {
@@ -452,11 +449,14 @@ export function WorkshopFrame({
         runtimeModuleId,
         runtimeModuleVersion,
       );
+      // Runtimes post ready once and Chromium can deliver it before the
+      // frame's load event, so trust the current frame window, not load order.
+      const frameWindow = iframeRef.current?.contentWindow ?? null;
       if (
-        !frameLoadedRef.current ||
+        frameWindow === null ||
         handshakeAcceptedRef.current ||
         failureHandledRef.current ||
-        event.source !== iframeRef.current?.contentWindow ||
+        event.source !== frameWindow ||
         supportedEvents === null ||
         !isWorkshopApiCompatible({
           min: runtimeApiMin,

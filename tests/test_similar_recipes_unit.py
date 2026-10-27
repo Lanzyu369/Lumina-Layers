@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import numpy as np
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import externalize_preview_cache
 from api.routers.converter import replace as replace_module
 from api.routers.converter import similar_recipes as similar_recipes_module
 from api.session_store import SessionStore
@@ -358,3 +360,116 @@ def test_similar_recipes_in_image_uses_visible_block_cache(_iso, monkeypatch) ->
     )
     assert mutate.status_code == 200, mutate.text
     assert _in_image_flags(sid) == {"#fafafa": True, "#dc1e1e": False, "#cd2828": False, "#1e1edc": False}
+
+
+def _seed_artifact_session(
+    store: SessionStore,
+    tmp_path,
+    material_source: str,
+    *,
+    drop_fields: tuple[str, ...] = (),
+) -> tuple[str, dict]:
+    """Seed an artifact-backed session shaped like a real preview cache.
+    写入与真实预览相同形态的 artifact 缓存会话。
+    """
+    sid = _seed_lut_session(store)
+    store.put(sid, "material_source", material_source)
+    cache = dict(store.get(sid)["preview_cache"])
+    height, width = cache["matched_rgb"].shape[:2]
+    matrix = np.zeros((height, width, 3), dtype=np.int32)
+    matrix[:2, :2] = [1, 1, 0]
+    matrix[2:, 2:] = [2, 1, -1]
+    cache["material_matrix"] = matrix
+    cache["preview_rgba"] = np.full((height, width, 4), 255, dtype=np.uint8)
+    cache["backing_mask"] = np.zeros((height, width), dtype=bool)
+    for field in drop_fields:
+        cache.pop(field)
+    manifest = externalize_preview_cache(sid, store, cache, root_dir=tmp_path)
+    store.put(sid, "preview_cache", manifest)
+    return sid, manifest
+
+
+def _similar(sid: str, color: str = "#c80000"):
+    return client.post(
+        "/api/convert/similar-recipes",
+        json={"session_id": sid, "target_color": color, "limit": 5},
+    )
+
+
+def _break_artifact(manifest: dict, field: str, mode: str = "missing") -> None:
+    path = manifest["fields"][field]["path"]
+    if mode == "missing":
+        os.remove(path)
+    else:
+        with open(path, "wb") as handle:
+            handle.write(b"not a npy file")
+
+
+@pytest.mark.parametrize("material_source", ["material_archive", "lut"])
+@pytest.mark.parametrize(
+    "unrelated",
+    [("preview_rgba",), ("preview_rgba", "backing_mask", "quantized_image")],
+)
+def test_similar_recipes_ignores_missing_unrelated_artifacts(
+    _iso, monkeypatch, tmp_path, material_source, unrelated
+) -> None:
+    _patch_runtime(monkeypatch, _fake_lut_runtime())
+    sid, manifest = _seed_artifact_session(_iso, tmp_path, material_source)
+    before = _similar(sid)
+    assert before.status_code == 200, before.text
+
+    for field in unrelated:
+        _break_artifact(manifest, field)
+    after = _similar(sid)
+
+    assert after.status_code == 200, after.text
+    assert after.json() == before.json()
+
+
+@pytest.mark.parametrize("mode", ["missing", "corrupt"])
+@pytest.mark.parametrize(
+    ("material_source", "field"),
+    [
+        ("material_archive", "matched_rgb"),
+        ("material_archive", "mask_solid"),
+        ("material_archive", "material_matrix"),
+        ("lut", "matched_rgb"),
+        ("lut", "mask_solid"),
+    ],
+)
+def test_similar_recipes_reports_unreadable_required_artifact_as_409(
+    _iso, monkeypatch, tmp_path, material_source, field, mode
+) -> None:
+    _patch_runtime(monkeypatch, _fake_lut_runtime())
+    sid, manifest = _seed_artifact_session(_iso, tmp_path, material_source)
+    _break_artifact(manifest, field, mode)
+
+    resp = _similar(sid)
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == similar_recipes_module.PREVIEW_CACHE_UNAVAILABLE_DETAIL
+
+
+def test_similar_recipes_lut_does_not_read_material_matrix(_iso, monkeypatch, tmp_path) -> None:
+    _patch_runtime(monkeypatch, _fake_lut_runtime())
+    sid, manifest = _seed_artifact_session(_iso, tmp_path, "lut")
+    before = _similar(sid, "#dc1e1e")
+    _break_artifact(manifest, "material_matrix")
+
+    after = _similar(sid, "#dc1e1e")
+
+    assert after.status_code == 200, after.text
+    assert after.json() == before.json()
+
+
+def test_similar_recipes_keeps_optional_fields_absent_from_manifest(_iso, monkeypatch, tmp_path) -> None:
+    sid, _manifest = _seed_artifact_session(
+        _iso, tmp_path, "material_archive", drop_fields=("mask_solid", "material_matrix")
+    )
+
+    resp = _similar(sid)
+
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert [item["hex"] for item in items] == ["#c80000", "#cc0402", "#fafafa"]
+    assert all(item["recipe"] == [] for item in items)

@@ -17,6 +17,7 @@ vi.mock("../api/converter", async () => {
   );
   return {
     ...actual,
+    fetchExportMaterialSelection: vi.fn(async () => (await import("./fixtures/exportMaterialSelection")).READY_EXPORT_MATERIAL_SELECTION),
     convertPreview: mocks.convertPreview,
     convertGenerate: mocks.convertGenerate,
     convertBatch: mocks.convertBatch,

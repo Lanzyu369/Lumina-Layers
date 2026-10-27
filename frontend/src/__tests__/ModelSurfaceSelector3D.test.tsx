@@ -3191,7 +3191,7 @@ describe("ModelSurfaceSelector3D", () => {
       document.querySelector('[data-model-rotation-actions="compact-horizontal"]'),
     ).not.toBeNull();
 
-    expect(screen.getByLabelText("X 相对旋转")).toHaveClass("bg-slate-50");
+    expect(screen.getByLabelText("X 相对旋转")).toHaveClass("bg-slate-100");
     expect(screen.getByLabelText("X 相对旋转")).toHaveClass("dark:bg-slate-900");
   });
 

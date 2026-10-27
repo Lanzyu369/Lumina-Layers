@@ -9,7 +9,6 @@ import os
 from typing import TYPE_CHECKING, Any, Mapping
 
 from api.structured_logging import get_logger
-from core.errors import WipeTowerLayoutError
 from core.wipe_tower_placement import (
     Rect, WIPE_TOWER_MANUAL_WARNING_CODE,
     WipeTowerPlacementRequest, WipeTowerPlacementResult,
@@ -309,31 +308,20 @@ def build_wipe_tower_placement_request(
 def build_wipe_tower_patch_settings(
     placement: WipeTowerPlacementResult | None,
 ) -> dict[str, Any]:
-    """Translate a safe placement into FatCat's native tower request.
+    """Translate a usable body placement into FatCat's native tower request.
 
-    将安全摆放结果转换为 FatCat 原生塔请求；自动布局无解时停止导出。
+    将可用实体布局转换为 FatCat 原生塔请求；底边待确认时仍报告警告，无解时保留设置。
 
     Args:
         placement: Shared solver result. 共享布局求解结果。
 
     Returns:
-        The native tower request. 原生塔参数请求。
-
-    Raises:
-        WipeTowerLayoutError: No safe automatic layout fits.
-            自动布局没有安全解。
+        Native tower changes, or no changes without a usable body layout.
+        原生塔变更；实体布局无解时不修改塔设置。
     """
 
-    if placement is None:
-        raise WipeTowerLayoutError(
-            "Automatic layout requires a printable area from the selected printer. "
-            "Select a valid printer profile or disable automatic layout for manual placement."
-        )
-    if placement.requires_manual_adjustment:
-        raise WipeTowerLayoutError(
-            "Automatic layout cannot fit the model and wipe tower on this plate. "
-            "Choose a larger plate or disable automatic layout to place them manually."
-        )
+    if placement is None or not placement.placement_available:
+        return {}
     settings: dict[str, Any] = {
         "enabled": True,
         "width_mm": placement.tower_width,
@@ -404,12 +392,31 @@ def build_wipe_tower_placement_metadata_payload(
             "warning_code": WIPE_TOWER_MANUAL_WARNING_CODE,
             "reason": "printable_area_unavailable",
         }
+    elif not placement.placement_available:
+        # Report the conservative search result without presenting an unsafe
+        # candidate's translation or tower changes as an applied placement.
+        payload = {
+            "schema_version": 1, "enabled": True, "available": True,
+            "adapted": False, "placement_applied": False,
+            "requires_manual_adjustment": True,
+            "warning_code": WIPE_TOWER_MANUAL_WARNING_CODE,
+            "reason": placement.reason,
+            "model_size_mm": [placement.model_bounds.width, placement.model_bounds.height],
+            "reserved_envelope_mm": [placement.model_outer_bounds.width, placement.model_outer_bounds.height],
+            "envelope_policy": "axis_aligned_bounds_with_full_brim_allowance",
+            "printable_bounds_mm": (
+                [placement.bed_bounds.width, placement.bed_bounds.height]
+                if placement.bed_bounds else None
+            ),
+        }
     else:
         payload = {
             "schema_version": 1,
             "enabled": True,
             "available": True,
             "adapted": placement.adapted,
+            "placement_applied": True,
+            "model_brim_requires_review": placement.model_brim_requires_review,
             "requires_manual_adjustment": placement.requires_manual_adjustment,
             "warning_code": placement.warning_code,
             "reason": placement.reason,

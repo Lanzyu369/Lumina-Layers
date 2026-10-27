@@ -1472,12 +1472,13 @@ class TestS06VoxelBuilding:
         result = run(ctx)
         backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
 
-        assert result["full_matrix"][backing_start: backing_end + 1, 0, 0].tolist() == [6] * (
+        logical_column = np.repeat(result["full_matrix"][:, 0, 0], np.diff(result["voxel_z_edges"]))
+        assert logical_column[backing_start: backing_end + 1].tolist() == [6] * (
             backing_end - backing_start + 1
         )
 
     def test_legacy_sources_keep_explicit_backing_color_id_for_backing_layers(self):
-        """传统 LUT 仍应沿用显式 backing_color_id，而不是 metadata.base_channel_idx。"""
+        """经典 LUT 仍应沿用显式 backing_color_id，而不是 metadata.base_channel_idx。"""
         from core.pipeline.s06_voxel_building import run
 
         ctx = self._make_valid_ctx()
@@ -1496,7 +1497,8 @@ class TestS06VoxelBuilding:
         result = run(ctx)
         backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
 
-        assert result["full_matrix"][backing_start: backing_end + 1, 0, 0].tolist() == [3] * (
+        logical_column = np.repeat(result["full_matrix"][:, 0, 0], np.diff(result["voxel_z_edges"]))
+        assert logical_column[backing_start: backing_end + 1].tolist() == [3] * (
             backing_end - backing_start + 1
         )
 
@@ -1526,11 +1528,12 @@ class TestS06VoxelBuilding:
         result = run(ctx)
         backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
 
-        backing = result["full_matrix"][backing_start: backing_end + 1]
+        logical_volume = np.repeat(result["full_matrix"], np.diff(result["voxel_z_edges"]), axis=0)
+        backing = logical_volume[backing_start: backing_end + 1]
         assert np.all(backing[:, mask_solid] == 3)
-        assert np.all(result["full_matrix"][:, ~mask_solid] == -1)
-        assert np.all(result["full_matrix"][:backing_start, 0, 0] == -1)
-        assert np.all(result["full_matrix"][:backing_start, 2, 1] == 2)
+        assert np.all(logical_volume[:, ~mask_solid] == -1)
+        assert np.all(logical_volume[:backing_start, 0, 0] == -1)
+        assert np.all(logical_volume[:backing_start, 2, 1] == 2)
 
     def test_high_fidelity_backing_stays_on_solid_mask(self):
         """Non-pixel modes keep transparent margins outside the backing footprint."""
@@ -1554,8 +1557,9 @@ class TestS06VoxelBuilding:
         result = run(ctx)
         backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
 
-        assert np.all(result["full_matrix"][backing_start: backing_end + 1, 0, 0] == -1)
-        assert np.all(result["full_matrix"][backing_start: backing_end + 1, 2, 1] == 3)
+        logical_volume = np.repeat(result["full_matrix"], np.diff(result["voxel_z_edges"]), axis=0)
+        assert np.all(logical_volume[backing_start: backing_end + 1, 0, 0] == -1)
+        assert np.all(logical_volume[backing_start: backing_end + 1, 2, 1] == 3)
 
     def test_cloisonne_builds_wireframe_without_processor(self):
         """Cloisonne mode must not require ctx["processor"] in material-archive flows."""
@@ -1868,6 +1872,7 @@ class TestS08AuxiliaryMeshes:
         self,
         enable_outline,
     ):
+        from core.export_materials import configure_coating_material
         from core.mesh_generators import HighFidelityMesher
         from core.pipeline.s08_auxiliary_meshes import run
 
@@ -1886,6 +1891,8 @@ class TestS08AuxiliaryMeshes:
             "pixel_scale": 1.0,
             "total_layers": total_layers,
             "preview_colors": {0: [255, 255, 255, 255]},
+            "slot_names": ["White"],
+            "material_types": {"White": "PETG"},
             "transform": np.eye(4),
             "mesher": HighFidelityMesher(disable_material_dilation=True),
             "structure_mode": "Double-sided",
@@ -1901,9 +1908,13 @@ class TestS08AuxiliaryMeshes:
             "boundary_geometry": None,
         }
 
+        # S01 resolves the automatic coating material before S08 consumes it.
+        configure_coating_material(ctx)
         result = run(ctx)
         coating = result["scene"].geometry["Coating"]
 
+        assert result["material_types"]["Coating"] == "PETG"
+        assert coating.metadata["bambu_material_name"] == "Coating"
         assert len(coating.split(only_watertight=False)) == 2
         assert coating.bounds[0, 2] == pytest.approx(-coating_layers * layer_height)
         assert coating.bounds[1, 2] == pytest.approx(
@@ -1928,6 +1939,7 @@ class TestS08AuxiliaryMeshes:
     def test_double_sided_raster_coating_keeps_contact_ranges_for_writer(self):
         """Copy/concatenate must retain point-contact shell ownership."""
 
+        from core.export_materials import configure_coating_material
         from core.mesh_export_parts import (
             get_mesh_export_part_ranges,
             mesh_export_parts_are_conditional,
@@ -1942,34 +1954,34 @@ class TestS08AuxiliaryMeshes:
             dtype=bool,
         )
         total_layers = 4
-        result = run(
-            {
-                "scene": trimesh.Scene(),
-                "valid_slot_names": [],
-                "full_matrix": np.zeros((total_layers, 2, 2), dtype=int),
-                "mask_solid": mask_solid,
-                "matched_rgb": np.zeros((2, 2, 3), dtype=np.uint8),
-                "target_h": 2,
-                "target_w": 2,
-                "pixel_scale": 1.0,
-                "total_layers": total_layers,
-                "preview_colors": {0: [255, 255, 255, 255]},
-                "transform": np.eye(4),
-                "mesher": HighFidelityMesher(
-                    disable_material_dilation=True
-                ),
-                "structure_mode": "Double-sided",
-                "separate_backing": False,
-                "backing_metadata": {},
-                "enable_coating": True,
-                "coating_height_mm": PrinterConfig.LAYER_HEIGHT,
-                "enable_outline": False,
-                "free_color_set": None,
-                "add_loop": False,
-                "loop_info": None,
-                "boundary_geometry": None,
-            }
-        )
+        ctx = {
+            "scene": trimesh.Scene(),
+            "valid_slot_names": [],
+            "full_matrix": np.zeros((total_layers, 2, 2), dtype=int),
+            "mask_solid": mask_solid,
+            "matched_rgb": np.zeros((2, 2, 3), dtype=np.uint8),
+            "target_h": 2,
+            "target_w": 2,
+            "pixel_scale": 1.0,
+            "total_layers": total_layers,
+            "preview_colors": {0: [255, 255, 255, 255]},
+            "slot_names": ["White"],
+            "material_types": {"White": "PLA"},
+            "transform": np.eye(4),
+            "mesher": HighFidelityMesher(disable_material_dilation=True),
+            "structure_mode": "Double-sided",
+            "separate_backing": False,
+            "backing_metadata": {},
+            "enable_coating": True,
+            "coating_height_mm": PrinterConfig.LAYER_HEIGHT,
+            "enable_outline": False,
+            "free_color_set": None,
+            "add_loop": False,
+            "loop_info": None,
+            "boundary_geometry": None,
+        }
+        configure_coating_material(ctx)
+        result = run(ctx)
         coating = result["scene"].geometry["Coating"]
         ranges = get_mesh_export_part_ranges(coating)
         assert len(ranges) == 4

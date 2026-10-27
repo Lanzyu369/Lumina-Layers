@@ -49,6 +49,23 @@ const RAW_FILE_NAMES = [
   "photo.raw",
 ] as const;
 
+describe("JFIF files accepted by extension", () => {
+  it.each(["photo.jfif", "photo.JFIF"])("accepts %s without a JPEG MIME type", (fileName) => {
+    for (const mime of ["", "application/octet-stream", "image/jpeg"]) {
+      expect(isValidImageType(mime, fileName)).toBe(true);
+    }
+  });
+
+  it("includes JFIF in the native file picker", () => {
+    expect(ACCEPT_IMAGE_FORMATS.split(",")).toContain(".jfif");
+  });
+
+  it("does not accept unrelated or misleading extensions", () => {
+    expect(isValidImageType("", "photo.jfif.exe")).toBe(false);
+    expect(isValidImageType("", "photo.txt")).toBe(false);
+  });
+});
+
 describe("RAW files accepted by extension", () => {
   it.each(RAW_FILE_NAMES)("returns true for %s with empty MIME", (fileName) => {
     expect(isValidImageType("", fileName)).toBe(true);

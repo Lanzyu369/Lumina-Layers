@@ -1,5 +1,5 @@
 ﻿import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import MaterialLibraryPanel from "../components/MaterialLibraryPanel";
 import {
@@ -44,6 +44,8 @@ describe("MaterialLibraryPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useLuminaBoxMaterialNavigation.setState({ libraryProfileKind: "stage_a", captureRequest: null, lastCaptureArchive: null });
+    localStorage.removeItem("lumina-material-library-pinned-brands");
+    localStorage.removeItem("lumina-material-library-brand-order");
     useWidgetStore.setState({ activeTab: "material-library" });
     useSingleStageStore.setState({
       materialName: "",
@@ -59,6 +61,7 @@ describe("MaterialLibraryPanel", () => {
       materials: [
         {
           material_name: "PLA Basic",
+          material_type: "PETG",
           directory_name: "pla-basic",
           created_at: "2026-04-16T10:00:00Z",
           updated_at: "2026-04-16T11:00:00Z",
@@ -108,8 +111,21 @@ describe("MaterialLibraryPanel", () => {
     expect(screen.queryByText(/下载 material\.json|download material\.json/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/下载 stage_A_parameters\.json|download stage_a_parameters\.json/i)).not.toBeInTheDocument();
     expect(screen.getAllByTestId("material-library-item")).toHaveLength(1);
+    expect(screen.getByText("PETG")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /编辑信息|edit details/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /导出所选耗材|export selected/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByTestId("material-library-item")[0]);
     expect(screen.getByTestId("material-library-official-badge")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByTestId("material-library-details"), { key: "Escape" });
+    expect(screen.queryByTestId("material-library-details")).not.toBeInTheDocument();
+    expect(screen.getByTestId("material-library-item")).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: /选择耗材|select materials/i }));
+    fireEvent.click(screen.getByTestId("material-library-item"));
+    expect(screen.getByTestId("material-library-item")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByTestId("material-library-details")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /完成选择|done selecting/i }));
+    expect(screen.getByTestId("material-library-item")).not.toHaveAttribute("aria-pressed");
   });
 
   it("manages current Box archives and resumes their original material collection", async () => {
@@ -132,7 +148,7 @@ describe("MaterialLibraryPanel", () => {
     expect(screen.queryByTestId("material-library-edit-color-picker")).not.toBeInTheDocument();
   });
 
-  it("groups saved materials by brand and prefixes names with brand tags", async () => {
+  it("groups saved materials by brand without repeating brand tags on cards", async () => {
     vi.mocked(listGradientCardMaterials).mockResolvedValue({
       status: "ok",
       message: "Loaded 4 saved materials",
@@ -198,7 +214,7 @@ describe("MaterialLibraryPanel", () => {
       expect(screen.getAllByTestId("material-library-brand-group")).toHaveLength(3);
     });
 
-    const groups = screen.getAllByTestId("material-library-brand-group");
+    let groups = screen.getAllByTestId("material-library-brand-group");
     expect(groups).toHaveLength(3);
     expect(groups.map((group) => group.getAttribute("data-brand"))).toEqual([
       "Brand A",
@@ -206,30 +222,37 @@ describe("MaterialLibraryPanel", () => {
       "",
     ]);
 
-    const firstGroupToggle = within(groups[0]).getByTestId("material-library-brand-group-toggle");
-    const secondGroupToggle = within(groups[1]).getByTestId("material-library-brand-group-toggle");
-    const unassignedToggle = within(groups[2]).getByTestId("material-library-brand-group-toggle");
+    let firstGroupToggle = within(groups[0]).getByTestId("material-library-brand-group-toggle");
+    let secondGroupToggle = within(groups[1]).getByTestId("material-library-brand-group-toggle");
+    let unassignedToggle = within(groups[2]).getByTestId("material-library-brand-group-toggle");
     expect(firstGroupToggle).toHaveAttribute("aria-expanded", "false");
     expect(secondGroupToggle).toHaveAttribute("aria-expanded", "false");
     expect(unassignedToggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "全部展开" })).toBeEnabled();
     expect(within(groups[0]).queryByText("PLA Red")).not.toBeInTheDocument();
 
-    fireEvent.click(firstGroupToggle);
-    fireEvent.click(secondGroupToggle);
-    fireEvent.click(unassignedToggle);
+    const search = screen.getByRole("searchbox", { name: "搜索耗材名称、品牌、类型…" });
+    fireEvent.change(search, { target: { value: "pla red" } });
+    expect(screen.getAllByTestId("material-library-brand-group")).toHaveLength(1);
+    expect(screen.getByText("PLA Red")).toBeInTheDocument();
+    expect(screen.getByText("1种耗材 · 1个品牌")).toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "Brand A" } });
+    expect(screen.getAllByTestId("material-library-item")).toHaveLength(2);
+    fireEvent.change(search, { target: { value: "no-such-material" } });
+    expect(screen.getByText("没有找到匹配的耗材，试试其他关键词。")).toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "" } });
+    expect(screen.getAllByTestId("material-library-brand-group-toggle").every((toggle) => toggle.getAttribute("aria-expanded") === "false")).toBe(true);
+    groups = screen.getAllByTestId("material-library-brand-group");
+    [firstGroupToggle, secondGroupToggle, unassignedToggle] = screen.getAllByTestId("material-library-brand-group-toggle");
+
+    fireEvent.click(screen.getByRole("button", { name: "全部展开" }));
 
     expect(within(groups[0]).getByText("PLA Red")).toBeInTheDocument();
     expect(within(groups[0]).getByText("PLA Yellow")).toBeInTheDocument();
     expect(within(groups[1]).getByText("PLA Blue")).toBeInTheDocument();
     expect(within(groups[2]).getByText("PLA Natural")).toBeInTheDocument();
 
-    const brandTags = screen.getAllByTestId("material-library-brand-tag");
-    expect(brandTags.map((tag) => tag.textContent)).toEqual([
-      "Brand A",
-      "Brand A",
-      "Brand B",
-      expect.stringMatching(/未分组|Unassigned/),
-    ]);
+    expect(screen.queryByTestId("material-library-brand-tag")).not.toBeInTheDocument();
 
     fireEvent.click(firstGroupToggle);
     expect(firstGroupToggle).toHaveAttribute("aria-expanded", "false");
@@ -241,6 +264,64 @@ describe("MaterialLibraryPanel", () => {
     expect(firstGroupToggle).toHaveAttribute("aria-expanded", "true");
     expect(within(groups[0]).getByText("PLA Red")).toBeInTheDocument();
     expect(within(groups[0]).getByText("PLA Yellow")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "全部收起" }));
+    for (const toggle of [firstGroupToggle, secondGroupToggle, unassignedToggle]) {
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+    }
+    expect(screen.queryByTestId("material-library-item")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "全部展开" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "全部展开" }));
+    for (const toggle of [firstGroupToggle, secondGroupToggle, unassignedToggle]) {
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+    }
+    expect(within(groups[0]).getByText("2种")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "固定展开 Brand A" }));
+    expect(screen.getByRole("button", { name: "取消固定 Brand A" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "全部收起" }));
+    cleanup();
+    render(<MaterialLibraryPanel />);
+    await waitFor(() => expect(screen.getAllByTestId("material-library-brand-group")).toHaveLength(3));
+    const restored = screen.getAllByTestId("material-library-brand-group-toggle");
+    expect(restored[0]).toHaveAttribute("aria-expanded", "true");
+    expect(restored[1]).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(screen.getByRole("button", { name: "取消固定 Brand A" }));
+    cleanup();
+    render(<MaterialLibraryPanel />);
+    await waitFor(() => expect(screen.getAllByTestId("material-library-brand-group")).toHaveLength(3));
+    expect(screen.getAllByTestId("material-library-brand-group-toggle")[0]).toHaveAttribute("aria-expanded", "false");
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const group = this.closest('[data-testid="material-library-brand-group"]');
+      const index = group ? screen.getAllByTestId("material-library-brand-group").indexOf(group as HTMLElement) : 0;
+      return { x: 0, y: index * 80, left: 0, top: index * 80, right: 600, bottom: index * 80 + 40, width: 600, height: 40, toJSON: () => ({}) };
+    });
+    const originalPointerEvent = window.PointerEvent;
+    class TestPointerEvent extends MouseEvent {
+      pointerId = 1;
+      isPrimary = true;
+    }
+    window.PointerEvent = TestPointerEvent as typeof PointerEvent;
+    try {
+      const brandBar = screen.getAllByTestId("material-library-brand-group-toggle")[1];
+      fireEvent.pointerDown(brandBar, { clientX: 100, clientY: 100, button: 0 });
+      fireEvent.pointerMove(document, { clientX: 100, clientY: 90 });
+      await waitFor(() => expect(document.querySelector('[aria-hidden="true"] .material-library-group')).toBeInTheDocument());
+      fireEvent.pointerMove(document, { clientX: 100, clientY: 20 });
+      await waitFor(() => expect(screen.getAllByTestId("material-library-brand-group")[0].style.transform).not.toBe(""));
+      fireEvent.pointerUp(document, { clientX: 100, clientY: 20 });
+      // dnd-kit briefly suppresses the click emitted after a pointer drop.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    } finally {
+      window.PointerEvent = originalPointerEvent;
+      rectSpy.mockRestore();
+    }
+    expect(screen.getAllByTestId("material-library-brand-group").map((group) => group.getAttribute("data-brand"))).toEqual(["Brand B", "Brand A", ""]);
+    cleanup();
+    render(<MaterialLibraryPanel />);
+    await waitFor(() => expect(screen.getAllByTestId("material-library-brand-group")).toHaveLength(3));
+    expect(screen.getAllByTestId("material-library-brand-group")[0]).toHaveAttribute("data-brand", "Brand B");
+    fireEvent.keyDown(screen.getAllByTestId("material-library-brand-group-toggle")[0], { key: "ArrowDown" });
+    expect(screen.getAllByTestId("material-library-brand-group")[0]).toHaveAttribute("data-brand", "Brand A");
   });
 
   it("edits a saved material name and brand from the library", async () => {
@@ -294,6 +375,7 @@ describe("MaterialLibraryPanel", () => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
 
+    fireEvent.click(screen.getAllByTestId("material-library-item")[0]);
     fireEvent.click(screen.getByRole("button", { name: /编辑信息|edit details/i }));
 
     expect(screen.getByTestId("material-library-edit-dialog")).toBeInTheDocument();
@@ -316,9 +398,9 @@ describe("MaterialLibraryPanel", () => {
     expandAllMaterialLibraryGroups();
 
     await waitFor(() => {
-      expect(screen.getByText("PLA Matte")).toBeInTheDocument();
+      expect(within(screen.getByTestId("material-library-details")).getByText("PLA Matte")).toBeInTheDocument();
     });
-    expect(screen.getByTestId("material-library-item-brand")).toHaveTextContent("Bambu Lab");
+    expect(within(screen.getByTestId("material-library-details")).getByText(/Bambu Lab ·/)).toBeInTheDocument();
   });
 
   it("edits the display color via hex input from the library", async () => {
@@ -372,6 +454,7 @@ describe("MaterialLibraryPanel", () => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
 
+    fireEvent.click(screen.getAllByTestId("material-library-item")[0]);
     fireEvent.click(screen.getByRole("button", { name: /编辑信息|edit details/i }));
 
     const hexInput = screen.getByTestId("material-library-edit-color-hex-input") as HTMLInputElement;
@@ -426,6 +509,7 @@ describe("MaterialLibraryPanel", () => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
 
+    fireEvent.click(screen.getAllByTestId("material-library-item")[0]);
     fireEvent.click(screen.getByRole("button", { name: /编辑信息|edit details/i }));
 
     const hexInput = screen.getByTestId("material-library-edit-color-hex-input") as HTMLInputElement;
@@ -482,6 +566,7 @@ describe("MaterialLibraryPanel", () => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
 
+    fireEvent.click(screen.getAllByTestId("material-library-item")[0]);
     fireEvent.click(screen.getByRole("button", { name: /展开验证历史|show verification history/i }));
 
     expect(screen.getByTestId("material-library-history-dialog")).toBeInTheDocument();
@@ -490,7 +575,7 @@ describe("MaterialLibraryPanel", () => {
     expect(screen.getByText(/0.210, 0.310, 0.410/)).toBeInTheDocument();
     expect(screen.getByText(/White identity \/ Black rotate_90_cw|白底 identity \/ 黑底 rotate_90_cw/i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /关闭|close/i }));
+    fireEvent.click(within(screen.getByTestId("material-library-history-dialog")).getByRole("button", { name: /关闭|close/i }));
 
     await waitFor(() => {
       expect(screen.queryByTestId("material-library-history-dialog")).not.toBeInTheDocument();
@@ -529,6 +614,7 @@ describe("MaterialLibraryPanel", () => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
 
+    fireEvent.click(screen.getAllByTestId("material-library-item")[0]);
     fireEvent.click(screen.getByRole("button", { name: /再次验证|re-verify/i }));
 
     expect(useWidgetStore.getState().activeTab).toBe("gradient-card-extract");
@@ -576,6 +662,7 @@ describe("MaterialLibraryPanel", () => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
 
+    fireEvent.click(screen.getAllByTestId("material-library-item")[0]);
     fireEvent.click(screen.getByRole("button", { name: /删除耗材|delete material/i }));
 
     await waitFor(() => {
@@ -584,7 +671,7 @@ describe("MaterialLibraryPanel", () => {
     expect(screen.queryByText("PLA Basic")).not.toBeInTheDocument();
   });
 
-  it("surfaces duplicate dates and directory in the card and delete confirmation", async () => {
+  it("shows duplicate dates and fit error while keeping directories in details and delete confirmation", async () => {
     vi.mocked(listGradientCardMaterials).mockResolvedValue({
       status: "ok",
       message: "Loaded 2 saved materials",
@@ -664,13 +751,14 @@ describe("MaterialLibraryPanel", () => {
     });
 
     const cards = screen.getAllByTestId("material-library-item");
-    expect(within(cards[0]).getByTestId("material-library-duplicate-badge")).toHaveTextContent(/同名 2 份|2 copies/i);
-    expect(within(cards[0]).getByTestId("material-library-item-meta")).toHaveTextContent("Brand/PLA Basic_20260709_145858");
-    expect(within(cards[0]).getByTestId("material-library-item-meta")).toHaveTextContent(/最近更新|Last updated/i);
-    expect(within(cards[0]).getByTestId("material-library-item-meta")).not.toHaveTextContent(/最近验证|Last verified/i);
-    expect(within(cards[0]).getByTestId("material-library-item-meta")).toHaveTextContent("2026");
-
-    fireEvent.click(within(cards[1]).getByRole("button", { name: /删除耗材|delete material/i }));
+    expect(within(cards[0]).getByTestId("material-library-duplicate-badge")).toHaveTextContent("2026");
+    expect(within(cards[1]).getByTestId("material-library-duplicate-badge")).toHaveTextContent("2026");
+    expect(within(cards[0]).getByTestId("material-library-card-fit-error")).toHaveTextContent("拟合误差");
+    expect(cards[0]).not.toHaveTextContent("PLA Basic_");
+    fireEvent.click(cards[0]);
+    expect(within(screen.getByTestId("material-library-details")).getByText("Brand/PLA Basic_20260709_145858")).toBeInTheDocument();
+    fireEvent.click(cards[1]);
+    fireEvent.click(screen.getByRole("button", { name: /删除耗材|delete material/i }));
 
     await waitFor(() => {
       expect(deleteGradientCardMaterial).toHaveBeenCalledWith("Brand/PLA Basic_20260521_161941");
@@ -752,7 +840,8 @@ describe("MaterialLibraryPanel", () => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId("material-library-select-pla-basic"));
+    fireEvent.click(screen.getByRole("button", { name: /选择耗材|select materials/i }));
+    fireEvent.click(screen.getAllByTestId("material-library-item")[0]);
     fireEvent.click(screen.getByRole("button", { name: /导出所选耗材|export selected/i }));
 
     await waitFor(() => {
@@ -819,10 +908,11 @@ describe("MaterialLibraryPanel", () => {
       });
       expandAllMaterialLibraryGroups();
       await screen.findByText("Stage A Red");
-      fireEvent.click(screen.getByTestId("material-library-select-stage-a-red"));
+      fireEvent.click(screen.getByRole("button", { name: "选择耗材" }));
+      fireEvent.click(screen.getByRole("button", { name: /Stage A Red/ }));
       expect(
-        screen.getByTestId("material-library-select-stage-a-red"),
-      ).toBeChecked();
+        screen.getByRole("button", { name: /Stage A Red/ }),
+      ).toHaveAttribute("aria-pressed", "true");
 
       fireEvent.click(screen.getByTestId("material-library-profile-lumina_box"));
 
@@ -1034,7 +1124,8 @@ describe("MaterialLibraryPanel", () => {
       await screen.findByTestId("material-library-brand-group");
       expandAllMaterialLibraryGroups();
       await screen.findByText("Stage A Red");
-      fireEvent.click(screen.getByTestId("material-library-select-stage-a-red"));
+      fireEvent.click(screen.getByRole("button", { name: "选择耗材" }));
+      fireEvent.click(screen.getByRole("button", { name: /Stage A Red/ }));
       fireEvent.click(screen.getByRole("button", { name: /导出所选耗材|export selected/i }));
       await waitFor(() => {
         expect(exportGradientCardMaterials).toHaveBeenCalledWith(["stage-a-red"]);
@@ -1101,7 +1192,8 @@ describe("MaterialLibraryPanel", () => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId("material-library-select-pla-basic"));
+    fireEvent.click(screen.getByRole("button", { name: /选择耗材|select materials/i }));
+    fireEvent.click(screen.getAllByTestId("material-library-item")[0]);
     fireEvent.click(screen.getByRole("button", { name: /导出所选耗材|export selected/i }));
 
     const error = await screen.findByTestId("material-library-error");
@@ -1208,7 +1300,7 @@ describe("MaterialLibraryPanel", () => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
     expect(screen.getByTestId("material-library-success")).toBeInTheDocument();
-    expect((screen.getByTestId("material-library-select-pla-basic") as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByTestId("material-library-item")).toHaveAttribute("aria-pressed", "true");
   });
 
 });

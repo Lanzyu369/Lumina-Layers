@@ -66,10 +66,20 @@ vi.mock("../hooks/useWorkspaceMode", () => ({
     isWide: false,
   }),
 }));
-vi.mock("../components/Scene3D", () => ({ default: () => null }));
+vi.mock("../components/Scene3D", () => ({ default: ({ suspended }: { suspended?: boolean }) => <div data-testid="scene-stub" data-suspended={String(suspended ?? false)} /> }));
 vi.mock("../components/SettingsPanel", () => ({ default: () => null }));
-vi.mock("../components/VectorizerPanel", () => ({ default: () => null }));
-vi.mock("../components/LanguageToggle", () => ({ LanguageToggle: () => null }));
+vi.mock("../components/VectorizerPanel", () => ({ default: () => <input aria-label="Vector draft" defaultValue="" /> }));
+const menuCommands = vi.hoisted(() => new Map<string, () => void>());
+vi.mock("../integrations/applicationMenu", () => ({
+  useApplicationMenuLanguage: vi.fn(),
+  useApplicationMenuCommand: (command: string, handler: () => void) => { menuCommands.set(command, handler); },
+}));
+vi.mock("../credits/AboutDialog", () => ({ default: ({ page, onNavigate, onClose }: {
+  page: "about" | "credits"; onNavigate: (page: "about" | "credits") => void; onClose: () => void;
+}) => <div role="dialog" aria-label={page === "about" ? "关于 Lumina Studio" : "致谢"}>
+  {page === "about" && <button onClick={() => onNavigate("credits")}>致谢</button>}
+  <button onClick={page === "credits" ? () => onNavigate("about") : onClose}>{page === "credits" ? "返回关于" : "Close about"}</button>
+</div> }));
 vi.mock("../components/ThemeToggle", () => ({ ThemeToggle: () => null }));
 vi.mock("../components/BugReportButton", () => ({ BugReportButton: () => null }));
 vi.mock("../components/BugReportModal", () => ({
@@ -94,19 +104,31 @@ import App from "../App";
 import apiClient from "../api/client";
 import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
 import { useErrorTicketPromptStore } from "../stores/errorTicketPromptStore";
+import { translations } from "../i18n/translations";
+import { useWidgetStore } from "../stores/widgetStore";
+
+// Backend status lives inside the header's more-options menu.
+function openHeaderMenu() {
+  fireEvent.click(screen.getByTestId("header-menu-button"));
+}
 
 describe("App component", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Restore default rejection for unmocked calls
-    vi.mocked(apiClient.get).mockRejectedValue(new Error("unmocked"));
+    menuCommands.clear();
+    // Unrelated workspace checks start after the backend readiness gate opens.
+    vi.mocked(apiClient.get).mockResolvedValue({
+      data: { status: "ok", version: "2.0", uptime_seconds: 100 },
+    });
     useSettingsStore.setState({ ...DEFAULT_SETTINGS });
     useErrorTicketPromptStore.getState()._resetForTests();
+    useWidgetStore.setState({ activeTab: "converter" });
     localStorage.clear();
   });
 
   it("offers a ticket after a server error and pre-fills the bug report", async () => {
     render(<App />);
+    await screen.findByText("Lumina Studio 2");
 
     act(() => {
       useErrorTicketPromptStore.getState().reportApiError({
@@ -134,31 +156,44 @@ describe("App component", () => {
     });
 
     render(<App />);
+    await screen.findByTestId("header-menu-button");
+    openHeaderMenu();
 
     await waitFor(() => {
       expect(screen.getByTestId("health-badge-ok")).toBeInTheDocument();
     });
+    expect(screen.queryByTestId("header-menu-alert")).not.toBeInTheDocument();
     expect(apiClient.get).toHaveBeenCalledWith("/health", {
       suppressClientLog: true,
+      timeout: 4_000,
+      signal: expect.any(AbortSignal),
     });
   });
 
-  it("renders red badge when API request fails", async () => {
+  it("waits for the backend before mounting the workspace after an initial failure", async () => {
     vi.mocked(apiClient.get).mockRejectedValue(new Error("Network Error"));
 
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
+      expect(apiClient.get).toHaveBeenCalled();
     });
+    expect(screen.getByRole("status")).toHaveTextContent(translations.app_starting.zh);
+    expect(screen.queryByText("Lumina Studio 2")).not.toBeInTheDocument();
     expect(apiClient.get).toHaveBeenCalledWith("/health", {
       suppressClientLog: true,
+      timeout: 4_000,
+      signal: expect.any(AbortSignal),
     });
   });
 
-  it("rechecks health after a failed request and recovers the badge", async () => {
+  it("rechecks health and preserves the workspace through later disconnects", async () => {
     vi.useFakeTimers();
     vi.mocked(apiClient.get)
+      .mockRejectedValueOnce(new Error("Network Error"))
+      .mockResolvedValueOnce({
+        data: { status: "ok", version: "2.0", uptime_seconds: 120 },
+      })
       .mockRejectedValueOnce(new Error("Network Error"))
       .mockResolvedValue({
         data: { status: "ok", version: "2.0", uptime_seconds: 120 },
@@ -170,7 +205,8 @@ describe("App component", () => {
       await act(async () => {
         await Promise.resolve();
       });
-      expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent(translations.app_starting.zh);
+      expect(screen.queryByText("Lumina Studio 2")).not.toBeInTheDocument();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5_000);
@@ -180,12 +216,31 @@ describe("App component", () => {
       expect(apiClient.get).toHaveBeenCalledTimes(2);
       expect(apiClient.get).toHaveBeenNthCalledWith(1, "/health", {
         suppressClientLog: true,
+        timeout: 4_000,
+        signal: expect.any(AbortSignal),
       });
       expect(apiClient.get).toHaveBeenNthCalledWith(2, "/health", {
         suppressClientLog: true,
+        timeout: 4_000,
+        signal: expect.any(AbortSignal),
       });
+      openHeaderMenu();
       expect(screen.getByTestId("health-badge-ok")).toBeInTheDocument();
       expect(screen.queryByTestId("health-badge-fail")).not.toBeInTheDocument();
+      const workspaceHeader = screen.getByText("Lumina Studio 2");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
+      expect(screen.getByText("Lumina Studio 2")).toBe(workspaceHeader);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(screen.getByTestId("health-badge-ok")).toBeInTheDocument();
+      expect(screen.getByText("Lumina Studio 2")).toBe(workspaceHeader);
+      expect(apiClient.get).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
     }
@@ -198,6 +253,54 @@ describe("App component", () => {
 
     render(<App />);
 
-    expect(screen.getByText("Lumina Studio 2")).toBeInTheDocument();
+    expect(await screen.findByText("Lumina Studio 2")).toBeInTheDocument();
+  });
+
+  it("preserves the active workspace and its draft while credits opens and closes", async () => {
+    useWidgetStore.setState({ activeTab: "vectorizer" });
+    render(<App />);
+    const draft = await screen.findByLabelText("Vector draft");
+    fireEvent.change(draft, { target: { value: "unsaved artwork" } });
+    openHeaderMenu();
+    fireEvent.click(screen.getByRole("button", { name: "关于 Lumina Studio" }));
+    await screen.findByRole("dialog", { name: "关于 Lumina Studio" });
+    fireEvent.click(screen.getByRole("button", { name: "致谢" }));
+    expect(screen.getByLabelText("Vector draft")).toBe(draft);
+    expect(draft.closest("main")).toHaveAttribute("inert");
+    fireEvent.click(screen.getByRole("button", { name: "返回关于" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close about" }));
+    expect(screen.getByLabelText("Vector draft")).toBe(draft);
+    expect(draft).toHaveValue("unsaved artwork");
+    expect(draft.closest("main")).not.toHaveAttribute("inert");
+  });
+
+  it("suspends background 3D rendering without unmounting the scene", async () => {
+    render(<App />);
+    const scene = await screen.findByTestId("scene-stub");
+    openHeaderMenu();
+    fireEvent.click(screen.getByRole("button", { name: "关于 Lumina Studio" }));
+    await screen.findByRole("dialog", { name: "关于 Lumina Studio" });
+    expect(screen.getByTestId("scene-stub")).toBe(scene);
+    expect(scene).toHaveAttribute("data-suspended", "true");
+    document.body.setAttribute("tabindex", "-1");
+    document.body.focus();
+    document.body.removeAttribute("tabindex");
+    fireEvent.click(screen.getByRole("button", { name: "致谢" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回关于" }));
+    expect(scene).toHaveAttribute("data-suspended", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Close about" }));
+    expect(scene).toHaveAttribute("data-suspended", "false");
+    expect(screen.getByTestId("header-menu-button")).toHaveFocus();
+  });
+
+  it("routes the native About command to the same page even while viewing credits", async () => {
+    render(<App />);
+    await screen.findByText("Lumina Studio 2");
+    act(() => menuCommands.get("about")!());
+    await screen.findByRole("dialog", { name: "关于 Lumina Studio" });
+    fireEvent.click(screen.getByRole("button", { name: "致谢" }));
+    expect(screen.getByRole("dialog", { name: "致谢" })).toBeInTheDocument();
+    act(() => menuCommands.get("about")!());
+    expect(screen.getByRole("dialog", { name: "关于 Lumina Studio" })).toBeInTheDocument();
   });
 });

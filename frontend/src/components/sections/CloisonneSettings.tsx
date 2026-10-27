@@ -3,6 +3,7 @@ import { useI18n } from "../../i18n/context";
 import { ModelingMode } from "../../api/types";
 import Checkbox from "../ui/Checkbox";
 import Slider from "../ui/Slider";
+import { StatusBanner } from "../ui/panelPrimitives";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
 
 export default function CloisonneSettings() {
@@ -20,10 +21,12 @@ export default function CloisonneSettings() {
   return (
     <div className="flex flex-col gap-4">
       {/* 🚧 施工中标记 / Work-in-progress banner */}
-      <div className="flex items-center gap-2 rounded-md bg-amber-50 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-        <span>🚧</span>
-        <span>{t("cloisonne_wip")}</span>
-      </div>
+      <StatusBanner tone="warning">
+        <span className="flex items-center gap-2">
+          <span aria-hidden="true">🚧</span>
+          <span>{t("cloisonne_wip")}</span>
+        </span>
+      </StatusBanner>
       <Checkbox
         label={t("cloisonne_enable")}
         checked={enable_cloisonne}

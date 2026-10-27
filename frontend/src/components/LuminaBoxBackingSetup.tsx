@@ -44,11 +44,11 @@ export default function LuminaBoxBackingSetup({ materials, locked, busy, onStart
       options={[{ value: "pair", label: t("lumina_box_bw_create_pair") }, { value: "single", label: t("lumina_box_bw_create_single") }]}
       onChange={(value) => setCreationMode(value as "pair" | "single")} /> : null}
     {paired ? <>
-      <div className={`${wellClass} space-y-3 p-4`}>
+      <div role="group" aria-label={t("lumina_box_white_material")} className={`${wellClass} space-y-3 p-4`}>
         <h4 className="font-medium">{t("lumina_box_white_material")}</h4>
         {fields(white, setWhite)}
       </div>
-      <div className={`${wellClass} space-y-3 p-4`}>
+      <div role="group" aria-label={t("lumina_box_black_material")} className={`${wellClass} space-y-3 p-4`}>
         <h4 className="font-medium">{t("lumina_box_black_material")}</h4>
         {fields(black, setBlack)}
       </div>

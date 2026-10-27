@@ -227,7 +227,7 @@ describe("recipe round-trip properties", () => {
         // Key parameters must survive round-trip
         expect(restored.source_version).toBe(overrides.source_version);
         expect(restored.lut_name).toBe(
-          isMaterialArchive ? "" : overrides.lut_name,
+          overrides.source_version === "legacy" ? overrides.lut_name : "",
         );
         expect(restored.selectedNativeBrandKey).toBe(
           isMaterialArchive ? "" : overrides.selectedNativeBrandKey,

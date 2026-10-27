@@ -1,12 +1,15 @@
+import type { PresetNameError, SavePresetResult, PresetOptions } from "../conversionPreferences";
 import type { ApiRequestOptions } from "../../api/client";
 import type {
   AutoHeightMode,
   BatchPreviewItem,
   BatchResponse,
+  BackingOutput,
   BedSizeItem,
   ColorMode,
   ColorReplacementItem,
   DynamicMaterialRecipe,
+  ExportMaterialSelection,
   FridgeMagnetItem,
   GradientGroupItem,
   GradientSelectionSource,
@@ -29,6 +32,8 @@ import type {
   PuzzleStyle,
   RecipeHistoryItem,
   RecipeOverrideItem,
+  RecipeOverrideApplyRequest,
+  RecipeOverrideApplyResponse,
   SelectionDocumentResponse,
   StructureMode,
   VirtualMaterial,
@@ -157,13 +162,30 @@ export interface WorkshopConverterImageInput {
   source: WorkshopRecipeSource;
 }
 
+export interface NativeFilamentProfileScope {
+  slicer: string;
+  printer_id: string;
+  device_profile_id: string;
+  nozzle_size: string;
+}
+
+export type NativeMaterialSelectionAction = "edit" | "generate" | "batch";
+
 // ========== State Interface ==========
 
 export interface ConverterState {
+  native_filament_profiles: Record<string, string>;
+  nativeFilamentProfileScope: NativeFilamentProfileScope | null;
+  nativeMaterialSelection: ExportMaterialSelection | null;
+  nativeMaterialSelectionAction: NativeMaterialSelectionAction | null;
+  nativeMaterialSelectionLoading: boolean;
+  nativeMaterialSelectionError: string | null;
   // 图片
   imageFile: File | null;
   imagePreviewUrl: string | null;
   aspectRatio: number | null;
+  preferredSizeAxis: "width" | "height";
+  conversionParameterContext: "defaults" | "restoring" | "project";
   workshopSource: WorkshopRecipeSource | null;
 
   // 模型覆面
@@ -235,6 +257,7 @@ export interface ConverterState {
   auto_dynamic_range: boolean;
   chroma_gate: number;
   separate_backing: boolean;
+  backingOutput: BackingOutput;
 
   // 挂件环
   add_loop: boolean;
@@ -316,6 +339,7 @@ export interface ConverterState {
   historyBusy: boolean;
   contentCommitStatus: ContentCommitStatus;
   contentCommitOperationId: string | null;
+  pendingEditorProject: File | null;
 
   // 颜色轮廓数据（后端 OpenCV 提取，用于 3D 高亮）
   colorContours: Record<string, number[][][]>;
@@ -492,6 +516,12 @@ export interface ConverterState {
 // ========== Actions Interface ==========
 
 export interface ConverterActions {
+  restoreConversionDefaults: () => void;
+  applyConversionPreset: (id: string | null) => boolean;
+  saveConversionPreset: (name: string, options?: PresetOptions) => SavePresetResult;
+  updateConversionPreset: (id: string) => boolean;
+  renameConversionPreset: (id: string, name: string) => PresetNameError | "missing-preset" | null;
+  deleteConversionPreset: (id: string) => void;
   // 图片
   setImageFile: (file: File | null) => void;
   rotateImageForExport: (degrees: ImageRotationDegrees) => Promise<void>;
@@ -535,6 +565,7 @@ export interface ConverterActions {
   setAutoDynamicRange: (enabled: boolean) => void;
   setChromaGate: (threshold: number) => void;
   setSeparateBacking: (enabled: boolean) => void;
+  setBackingOutput: (output: BackingOutput) => void;
   setAddLoop: (enabled: boolean) => void;
   setLoopWidth: (width: number) => void;
   setLoopLength: (length: number) => void;
@@ -634,6 +665,7 @@ export interface ConverterActions {
     /** Virtual materials declared at apply time; required when ``recipe`` carries indices ``>= LUT.N``. */
     virtualMaterials?: VirtualMaterial[],
   ) => Promise<void>;
+  commitRecipeOverride: (request: RecipeOverrideApplyRequest) => Promise<RecipeOverrideApplyResponse | undefined>;
   upsertRecipeOverrides: (
     regionIds: string[],
     recipe: number[],
@@ -871,6 +903,16 @@ export interface ConverterActions {
   invalidatePreviewForAutoRefresh: () => void;
   submitPreview: () => Promise<void>;
   submitGenerate: () => Promise<string | null>;
+  openNativeMaterialSelection: () => Promise<void>;
+  refreshNativeMaterialSelection: (
+    profiles: Record<string, string>,
+    buildPlateId: string,
+  ) => Promise<void>;
+  applyNativeMaterialSelection: (
+    profiles: Record<string, string>,
+    buildPlateId: string,
+  ) => Promise<void>;
+  cancelNativeMaterialSelection: () => void;
   reconcileUnknownContentCommit: () => Promise<void>;
 
   // 裁剪
@@ -881,6 +923,7 @@ export interface ConverterActions {
     y: number,
     width: number,
     height: number,
+    rotation?: 0 | ImageRotationDegrees,
   ) => Promise<void>;
 
   // 自动检测颜色
@@ -917,6 +960,8 @@ export interface ConverterActions {
   setLayerImagesOpen: (open: boolean) => void;
 
   // 配方导入
+  /** Capture source parameters and a confirmed portable editor checkpoint. */
+  prepareRecipeExport: () => Promise<{ state: ConverterState; editorFile: File | null }>;
   importRecipeState: (
     partial: Partial<ConverterState>,
     imageFile: File,

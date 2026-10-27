@@ -8,9 +8,16 @@
  * 仅渲染一级标签行。二级标签由 SubTabBar 在主内容区渲染，
  * 使顶栏高度恒定，不会引起布局位移。
  */
+import type { Ref } from 'react';
 import { useI18n } from '../../i18n/context';
 import type { TabId } from '../../types/widget';
 import { motion } from 'framer-motion';
+import NavTabStrip from './NavTabStrip';
+import {
+  NAV_TAB_INDICATOR_CLASS,
+  NAV_TAB_INDICATOR_TRANSITION,
+  primaryNavTabClass,
+} from './navTabStyles';
 
 type PrimaryTabId = 'converter' | 'lut-management' | 'material-management' | 'vectorizer' | 'workshop' | 'settings';
 type LutSubTabId = 'lut-library' | 'calibration' | 'extractor' | 'lut-manager' | 'lut-cloud-sync' | 'lut-details' | 'lut-compare' | 'five-color';
@@ -98,56 +105,57 @@ export function hasSubTabs(activeTab: TabId): boolean {
 interface TabNavBarProps {
   activeTab: TabId;
   onTabChange: (tab: TabId) => void;
+  onIndicatorAnimationComplete?: (tab: TabId) => void;
   compact?: boolean;
+  /** Exposes the tab strip so the header can measure its full width. */
+  navRef?: Ref<HTMLElement>;
 }
 
-export default function TabNavBar({ activeTab, onTabChange, compact = false }: TabNavBarProps) {
+export default function TabNavBar({ activeTab, onTabChange, onIndicatorAnimationComplete, compact = false, navRef }: TabNavBarProps) {
   const { t } = useI18n();
   const activePrimaryTab = resolvePrimaryTab(activeTab);
 
   return (
-    <nav data-tutorial="primary-tabs" className={`dock-scrollbar flex max-w-full items-center overflow-x-auto border border-slate-200/80 bg-slate-100/90 dark:border-slate-800/80 dark:bg-slate-900/90 ${compact ? "rounded-[20px] p-1" : "rounded-2xl p-1.5"}`}>
-      <div className="flex min-w-max items-center gap-1">
-        {PRIMARY_TAB_LIST.map(({ id, titleKey }) => {
-          const isActive = id === activePrimaryTab;
-          return (
-            <button
-              key={id}
-              data-testid={`tab-${id}`}
-              onClick={() => {
-                if (id === 'lut-management') {
-                  onTabChange(isLutSubTab(activeTab) ? activeTab : 'lut-library');
-                  return;
-                }
-                if (id === 'material-management') {
-                  onTabChange(isMaterialSubTab(activeTab) ? activeTab : 'material-library');
-                  return;
-                }
-                onTabChange(id);
-              }}
-              className={`
-                relative z-10 shrink-0 rounded-xl font-semibold tracking-wide transition-colors duration-300 outline-none
-                ${compact ? "px-2.5 py-2 text-xs sm:px-3" : "px-3 py-2 text-sm sm:px-4"}
-                ${isActive ? 'text-blue-700 dark:text-blue-400' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}
-              `}
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-            >
-              {isActive && (
-                <motion.div
-                  layoutId="active-primary-tab-indicator"
-                  className="absolute inset-0 rounded-xl border border-slate-200/80 bg-slate-100/95 dark:border-slate-700/80 dark:bg-slate-900/85"
-                  transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
-                  style={{ zIndex: -1 }}
-                />
-              )}
-              <span className="relative z-10 flex items-center gap-2">
-                <span className="flex items-center justify-center">{PRIMARY_TAB_ICONS[id]}</span>
-                <span className={`whitespace-nowrap ${compact ? "hidden sm:inline" : ""}`}>{t(titleKey)}</span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </nav>
+    <NavTabStrip navRef={navRef} tutorialAnchor="primary-tabs">
+      {PRIMARY_TAB_LIST.map(({ id, titleKey }) => {
+        const isActive = id === activePrimaryTab;
+        return (
+          <button
+            key={id}
+            data-testid={`tab-${id}`}
+            onClick={() => {
+              if (id === 'lut-management') {
+                onTabChange(isLutSubTab(activeTab) ? activeTab : 'lut-library');
+                return;
+              }
+              if (id === 'material-management') {
+                onTabChange(isMaterialSubTab(activeTab) ? activeTab : 'material-library');
+                return;
+              }
+              onTabChange(id);
+            }}
+            className={primaryNavTabClass(isActive, compact)}
+            style={{ WebkitTapHighlightColor: 'transparent' }}
+          >
+            {isActive && (
+              // Animate only when the selected tab changes; header layout
+              // changes must not replay the slide from the old position.
+              <motion.div
+                layoutId="active-primary-tab-indicator"
+                layoutDependency={id}
+                className={NAV_TAB_INDICATOR_CLASS}
+                transition={NAV_TAB_INDICATOR_TRANSITION}
+                onLayoutAnimationComplete={() => onIndicatorAnimationComplete?.(activeTab)}
+                style={{ zIndex: -1 }}
+              />
+            )}
+            <span className="relative z-10 flex items-center gap-2">
+              <span className="flex items-center justify-center">{PRIMARY_TAB_ICONS[id]}</span>
+              <span className={`whitespace-nowrap ${compact ? "hidden sm:inline" : ""}`}>{t(titleKey)}</span>
+            </span>
+          </button>
+        );
+      })}
+    </NavTabStrip>
   );
 }

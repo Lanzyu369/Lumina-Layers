@@ -6,6 +6,7 @@ const {
   Menu,
   net: electronNet,
   protocol,
+  screen,
   session,
   utilityProcess,
   shell,
@@ -20,14 +21,28 @@ const { pathToFileURL } = require("url");
 const { createSerialPortPicker } = require("./serial-port-picker.cjs");
 const { createConnectionDiagnosticsSaver } = require("./connection-diagnostics.cjs");
 const { createNativeSerialBridge } = require("./native-serial.cjs");
+const { createLauncherStartup } = require('./launcher-startup.cjs');
+const { createSplashController } = require('./splash-controller.cjs');
+const launcherStartup = createLauncherStartup();
+if (launcherStartup.enabled) {
+  launcherStartup.checkpoint(0);
+  app.on('will-quit', () => launcherStartup.failed());
+}
 const { saveGeneratedFile } = require("./generated-file-save.cjs");
+const { createApplicationMenu } = require("./application-menu.cjs");
 const {
   createGeneratedFileDirectoryState,
   pickGeneratedFileDirectory,
   resolveDefaultSavePath,
   setGeneratedFileDirectory,
+  isTrustedMainFrameSender,
 } = require("./generated-file-directory.cjs");
 const { assertPortsAvailable, selectBackendEndpoint, commitBackendEndpoint, validateHealthResponse } = require("./backend-endpoint.cjs");
+const {
+  createInterfaceScaleController,
+  getInterfaceScale,
+  setInterfaceScale,
+} = require("./interface-scale.cjs");
 const {
   fetchNativeBedModel,
   isAllowedBedModelIpcSender,
@@ -392,8 +407,12 @@ if (!gotLock) {
 // ═══════════════════════════════════════════════════════════
 
 let win = null;
+let trafficLightButtonHeight = null;
+let interfaceScale = null;
+let applicationMenu = null;
 const generatedFileDirectory = createGeneratedFileDirectoryState();
 let splashWin = null;
+let splashController = null;
 let isQuitting = false;
 const serialPortPicker = createSerialPortPicker({
   getWindow: () => win,
@@ -559,25 +578,14 @@ function installWorkshopSessionSecurity() {
 }
 
 function createSplash() {
-  splashWin = new BrowserWindow({
-    width: 480,
-    height: 320,
-    frame: false,
-    transparent: true,
-    resizable: false,
-    center: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    icon: fs.existsSync(ICON_PATH) ? ICON_PATH : undefined,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-  splashWin.loadFile(path.join(__dirname, "splash.html"));
+  splashController = createSplashController({ BrowserWindow, ipcMain, app,
+    language: currentLang, onProgress: value => launcherStartup.checkpoint(value) });
+  splashWin = splashController.window;
 }
 
 function closeSplash() {
+  splashController?.close();
+  splashController = null;
   if (splashWin && !splashWin.isDestroyed()) {
     splashWin.close();
     splashWin = null;
@@ -585,27 +593,66 @@ function closeSplash() {
 }
 
 function createWindow() {
+  trafficLightButtonHeight = null;
+  interfaceScale = createInterfaceScaleController({
+    screen,
+    stateFile: path.join(app.getPath("userData"), "interface-scale.json"),
+    log: logSys,
+    logError: logErr,
+  });
+  const placement = interfaceScale.initialPlacement();
   const windowOptions = {
-    width: 1440,
-    height: 900,
+    ...placement.bounds,
     title: "Lumina Studio 2",
+    // Keep macOS traffic lights while the renderer paints the title bar.
+    ...(process.platform === "darwin" ? {
+      titleBarStyle: "hidden",
+      titleBarOverlay: true,
+      // With zero vertical margin, WCO reports the actual native button height.
+      trafficLightPosition: { x: 16, y: 0 },
+    } : {}),
+    ...(process.platform === "win32" ? {
+      titleBarStyle: "hidden",
+      autoHideMenuBar: true,
+      titleBarOverlay: { color: "#e2e8f0", symbolColor: "#334155", height: 40 },
+    } : {}),
     icon: fs.existsSync(ICON_PATH) ? ICON_PATH : undefined,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, "preload.cjs"),
       sandbox: false,
+      zoomFactor: placement.zoomFactor,
     },
+    // Matches the app background so the hidden window does not flash white
+    // while the page loads.
+    backgroundColor: "#f1f5f9",
     show: false,
   };
 
   win = new BrowserWindow(windowOptions);
+  interfaceScale.attach(win);
+  // macOS maximize() also reveals a hidden window. Defer it until the splash finishes.
+  const mainWindow = win;
   win.once("ready-to-show", () => {
-    closeSplash();
-    win.show();
+    void (async () => {
+      await splashController?.complete();
+      if (mainWindow.isDestroyed()) return;
+      if (placement.maximize) mainWindow.maximize();
+      await launcherStartup.present(mainWindow);
+      closeSplash();
+    })().catch(error => {
+      logErr(`Window presentation failed: ${error.message}`);
+      closeSplash();
+      if (!mainWindow.isDestroyed()) mainWindow.show();
+    });
   });
 
-  Menu.setApplicationMenu(null);
+  applicationMenu?.rebuild();
+  win.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) applicationMenu?.reset();
+  });
+  win.webContents.on("render-process-gone", () => applicationMenu?.reset());
 
   win.webContents.setWindowOpenHandler(({ url, referrer }) => {
     const openerUrl = referrer?.url || null;
@@ -747,6 +794,35 @@ function createWindow() {
 //  IPC handlers
 // ═══════════════════════════════════════════════════════════
 
+ipcMain.on("application-menu-state", (event, payload) => {
+  if (isTrustedMainFrameSender(event, win, `${FRONTEND_URL}/`)) applicationMenu?.update(payload);
+});
+
+ipcMain.on("set-titlebar-theme", (event, theme) => {
+  if (process.platform !== "win32" || !isTrustedMainFrameSender(event, win, `${FRONTEND_URL}/`)) return;
+  if (theme !== "light" && theme !== "dark") return;
+  win.setTitleBarOverlay(theme === "dark"
+    ? { color: "#020617", symbolColor: "#cbd5e1" }
+    : { color: "#e2e8f0", symbolColor: "#334155" });
+});
+
+ipcMain.handle("align-traffic-lights", (event, centerY, controlsHeight) => {
+  if (process.platform !== "darwin" || !isTrustedMainFrameSender(event, win, `${FRONTEND_URL}/`)) return null;
+  if (typeof centerY !== "number" || !Number.isFinite(centerY) || centerY < 0 || centerY > 200) return null;
+  const zoom = win.webContents.getZoomFactor();
+  if (trafficLightButtonHeight === null) {
+    if (typeof controlsHeight !== "number" || !Number.isFinite(controlsHeight) || controlsHeight <= 0 || controlsHeight > 200) return null;
+    // Capture before the first move: subsequent WCO heights include our margins.
+    trafficLightButtonHeight = controlsHeight * zoom;
+  }
+  // CSS pixels become window points through page zoom, not devicePixelRatio.
+  win.setWindowButtonPosition({
+    x: 16,
+    y: Math.max(0, Math.round(centerY * zoom - trafficLightButtonHeight / 2)),
+  });
+  return null;
+});
+
 nativeSerial.install(ipcMain);
 
 ipcMain.on("set-language", (event, lang, serialLabels) => {
@@ -767,6 +843,17 @@ ipcMain.handle("save-connection-diagnostics", createConnectionDiagnosticsSaver({
   dialog,
   isTrustedIpcSender: (event) => serialPortPicker.isTrustedIpcSender(event),
 }));
+ipcMain.handle("open-gradient-model", async (event, url) => {
+  const modelUrls = [
+    "https://makerworld.com.cn/zh/models/2394753-lumina2-0-ti-xing-xiao-se-se-qia-0-08ceng-gao-15ce#profileId-2721317",
+    "https://makerworld.com.cn/zh/models/2400920-can-shu-hua-lumina-2-0ti-du-se-qia-zi-ding-yi-shou#profileId-2729620",
+  ];
+  if (!isTrustedMainFrameSender(event, win, trustedMainFrameUrl) || !modelUrls.includes(url)) {
+    throw new Error("Model external link denied.");
+  }
+  await shell.openExternal(url);
+  return { opened: true };
+});
 
 ipcMain.handle("open-wiki", async (event, url) => {
   const senderFrame = event.senderFrame ?? null;
@@ -813,6 +900,23 @@ ipcMain.handle("pick-generated-file-directory", (event) =>
     trustedUrl: trustedMainFrameUrl,
     state: generatedFileDirectory,
     showOpenDialog: (owner, options) => dialog.showOpenDialog(owner, options),
+  }));
+
+ipcMain.handle("get-interface-scale", (event) =>
+  getInterfaceScale({
+    event,
+    window: win,
+    trustedUrl: trustedMainFrameUrl,
+    controller: interfaceScale,
+  }));
+
+ipcMain.handle("set-interface-scale", (event, preference) =>
+  setInterfaceScale({
+    event,
+    window: win,
+    trustedUrl: trustedMainFrameUrl,
+    controller: interfaceScale,
+    preference,
   }));
 
 ipcMain.handle("get-native-bed-model", async (event, deviceProfileId) => {
@@ -916,6 +1020,17 @@ app.whenReady().then(async () => {
     }
   }
 
+  if (IS_MAC) {
+    applicationMenu = createApplicationMenu({
+      Menu, app, getWindow: () => win, getScale: () => interfaceScale,
+      onError: (error) => logErr(`Menu import could not open: ${error.message}`),
+      openDocs: () => { void shell.openExternal(`https://wiki.luminastudio.com.cn/${currentLang}/`).catch((error) => logErr(`Documentation could not open: ${error.message}`)); },
+    });
+    applicationMenu.rebuild();
+  } else {
+    Menu.setApplicationMenu(null);
+  }
+
   createSplash();
 
   try {
@@ -935,6 +1050,7 @@ app.whenReady().then(async () => {
   }
 
   // ── Start backend ──
+  splashController?.checkpoint(2);
   let backendProc;
   const python = findPython();
   const apiServer = path.join(ROOT_DIR, "api_server.py");
@@ -961,6 +1077,7 @@ app.whenReady().then(async () => {
   try {
     await waitForHealth(backendEndpoint.healthUrl, HEALTH_TIMEOUT_MS, backendProc);
     logOk("Backend is healthy");
+    splashController?.checkpoint(5);
     commitBackendEndpoint({
       portFile: path.join(app.getPath("userData"), "backend-port.json"),
       endpoint: backendEndpoint,
@@ -1006,6 +1123,7 @@ app.whenReady().then(async () => {
   installWorkshopSessionSecurity();
 
   // ── Create main window ──
+  splashController?.checkpoint(7);
   createWindow();
 }).catch(error => {
   logErr(`Desktop startup failed: ${error.code || error.message}`);

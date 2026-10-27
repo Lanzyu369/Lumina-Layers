@@ -138,8 +138,12 @@ describe("useConverterDropRouting", () => {
     expect(state.imageFile).toBeNull();
   });
 
-  it("routes an image drop to image upload and never into the model flow", async () => {
-    const file = new File(["img"], "artwork.jpg", { type: "image/jpeg" });
+  it.each([
+    ["artwork.jpg", "image/jpeg"],
+    ["artwork.jfif", ""],
+    ["artwork.JFIF", "application/octet-stream"],
+  ])("routes an image drop (%s) to image upload and never into the model flow", async (name, type) => {
+    const file = new File(["img"], name, { type });
 
     render(<DropRoutingHarness />);
 

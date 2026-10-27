@@ -6,60 +6,23 @@ import Button from "../ui/Button";
 import Switch from "../ui/Switch";
 import CustomRecipeDialog from "../ui/CustomRecipeDialog";
 import { useI18n } from "../../i18n/context";
-import { cx, cardClass, wellPadClass } from "../ui/panelPrimitives";
-import { normalizeResourceUrl } from "../../utils/resourceUrl";
+import { cx, cardClass, groupHeaderClass, wellPadClass } from "../ui/panelPrimitives";
 import MaterialLayerBenefitCurve from "./MaterialLayerBenefitCurve";
 import SelectionToolPicker from "./SelectionToolPicker";
 
 // ========== ToolbarGroup ==========
 
-type ToolbarGroupTint = "slate" | "sky" | "rose" | "amber" | "emerald";
-
-/* Hierarchy v2: groups are borderless — a colored dot + small-caps label
- * carries the category, so the card interior stays a single flat surface.
- * 层级 v2：工具组不再是彩色边框小卡片，改为“彩点 + 小标题”，卡片内部
- * 保持一个平面，靠留白分组。 */
-const TOOLBAR_GROUP_DOT_CLASS: Record<ToolbarGroupTint, string> = {
-  slate: "bg-slate-400",
-  sky: "bg-sky-500",
-  rose: "bg-rose-500",
-  amber: "bg-amber-500",
-  emerald: "bg-emerald-500",
-};
-
-const TOOLBAR_GROUP_LABEL_TINT_CLASS: Record<ToolbarGroupTint, string> = {
-  slate: "text-slate-500 dark:text-slate-400",
-  sky: "text-sky-700 dark:text-sky-300",
-  rose: "text-rose-700 dark:text-rose-300",
-  amber: "text-amber-700 dark:text-amber-300",
-  emerald: "text-emerald-700 dark:text-emerald-300",
-};
-
 interface ToolbarGroupProps {
   label: string;
-  tint: ToolbarGroupTint;
   children: ReactNode;
   contentClassName?: string;
 }
 
-/**
- * Toolbar group: colored dot + small caps label above a row of compact
- * controls. No border, no background — grouping is typographic.
- * 工具栏分组：彩点 + 小标题 + 紧凑按钮行，无边框无底色，靠排版分组。
- */
-function ToolbarGroup({ label, tint, children, contentClassName }: ToolbarGroupProps) {
+/** Toolbar groups use neutral headings and spacing. */
+function ToolbarGroup({ label, children, contentClassName }: ToolbarGroupProps) {
   return (
     <div className="flex flex-col gap-1" role="group" aria-label={label}>
-      <span
-        className={cx(
-          "flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.1em]",
-          TOOLBAR_GROUP_LABEL_TINT_CLASS[tint],
-        )}
-      >
-        <span
-          aria-hidden="true"
-          className={cx("h-1.5 w-1.5 shrink-0 rounded-full", TOOLBAR_GROUP_DOT_CLASS[tint])}
-        />
+      <span className={groupHeaderClass}>
         {label}
       </span>
       <div className={contentClassName ?? "flex min-h-9 flex-wrap items-center gap-1.5"}>{children}</div>
@@ -134,8 +97,8 @@ function PaletteItem({
         }}
         className={`relative flex w-full min-w-0 flex-col items-center gap-1 rounded-[10px] px-1.5 py-2 cursor-pointer border transition-all duration-150 ${
           isSelected
-            ? "border-amber-400 bg-amber-400/10 ring-2 ring-amber-400/30"
-            : "border-transparent bg-white/35 hover:border-slate-300 hover:bg-white/65 dark:bg-slate-900/35 dark:hover:border-slate-600 dark:hover:bg-slate-900/75"
+            ? "border-amber-400 bg-amber-400/10"
+            : "border-transparent hover:border-[color:var(--surface-card-outline)] hover:bg-[var(--nav-chip-hover)]"
         }`}
       >
         <span
@@ -169,8 +132,8 @@ function PaletteItem({
       }}
       className={`relative flex h-full min-h-0 flex-col gap-2 rounded-[10px] px-2.5 py-2 cursor-pointer border transition-all duration-150 ${
         isSelected
-          ? "border-amber-400 bg-amber-400/10 ring-2 ring-amber-400/30"
-          : "border-transparent bg-white/35 hover:border-slate-300 hover:bg-white/65 dark:bg-slate-900/35 dark:hover:border-slate-600 dark:hover:bg-slate-900/75"
+          ? "border-amber-400 bg-amber-400/10"
+          : "border-transparent hover:border-[color:var(--surface-card-outline)] hover:bg-[var(--nav-chip-hover)]"
       }`}
     >
       {/* Top row: swatch + percentage */}
@@ -222,7 +185,7 @@ function DynamicMaterialRecipeMetrics({
   ] as const;
 
   return (
-    <dl className="mt-1 grid w-full grid-cols-[minmax(0,1fr)_auto] gap-x-1.5 gap-y-0.5 border-t border-slate-200/70 pt-1.5 text-[9px] leading-tight dark:border-slate-700/70">
+    <dl className="mt-1 grid w-full grid-cols-[minmax(0,1fr)_auto] gap-x-1.5 gap-y-0.5 border-t border-[color:var(--surface-divider)] pt-1.5 text-[9px] leading-tight">
       {metrics.map(([label, value]) => (
         <div key={label} className="contents">
           <dt className="truncate text-left text-slate-500 dark:text-slate-400">
@@ -262,7 +225,7 @@ function FreeColorSummary({ freeColors }: { freeColors: Set<string> }) {
   const { t } = useI18n();
   if (freeColors.size === 0) return null;
   return (
-    <div className={cx(wellPadClass, "flex flex-wrap items-center gap-2 px-3 py-2.5")}>
+    <div className={cx(wellPadClass, "flex flex-wrap items-center gap-2")}>
       <span className="text-[clamp(0.65rem,0.8vw,0.7rem)] font-medium text-slate-500 dark:text-slate-400">{t("conv_free_color_label")}:</span>
       {Array.from(freeColors).sort().map(hex => (
         <span
@@ -445,7 +408,7 @@ export default function PalettePanel({
   };
 
   return (
-    <div className={cx(cardClass, "flex h-full min-h-0 flex-col px-4 py-4")}>
+    <div className={cx(cardClass, "color-tools-panel flex h-full min-h-0 flex-col px-4 py-4")}>
       {palette.length === 0 ? (
         <p className="py-4 text-sm text-slate-500 dark:text-slate-400">
           {t("palette_no_data")}
@@ -493,7 +456,7 @@ export default function PalettePanel({
 
             {/* Grouped toolbar: auto-fit grid keeps every group card the same width */}
             <div className="grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-2">
-              <ToolbarGroup label={t("palette_group_history")} tint="slate">
+              <ToolbarGroup label={t("palette_group_history")}>
                 <Button
                   label={t("palette_undo")}
                   variant="secondary"
@@ -519,7 +482,6 @@ export default function PalettePanel({
 
               <ToolbarGroup
                 label={t("palette_group_mode")}
-                tint="sky"
                 contentClassName="grid min-h-9 grid-cols-[repeat(auto-fit,minmax(6.75rem,1fr))] items-center gap-1.5"
               >
                 <SelectionToolPicker />
@@ -528,19 +490,22 @@ export default function PalettePanel({
                   variant="secondary"
                   size="sm"
                   onClick={clearSelection}
-                  className="w-full !border-amber-200/80 !bg-amber-100/80 !text-amber-800 hover:!bg-amber-100 dark:!border-amber-700/70 dark:!bg-amber-900/35 dark:!text-amber-100 dark:hover:!bg-amber-900/45"
-                />
-                <Button
-                  label={t("palette_selection_blink")}
-                  variant={selectionBlinkEnabled ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={toggleSelectionBlink}
                   className="w-full"
-                  title={t("palette_selection_blink_title")}
                 />
+                <label
+                  className="col-span-full mt-1 flex items-center justify-between gap-3 border-t border-slate-200 py-2 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300"
+                  title={t("palette_selection_blink_title")}
+                >
+                  {t("palette_selection_blink")}
+                  <Switch
+                    checked={selectionBlinkEnabled}
+                    onChange={toggleSelectionBlink}
+                    ariaLabel={t("palette_selection_blink")}
+                  />
+                </label>
               </ToolbarGroup>
 
-              <ToolbarGroup label={t("palette_group_free")} tint="rose">
+              <ToolbarGroup label={t("palette_group_free")}>
                 <Button
                   label={t("conv_free_color_btn")}
                   variant="secondary"
@@ -559,7 +524,7 @@ export default function PalettePanel({
                 />
               </ToolbarGroup>
 
-              <ToolbarGroup label={t("palette_group_recipe")} tint="amber">
+              <ToolbarGroup label={t("palette_group_recipe")}>
                 <Button
                   label={t("recipe_custom_button")}
                   variant="secondary"
@@ -570,7 +535,7 @@ export default function PalettePanel({
                 />
               </ToolbarGroup>
 
-              <ToolbarGroup label={t("viewer_hover_toggle_group")} tint="emerald">
+              <ToolbarGroup label={t("viewer_hover_toggle_group")}>
                 <label className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-slate-600 dark:text-slate-300">
                   <Switch
                     checked={showHoverMagnifier}
@@ -593,7 +558,7 @@ export default function PalettePanel({
 
           <div className="shrink-0 flex flex-col gap-1.5">
             {selectionDocument && selectionDocument.selected_component_count > 0 && (
-              <div className={cx(wellPadClass, "flex items-center gap-2 px-3 py-2 text-[11px] text-slate-600 dark:text-slate-300")}>
+              <div className={cx(wellPadClass, "flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300")}>
                 <span>{t("palette_selected_blocks").replace("{count}", String(selectionDocument.selected_component_count))}</span>
                 <span aria-hidden="true">·</span>
                 <span>{t("palette_selected_colors").replace("{count}", String(selectionDocument.selected_color_hexes.length))}</span>
@@ -608,7 +573,7 @@ export default function PalettePanel({
             {selectionMode === 'select-all' &&
               selectedColors.size > 0 &&
               !isRegionScopedSelection && (
-            <div className={cx(wellPadClass, "flex min-h-11 flex-nowrap items-center gap-2 overflow-hidden px-3 py-2.5")}>
+            <div className={cx(wellPadClass, "flex min-h-11 flex-nowrap items-center gap-2 overflow-hidden")}>
               <span className="shrink-0 whitespace-nowrap text-[clamp(0.55rem,0.75vw,0.625rem)] font-medium text-amber-500 dark:text-amber-400">
                 {t("palette_multi_select_count").replace("{count}", String(selectedColors.size))}
               </span>
@@ -619,7 +584,7 @@ export default function PalettePanel({
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => handleSelect(hex)}
-                    className="h-5 w-5 shrink-0 rounded-md border-2 border-amber-400 shadow-sm transition-transform hover:scale-110"
+                    className="h-5 w-5 shrink-0 rounded-md border-2 border-amber-400 transition-transform hover:scale-110"
                     style={{ backgroundColor: `#${hex}` }}
                     title={`#${hex} — ${t("palette_multi_select_click_remove")}`}
                   />
@@ -630,7 +595,7 @@ export default function PalettePanel({
 
             {/* Multi-select region indicator */}
             {selectionMode === 'multi-select' && selectedRegions.length > 0 && (
-            <div className={cx(wellPadClass, "flex flex-wrap items-center gap-2 px-3 py-2.5")}>
+            <div className={cx(wellPadClass, "flex flex-wrap items-center gap-2")}>
               <span className="text-[clamp(0.55rem,0.75vw,0.625rem)] font-medium text-amber-500 dark:text-amber-400">
                 {t("palette_multi_select_region_count").replace("{count}", String(selectedRegions.length))}
               </span>
@@ -641,7 +606,7 @@ export default function PalettePanel({
                     key={region.regionId}
                     type="button"
                     onClick={() => removeRegionFromSelection(region.regionId)}
-                    className="h-5 w-5 rounded-md border-2 border-amber-400 shadow-sm transition-transform hover:scale-110"
+                    className="h-5 w-5 rounded-md border-2 border-amber-400 transition-transform hover:scale-110"
                     style={{ backgroundColor: `#${hex}` }}
                     title={`#${hex} (${region.pixelCount}px) — ${t("palette_multi_select_click_remove")}`}
                   />
@@ -718,86 +683,6 @@ export default function PalettePanel({
         layerOrder={selectedLutInfo?.layer_order ?? "Top2Bottom"}
         baseChannelIdx={selectedLutInfo?.base_channel_idx ?? 0}
         onClose={() => setRecipeDialogOpen(false)}
-        onApplied={(response, recipe, nextLayers, nextLayerHeightMm, virtualMaterials) => {
-          const activeRegionIds = activeRecipeRegionIds;
-          // Persist the virtual_materials declared at apply time alongside
-          // the recipe. ``submitGenerate`` later forwards
-          // ``state.recipe_overrides`` verbatim to ``/generate``; dropping
-          // virtuals here makes the worker pipeline unable to extend the
-          // palette, so S07 emits no mesh for the virtual-index pixels and
-          // the 3MF loses that filament / object (表现为透明失效 / 方块 /
-          // 3MF 缺对象). Only attach the key when the list is non-empty so
-          // legacy non-virtual overrides keep their existing serialized
-          // shape for recipe bundle round-trips.
-          // 把 apply 时声明的虚拟耗材和 recipe 一起存进 store，后续
-          // ``submitGenerate`` 会原样转发给 ``/generate``；丢掉 virtuals
-          // 会让 worker 无法扩展调色板，S07 为虚拟索引像素生成不出 mesh，
-          // 3MF 里也缺少对应的耗材 / 对象。只在非空时带 key，以免污染旧
-          // recipe bundle 的序列化格式。
-          const clonedVirtuals = virtualMaterials.map((material) => ({
-            name: material.name,
-            hex: material.hex,
-          }));
-          useConverterStore.setState((state) => ({
-            previewImageUrl: normalizeResourceUrl(response.preview_url) ?? response.preview_url,
-            previewBaseImageUrl: normalizeResourceUrl(response.preview_url) ?? response.preview_url,
-            previewGlbUrl: response.preview_glb_url
-              ? normalizeResourceUrl(response.preview_glb_url)
-              : state.previewGlbUrl,
-            color_layers: Math.max(state.color_layers ?? 0, nextLayers),
-            layer_height_mm: nextLayerHeightMm,
-            recipe_overrides: [
-              ...state.recipe_overrides.filter(
-                (item) => !activeRegionIds.includes(item.region_id),
-              ),
-              ...activeRegionIds.map((regionId) => ({
-                region_id: regionId,
-                recipe: [...recipe],
-                layer_order: selectedLutInfo?.layer_order ?? "Top2Bottom",
-                ...(clonedVirtuals.length > 0
-                  ? {
-                      virtual_materials: clonedVirtuals.map((material) => ({
-                        ...material,
-                      })),
-                    }
-                  : {}),
-              })),
-            ],
-            lutMatchMode: "predictive",
-            lutMatchInfo: {
-              ...(state.lutMatchInfo ?? {}),
-              match_mode: "predictive",
-              runtime_mode_key: response.runtime_mode_key ?? null,
-              source: response.source,
-              override: true,
-            },
-            // Invalidate the cached per-layer preview images so the next
-            // hover / ActionBar render re-fetches against the post-apply
-            // ``material_matrix``. Without this the stale pre-apply
-            // layer list survives (it was sized to the original
-            // ``color_layers``) and only the layers the override touched
-            // look fresh — users see it as "分层预览只显示更改配方的那几
-            // 层". Store-level ``applyCustomRecipeOverride`` already does
-            // this via ``INVALIDATE_LAYER_IMAGES_AFTER_REPLACE``; the
-            // dialog-driven path must stay consistent.
-            // 刷新分层预览缓存：apply 后 material_matrix 的层数和内容都会
-            // 变，继续沿用旧的 layerImages 会出现 "只显示更改配方的层，
-            // 其它灰"。store 的 applyCustomRecipeOverride 本来就会通过
-            // INVALIDATE_LAYER_IMAGES_AFTER_REPLACE 做同样的事，dialog
-            // 路径也必须保持一致。
-            layerImages: [] as typeof state.layerImages,
-            layerImagesSourceKey: null,
-            materialDynamicRecipes: response.material_dynamic_recipes ?? [],
-            materialLayerBenefitCurve:
-              response.material_layer_benefit_curve ?? [],
-            materialLayerBenefitScope:
-              response.material_layer_benefit_scope ??
-              "all_printable_pixels",
-            materialLayerBenefitPixelCount:
-              response.material_layer_benefit_pixel_count ?? 0,
-          }));
-          useConverterStore.getState()._pollAsyncGlb();
-        }}
       />
     </div>
   );

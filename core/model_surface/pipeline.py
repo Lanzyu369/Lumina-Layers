@@ -36,6 +36,7 @@ from core.model_surface.types import (
     ModelSurfaceError,
     SurfaceFootprint,
 )
+from core.model_surface.validation import prepare_surface_base_for_export
 from core.pipeline.preview_color_utils import resolve_material_preview
 
 
@@ -126,11 +127,15 @@ def build_surface_overlay_scene(
         model_transform,
         _copy_scene=False,
     )
-    return orient_overlay_scene_for_print(
+    print_overlay = orient_overlay_scene_for_print(
         transformed_overlay,
         face_orientation,
         _copy_scene=False,
     )
+    print_overlay.scene.geometry["surface_base"] = prepare_surface_base_for_export(
+        print_overlay.scene.geometry["surface_base"],
+    )
+    return print_overlay
 
 
 def _build_pattern_scene(
@@ -452,6 +457,16 @@ def _resolve_surface_display_stack(
         raise ModelSurfaceError("Converter display layer heights must be positive and finite.")
 
     face_orientation = str(ctx.get("bambu_face_orientation", "down") or "down").lower()
+    if ctx.get("voxel_z_edges") is not None:
+        from core.layered_z import validate_layer_z_edges
+
+        edges = validate_layer_z_edges(ctx["voxel_z_edges"], full_matrix.shape[0])
+        widths = np.diff(edges)
+        display_widths = (
+            widths[:display_layer_count] if face_orientation == "down" else widths[-display_layer_count:]
+        )
+        if np.any(display_widths != 1):
+            raise ModelSurfaceError("Converter display layers must retain their individual Z intervals.")
     if face_orientation == "down":
         # Reverse only the display stack so its viewing layer faces outward
         # while the pattern is embedded. The final rigid rotation of the

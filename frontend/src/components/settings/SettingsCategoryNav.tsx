@@ -1,4 +1,13 @@
 import { cx } from "../ui/panelPrimitives";
+import { primaryNavTabClass } from "../widget/navTabStyles";
+import { AdjustmentsHorizontalIcon, Cog6ToothIcon, PrinterIcon, CircleStackIcon } from "@heroicons/react/24/outline";
+
+const categoryIcons = {
+  device: PrinterIcon,
+  general: Cog6ToothIcon,
+  conversion: AdjustmentsHorizontalIcon,
+  maintenance: CircleStackIcon,
+};
 
 export type SettingsCategoryId =
   | "device"
@@ -33,10 +42,11 @@ export default function SettingsCategoryNav({
     <nav
       aria-label={ariaLabel}
       data-testid="settings-category-nav"
-      className="dock-scrollbar flex min-w-0 gap-2 overflow-x-auto rounded-[24px] border border-slate-200/75 bg-slate-100/65 p-2 dark:border-slate-700/75 dark:bg-slate-900/55 lg:sticky lg:top-0 lg:flex-col lg:self-start lg:overflow-visible"
+      className="settings-sidebar dock-scrollbar flex min-h-0 min-w-0 gap-1 overflow-x-auto border-b panel-divider p-3 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:overscroll-y-contain sm:border-b-0 sm:border-r sm:py-6"
     >
       {categories.map((category) => {
         const active = category.id === activeCategory;
+        const Icon = categoryIcons[category.id];
         return (
           <button
             key={category.id}
@@ -47,17 +57,14 @@ export default function SettingsCategoryNav({
             aria-controls={`settings-category-panel-${category.id}`}
             onClick={() => onChange(category.id)}
             className={cx(
-              "min-h-11 shrink-0 rounded-[18px] border px-3.5 py-2.5 text-left outline-none transition-all duration-200 focus:ring-4 focus:ring-[var(--focus-ring)] lg:w-full",
-              active
-                ? "border-blue-300 bg-white text-slate-900 shadow-[var(--shadow-control)] dark:border-blue-500/55 dark:bg-slate-900 dark:text-slate-50"
-                : "border-transparent text-slate-600 hover:border-slate-200/80 hover:bg-white/65 hover:text-slate-900 dark:text-slate-300 dark:hover:border-slate-700/80 dark:hover:bg-slate-900/75 dark:hover:text-slate-50",
+              primaryNavTabClass(active, false),
+              "flex min-h-11 items-center gap-3 text-left sm:w-full",
+              active && "bg-[var(--nav-tab-selected-bg)]",
             )}
           >
-            <span className="block whitespace-nowrap text-sm font-semibold">
+            <Icon aria-hidden="true" className="h-5 w-5 shrink-0" />
+            <span className="block whitespace-nowrap text-sm font-medium">
               {category.label}
-            </span>
-            <span className="mt-1 hidden text-xs leading-5 text-slate-500 dark:text-slate-400 lg:block">
-              {category.description}
             </span>
           </button>
         );

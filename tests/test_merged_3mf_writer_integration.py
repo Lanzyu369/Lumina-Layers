@@ -24,7 +24,6 @@ import pytest
 import trimesh
 
 from config import TEMP_DIR
-from core.errors import WipeTowerLayoutError
 from utils.bambu_3mf_writer import (
     export_scene_with_bambu_metadata,
     read_wipe_tower_placement_warnings,
@@ -726,7 +725,7 @@ class TestMergedWriterBambuCompatibility:
             for path in (src1, src2, Path(out_path)):
                 path.unlink(missing_ok=True)
 
-    def test_impossible_merged_layout_rejects_colliding_export(
+    def test_impossible_merged_layout_exports_with_manual_warning(
         self, tmp_path: Path,
     ) -> None:
         source = _make_source_3mf(
@@ -746,16 +745,16 @@ class TestMergedWriterBambuCompatibility:
         out_path = tmp_path / "no-fit-merged.3mf"
 
         try:
-            with pytest.raises(
-                WipeTowerLayoutError, match="cannot fit the model and wipe tower",
-            ):
-                MergedBambu3MFWriter().write(
-                    [item],
-                    out_path,
-                    plate_width_mm=180.0,
-                    plate_depth_mm=180.0,
-                )
-            assert not out_path.exists()
+            MergedBambu3MFWriter().write(
+                [item], out_path, plate_width_mm=180.0, plate_depth_mm=180.0,
+            )
+            assert out_path.exists()
+            assert read_wipe_tower_placement_warnings(out_path) == ["wipe_tower_manual_adjustment_required"]
+            with zipfile.ZipFile(out_path) as package:
+                placement = json.loads(package.read("Metadata/lumina_wipe_tower_placement.json"))
+            assert placement["requires_manual_adjustment"] is True
+            assert placement["placement_applied"] is False
+            assert placement["adapted"] is False
         finally:
             source.unlink(missing_ok=True)
             Path(out_path).unlink(missing_ok=True)

@@ -1,11 +1,11 @@
 import { useState, useRef, useCallback } from "react";
 import { useI18n } from "../../i18n/context";
 import { isShareCardFile } from "../../recipe/importFlow";
+import { ArrowPathIcon, PlusIcon } from "@heroicons/react/24/outline";
+import Button from "./Button";
+import { useApplicationMenuCommand } from "../../integrations/applicationMenu";
 
 const VISIBLE_BATCH_FILE_LIMIT = 40;
-const SINGLE_PREVIEW_ACTION_BUTTON_CLASS =
-  "min-h-9 rounded-xl border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-[color:var(--surface-panel-strong)] dark:text-slate-200";
-
 interface UnifiedUploaderProps {
   /** 当前单图模式的预览 URL */
   singlePreview?: string;
@@ -40,6 +40,9 @@ export default function UnifiedUploader({
   const inputRef = useRef<HTMLInputElement>(null);
   const addMoreInputRef = useRef<HTMLInputElement>(null);
   const acceptedFormats = onShareCardDetected ? `${accept},.json` : accept;
+  useApplicationMenuCommand('import', () => {
+    (isBatchMode ? addMoreInputRef.current : inputRef.current)?.click();
+  });
 
   /**
    * Check files for share cards before passing to normal handler.
@@ -159,7 +162,7 @@ export default function UnifiedUploader({
 
   const borderClass = isDragging
     ? "border-blue-500 bg-blue-500/10"
-    : "border-slate-300 dark:border-slate-600 border-dashed";
+    : "border-slate-300/80 dark:border-slate-600/80 border-dashed";
 
   // BatchMode: file list + "add more" area
   if (isBatchMode && batchFiles.length > 0) {
@@ -173,29 +176,30 @@ export default function UnifiedUploader({
           {t("upload_file_count").replace("{count}", String(batchFiles.length))}
         </p>
 
-        {/* File list */}
+        {/* File list: plain rows, hairlines instead of a box per file */}
         <ul
-          className="flex max-h-64 flex-col gap-1 overflow-y-auto pr-1"
+          className="flex max-h-64 flex-col overflow-y-auto pr-1"
           aria-label={t("upload_file_list_label")}
         >
           {visibleBatchFiles.map((file, index) => (
             <li
               key={`${file.name}-${index}`}
-              className="flex items-center justify-between rounded-2xl border border-transparent bg-slate-100 px-2 py-1 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              className="flex items-center justify-between gap-2 border-t border-[color:var(--surface-divider)] px-2 py-1.5 text-sm text-slate-700 first:border-t-0 dark:text-slate-200"
             >
-              <span className="truncate mr-2">{file.name}</span>
+              <span className="truncate">{file.name}</span>
               <button
                 type="button"
                 aria-label={t("upload_delete_file").replace("{name}", file.name)}
                 onClick={() => onBatchFileRemove(index)}
-                className="shrink-0 text-slate-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                className="ghost-control shrink-0 rounded-md p-1 text-slate-400"
+                data-tone="danger"
               >
                 ✕
               </button>
             </li>
           ))}
           {hiddenBatchFileCount > 0 && (
-            <li className="rounded-2xl border border-dashed border-slate-300 px-2 py-1 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
+            <li className="border-t border-[color:var(--surface-divider)] px-2 py-1.5 text-xs text-slate-500 dark:text-slate-400">
               {t("upload_file_list_truncated").replace(
                 "{count}",
                 String(hiddenBatchFileCount),
@@ -217,7 +221,7 @@ export default function UnifiedUploader({
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
-          className={`flex min-h-[60px] items-center justify-center rounded-2xl border-2 cursor-pointer transition-colors ${borderClass}`}
+          className={`flex min-h-[60px] items-center justify-center rounded-[10px] border-2 cursor-pointer transition-colors ${borderClass}`}
         >
           <input
             ref={addMoreInputRef}
@@ -251,7 +255,7 @@ export default function UnifiedUploader({
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleReplaceDrop}
-          className={`flex min-h-[120px] items-center justify-center rounded-2xl border-2 cursor-pointer transition-colors ${borderClass}`}
+          className={`flex min-h-[120px] items-center justify-center rounded-[10px] border-2 cursor-pointer transition-colors ${borderClass}`}
         >
           <input
             ref={inputRef}
@@ -261,31 +265,31 @@ export default function UnifiedUploader({
             className="hidden"
             aria-hidden="true"
           />
-          <div className="flex w-full items-center justify-center rounded-2xl p-2 bg-[length:16px_16px] bg-[image:linear-gradient(45deg,_#e0e0e0_25%,_transparent_25%),linear-gradient(-45deg,_#e0e0e0_25%,_transparent_25%),linear-gradient(45deg,_transparent_75%,_#e0e0e0_75%),linear-gradient(-45deg,_transparent_75%,_#e0e0e0_75%)] dark:bg-[image:linear-gradient(45deg,_#374151_25%,_transparent_25%),linear-gradient(-45deg,_#374151_25%,_transparent_25%),linear-gradient(45deg,_transparent_75%,_#374151_75%),linear-gradient(-45deg,_transparent_75%,_#374151_75%)] bg-[position:0_0,0_8px,8px_-8px,-8px_0px]">
+          <div className="flex w-full items-center justify-center rounded-[10px] p-2 bg-[length:16px_16px] bg-[image:linear-gradient(45deg,_#e0e0e0_25%,_transparent_25%),linear-gradient(-45deg,_#e0e0e0_25%,_transparent_25%),linear-gradient(45deg,_transparent_75%,_#e0e0e0_75%),linear-gradient(-45deg,_transparent_75%,_#e0e0e0_75%)] dark:bg-[image:linear-gradient(45deg,_#374151_25%,_transparent_25%),linear-gradient(-45deg,_#374151_25%,_transparent_25%),linear-gradient(45deg,_transparent_75%,_#374151_75%),linear-gradient(-45deg,_transparent_75%,_#374151_75%)] bg-[position:0_0,0_8px,8px_-8px,-8px_0px]">
             <img
               src={singlePreview}
               alt={t("common_preview_alt")}
-              className="block max-w-full rounded-2xl object-contain"
+              className="block max-w-full rounded-[10px] object-contain"
               style={{ maxHeight: "clamp(10rem, 22vh, 18rem)" }}
             />
           </div>
         </div>
 
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <button
-            type="button"
+          <Button
+            label={t("upload_replace_current")}
+            variant="secondary"
+            size="sm"
+            leadingIcon={<ArrowPathIcon className="size-4" />}
             onClick={handleClick}
-            className={SINGLE_PREVIEW_ACTION_BUTTON_CLASS}
-          >
-            {t("upload_replace_current")}
-          </button>
-          <button
-            type="button"
+          />
+          <Button
+            label={t("upload_add_more")}
+            variant="secondary"
+            size="sm"
+            leadingIcon={<PlusIcon className="size-4" />}
             onClick={handleAddMoreClick}
-            className={SINGLE_PREVIEW_ACTION_BUTTON_CLASS}
-          >
-            {t("upload_add_more")}
-          </button>
+          />
           <input
             ref={addMoreInputRef}
             type="file"
@@ -314,7 +318,7 @@ export default function UnifiedUploader({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`flex min-h-[120px] items-center justify-center rounded-2xl border-2 cursor-pointer transition-colors ${borderClass}`}
+      className={`flex min-h-[120px] items-center justify-center rounded-[10px] border-2 px-4 py-5 text-center cursor-pointer transition-colors ${borderClass}`}
     >
       <input
         ref={inputRef}
@@ -325,8 +329,9 @@ export default function UnifiedUploader({
         className="hidden"
         aria-hidden="true"
       />
-      <span className="text-sm text-slate-500 dark:text-slate-400 select-none">
-        {t("upload_unified_hint")}
+      <span className="min-w-0 text-sm leading-relaxed text-slate-500 dark:text-slate-400 select-none">
+        <span className="block text-balance">{t("upload_unified_hint")}</span>
+        <span className="mt-1 block text-balance">{t("upload_unified_multiselect_hint")}</span>
       </span>
     </div>
   );

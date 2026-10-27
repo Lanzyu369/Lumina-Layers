@@ -10,9 +10,13 @@
  * V3: 可选的版本化创意工坊恢复来源。
  * V4: Editable local recipes without application content digests.
  * V4: 可直接编辑的本地配方，不包含应用自建内容摘要。
+ * V5: Portable authoritative editor checkpoint with spatial masks.
+ * V5: 包含真实空间掩码的可携带权威编辑快照。
  */
 
 import type {
+  CoatingMaterialReference,
+  BackingOutput,
   DynamicMaterialRecipe,
   FridgeMagnetItem,
   MaterialLayerBenefitPoint,
@@ -74,6 +78,7 @@ export interface ConverterRecipeGeometry {
   backing_infill_density_percent?: number;
   structure_mode: string;
   separate_backing: boolean;
+  backing_output?: BackingOutput;
   add_loop: boolean;
   loop_width: number;
   loop_length: number;
@@ -105,13 +110,14 @@ export interface ConverterRecipeCloisonne {
 export interface ConverterRecipeCoating {
   enable_coating: boolean;
   coating_height_mm: number;
+  /** Historical selection retained for reading old recipes; ignored on restore. */
+  coating_material?: CoatingMaterialReference | null;
 }
 
 export interface ConverterRecipeColorOps {
   /**
-   * Global whole-image color mappings only. Session-scoped spatial edits
-   * are intentionally not serialized in the recipe schema.
-   * 仅保存全图颜色映射；会话级空间局部改色不写入配方 schema。
+   * Global mappings; local editable pixels and masks live in asset.editor.
+   * 全图映射；局部可编辑像素及掩码由 asset.editor 保存。
    */
   replacement_regions: Array<{
     quantized_hex: string;
@@ -201,6 +207,8 @@ export interface ConverterRecipeDevice {
   build_plate_id?: string;
   /** Device-local template ID; import the native project on each device. */
   custom_3mf_template_id?: string | null;
+  /** Exact native filament presets, scoped to this recipe's hardware target. */
+  native_filament_profiles?: Record<string, string>;
   /** Preserve the slicer's base-layer height modifier choice. */
   enable_base_layer_height_modifier?: boolean;
   /** Allow Lumina to adapt the model and wipe-tower layout during export. */
@@ -291,6 +299,7 @@ export interface RecipeCover {
 export interface RecipeAssets {
   primary: AssetEntry;
   heightmap?: AssetEntry;
+  editor?: AssetEntry;
 }
 
 export interface RecipeCompat {
@@ -317,5 +326,6 @@ export interface LuminaRecipe {
 // ========== Constants ==========
 
 export const RECIPE_FORMAT = "lumina-recipe" as const;
-export const RECIPE_SCHEMA_VERSION = 4;
+export const RECIPE_SCHEMA_VERSION = 5;
+export const EDITOR_PROJECT_MAX_BYTES = 512 * 1024 * 1024;
 export const WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES = 1024 * 1024;

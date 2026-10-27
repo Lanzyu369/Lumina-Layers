@@ -643,7 +643,7 @@ export default function MaterialSolverCacheStatusCard({
                     ? t("basic_material_cache_building_label")
                     : t("basic_material_cache_build_button")
                 }
-                variant="primary"
+                variant="secondary"
                 disabled={
                   materialDirectoryNames.length === 0 || isBuilding
                 }
@@ -732,6 +732,7 @@ export default function MaterialSolverCacheStatusCard({
                 loading={isRuntimeDeleting}
                 onClick={handleDeleteRuntime}
                 className="px-3 text-xs"
+                tone="danger"
               />
               <Button
                 label={t(
@@ -754,7 +755,7 @@ export default function MaterialSolverCacheStatusCard({
                   ? t("basic_material_runtime_building_label")
                   : t("basic_material_runtime_build_button")
               }
-              variant="primary"
+              variant="secondary"
               disabled={materialDirectoryNames.length === 0 || isRuntimeBuilding}
               loading={isRuntimeBuilding}
               onClick={handleBuildRuntime}

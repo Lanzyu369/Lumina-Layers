@@ -8,7 +8,7 @@ import { hexToRgb, sortByColorDistance } from "../../utils/colorUtils";
 import { isCardModeAvailable } from "../../utils/cardUtils";
 import type { LutColorEntry, LutColorsCard } from "../../api/types";
 import { useI18n } from "../../i18n/context";
-import { cx, cardClass, wellPadClass } from "../ui/panelPrimitives";
+import { cx, cardClass, compactFieldClass, wellClass, wellPadClass } from "../ui/panelPrimitives";
 import MaterialColorPicker from "./MaterialColorPicker";
 
 export type HueCategory =
@@ -119,8 +119,8 @@ const ColorSwatch = memo(function ColorSwatch({
       onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick(); }}
       className={`relative flex w-full min-w-0 flex-col items-center rounded-[10px] border px-1 py-1.5 transition-colors ${
         isTarget
-          ? "border-amber-400 bg-amber-400/10 ring-2 ring-amber-400/30"
-          : "border-transparent hover:border-slate-300 hover:bg-slate-100/70 dark:hover:border-slate-600 dark:hover:bg-slate-900/75"
+          ? "border-amber-400 bg-amber-400/10"
+          : "border-transparent hover:border-[color:var(--surface-card-outline)] hover:bg-[var(--nav-chip-hover)]"
       }`}
       title={`${entry.hex} · ${isFav ? t("lut_grid_dblclick_unfav") : t("lut_grid_dblclick_fav")}`}
     >
@@ -219,7 +219,7 @@ function LutColorGridInner() {
           <p className="mb-2 text-[clamp(0.65rem,0.8vw,0.7rem)] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">{title}</p>
         )}
         <div
-          className="panel-well rounded-[10px] p-2"
+          className={cx(wellClass, "p-2")}
           style={{
             display: "grid",
             gridTemplateColumns: `repeat(${cols}, ${CARD_CELL_SIZE})`,
@@ -240,7 +240,7 @@ function LutColorGridInner() {
                 onClick={() => onColorClick(c.hex)}
                 className={`cursor-pointer rounded-[8px] border transition-colors ${
                   isTarget
-                    ? "border-amber-500 ring-1 ring-amber-500"
+                    ? "border-amber-500"
                     : "border-transparent hover:border-slate-400"
                 }`}
                 style={{
@@ -406,10 +406,10 @@ function LutColorGridInner() {
       ) : lutColors.length === 0 ? (
         <p className="py-4 text-sm text-slate-500 dark:text-slate-400">{t("lut_grid_select_lut")}</p>
       ) : (
-        <div className={cx(cardClass, "flex h-full flex-col gap-3 px-4 py-4")}>
+        <div className={cx(cardClass, "panel-default-surface flex h-full flex-col gap-3 px-4 py-4")}>
           {/* Confirmation preview bar */}
           {pendingReplacement && (
-            <div className={cx(wellPadClass, "flex flex-col gap-2 px-3 py-2")}>
+            <div className={cx(wellPadClass, "flex flex-col gap-2")}>
               <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                 {/* Source color swatch(es) */}
                 <div className="flex min-w-0 flex-wrap items-center gap-0.5">
@@ -456,7 +456,7 @@ function LutColorGridInner() {
                 <button
                   type="button"
                   onClick={() => confirmReplacement()}
-                  className="rounded-full bg-blue-600 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-blue-500"
+                  className="action-control rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors"
                 >
                   {t("replace_confirm_btn")}
                 </button>
@@ -464,7 +464,7 @@ function LutColorGridInner() {
                 <button
                   type="button"
                   onClick={() => setPendingReplacement(null)}
-                  className="rounded-full border border-slate-300/80 bg-slate-100/85 px-2.5 py-1 text-[10px] font-medium text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-900"
+                  className="ghost-control rounded-full px-2.5 py-1 text-[10px] font-medium text-slate-700 dark:text-slate-200"
                 >
                   {t("replace_cancel_btn")}
                 </button>
@@ -497,7 +497,7 @@ function LutColorGridInner() {
             placeholder={t("lut_grid_search_placeholder_short")}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            className="w-full rounded-[10px] border border-slate-200/80 bg-slate-100/78 px-3 py-2 text-[clamp(0.65rem,0.85vw,0.75rem)] text-slate-700 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100"
+            className={cx(compactFieldClass, "text-[clamp(0.65rem,0.85vw,0.75rem)]")}
           />
 
           {/* Hue filter bar + mode toggle */}
@@ -508,11 +508,10 @@ function LutColorGridInner() {
                   key={f.key}
                   type="button"
                   onClick={() => setHueFilter(f.key)}
-                  className={`flex items-center gap-0.5 rounded-full border px-2 py-1 text-[clamp(0.55rem,0.75vw,0.625rem)] transition-colors ${
-                    hueFilter === f.key
-                      ? "border-blue-300 bg-blue-500/12 text-blue-700 dark:border-blue-700 dark:bg-blue-500/16 dark:text-blue-300"
-                      : "border-slate-200/80 bg-slate-100/70 text-slate-500 hover:border-slate-300 dark:border-slate-700/80 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:border-slate-600"
+                  className={`ghost-control flex items-center gap-0.5 rounded-full px-2 py-1 text-[clamp(0.55rem,0.75vw,0.625rem)] ${
+                    hueFilter === f.key ? "" : "text-slate-500 dark:text-slate-400"
                   }`}
+                  data-active={hueFilter === f.key ? "true" : undefined}
                 >
                   {f.key === "fav" ? (
                     <span className="text-yellow-400 text-[9px]">★</span>
@@ -530,22 +529,20 @@ function LutColorGridInner() {
                   <button
                     type="button"
                     onClick={() => setPaletteMode("swatch")}
-                    className={`rounded-full border px-2 py-1 text-[clamp(0.55rem,0.75vw,0.625rem)] transition-colors ${
-                      paletteMode === "swatch"
-                        ? "border-blue-300 bg-blue-500/12 text-blue-700 dark:border-blue-700 dark:bg-blue-500/16 dark:text-blue-300"
-                        : "border-slate-200/80 bg-white/65 text-slate-500 hover:border-slate-300 dark:border-slate-700/80 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:border-slate-600"
+                    className={`ghost-control rounded-full px-2 py-1 text-[clamp(0.55rem,0.75vw,0.625rem)] ${
+                      paletteMode === "swatch" ? "" : "text-slate-500 dark:text-slate-400"
                     }`}
+                    data-active={paletteMode === "swatch" ? "true" : undefined}
                   >
                     {t("lut_grid_mode_swatch")}
                   </button>
                   <button
                     type="button"
                     onClick={() => setPaletteMode("card")}
-                    className={`rounded-full border px-2 py-1 text-[clamp(0.55rem,0.75vw,0.625rem)] transition-colors ${
-                      paletteMode === "card"
-                        ? "border-blue-300 bg-blue-500/12 text-blue-700 dark:border-blue-700 dark:bg-blue-500/16 dark:text-blue-300"
-                        : "border-slate-200/80 bg-white/65 text-slate-500 hover:border-slate-300 dark:border-slate-700/80 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:border-slate-600"
+                    className={`ghost-control rounded-full px-2 py-1 text-[clamp(0.55rem,0.75vw,0.625rem)] ${
+                      paletteMode === "card" ? "" : "text-slate-500 dark:text-slate-400"
                     }`}
+                    data-active={paletteMode === "card" ? "true" : undefined}
                   >
                     {t("lut_grid_mode_card")}
                   </button>

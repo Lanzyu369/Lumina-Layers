@@ -22,6 +22,7 @@ import type { ColorReplacementItem } from "../api/types";
 import { LUMINA_BOX_PRODUCTION_MODEL_ID } from "../api/luminaBoxMaterials";
 import type { WorkshopRecipeSource } from "../workshop/types";
 import { svgHoleCompensationOptions } from "../constants/svgHoleCompensation";
+import { scopedNativeFilamentProfiles } from "../stores/converter/nativeMaterialSelection";
 import {
   cloneDynamicMaterialRecipe,
   cloneMaterialLayerBenefitCurve,
@@ -117,8 +118,8 @@ export function exportConverterRecipe(
   lutPath?: string,
 ): ConverterRecipe {
   // Merge global-only colorRemapMap entries into global replacement_regions.
-  // Spatial region edits remain session-scoped and are never serialized here.
-  // 这里只合并全局替色映射；空间局部改色仅存在于当前会话。
+  // Local edits use the authoritative checkpoint embedded beside the source.
+  // 这里只合并全局映射；局部编辑通过原图旁的权威快照保存。
   let mergedReplacements: ColorReplacementItem[] = [
     ...state.replacement_regions,
   ];
@@ -149,6 +150,7 @@ export function exportConverterRecipe(
   const isMaterialArchiveSource = isMaterialArchiveSourceVersion(
     state.source_version,
   );
+  const nativeFilamentProfiles = scopedNativeFilamentProfiles(state, settings);
   const hasDynamicResult =
     state.materialDynamicRecipes.length > 0 ||
     state.materialLayerBenefitCurve.length > 0;
@@ -238,6 +240,7 @@ export function exportConverterRecipe(
         state.backing_infill_density_percent,
       structure_mode: state.structure_mode,
       separate_backing: state.separate_backing,
+      backing_output: state.backingOutput,
       add_loop: state.add_loop,
       loop_width: state.loop_width,
       loop_length: state.loop_length,
@@ -326,6 +329,7 @@ export function exportConverterRecipe(
       nozzle_size: settings.nozzleSize,
       device_profile_id: settings.deviceProfileId,
       custom_3mf_template_id: settings.custom3mfTemplateId,
+      ...(nativeFilamentProfiles ? { native_filament_profiles: nativeFilamentProfiles } : {}),
       ...(settings.buildPlateId
         ? { build_plate_id: settings.buildPlateId }
         : {}),
@@ -382,11 +386,15 @@ export async function buildFullRecipe(
 export async function buildRecipeAssets(
   primaryFile: File,
   heightmapFile?: File | null,
+  editorFile?: File | null,
 ): Promise<RecipeAssets> {
   const primary = await buildAssetEntry(primaryFile);
   const assets: RecipeAssets = { primary };
   if (heightmapFile) {
     assets.heightmap = await buildAssetEntry(heightmapFile);
+  }
+  if (editorFile) {
+    assets.editor = await buildAssetEntry(editorFile);
   }
   return assets;
 }
@@ -422,6 +430,7 @@ export async function buildCoverImage(
 
   // 3) Compute footer layout (QR size, font, wrapped lines) for the canvas
   //    width using a real canvas measurer so caption shrink/wrap is accurate.
+  await document.fonts.load('400 14px "MiSans"');
   const measureCanvas = document.createElement("canvas");
   const measureCtx = measureCanvas.getContext("2d");
   if (!measureCtx) {

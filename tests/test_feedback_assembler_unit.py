@@ -441,7 +441,7 @@ def test_collect_sync_attachments_preserves_legacy_multi_lut_context(
 ) -> None:
     """Multi-select legacy LUT reports keep every selected LUT.
 
-    传统多选 LUT 的反馈包必须保留所有选中 LUT。
+    经典多选 LUT 的反馈包必须保留所有选中 LUT。
     """
 
     repo_root = tmp_path / "repo"
@@ -502,7 +502,7 @@ def test_collect_sync_attachments_preserves_missing_legacy_multi_lut_item(
 ) -> None:
     """Mixed existing/missing legacy LUTs keep per-item diagnostics.
 
-    传统多选 LUT 部分缺失时保留逐项诊断，不退化为收集崩溃。
+    经典多选 LUT 部分缺失时保留逐项诊断，不退化为收集崩溃。
     """
 
     repo_root = tmp_path / "repo"

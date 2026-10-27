@@ -1,8 +1,8 @@
 # lumina-svg-core
 
 > Historical 0.3.0 source and benchmark snapshot. Lumina Studio now installs
-> the independent repository's [0.3.1 release](https://github.com/lumina-layer-studio/lumina-svg-core/releases/tag/v0.3.1)
-> through `requirements-native-svg.txt`. Engine development and wheel builds
+> the independent repository's [0.3.2 PyPI release](https://pypi.org/project/lumina-svg-core/0.3.2/)
+> through `requirements.txt`. Engine development and wheel builds
 > belong to that repository; this snapshot remains for existing benchmark
 > fixtures and compatibility checks.
 

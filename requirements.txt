@@ -1,3 +1,7 @@
+--only-binary=fatcat-metadata,neroued-3mf,lumina-svg-core,neroued-vectorizer
+# Public precompiled Production writer wheels (no local SDK build required).
+--find-links https://github.com/MOVIBALE/neroued_3mf/releases/expanded_assets/fatcat-production-1
+
 pillow-heif>=0.18.0
 rawpy>=0.21.0
 python-multipart
@@ -15,7 +19,7 @@ svgelements>=1.9.0
 shapely>=2.1.0
 mapbox-earcut
 # Required native SVG parse/clip runtime from the pinned standalone release.
--r requirements-native-svg.txt
+lumina-svg-core==0.3.4
 # Exact indexed triangulation for slicer-safe vector solids.
 manifold3d>=3.4.0
 # FastAPI backend dependencies
@@ -30,9 +34,9 @@ psutil>=5.9.8
 # Vectorizer (C++ image-to-SVG)
 neroued-vectorizer>=0.1.1
 # 3MF writer (C++ streaming 3MF with Production Extension).
-# Python 3.12+ uses the exact downstream wheel built from the pinned
-# neroued-3mf v0.4.0 source plus Fat Cat's B7 multi-group Production patch.
-# Older runtimes keep the stock writer for legacy development paths.
-neroued-3mf==0.4.0+fatcat.b7; python_version >= "3.12"
-neroued-3mf>=0.4.0,<0.5.0; python_version < "3.12"
--r requirements-3mf-native.txt
+# CPython 3.12-3.14 uses public Production wheels, without consumer patches.
+neroued-3mf==0.4.0+fatcat.production.1
+# Public SDK: https://github.com/MOVIBALE/fatcat-metadata
+# Release source: acdf8abdf00560759ecdf660eb080bb2083fd5bb.
+# Preserves inherited filament IDs required by startup G-code.
+fatcat-metadata==0.1.2

@@ -190,7 +190,7 @@ describe('Widget Drag Performance Property-Based Tests', () => {
           fc.integer({ min: WIDGET_WIDTH, max: 5000 }),
           (widgets, edge, containerWidth) => {
             const positions = computeStackPositions(widgets, edge, containerWidth);
-            const expectedX = edge === 'left' ? 0 : containerWidth - WIDGET_WIDTH;
+            const expectedX = edge === 'left' ? STACK_GAP : Math.max(0, containerWidth - WIDGET_WIDTH - STACK_GAP);
 
             for (const [, pos] of positions) {
               expect(pos.x).toBe(expectedX);

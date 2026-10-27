@@ -25,6 +25,47 @@ from core.native_svg_adapter import (
 )
 
 
+@pytest.mark.parametrize("width,tolerance", [(0.0, 0.02), (float("nan"), 0.02), (20.0, 0.0), (20.0, float("nan"))])
+def test_native_clipped_stroke_keeps_physical_validation(
+    tmp_path, width: float, tolerance: float,
+) -> None:
+    source = tmp_path / "clipped.svg"
+    source.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+        '<defs><clipPath id="clip"><rect width="10" height="10"/></clipPath></defs>'
+        '<rect width="20" height="20" fill="red" clip-path="url(#clip)"/></svg>',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CoreValidationError) as error:
+        analyze_native_svg(str(source), width, tolerance, expand_stroke_to_fill=True)
+
+    assert error.value.reason_code == "invalid_physical_parameters"
+
+
+def test_published_runtime_analyzes_clipped_curved_stroke_natively(tmp_path) -> None:
+    source = tmp_path / "clipped-curve.svg"
+    source.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+        '<defs><clipPath id="window"><rect x="5" y="5" width="90" height="90"/>'
+        '</clipPath></defs>'
+        '<svg x="0" y="0" width="100" height="100" viewBox="0 0 100 100">'
+        '<path d="M5 50 C25 5 75 95 95 50" fill="none" stroke="#123456" '
+        'stroke-width="4" clip-path="url(#window)"/>'
+        '</svg></svg>',
+        encoding="utf-8",
+    )
+
+    outcome = analyze_native_svg(
+        str(source), 230.0, 0.02, expand_stroke_to_fill=True,
+    )
+
+    assert isinstance(outcome, NativeSvgGeometry), outcome
+    assert outcome.native_version == "0.3.4"
+    assert len(outcome.clipped_shapes) == 1
+    assert outcome.clipped_shapes[0]["geometry"].area > 0.0
+
+
 @pytest.mark.parametrize("coordinates", [
     [(675884046053, 323293585526), (676603618425, 324732730271),
      (676603618421, 324732730263), (675472861842, 322471217105)],

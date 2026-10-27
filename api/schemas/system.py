@@ -128,6 +128,9 @@ class UserSettings(BaseModel):
         description="Instrument diffuser XYZ percentages; all zeros select diffuser-free capture.",
     )
 
+    header_nav_alignment: Literal["center", "left"] = "center"
+    conversion_preferences: dict[str, Any] | None = None
+
     @field_validator("measurement_backing_percent_xyz", mode="before")
     @classmethod
     def validate_measurement_backing_percent_xyz(cls, value: Any) -> list[float]:

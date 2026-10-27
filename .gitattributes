@@ -7,3 +7,6 @@
 
 # Unified diffs require a single context marker on otherwise blank lines.
 native/lumina-svg-core/patches/*.patch -whitespace
+
+# Preserve upstream license bytes, including line endings and final blank lines.
+third_party/interface-assets/*.txt -text -eol whitespace=cr-at-eol,-blank-at-eof

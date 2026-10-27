@@ -31,7 +31,13 @@ REPLACEMENT_REDO_STACK_KEY = "replacement_redo_stack"
 _DEFAULT_MAX_DEPTH = 20
 _DEFAULT_MAX_BYTES = 512 * 1024 * 1024
 
-_SESSION_FIELD_KEYS: tuple[str, ...] = (
+REPLACEMENT_CACHE_METADATA_FIELDS = frozenset({
+    "color_palette", "color_layers", "layer_height_mm",
+    "material_dynamic_layer_info", "original_material_dynamic_layer_info",
+    "material_solver_info", "original_material_solver_info",
+})
+
+REPLACEMENT_SESSION_FIELDS: tuple[str, ...] = (
     "replacement_regions",
     "recipe_overrides",
     "recipe_override_count",
@@ -122,7 +128,7 @@ def snapshot_replacement_state(
     在变更操作前捕获可恢复 checkpoint。
     """
     preview_cache = session_data.get("preview_cache")
-    fields = _SESSION_FIELD_KEYS if session_fields is None else session_fields
+    fields = REPLACEMENT_SESSION_FIELDS if session_fields is None else session_fields
     cloned_fields = {
         key: _clone_value(session_data.get(key))
         for key in fields
@@ -223,7 +229,7 @@ def restore_from_history(
     next_target = [*_stack(session_data, target_key), current]
     next_target = _trim_stack(next_target)
 
-    _restore_checkpoint(
+    restore_replacement_checkpoint(
         session_id,
         store,
         session_data,
@@ -256,7 +262,7 @@ def collect_checkpoint_artifact_paths(session_data: dict[str, Any] | None) -> se
     return paths
 
 
-def _restore_checkpoint(
+def restore_replacement_checkpoint(
     session_id: str,
     store: SessionStore,
     session_data: dict[str, Any],
@@ -264,6 +270,10 @@ def _restore_checkpoint(
     *,
     preserve_selection: bool = False,
 ) -> None:
+    """Restore an editor checkpoint through the shared history state contract.
+
+    按历史恢复的统一状态契约还原编辑快照，供撤销/重做和项目恢复共用。
+    """
     if is_preview_cache_artifact_ref(checkpoint.get("preview_cache_ref")):
         preview_cache = _copy_preview_cache_ref(checkpoint["preview_cache_ref"])
     elif isinstance(checkpoint.get("preview_cache_arrays"), dict):
@@ -299,7 +309,7 @@ def _restore_checkpoint(
             "editor_selection_content_generation",
         )
         if checkpoint.get("kind") == "selection"
-        else _SESSION_FIELD_KEYS
+        else REPLACEMENT_SESSION_FIELDS
     )
     for key in restore_keys:
         if preserve_selection and key in {

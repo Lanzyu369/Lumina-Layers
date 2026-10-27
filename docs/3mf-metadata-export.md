@@ -4,11 +4,11 @@
 
 This guide describes the current 3MF export boundary and where its configuration lives.
 Lumina supplies selected device/material facts, geometry, layout, and explicit product
-process values. FatCat composes slicer project metadata; the patched `neroued-3mf`
+process values. FatCat composes slicer project metadata; the pinned `neroued-3mf`
 writer writes the final package once.
 
 本文说明当前 3MF 导出边界及配置归属。Lumina 提供用户选择的设备和材料事实、几何、
-布局及明确的产品工艺值；FatCat 合成切片器项目元数据，补丁版 `neroued-3mf` 单次写出最终包。
+布局及明确的产品工艺值；FatCat 合成切片器项目元数据，固定版本的 `neroued-3mf` 单次写出最终包。
 
 ## Code entry points / 代码入口
 
@@ -63,21 +63,41 @@ validation stays at the existing SDK, source parser and writer boundaries.
   private package files.
 - **neroued-3mf** owns the one final 3MF package write.
 
-FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`, version
-`0.1.0+lumina.1` (upstream `0.1.0` with the tracked native export patch). Lumina builds from the public
+FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`.
+This branch requires [PyPI 0.1.2](https://pypi.org/project/fatcat-metadata/0.1.2/)
+for native material preflight and inherited filament IDs used by startup G-code.
+Requirements select matching published wheels
+automatically; no SDK checkout, local wheelhouse or C++ compiler is needed.
+Lumina consumes the same public SDK without a downstream patch or version suffix.
+Maintainer builds use the public
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) root
-project at source revision `63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b` and pins
+project at source revision `acdf8abdf00560759ecdf660eb080bb2083fd5bb` and pins
 the writer contract in
 `scripts/fatcat_packaging_contract.py`; build and installation steps are in
 [the desktop setup guide](desktop-electron.md).
 
-FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`，构建版本为
-`0.1.0+lumina.1`（上游 `0.1.0` 加仓库保存的原生导出修正补丁）。
-Lumina 从公开仓库
+FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`。
+本分支需要 [PyPI 0.1.2](https://pypi.org/project/fatcat-metadata/0.1.2/)，
+保留原生耗材继承的 ID，供启动 G-code 使用。
+requirements 自动选择匹配的已发布 wheel，
+无需额外克隆 SDK、准备本地 wheelhouse 或安装 C++ 编译器。
+Lumina 直接使用公共 SDK，不再维护 FatCat 补丁或额外版本后缀。
+维护者从公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) 的根项目构建，
-源码提交固定为 `63326e2d0985cfd4873bbd44684a8a8f0a7b3f0b`，并在
+源码提交固定为 `acdf8abdf00560759ecdf660eb080bb2083fd5bb`，并在
 `scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
 [桌面环境指南](desktop-electron.md)。
+
+The writer uses `neroued-3mf==0.4.0+fatcat.production.1`, built from a fixed
+public source commit without a Lumina patch. Its generic Production APIs are
+submitted in [upstream PR #17](https://github.com/Neroued/neroued_3mf/pull/17).
+The [temporary GitHub Release](https://github.com/MOVIBALE/neroued_3mf/releases/tag/fatcat-production-1)
+provides matching CPython 3.12–3.14 wheels through `requirements.txt`.
+The writer will switch to an official upstream version after acceptance and release.
+
+写包库使用固定公开源码构建的 `neroued-3mf==0.4.0+fatcat.production.1`，
+Lumina 不再维护 writer 补丁。通用 Production 接口已提交上游 PR #17，临时公开
+Release 提供 CPython 3.12～3.14 的预编译包；上游接受并发布后切换官方版本。
 
 The current source pin includes Bambu Studio 02.08.02.61, OrcaSlicer 2.4.2,
 QIDI Studio 02.07.02.60, ElegooSlicer 1.5.3.5, Anycubic Slicer Next macOS
@@ -109,6 +129,26 @@ FatCat 统一写入独立项目预设名称，保留原生来源与已合成的�
 原生 0.20mm 名称时让用户误以为实际层高也是 0.20mm。单件用户模板保留自身预设名称。
 
 ## Current Selection and Composition
+
+Built-in exports use FatCat's `resolve_project_materials` for both preflight and
+final composition. It returns native filament candidates and the plates compatible
+with the complete selection. Ambiguous presets require an explicit user choice;
+an incompatible plate is a configuration error, not an internal server failure.
+Lumina's **Print materials…** action opens the same selection dialog after preview.
+Saving there changes only native preset and plate choices; generation resumes only
+when requested. Generate and batch actions show this dialog when preflight needs
+input, then continue after confirmation. Choices are scoped to the slicer, exact
+device and nozzle, and are included in saved recipes and bug-report context.
+Imported user templates retain their own material tuning and bypass built-in
+selection. Layer heights, speeds, flow and other explicit process overrides stay
+on the existing composition path; preflight does not rewrite them.
+
+内置导出的预检和最终组装共用 FatCat 的原生耗材解析规则，返回候选预设和整套材料
+共同兼容的打印板。多个候选时由用户明确选择，板型不兼容则返回可操作的配置错误。
+预览后可点击「打印耗材…」主动修改；这里保存选择不会立即生成。直接生成或批量
+生成遇到歧义时，也会打开同一窗口，确认后继续。选择按切片软件、具体设备和喷嘴
+隔离，并写入配方及工单复现上下文。导入的用户模板继续保留自身耗材调校；层高、
+速度、流量等明确工艺值仍走已有组装流程，预检不会改写这些值。
 
 Automatic tower placement first preserves the selected native body style. If
 it cannot fit safely, the shared single/batch/puzzle solver may select a

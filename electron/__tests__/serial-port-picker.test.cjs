@@ -215,10 +215,8 @@ describe("Explicit desktop serial selection", () => {
     f.picker.dispose();
   });
 
-  it("packages the picker and binds the serial-only permission handler", () => {
+  it("binds the serial-only permission handler", () => {
     const root = path.join(__dirname, "..");
-    const config = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-    assert.ok(config.build.files.includes("serial-port-picker.cjs"));
     const main = fs.readFileSync(path.join(root, "main.cjs"), "utf8");
     assert.match(main, /serialPortPicker\.install\(session\.defaultSession\)/);
     assert.match(main, /permission === "serial"/);

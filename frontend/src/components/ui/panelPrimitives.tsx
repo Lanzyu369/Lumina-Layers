@@ -6,8 +6,9 @@ export function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
+// Page roots own the native scroll chain; nested lists can still chain into them.
 export const panelSurfaceClass =
-  "panel-surface h-full w-full overflow-auto px-3 py-3 sm:px-5 sm:py-4 lg:px-7 lg:py-5";
+  "panel-surface h-full w-full overflow-auto overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4 lg:px-7 lg:py-5";
 
 export const centeredPanelClass =
   `${panelSurfaceClass}`;
@@ -51,20 +52,57 @@ export const cardDividerClass =
 export const groupHeaderClass =
   "flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400";
 
+/** Settings sections use one continuous tinted surface around their controls. */
+export const settingsGroupClass =
+  "settings-group flex min-w-0 flex-col gap-3 rounded-[10px] bg-[var(--surface-well)] p-3";
+
+export const settingsGroupHeadingClass =
+  "text-sm font-semibold text-slate-800 dark:text-slate-100";
+
 export const workstationFieldLabelClass =
   "text-sm font-medium text-slate-700 dark:text-slate-200";
 
-export const workstationInputClass =
-  "min-h-11 w-full rounded-[10px] border border-slate-200/80 bg-white/82 px-3.5 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 hover:bg-white/90 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100 dark:hover:border-slate-600";
+/** Field shell: filled at rest, boundary appears on hover, blue on focus.
+ * 输入框外壳：静止时只有浅灰底，悬停才出现细边框，聚焦转蓝并加焦点环。 */
+const workstationFieldShellClass =
+  "min-h-11 w-full rounded-[10px] border border-transparent bg-[var(--surface-well)] px-3.5 py-2 text-sm text-slate-800 outline-none transition-all duration-200 hover:border-[color:var(--surface-card-outline)] disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-100";
 
+export const workstationInputClass =
+  `${workstationFieldShellClass} focus:border-blue-400 focus:ring-2 focus:ring-[var(--focus-ring)]`;
+
+/** Picker buttons show a focus ring only for keyboard navigation. */
+export const workstationPickerTriggerClass =
+  `${workstationFieldShellClass} focus-visible:border-blue-400 focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]`;
+
+/** Standalone text input (no min-height, no vertical padding): same field
+ *  treatment for compact search / hex rows. 紧凑输入框，沿用同一套字段样式。 */
+export const compactFieldClass =
+  "w-full rounded-[10px] border border-transparent bg-[var(--surface-well)] px-3 py-2 text-sm text-slate-800 outline-none transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus:border-blue-400 focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-100";
+
+/** Selectable row (checkbox / radio option): borderless at rest and on hover.
+ *  The negative inline margin lets the hover fill extend slightly past the
+ *  text while the label text stays aligned with the rows above it.
+ *  可选行：静止和悬停均无可见边框；负外边距让
+ *  悬停底色向外伸出，文字仍与其它控件左对齐。
+ *  `rounded-[10px]` is part of the public contract (tests locate rows by it). */
 export const workstationChoiceRowClass =
-  "rounded-[10px] border border-slate-200/80 bg-white/60 px-3.5 py-3 shadow-[var(--shadow-control)] transition-all duration-200 dark:border-slate-700/80 dark:bg-slate-900/55";
+  "-mx-2 flex rounded-[10px] border border-transparent px-2 py-1.5 transition-colors duration-150";
 
 export const workstationChoiceRowActiveClass =
-  "border-blue-400 bg-white/92 dark:border-blue-400/80 dark:bg-slate-900/82";
+  "hover:bg-[var(--nav-chip-hover)]";
 
-export const workstationChoiceRowDisabledClass =
-  "cursor-not-allowed opacity-45";
+export const workstationChoiceRowDisabledClass = "cursor-not-allowed opacity-45";
+
+/** Sub-settings revealed by a parent control (a switch inside a card that
+ *  unlocks more fields). Indented behind a hairline rule instead of being
+ *  wrapped in another bordered box. 从属缩进：父级开关展开的子设置，用一条
+ *  细竖线加缩进表达从属关系，不再套一层带边框的盒子。 */
+export const dependentGroupClass =
+  "flex flex-col gap-3 border-l-2 border-[color:var(--surface-divider)] py-1 pl-3";
+
+/** Ghost button/icon-button class for raw <button> elements that do not go
+ *  through the shared Button component. 原生按钮使用的幽灵按钮样式。 */
+export const ghostControlClass = "ghost-control";
 
 export const desktopSplitLayoutClass =
   "grid min-h-0 gap-5 xl:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)] xl:items-start 2xl:grid-cols-[minmax(22rem,27.5rem)_minmax(0,1fr)]";

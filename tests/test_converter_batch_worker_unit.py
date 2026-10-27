@@ -39,7 +39,6 @@ import trimesh
 from PIL import Image
 
 from api.workers.converter_workers import (
-    _batch_compute_xy_bbox_mm,
     worker_batch_convert_item,
 )
 from config import MODELS_DIR, OUTPUT_DIR, TEMP_DIR
@@ -63,11 +62,13 @@ def test_batch_worker_forwards_coating(enabled, mode, source):
             modeling_mode_value=mode, color_layers=5, layer_height_mm=0.08,
             quantize_colors=48, enable_cleanup=True, artifact_prefix="test-",
             material_source=source, enable_coating=enabled, coating_height_mm=0.12,
+            coating_material={"source": "palette", "key": "White"},
             svg_hole_compensation_enabled=mode == "vector",
             svg_hole_max_area_mm2=0.75, svg_hole_max_width_mm=0.21,
         )
     assert convert.call_args.kwargs["enable_coating"] is enabled
     assert convert.call_args.kwargs["coating_height_mm"] == 0.12
+    assert convert.call_args.kwargs["coating_material"] == {"source": "palette", "key": "White"}
     assert convert.call_args.kwargs["svg_hole_compensation_enabled"] is (mode == "vector")
     assert convert.call_args.kwargs["svg_hole_max_area_mm2"] == 0.75
     assert convert.call_args.kwargs["svg_hole_max_width_mm"] == 0.21
@@ -109,9 +110,10 @@ def test_two_svg_batch_exports_keep_coating(tmp_path, monkeypatch, mode, enabled
         sidecar = json.loads(Path(result["metadata_sidecar_path"]).read_text(encoding="utf-8"))
         slots = tuple(MaterialSlot(**slot) for slot in sidecar["slots"])
         assert any(slot.slot_name == "Coating" for slot in slots) is enabled
+        assert any(slot.slot_name == "White" for slot in slots)
         items.append(MergedItem(
             source_filename=svg_path.name, source_3mf_path=Path(result["threemf_path"]),
-            slots=slots, tx_mm=index * 15, ty_mm=0,
+            slots=slots, tx_mm=40 + index * 15, ty_mm=40,
         ))
     merged = tmp_path / "merged.3mf"
     MergedBambu3MFWriter().write(items, merged, plate_width_mm=256, plate_depth_mm=256)
@@ -143,11 +145,84 @@ def test_two_svg_batch_exports_keep_coating(tmp_path, monkeypatch, mode, enabled
                 assert max(z_values) - min(z_values) == pytest.approx(expected_height)
 
 
-def _make_test_image(tmp_dir: str) -> Path:
-    """Write a tiny PNG that the worker can use to compute xy_bbox_mm.
+@pytest.mark.parametrize("source", ["lut", "material_archive"])
+@pytest.mark.parametrize("mode", ["vector", "high-fidelity"])
+@pytest.mark.parametrize(("kinds", "expected"), [
+    (("PLA", "PLA"), "PLA"),
+    (("PETG", "PETG"), "PETG"),
+    (("PETG", "PLA"), "PLA"),
+])
+def test_automatic_coating_type_survives_real_export(tmp_path, monkeypatch, source, mode, kinds, expected):
+    import zipfile
 
-    在 ``tmp_dir`` 下写一张极小 PNG，worker 用它计算 xy_bbox_mm。
-    """
+    import config
+    from config import LUTMetadata, PaletteEntry
+    from core.export_material_selection import require_export_material_selection
+    from core import material_lut_provider, material_lut_synthesis
+    from core.pipeline import s09_export_3mf, s11_glb_preview
+    from utils.lut_manager import LUTManager
+
+    for name in ("MODELS_DIR", "OUTPUT_DIR", "TEMP_DIR"):
+        monkeypatch.setattr(config, name, str(tmp_path))
+    monkeypatch.setattr(s09_export_3mf, "MODELS_DIR", str(tmp_path))
+    monkeypatch.setattr(s11_glb_preview, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("LUMINA_RUNTIME_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(material_lut_provider, "MATERIALS_DIR", str(tmp_path))
+    monkeypatch.setattr(material_lut_synthesis, "MATERIALS_DIR", str(tmp_path))
+
+    for name, kind, level in zip(("White", "Black"), kinds, (1.0, 0.01)):
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / "material.json").write_text(json.dumps({
+            "material_name": name, "material_type": kind,
+        }), encoding="utf-8")
+        (directory / "stage_A_parameters.json").write_text(json.dumps({
+            "parameters": {
+                "channels": [{"E": [level] * 3, "k": [1.0] * 3}],
+                "substrates": [{"substrate_id": "white", "C0": [1.0] * 3}],
+            },
+        }), encoding="utf-8")
+
+    lut_path = tmp_path / "colors.npz"
+    LUTManager.save_npz_with_metadata(
+        str(lut_path), np.array([[255, 255, 255]], dtype=np.uint8),
+        np.zeros((1, 5), dtype=np.int32), LUTMetadata(palette=[
+            PaletteEntry(color=name, material=kind)
+            for name, kind in zip(("White", "Black"), kinds)
+        ]),
+    )
+    if mode == "vector":
+        image_path = tmp_path / "source.svg"
+        image_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="5" height="5">'
+            '<rect width="5" height="5" fill="white"/></svg>', encoding="utf-8",
+        )
+    else:
+        image_path = tmp_path / "source.png"
+        Image.new("RGB", (5, 5), "white").save(image_path)
+    selection = require_export_material_selection(
+        {"enable_coating": True}, source_context={
+            "material_source": source, "selected_materials": ["White", "Black"],
+            "lut_path": str(lut_path),
+        },
+    )
+    assert next(item for item in selection["materials"] if item["name"] == "Coating")["material_type"] == expected
+    result = worker_batch_convert_item(
+        str(image_path), str(lut_path), 5, 1.2, "Single-sided", "4-Color (RYBW)",
+        mode, 5, 0.08, 4, False, "automatic-coating-", material_source=source,
+        selected_materials=["White", "Black"] if source == "material_archive" else None,
+        enable_coating=True, coating_height_mm=0.08,
+    )
+    assert result["threemf_path"], result["status_msg"]
+    sidecar = json.loads(Path(result["metadata_sidecar_path"]).read_text(encoding="utf-8"))
+    coating = next(slot for slot in sidecar["slots"] if slot["slot_name"] == "Coating")
+    with zipfile.ZipFile(result["threemf_path"]) as archive:
+        settings = json.loads(archive.read("Metadata/project_settings.config"))
+    assert settings["filament_type"][int(coating["slot_id"])] == expected
+
+
+def _make_test_image(tmp_dir: str) -> Path:
+    """Write a source PNG whose size deliberately differs from the export."""
     img = Image.new("RGB", (40, 30), (200, 100, 50))
     fd, path = tempfile.mkstemp(prefix="batch_worker_unit_image_", suffix=".png", dir=tmp_dir)
     os.close(fd)
@@ -198,66 +273,6 @@ def _make_real_glb(out_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Test
 # ---------------------------------------------------------------------------
-
-
-def test_batch_compute_xy_bbox_ignores_transparent_padding(tmp_path) -> None:
-    """Transparent image padding must not inflate batch layout spacing.
-
-    透明留白不应放大批量排布间距；否则用户设置的 2mm 间距在预览和切片
-    软件里会看起来明显偏大。
-    """
-    image = Image.new("RGBA", (100, 50), (0, 0, 0, 0))
-    for x in range(20, 80):
-        for y in range(10, 30):
-            image.putpixel((x, y), (255, 0, 0, 255))
-    image_path = tmp_path / "transparent-padding.png"
-    image.save(image_path)
-
-    width_mm, depth_mm = _batch_compute_xy_bbox_mm(
-        str(image_path),
-        target_width_mm=50.0,
-    )
-
-    assert width_mm == 30.0
-    assert depth_mm == 10.0
-
-
-def test_batch_compute_xy_bbox_supports_svg_alpha_bbox(tmp_path) -> None:
-    """SVG inputs should not fail batch layout footprint calculation.
-
-    批量 SVG 不应在排布占位尺寸计算阶段被 PIL 误判为无法打开。
-    """
-    svg_path = tmp_path / "sprite.svg"
-    svg_path.write_text(
-        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" '
-        'viewBox="0 0 20 10"><rect x="5" y="2" width="10" height="4" '
-        'fill="#ff0000"/></svg>',
-        encoding="utf-8",
-    )
-    raster = np.zeros((10, 20, 4), dtype=np.uint8)
-    raster[2:6, 5:15, 3] = 255
-
-    with patch(
-        "core.pipeline.processing_ops.svg_rasterizer.rasterize_svg",
-        return_value=raster,
-    ) as rasterize_svg_mock:
-        width_mm, depth_mm = _batch_compute_xy_bbox_mm(
-            str(svg_path),
-            target_width_mm=40.0,
-            svg_pixels_per_mm=3.0,
-        )
-
-    assert width_mm == 20.0
-    assert depth_mm == 8.0
-    rasterize_svg_mock.assert_called_once_with(
-        svg_path=str(svg_path),
-        target_width_mm=40.0,
-        pixels_per_mm=3.0,
-        crop_to_content=False,
-        _min_quality_px=1,
-        _max_longest_px=2048,
-        _cache_result=False,
-    )
 
 
 @pytest.fixture

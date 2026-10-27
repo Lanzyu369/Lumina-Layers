@@ -229,7 +229,7 @@ def test_library_api_metadata_recipe_preview_and_export_download(saved_backed_ma
     from api.session_store import SessionStore
 
     root, saved, measurements = saved_backed_material
-    for module in ("core.single_stage.materials", "core.material_lut_synthesis", "core.material_lut_provider",
+    for module in ("core.single_stage.material_files", "core.material_lut_synthesis", "core.material_lut_provider",
                    "core.pipeline._input_validation_common", "api.file_registry"):
         monkeypatch.setattr(f"{module}.MATERIALS_DIR", str(root))
     registry = FileRegistry()

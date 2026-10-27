@@ -1,7 +1,7 @@
 """
 Lumina Studio — headless benchmark script.
 
-Runs both SVG mode (Lanz1.svg) and High-Fidelity mode (Lanz2.jpg) without
+Runs both SVG mode and High-Fidelity mode on project-owned synthetic inputs without
 starting the UI, measures wall-clock time for each stage, and prints
 [BENCH] summary lines that can be grepped from log files for easy comparison
 across optimisation iterations.
@@ -144,12 +144,10 @@ def _pick_latest_lut():
 
 LUT_PATH = _pick_latest_lut()
 SVG_PATH = _pick_first_existing([
-    os.path.join(_ROOT, "test_images", "benchmark.svg"),
-    os.path.join(_ROOT, "Lanz1.svg"),
+    os.path.join(_ROOT, "native", "lumina-svg-core", "benchmarks", "supported_scale_fixture.svg"),
 ])
 HIFI_PATH = _pick_first_existing([
-    os.path.join(_ROOT, "test_images", "benchmark.jpg"),
-    os.path.join(_ROOT, "Lanz2.jpg"),
+    os.path.join(_ROOT, "test_images", "LUT_Stress_Test_HD.png"),
 ])
 COLOR_MODE = "5-Color Extended"
 LONG_EDGE  = 240.0          # mm — long-edge constraint

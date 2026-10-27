@@ -12,7 +12,10 @@ from typing import Any, NoReturn
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from api.editor_project import (
+    EDITOR_PROJECT_MAX_BYTES, build_editor_project, decode_editor_project,
+)
 from api.dependencies import get_file_registry, get_session_store
 from api.dynamic_material_response import dynamic_material_result_from_cache
 from api.editor_commit import (
@@ -130,11 +133,13 @@ from api.preview_cache_artifacts import (
     preview_cache_transaction,
 )
 from api.replacement_history import (
+    REPLACEMENT_CACHE_METADATA_FIELDS as _REPLACEMENT_CACHE_METADATA_FIELDS,
     can_redo as replacement_can_redo,
     can_undo as replacement_can_undo,
     push_replacement_checkpoint,
     replacement_history_lock,
     restore_from_history,
+    restore_replacement_checkpoint,
     snapshot_replacement_state,
     snapshot_selection_state,
 )
@@ -224,17 +229,6 @@ REGION_REQUANTIZE_CACHE_CONFLICT_DETAIL = (
 RECIPE_OVERRIDE_APPLY_FAILED_DETAIL = (
     "Recipe override could not be applied. Check the server log for details."
 )
-_REPLACEMENT_CACHE_METADATA_FIELDS = {
-    "color_palette",
-    "color_layers",
-    "layer_height_mm",
-    "material_dynamic_layer_info",
-    "original_material_dynamic_layer_info",
-    "material_solver_info",
-    "original_material_solver_info",
-}
-
-
 def _require_preview_cache_fields(
     session_data: dict,
     *,
@@ -2863,6 +2857,93 @@ def _selection_after_content_commit(
             component_cache,
             _get_visible_region_source_rgb(preview_cache),
         )
+
+
+@router.get("/editor-project/{session_id}")
+def export_editor_project(
+    session_id: str,
+    editor_content_revision: int | None = None,
+    selection_revision: int | None = None,
+    store: SessionStore = Depends(get_session_store),
+) -> Response:
+    """Capture a portable checkpoint at the confirmed editor/selection revision.
+
+    在已确认的内容与选区版本下保存可携带快照，避免保存进行中的局部操作。
+    """
+    with _replacement_selection_lock(session_id):
+        session = _require_session(store, session_id)
+        if (
+            editor_content_revision is not None
+            and editor_content_revision != get_editor_content_revision(session)
+        ) or (
+            selection_revision is not None
+            and selection_revision != get_selection_revision(session)
+        ):
+            raise HTTPException(status_code=409, detail="Editor changed while saving; wait for editing to finish and save again.")
+        try:
+            payload = build_editor_project(session)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    log.info("Project edits exported", extra={
+        "event": "converter_project_edits_exported", "session_id": session_id,
+        "asset_bytes": len(payload),
+    })
+    return Response(payload, media_type="application/gzip", headers={"Cache-Control": "no-store"})
+
+
+@router.post("/editor-project/{session_id}/restore", response_model=EditorCommitStatusResponse)
+def restore_editor_project(
+    session_id: str,
+    file: UploadFile = File(...),
+    operation_id: str = Form(...),
+    store: SessionStore = Depends(get_session_store),
+    registry: FileRegistry = Depends(get_file_registry),
+) -> EditorCommitStatusResponse:
+    """Initialize a fresh preview with saved editable pixels and spatial masks.
+
+    将项目编辑内容与真实空间掩码恢复到新预览；不覆盖已有编辑会话。
+    """
+    try:
+        payload = file.file.read(EDITOR_PROJECT_MAX_BYTES + 1)
+    finally:
+        file.file.close()
+    with _replacement_selection_lock(session_id):
+        session = _require_session(store, session_id)
+        if get_editor_content_revision(session) != 0 or get_selection_revision(session) != 0:
+            raise HTTPException(status_code=409, detail="Project edits can only initialize a fresh preview session.")
+        try:
+            checkpoint = decode_editor_project(payload, session)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        begin_editor_commit(session_id, store, session, operation_id=operation_id, operation="project_restore")
+        cache = checkpoint.pop("preview_cache_arrays")
+        restore_replacement_checkpoint(session_id, store, session, checkpoint)
+        persisted = persist_preview_cache(session_id, store, cache)
+        session["preview_cache"] = persisted
+        _invalidate_and_prewarm_visible_region_cache(session_id, store, session, cache)
+        mask = session.get("editor_selection_mask")
+        if isinstance(mask, np.ndarray):
+            persist_selection_mask(
+                session_id, store, session, mask,
+                content_generation=get_visible_region_generation(session),
+                revision=get_selection_revision(session),
+            )
+        preview_id = registry.register_bytes(
+            session_id, _render_styled_preview_bytes(cache["matched_rgb"], cache), "preview_project_restored.png",
+        )
+        revision = advance_editor_content_revision(session_id, store, session)
+        _selection_after_content_commit(session_id, store, session, cache)
+        result = _editor_commit_result(session, cache=cache, preview_url=f"/api/files/{preview_id}", preview_glb_url=None)
+        publish_editor_commit(
+            session_id, store, session, operation_id=operation_id,
+            editor_content_revision=revision, selection_revision=get_selection_revision(session), result=result,
+        )
+    _schedule_or_run_overridden_glb_build(session_id, store, registry, cache, "preview_project_restored.glb")
+    log.info("Project edits restored", extra={
+        "event": "converter_project_edits_restored", "session_id": session_id,
+        "editor_content_revision": revision,
+    })
+    return get_editor_commit_status(session_id, operation_id, store)
 
 
 @router.get(
@@ -6114,6 +6195,7 @@ def apply_recipe_override(
             str(runtime_mode_key) if runtime_mode_key is not None else None
         ),
         override_count=len(existing_overrides),
+        recipe_overrides=existing_overrides,
         **dynamic_material_result_from_cache(cache).model_dump(
             exclude={"operation_id", "editor_content_revision"}
         ),

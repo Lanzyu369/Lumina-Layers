@@ -1,16 +1,18 @@
+import PreviewOrbitControls from "./ui/PreviewOrbitControls";
 import { saveGeneratedFile } from "../utils/saveGeneratedFile";
 import {
   Suspense,
   useRef,
   useState,
   useEffect,
+  useLayoutEffect,
   useCallback,
   useMemo,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls, Environment, Html } from "@react-three/drei";
+import { Environment, Html } from "@react-three/drei";
 import { LIGHTING_CONFIG } from "./lightingConfig";
 import * as THREE from "three";
 import { computeFitDistance } from "./ModelViewer";
@@ -18,6 +20,12 @@ import InteractiveModelViewer, {
   resolvePreviewColorLayerHeightMm,
 } from "./InteractiveModelViewer";
 import BedPlatform from "./BedPlatform";
+import { SceneAssetReady, SceneTransitionBridge } from "./SceneTransitionBridge";
+import {
+  clearSceneTransitionSnapshot,
+  getSceneTransitionKey,
+  getSceneTransitionSnapshot,
+} from "./sceneTransitionSnapshot";
 import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
 import LargeFormatTileOverlay3D from "./LargeFormatTileOverlay3D";
@@ -41,12 +49,13 @@ import {
   getThreePerfDebugConfig,
 } from "../utils/threeDebug";
 import { postClientLog } from "../utils/clientLog";
+import { HeaderTooltip } from "./ui/HeaderTooltip";
 import {
   ActivityIcon,
-  BarChartIcon,
   CameraIcon,
   MaximizeIcon,
   MinimizeIcon,
+  StopwatchIcon,
 } from "./ui/icons";
 import type { BatchPreviewItem, PerformanceTiming } from "../api/types";
 
@@ -64,6 +73,10 @@ declare global {
 
 interface Scene3DProps {
   modelUrl?: string;
+  /** Keep only the static frame while the primary tab indicator is moving. */
+  deferInitialization?: boolean;
+  /** Pause rendering behind modal pages without discarding the scene state. */
+  suspended?: boolean;
 }
 
 export interface PreviewModelBounds {
@@ -773,11 +786,55 @@ function BatchPreviewModels({
   );
 }
 
-function Scene3D({ modelUrl }: Scene3DProps) {
+function Scene3D({ modelUrl, deferInitialization = false, suspended = false }: Scene3DProps) {
   const { t } = useI18n();
   const themeColors = useThemeConfig();
   const containerRef = useRef<HTMLDivElement>(null);
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
+  const getTransitionKey = useCallback(() => {
+    const settings = useSettingsStore.getState();
+    return getSceneTransitionKey(useConverterStore.getState(), [
+      settings.theme, settings.deviceProfileId, settings.buildPlateId,
+      settings.slicerSoftware, modelUrl ?? null,
+    ]);
+  }, [modelUrl]);
+  const transitionKey = getTransitionKey();
+  const [transitionSnapshot, setTransitionSnapshot] = useState(
+    () => getSceneTransitionSnapshot(transitionKey),
+  );
+  const snapshotCanvasRef = useRef<HTMLCanvasElement>(null);
+  const captureTransitionRef = useRef<(() => void) | null>(null);
+  const [environmentReady, setEnvironmentReady] = useState(false);
+  const [bedReady, setBedReady] = useState(false);
+  const [readyModelKey, setReadyModelKey] = useState<string | null>(null);
+  const visibleSnapshot = transitionSnapshot?.key === transitionKey ? transitionSnapshot : null;
+  const handleFrameReady = useCallback(() => {
+    setTransitionSnapshot(null);
+    clearSceneTransitionSnapshot();
+  }, []);
+
+  useLayoutEffect(() => () => {
+    // Capture before React removes the DOM; R3F can then dispose normally.
+    captureTransitionRef.current?.();
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!visibleSnapshot || !snapshotCanvasRef.current || !containerRef.current) return;
+    const { width, height } = containerRef.current.getBoundingClientRect();
+    if (Math.abs(width - visibleSnapshot.width) > 1 || Math.abs(height - visibleSnapshot.height) > 1) {
+      setTransitionSnapshot(null);
+      clearSceneTransitionSnapshot();
+      return;
+    }
+    try {
+      const context = snapshotCanvasRef.current.getContext("2d");
+      if (context) context.drawImage(visibleSnapshot.image, 0, 0);
+      else setTransitionSnapshot(null);
+    } catch {
+      setTransitionSnapshot(null);
+      clearSceneTransitionSnapshot();
+    }
+  }, [visibleSnapshot]);
   const activeOrbitPanPointerRef = useRef<ActiveOrbitPanPointer | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [screenshotNotice, setScreenshotNotice] = useState<string | null>(null);
@@ -1030,6 +1087,14 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   );
   const displayModelBounds = modelPreviewSpace?.displayBounds ?? null;
   const activeModelUrl = effectiveModelUrl || previewGlbUrl;
+  const modelReadyKey = showModelSurfaceSelector
+    ? modelSurfacePreviewUrl!
+    : batchPreviewItems.length > 0
+      ? JSON.stringify(batchPreviewItems.map((item) => item.url))
+      : activeModelUrl ?? "empty";
+  const handleModelReadyChange = useCallback((ready: boolean) => {
+    setReadyModelKey(ready ? modelReadyKey : null);
+  }, [modelReadyKey]);
   const activePreviewCanvasBounds =
     previewCanvasBoundsState?.sourceUrl === activeModelUrl
       ? previewCanvasBoundsState.bounds
@@ -1251,60 +1316,66 @@ function Scene3D({ modelUrl }: Scene3DProps) {
        * `--lumina-right-dock-width` CSS 变量自动避开右侧坞内的 widget。
        */}
       <div
-        className="absolute z-10 flex gap-1.5"
+        className="absolute z-10 flex gap-0.5 rounded-full border border-slate-200/80 bg-slate-100/85 p-1 backdrop-blur-sm dark:border-slate-700/80 dark:bg-slate-900/70"
         style={{
           top: "12px",
           right: "calc(var(--lumina-right-dock-width, 0px) + 12px)",
         }}
       >
-        <button
-          onClick={togglePerformance}
-          aria-pressed={performanceVisible}
-          aria-label={t("viewer_performance_toggle")}
-          title={t("viewer_performance_toggle")}
-          data-testid="scene3d-performance-toggle"
-          className={
-            "inline-flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] " +
-            (performanceVisible
-              ? "border-blue-500/60 bg-blue-500/15 text-blue-600 dark:text-blue-300"
-              : "border-slate-200/80 bg-slate-100/85 text-slate-600 hover:bg-slate-200/90 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80")
-          }
+        <HeaderTooltip
+          label={t("viewer_performance_toggle")}
+          suppressed={performanceVisible || diagnosticsVisible}
         >
-          <BarChartIcon className="h-4 w-4" />
-        </button>
-        <button
-          onClick={toggleDiagnostics}
-          aria-pressed={diagnosticsVisible}
-          aria-label={t("viewer_diagnostics_toggle")}
-          title={t("viewer_diagnostics_toggle")}
-          data-testid="scene3d-diagnostics-toggle"
-          className={
-            "inline-flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] " +
-            (diagnosticsVisible
-              ? "border-blue-500/60 bg-blue-500/15 text-blue-600 dark:text-blue-300"
-              : "border-slate-200/80 bg-slate-100/85 text-slate-600 hover:bg-slate-200/90 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80")
-          }
-        >
-          <ActivityIcon className="h-4 w-4" />
-        </button>
-        {fullscreenSupported && (
           <button
-            onClick={toggleFullscreen}
-            aria-label={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
-            title={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/80 bg-slate-100/85 text-slate-600 backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors hover:bg-slate-200/90 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80"
+            onClick={togglePerformance}
+            aria-pressed={performanceVisible}
+            aria-label={t("viewer_performance_toggle")}
+            data-testid="scene3d-performance-toggle"
+            className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
           >
-            {isFullscreen ? <MinimizeIcon className="h-4 w-4" /> : <MaximizeIcon className="h-4 w-4" />}
+            <StopwatchIcon className="h-4 w-4" />
           </button>
-        )}
-        <button
-          onClick={takeScreenshot}
-          aria-label={t("viewer_screenshot")}
-          title={t("viewer_screenshot")}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/80 bg-slate-100/85 text-slate-600 backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors hover:bg-slate-200/90 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80"
+        </HeaderTooltip>
+        <HeaderTooltip
+          label={t("viewer_diagnostics_toggle")}
+          suppressed={performanceVisible || diagnosticsVisible}
         >
-          <CameraIcon className="h-4 w-4" />
-        </button>
+          <button
+            onClick={toggleDiagnostics}
+            aria-pressed={diagnosticsVisible}
+            aria-label={t("viewer_diagnostics_toggle")}
+            data-testid="scene3d-diagnostics-toggle"
+            className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
+          >
+            <ActivityIcon className="h-4 w-4" />
+          </button>
+        </HeaderTooltip>
+        {fullscreenSupported && (
+          <HeaderTooltip
+            label={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
+            suppressed={performanceVisible || diagnosticsVisible}
+          >
+            <button
+              onClick={toggleFullscreen}
+              aria-label={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
+              className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
+            >
+              {isFullscreen ? <MinimizeIcon className="h-4 w-4" /> : <MaximizeIcon className="h-4 w-4" />}
+            </button>
+          </HeaderTooltip>
+        )}
+        <HeaderTooltip
+          label={t("viewer_screenshot")}
+          suppressed={performanceVisible || diagnosticsVisible}
+        >
+          <button
+            onClick={takeScreenshot}
+            aria-label={t("viewer_screenshot")}
+            className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
+          >
+            <CameraIcon className="h-4 w-4" />
+          </button>
+        </HeaderTooltip>
       </div>
 
       {performanceVisible && (
@@ -1431,8 +1502,9 @@ function Scene3D({ modelUrl }: Scene3DProps) {
 
       {/* Loading indicator is now 3D-anchored inside Canvas */}
 
-      <Canvas
-        frameloop="demand"
+      {!deferInitialization && <Canvas
+        style={visibleSnapshot ? { visibility: "hidden" } : undefined}
+        frameloop={suspended ? "never" : "demand"}
         camera={{
           position: [...DEFAULT_CAMERA_POSITION],
           fov: 45,
@@ -1483,6 +1555,14 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         }}
       >
         <ScreenshotHelper onGlReady={handleGlReady} />
+        <SceneTransitionBridge
+          snapshotKey={transitionKey}
+          getCurrentKey={getTransitionKey}
+          snapshot={visibleSnapshot}
+          ready={environmentReady && bedReady && (modelReadyKey === "empty" || readyModelKey === modelReadyKey)}
+          captureRef={captureTransitionRef}
+          onFrameReady={handleFrameReady}
+        />
         <RendererDiagnosticsBridge
           enabled={diagnosticsSamplingEnabled}
           onSample={handleDiagnosticsSample}
@@ -1507,13 +1587,14 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             background={false}
             environmentIntensity={themeColors.environmentIntensity}
           />
+          <SceneAssetReady onReadyChange={setEnvironmentReady} />
         </Suspense>
         <directionalLight
           position={[...LIGHTING_CONFIG.keyLight.position]}
           intensity={themeColors.keyLightIntensity}
           color={themeColors.keyLightColor}
         />
-        <OrbitControls
+        <PreviewOrbitControls
           makeDefault
           enableDamping
           dampingFactor={0.1}
@@ -1524,6 +1605,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         <BedPlatform
           surfaceModelActive={showModelSurfaceSelector}
           gridVisible={showModelSurfaceSelector ? modelSurfaceBedGridVisible : true}
+          onReadyChange={setBedReady}
         />
         {showModelSurfaceSelector && modelSurfacePreviewUrl && modelSurfaceFile ? (
           <ModelSurfaceSelector3D
@@ -1544,6 +1626,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             onUpdateModelRotation={updateModelSurfaceModelRotation}
             onFitArtwork={fitModelSurfaceArtwork}
             onBedGridVisibleChange={setModelSurfaceBedGridVisible}
+            onReadyChange={handleModelReadyChange}
           />
         ) : batchPreviewItems.length > 0 ? (
           <Suspense fallback={null}>
@@ -1564,6 +1647,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               rasterCellSize={rasterCellSize}
               colorLayerHeightMm={colorLayerHeightMm}
             />
+            <SceneAssetReady onReadyChange={handleModelReadyChange} />
           </Suspense>
         ) : effectiveModelUrl ? (
           <Suspense fallback={null}>
@@ -1590,6 +1674,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               colorLayerHeightMm={colorLayerHeightMm}
               onPreviewCanvasBoundsChange={handlePreviewCanvasBoundsChange}
             />
+            <SceneAssetReady onReadyChange={handleModelReadyChange} />
           </Suspense>
         ) : previewGlbUrl ? (
           <Suspense fallback={null}>
@@ -1622,6 +1707,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               coatingHeightMm={coatingHeightMm}
               printingLayerHeightMm={layerHeightMm ?? 0.08}
             />
+            <SceneAssetReady onReadyChange={handleModelReadyChange} />
           </Suspense>
         ) : null}
         {batchPreviewItems.length === 0 && addLoop && displayModelBounds && (
@@ -1694,7 +1780,17 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             </div>
           </Html>
         )}
-      </Canvas>
+      </Canvas>}
+      {visibleSnapshot && (
+        <canvas
+          ref={snapshotCanvasRef}
+          width={visibleSnapshot.image.width}
+          height={visibleSnapshot.image.height}
+          className="absolute inset-0 h-full w-full"
+          aria-hidden="true"
+          data-testid="scene3d-transition-snapshot"
+        />
+      )}
 
       {modelSurfaceBusy ? (
         <div

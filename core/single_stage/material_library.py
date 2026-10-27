@@ -229,8 +229,8 @@ def _material_summary_from_saved_archive(
     return {
         "material_name": material_name,
         "directory_name": relative_directory_name,
-        "notes": archive_payload.get("notes"),
-        "notes": archive_payload.get("notes"),
+        "profile_kind": _STAGE_A_PROFILE_KIND,
+        "notes": payload.get("notes"),
         "brand": brand_value,
         **picker_metadata,
         "archive_path": str(archive_path),
@@ -404,6 +404,7 @@ def _saved_material_library_item_from_archive(
     return {
         "material_name": material_name,
         "directory_name": relative_directory_name,
+        "profile_kind": _STAGE_A_PROFILE_KIND,
         "brand": brand_value,
         **picker_metadata,
         "created_at": archive_payload.get("created_at"),
@@ -1240,7 +1241,7 @@ def list_saved_stage_a_material_archives(
             item
             for item in items
             if normalized_profile_kind is None
-            or item.get("profile_kind") == normalized_profile_kind
+            or item.get("profile_kind", _STAGE_A_PROFILE_KIND) == normalized_profile_kind
         ]
 
     items: list[dict[str, Any]] = []
@@ -1281,5 +1282,5 @@ def list_saved_stage_a_material_archives(
         item
         for item in items
         if normalized_profile_kind is None
-        or item.get("profile_kind") == normalized_profile_kind
+        or item.get("profile_kind", _STAGE_A_PROFILE_KIND) == normalized_profile_kind
     ]

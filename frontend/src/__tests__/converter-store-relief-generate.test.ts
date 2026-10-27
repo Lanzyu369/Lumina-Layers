@@ -20,6 +20,7 @@ vi.mock("../api/converter", async () => {
     await vi.importActual<typeof import("../api/converter")>("../api/converter");
   return {
     ...actual,
+    fetchExportMaterialSelection: vi.fn(async () => (await import("./fixtures/exportMaterialSelection")).READY_EXPORT_MATERIAL_SELECTION),
     convertPreview: mocks.convertPreview,
     convertGenerate: mocks.convertGenerate,
     convertGenerateLargeFormat: mocks.convertGenerateLargeFormat,
@@ -301,9 +302,7 @@ describe("converter store relief generate flow", () => {
     });
 
     const generateRequest = useConverterStore.getState().submitGenerate();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(mocks.convertGenerate).toHaveBeenCalledOnce());
 
     useConverterStore.getState().applyColorRemap("111111", "eeeeee");
     await Promise.resolve();

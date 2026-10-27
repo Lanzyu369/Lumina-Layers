@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import CalibrationPanel from "../components/CalibrationPanel";
 import { CalibrationColorMode } from "../api/types";
@@ -52,12 +52,25 @@ beforeEach(() => {
     previewImageUrl: null,
     modelUrl: null,
     statusMessage: null,
+    warnings: [],
     manifestUrl: null,
     singleStageJobs: [],
   });
 });
 
 describe("CalibrationPanel", () => {
+  it("keeps a precise backing-thickness editor and unit below the external heading", () => {
+    render(<CalibrationPanel />);
+    const slider = screen.getByTestId("backing-thickness-slider");
+    const control = slider.parentElement!.parentElement!;
+    const input = within(control).getByRole("textbox");
+    expect(input).toHaveValue("1.20");
+    expect(within(control).getByText("mm")).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "1.48" } });
+    fireEvent.blur(input);
+    expect(useCalibrationStore.getState().backing_thickness).toBe(1.48);
+  });
+
   it("renders legacy LUT controls and no gradient-card workflow selector", () => {
     render(<CalibrationPanel />);
 
@@ -190,6 +203,61 @@ describe("CalibrationPanel", () => {
       "data-large-format",
       "true",
     );
+  });
+
+  it("shows the manual layout warning with a generated ZIP download", () => {
+    useCalibrationStore.setState({
+      color_mode: CalibrationColorMode.FIVE_COLOR_EXT,
+      downloadUrl: "/api/files/test.zip",
+      statusMessage: "5-Color Extended Kit (Page 1 & 2) Generated!",
+      warnings: ["wipe_tower_manual_adjustment_required"],
+    });
+    render(<CalibrationPanel />);
+
+    const warning = screen.getByTestId("calibration-placement-warning");
+    expect(warning).toHaveAttribute("data-tone", "warning");
+    expect(warning).toHaveTextContent(
+      /Check the layout before printing|打印前请手动检查摆放/,
+    );
+    expect(warning).toHaveTextContent(
+      /Check each project in a ZIP separately|ZIP 中的每个工程都需要分别检查/,
+    );
+    expect(screen.getByTestId("download-link")).toHaveAttribute(
+      "href",
+      "/api/files/test.zip",
+    );
+  });
+
+  it("keeps the warning next to a retained ZIP after a failed retry", () => {
+    useCalibrationStore.setState({
+      color_mode: CalibrationColorMode.FIVE_COLOR_EXT,
+      downloadUrl: "/api/files/test.zip",
+      warnings: ["wipe_tower_manual_adjustment_required"],
+      error: "Calibration board could not be generated.",
+    });
+    render(<CalibrationPanel />);
+
+    expect(screen.getByTestId("error-message")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("calibration-placement-warning"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("download-link")).toHaveAttribute(
+      "href",
+      "/api/files/test.zip",
+    );
+  });
+
+  it("does not show a placement warning when the result has none", () => {
+    useCalibrationStore.setState({
+      color_mode: CalibrationColorMode.FIVE_COLOR_EXT,
+      downloadUrl: "/api/files/test.zip",
+      warnings: [],
+    });
+    render(<CalibrationPanel />);
+
+    expect(
+      screen.queryByTestId("calibration-placement-warning"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows preview image when previewImageUrl is set", () => {

@@ -26,6 +26,7 @@ vi.mock("../api/converter", () => ({
   fetchLutList: vi.fn(),
   convertPreview: vi.fn(),
   convertGenerate: vi.fn(),
+  fetchExportMaterialSelection: vi.fn().mockResolvedValue({ ready: true, materials: [], build_plates: [], issues: [] }),
   convertGenerateLargeFormat: vi.fn(),
   convertGeneratePuzzle: vi.fn(),
   convertPuzzleLayoutPreview: vi.fn(),
@@ -594,6 +595,75 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     expect(patch.language).toBe("en");
   });
 
+  it("defaults the top navigation to centered and ignores unknown alignments", async () => {
+    const { settingsStoreModule } = await loadStores();
+    const store = settingsStoreModule.useSettingsStore;
+
+    expect(settingsStoreModule.DEFAULT_SETTINGS.headerNavAlignment).toBe(
+      "center",
+    );
+    store.getState().setHeaderNavAlignment("left");
+    expect(store.getState().headerNavAlignment).toBe("left");
+
+    store.getState().setHeaderNavAlignment("right" as never);
+    expect(store.getState().headerNavAlignment).toBe("left");
+  });
+
+  it("synchronizes the top navigation alignment and hydrates it for a fresh origin", async () => {
+    const { settingsStoreModule, systemApi } = await loadStores();
+    const store = settingsStoreModule.useSettingsStore;
+
+    store.getState().setHeaderNavAlignment("left");
+    await store.getState().syncToBackend();
+    expect(systemApi.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ header_nav_alignment: "left" }),
+    );
+
+    const fresh = settingsStoreModule.deriveBackendDeviceSettingsPatch(
+      settingsStoreModule.DEFAULT_SETTINGS,
+      { header_nav_alignment: "left" },
+      {},
+    );
+    expect(fresh.headerNavAlignment).toBe("left");
+
+    const local = settingsStoreModule.deriveBackendDeviceSettingsPatch(
+      settingsStoreModule.DEFAULT_SETTINGS,
+      { header_nav_alignment: "left" },
+      { headerNavAlignment: "center" },
+    );
+    expect(local.headerNavAlignment).toBeUndefined();
+
+    const unknown = settingsStoreModule.deriveBackendDeviceSettingsPatch(
+      settingsStoreModule.DEFAULT_SETTINGS,
+      { header_nav_alignment: "right" as never },
+      {},
+    );
+    expect(unknown.headerNavAlignment).toBeUndefined();
+  });
+
+  it.each([
+    ["left", "left"],
+    ["diagonal", "center"],
+    [42, "center"],
+  ])(
+    "restores persisted top navigation alignment %s as %s",
+    async (persistedValue, expectedValue) => {
+      localStorage.setItem(
+        "lumina-settings",
+        JSON.stringify({
+          state: { headerNavAlignment: persistedValue },
+          version: 1,
+        }),
+      );
+
+      const settingsStoreModule = await import("../stores/settingsStore");
+
+      expect(
+        settingsStoreModule.useSettingsStore.getState().headerNavAlignment,
+      ).toBe(expectedValue);
+    },
+  );
+
   it("hydrates backend device_profile_id when there is no persisted choice", async () => {
     const { settingsStoreModule } = await loadStores();
 
@@ -704,6 +774,9 @@ describe("settings store hydration and base-layer modifier wiring", () => {
   it("submitGenerate includes device and high-fidelity SVG settings", async () => {
     const { settingsStoreModule, converterStoreModule, converterApi } =
       await loadStores();
+    vi.mocked(converterApi.fetchExportMaterialSelection).mockResolvedValue(
+      (await import("./fixtures/exportMaterialSelection")).READY_EXPORT_MATERIAL_SELECTION,
+    );
 
     vi.mocked(converterApi.convertGenerate).mockResolvedValue({
       status: "ok",

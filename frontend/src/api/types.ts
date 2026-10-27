@@ -133,11 +133,19 @@ export interface VectorPreviewRendererResponse {
   renderer: "vector_analytic" | "segmented";
 }
 
+export interface CoatingMaterialReference {
+  source: "palette" | "material_archive";
+  key: string;
+}
+
+export type BackingOutput = "same_project" | "separate_project";
+
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
   spacer_thick: number;
   backing_infill_density_percent?: number;
   structure_mode: StructureMode;
   separate_backing: boolean;
+  backing_output?: BackingOutput;
   add_loop: boolean;
   loop_width: number;
   loop_length: number;
@@ -158,6 +166,8 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   wire_height_mm: number;
   enable_coating: boolean;
   coating_height_mm: number;
+  /** Deprecated selection accepted for compatibility; generation chooses the type automatically. */
+  coating_material?: CoatingMaterialReference | null;
   replacement_regions?: ColorReplacementItem[];
   recipe_overrides?: RecipeOverrideItem[];
   free_color_set?: string[];
@@ -169,6 +179,7 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   device_profile_id?: string;
   build_plate_id?: string;
   custom_3mf_template_id?: string | null;
+  native_filament_profiles?: Record<string, string>;
   enable_base_layer_height_modifier?: boolean;
   enable_wipe_tower_auto_placement?: boolean;
   use_cached_matched_rgb?: boolean;
@@ -177,6 +188,51 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   /** Exact shared-selection revision captured for generation. */
   selection_revision?: number;
 };
+
+export interface NativeFilamentProfile {
+  name: string;
+  vendor: string;
+  material_type: string;
+  available: boolean;
+  supported_build_plate_uids: string[];
+}
+
+export type ExportMaterialIssueCode =
+  | "native_material_ambiguous"
+  | "native_material_plate_incompatible"
+  | "native_material_unavailable"
+  | "native_material_selection_invalid"
+  | "native_material_settings_incompatible";
+
+export interface ExportMaterialSelection {
+  ready: boolean;
+  slicer_id: string;
+  machine_uid: string;
+  nozzle_uid: string;
+  device_profile_id: string;
+  machine_profile_id: string;
+  build_plate_uid: string;
+  materials: Array<{
+    name: string;
+    material_type: string;
+    selected_profile_name: string | null;
+    profiles: NativeFilamentProfile[];
+  }>;
+  build_plates: Array<{
+    id: string;
+    build_plate_uid: string;
+    name: string;
+    compatible: boolean;
+  }>;
+  issues: Array<{
+    code: ExportMaterialIssueCode;
+    material_index: number | null;
+    material_name: string;
+    material_type: string;
+    build_plate_uid: string;
+    message: string;
+  }>;
+}
 
 export interface PuzzleLayoutPreviewRequest {
   target_height_mm: number;
@@ -283,6 +339,7 @@ export interface RecipeOverrideApplyResponse
   preview_url: string;
   preview_glb_url?: string | null;
   override_count: number;
+  recipe_overrides?: RecipeOverrideItem[];
   can_undo?: boolean;
   can_redo?: boolean;
   /** Authoritative selection and content revision after the edit. */
@@ -717,6 +774,7 @@ export interface CalibrationResponse {
   preview_url: string | null;
   layer_urls: string[] | null;
   threemf_disk_path?: string | null;
+  warnings?: string[];
 }
 
 export interface SingleStageJobSummary {
@@ -1418,6 +1476,7 @@ export interface MaterialSyncInstalledEntry {
   local_exists: boolean;
   material_file_exists: boolean;
   available_revisions: string[];
+  revision_history?: { revision_id: string; installed_at?: string | null }[];
 }
 
 export interface MaterialSyncStatusResponse {
@@ -2103,11 +2162,14 @@ export interface BatchPreviewItem {
 }
 
 export interface BatchConvertParams {
+  backing_output?: BackingOutput;
   svg_hole_compensation_enabled?: boolean;
   svg_hole_max_area_mm2?: number;
   svg_hole_max_width_mm?: number;
   enable_coating?: boolean;
   coating_height_mm?: number;
+  /** Deprecated selection accepted for compatibility; generation chooses the type automatically. */
+  coating_material?: CoatingMaterialReference | null;
   source_kind?: "legacy_single" | "legacy_multi" | "native_bundle";
   lut_name?: string;
   lut_names?: string[];
@@ -2157,6 +2219,7 @@ export interface BatchConvertParams {
   device_profile_id?: string;
   build_plate_id?: string;
   custom_3mf_template_id?: string | null;
+  native_filament_profiles?: Record<string, string>;
   enable_base_layer_height_modifier?: boolean;
   enable_wipe_tower_auto_placement?: boolean;
 }
@@ -2537,6 +2600,7 @@ export interface PrinterListResponse {
 // ========== Settings Models ==========
 
 export interface UserSettings {
+  conversion_preferences?: import("../stores/conversionPreferences").ConversionPreferences | null;
   custom_3mf_template_id?: string | null;
   language: "zh" | "en";
   theme: "light" | "dark";
@@ -2571,6 +2635,8 @@ export interface UserSettings {
   auto_replace_gradient_banding: boolean;
   /** Desktop save-dialog default folder; empty = OS default. 桌面版保存对话框默认文件夹。 */
   generated_file_directory?: string;
+  /** Top navigation alignment. 顶部导航对齐方式。 */
+  header_nav_alignment?: "center" | "left";
 }
 
 export interface UserSettingsResponse {

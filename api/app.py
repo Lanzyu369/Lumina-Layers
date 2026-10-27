@@ -335,9 +335,12 @@ def _configure_frontend_dist(app: FastAPI) -> None:
             name="frontend-assets",
         )
 
+    # A cached entry can load an old UI against an upgraded backend.
+    index_headers = {"Cache-Control": "no-store"}
+
     @app.get("/", include_in_schema=False)
     async def frontend_index() -> FileResponse:
-        return FileResponse(index_path, media_type="text/html")
+        return FileResponse(index_path, media_type="text/html", headers=index_headers)
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def frontend_spa_fallback(request: Request, full_path: str) -> FileResponse:
@@ -351,8 +354,9 @@ def _configure_frontend_dist(app: FastAPI) -> None:
             return FileResponse(
                 requested_path,
                 media_type=_FRONTEND_MEDIA_TYPES.get(requested_path.suffix.lower()),
+                headers=index_headers if requested_path == index_path else None,
             )
-        return FileResponse(index_path, media_type="text/html")
+        return FileResponse(index_path, media_type="text/html", headers=index_headers)
 
 
 def _run_cleanup_pass(

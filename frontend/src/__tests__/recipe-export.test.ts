@@ -26,6 +26,7 @@ describe("recipe/exportRecipe", () => {
     it("exports base parameters correctly", () => {
       const state = makeState({
         lut_name: "TestLUT",
+        source_version: "legacy",
         color_mode: "4-Color (RYBW)" as ConverterState["color_mode"],
         modeling_mode: "high-fidelity" as ConverterState["modeling_mode"],
         target_width_mm: 100,
@@ -430,7 +431,7 @@ describe("recipe/exportRecipe", () => {
       source,
     );
 
-    expect(recipe.schema_version).toBe(4);
+    expect(recipe.schema_version).toBe(5);
     expect(recipe.recipe.workshop).toEqual(source);
     expect(recipe.recipe.workshop).not.toBe(source);
     expect(recipe.recipe.workshop?.payload).not.toBe(source.payload);

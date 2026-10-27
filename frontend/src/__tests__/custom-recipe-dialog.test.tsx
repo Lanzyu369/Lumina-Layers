@@ -29,6 +29,8 @@ const converterStoreState = vi.hoisted(() => ({
   materialSuggestionsError: null,
   fetchMaterialSuggestions: vi.fn(),
   applyCustomRecipeFromHistory: vi.fn(),
+  commitRecipeOverride: vi.fn(),
+  error: null as string | null,
 }));
 
 vi.mock("../api/converter", async () => {
@@ -127,6 +129,7 @@ function deferred<T>() {
 describe("CustomRecipeDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    converterStoreState.commitRecipeOverride.mockImplementation((request) => applyRecipeOverrideMock(request));
     converterStoreState.customRecipeHistory = [];
     converterStoreState.source_version = "legacy";
     converterStoreState.selectedLutInfo = null;

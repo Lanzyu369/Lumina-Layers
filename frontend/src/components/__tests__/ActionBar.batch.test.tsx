@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useConverterStore } from "../../stores/converter";
@@ -7,7 +6,6 @@ import * as recipeImportFlow from "../../recipe/importFlow";
 import ActionBar from "../sections/ActionBar";
 import { translations } from "../../i18n/translations";
 
-let capturedCanvasPreviewSurfaceProps: Record<string, unknown> | null = null;
 let capturedSlicerSelectorProps: Record<string, unknown> | null = null;
 
 // Mock child components with complex dependencies
@@ -23,16 +21,7 @@ vi.mock("../sections/SlicerSelector", () => ({
 }));
 
 vi.mock("../ui/CanvasPreviewSurface", () => ({
-  default: (props: Record<string, unknown>) => {
-    capturedCanvasPreviewSurfaceProps = props;
-    return (
-      <div data-testid="canvas-preview-surface-mock">
-        <div role="img" aria-label={String(props.alt ?? "")} data-src={String(props.src ?? "")} />
-        {props.overlay ? <div data-testid="canvas-preview-overlay">{props.overlay as ReactNode}</div> : null}
-        {props.floatingOverlay ? <div data-testid="canvas-preview-floating-overlay">{props.floatingOverlay as ReactNode}</div> : null}
-      </div>
-    );
-  },
+  default: () => <div data-testid="canvas-preview-surface-mock" />,
 }));
 
 vi.mock("../../recipe/importFlow", () => ({
@@ -49,7 +38,6 @@ function makeFile(name: string, type = "image/png"): File {
 describe("ActionBar — auto batch mode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    capturedCanvasPreviewSurfaceProps = null;
     capturedSlicerSelectorProps = null;
     useConverterStore.setState({
       batchMode: false,
@@ -97,6 +85,7 @@ describe("ActionBar — auto batch mode", () => {
     const click = () => fireEvent.click(screen.getByText(translations[buttonKey].zh));
     click();
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText(translations[buttonKey].zh).closest("button")).toBeEnabled());
     expect(screen.queryByText(translations.file_save_saved.zh)).not.toBeInTheDocument();
     save.mockResolvedValue('saved');
     await act(async () => { click(); });
@@ -107,11 +96,12 @@ describe("ActionBar — auto batch mode", () => {
     expect(screen.queryByText(translations.file_save_saved.zh)).not.toBeInTheDocument();
   });
 
-  it("shows preview and generate buttons in SingleMode (no batchFiles)", () => {
+  it("shows preview and output actions without a standalone generate button in SingleMode", () => {
     useConverterStore.setState({ batchMode: false, batchFiles: [] });
     render(<ActionBar />);
     expect(screen.getByText("预览")).toBeInTheDocument();
-    expect(screen.getByText("生成")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "生成" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("slicer-selector")).toBeInTheDocument();
     expect(screen.queryByText("批量生成")).not.toBeInTheDocument();
   });
 
@@ -123,9 +113,9 @@ describe("ActionBar — auto batch mode", () => {
 
     render(<ActionBar />);
 
-    expect(screen.getByText("打印前必须手动调整擦料塔")).toBeInTheDocument();
+    expect(screen.getByText("打印前请手动检查摆放")).toBeInTheDocument();
     expect(
-      screen.getByText(/没有缩小模型，也没有关闭擦料塔/),
+      screen.getByText(/模型尺寸、原生工艺和擦料塔均已保留/),
     ).toBeInTheDocument();
   });
 
@@ -227,6 +217,31 @@ describe("ActionBar — auto batch mode", () => {
     expect(btn).not.toBeDisabled();
   });
 
+  it("disables the output action and explains why while large format and model texture are both on", () => {
+    useConverterStore.setState({
+      imageFile: makeFile("art.png"),
+      lut_name: "test_lut",
+      sessionId: "conflict-session",
+      largeFormatEnabled: true,
+      modelSurfaceEnabled: false,
+    });
+    const { rerender } = render(<ActionBar />);
+    expect(capturedSlicerSelectorProps?.canSubmit).toBe(true);
+    expect(
+      screen.queryByText(translations.large_format_model_surface_conflict.zh),
+    ).not.toBeInTheDocument();
+
+    act(() => {
+      useConverterStore.setState({ modelSurfaceEnabled: true });
+    });
+    rerender(<ActionBar />);
+
+    expect(capturedSlicerSelectorProps?.canSubmit).toBe(false);
+    expect(
+      screen.getByText(translations.large_format_model_surface_conflict.zh),
+    ).toBeInTheDocument();
+  });
+
   it.each([
     ["Stage A", "material"],
     ["Lumina Box", "lumina_box"],
@@ -302,6 +317,25 @@ describe("ActionBar — auto batch mode", () => {
     expect(screen.getByText("请先添加图片并选择品牌和数据库")).toBeInTheDocument();
   });
 
+  it("generates the single 3MF through the output action without a standalone generate button", async () => {
+    const submitFullPipeline = vi.fn(async () => {
+      useConverterStore.setState({ downloadUrl: "/api/files/single-model" });
+      return "/api/files/single-model";
+    });
+    useConverterStore.setState({
+      imageFile: makeFile("art.png"),
+      lut_name: "test_lut",
+      submitFullPipeline,
+    });
+
+    render(<ActionBar />);
+
+    expect(capturedSlicerSelectorProps?.canSubmit).toBe(true);
+    const onAutoGenerate = capturedSlicerSelectorProps?.onAutoGenerate as () => Promise<string | null>;
+    await expect(onAutoGenerate()).resolves.toBe("/api/files/single-model");
+    expect(submitFullPipeline).toHaveBeenCalledOnce();
+  });
+
   it("reuses the slicer-open action for batch merged 3MF generation", async () => {
     const submitBatch = vi.fn(async () => {
       useConverterStore.setState({ downloadUrl: "/api/files/batch-merged" });
@@ -331,7 +365,7 @@ describe("ActionBar — auto batch mode", () => {
     expect(submitFullPipeline).not.toHaveBeenCalled();
   });
 
-  it("enables preview but keeps generate disabled before a native bundle session exists even when lut_name is empty", () => {
+  it("enables preview and automatic output before a native bundle session exists even when lut_name is empty", () => {
     useConverterStore.setState({
       batchMode: false,
       batchFiles: [],
@@ -359,9 +393,9 @@ describe("ActionBar — auto batch mode", () => {
     render(<ActionBar />);
 
     const previewBtn = screen.getByText("预览").closest("button")!;
-    const generateBtn = screen.getByText("生成").closest("button")!;
     expect(previewBtn).not.toBeDisabled();
-    expect(generateBtn).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "生成" })).not.toBeInTheDocument();
+    expect(capturedSlicerSelectorProps?.canSubmit).toBe(true);
   });
 
   // --- BatchResultSummary ---
@@ -400,170 +434,30 @@ describe("ActionBar — auto batch mode", () => {
     expect(screen.queryByText(/成功.*总计/)).not.toBeInTheDocument();
   });
 
-  it("does not duplicate the authoritative selection overlay in the action-bar thumbnail", () => {
-    useConverterStore.setState({
-      selectionMode: "multi-select",
-      sessionId: "session-1",
-      previewImageUrl: "/api/files/highlight-last-region",
-      previewBaseImageUrl: "/api/files/base-preview",
-      preview_width_mm: 60,
-      previewPixelWidth: 600,
-      previewPixelHeight: 400,
-      selectedRegions: [
-        {
-          regionId: "region-a",
-          colorHex: "#ff0000",
-          pixelCount: 10,
-          previewUrl: "/api/files/highlight-region-a",
-          contours: [[[10, 10], [20, 10], [20, 20], [10, 20]]],
-        },
-        {
-          regionId: "region-b",
-          colorHex: "#00ff00",
-          pixelCount: 20,
-          previewUrl: "/api/files/highlight-region-b",
-          contours: [[[30, 5], [40, 5], [40, 15], [30, 15]]],
-        },
-      ],
-    });
-
-    render(<ActionBar />);
-
-    const previewImage = screen.getByRole("img", { name: "预览结果" });
-    expect(previewImage).toHaveAttribute("data-src", "/api/files/highlight-last-region");
-    expect(screen.queryByTestId("preview-multi-select-overlay")).not.toBeInTheDocument();
-    expect(screen.queryAllByTestId("preview-multi-select-polygon")).toHaveLength(0);
-  });
-
-  it("redraws the 2D hover magnifier after the preview buffer image loads asynchronously", async () => {
-    vi.useFakeTimers();
-
-    const drawImageMock = vi.fn();
-    const context2d = {
-      clearRect: vi.fn(),
-      drawImage: drawImageMock,
-      getImageData: vi.fn(() => ({ data: new Uint8ClampedArray([255, 0, 0, 255]) })),
-      beginPath: vi.fn(),
-      moveTo: vi.fn(),
-      lineTo: vi.fn(),
-      stroke: vi.fn(),
-      canvas: { width: 152, height: 152 },
-      set imageSmoothingEnabled(_value: boolean) {},
-      set strokeStyle(_value: string) {},
-      set lineWidth(_value: number) {},
-    } as unknown as CanvasRenderingContext2D;
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
-      ((contextId: string) => (contextId === "2d" ? context2d : null)) as typeof HTMLCanvasElement.prototype.getContext,
-    );
-
-    useConverterStore.setState({
-      batchMode: false,
-      imageFile: makeFile("preview.png"),
-      lut_name: "test_lut",
-      sessionId: null,
-      previewImageUrl: "/api/files/preview.png",
-      previewBaseImageUrl: "/api/files/preview.png",
-      previewPixelWidth: 300,
-      previewPixelHeight: 200,
-      layerImages: [],
-      layerImagesLoading: true,
-    });
-
-    render(<ActionBar />);
-
-    const hoverHandler = capturedCanvasPreviewSurfaceProps?.onHoverSample as
-      | ((sample: {
-        containerX: number;
-        containerY: number;
-        containerWidth: number;
-        containerHeight: number;
-        containerLeft: number;
-        containerTop: number;
-        pixelX: number;
-        pixelY: number;
-        naturalWidth: number;
-        naturalHeight: number;
-      } | null) => void)
-      | undefined;
-    const surfaceReadyHandler = capturedCanvasPreviewSurfaceProps?.onSurfaceReady as
-      | ((payload: {
-        image: HTMLImageElement;
-        previewBuffer: {
-          width: number;
-          height: number;
-          context: CanvasRenderingContext2D;
-        } | null;
-      } | null) => void)
-      | undefined;
-
-    expect(hoverHandler).toBeTypeOf("function");
-    expect(surfaceReadyHandler).toBeTypeOf("function");
-
-    act(() => {
-      hoverHandler?.({
-        containerX: 96,
-        containerY: 72,
-        containerWidth: 320,
-        containerHeight: 220,
-        containerLeft: 40,
-        containerTop: 60,
-        pixelX: 200,
-        pixelY: 120,
-        naturalWidth: 600,
-        naturalHeight: 400,
+  it.each([null, "/api/files/puzzle-overlay.png"])(
+    "keeps preview and export actions without an embedded 2D window (puzzle overlay: %s)",
+    (puzzleOverlayUrl) => {
+      useConverterStore.setState({
+        imageFile: makeFile("preview.png"),
+        lut_name: "test_lut",
+        sessionId: "session-1",
+        previewImageUrl: "/api/files/preview.png",
+        previewBaseImageUrl: "/api/files/preview-base.png",
+        puzzleOverlayUrl,
       });
-      vi.advanceTimersByTime(180);
-    });
 
-    expect(screen.getByTestId("action-hover-inspector")).toBeInTheDocument();
-    expect(drawImageMock.mock.calls.some((call) => call.length >= 9)).toBe(false);
+      render(<ActionBar />);
 
-    const previewImage = document.createElement("img");
-    Object.defineProperty(previewImage, "naturalWidth", { value: 600, configurable: true });
-    Object.defineProperty(previewImage, "naturalHeight", { value: 400, configurable: true });
-    Object.defineProperty(previewImage, "width", { value: 600, configurable: true });
-    Object.defineProperty(previewImage, "height", { value: 400, configurable: true });
-
-    act(() => {
-      surfaceReadyHandler?.({
-        image: previewImage,
-        previewBuffer: {
-          width: 600,
-          height: 400,
-          context: context2d,
-        },
-      });
-    });
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(drawImageMock.mock.calls.some((call) => call.length >= 9)).toBe(true);
-
-    const magnifierDrawCall = [...drawImageMock.mock.calls].reverse().find((call) => call.length >= 9);
-    expect(magnifierDrawCall).toBeDefined();
-    expect(magnifierDrawCall?.[1]).toBeCloseTo(174.6667, 3);
-    expect(magnifierDrawCall?.[2]).toBeCloseTo(94.6667, 3);
-  });
-
-  it("uses previewBaseImageUrl when puzzle overlay is active", () => {
-    useConverterStore.setState({
-      batchMode: false,
-      imageFile: makeFile("preview.png"),
-      lut_name: "test_lut",
-      sessionId: "session-1",
-      previewImageUrl: "/api/files/preview-bed.png",
-      previewBaseImageUrl: "/api/files/preview-raw.png",
-      puzzleOverlayUrl: "/api/files/puzzle-overlay.png",
-      layerImages: [],
-      layerImagesLoading: false,
-    });
-
-    render(<ActionBar />);
-
-    expect(capturedCanvasPreviewSurfaceProps?.src).toBe("/api/files/preview-raw.png");
-  });
+      expect(screen.queryByTestId("canvas-preview-surface-mock")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("action-hover-inspector")).not.toBeInTheDocument();
+      expect(screen.getByText(translations.action_preview.zh).closest("button")).toBeEnabled();
+      expect(screen.queryByRole("button", { name: translations.action_view_layers.zh })).not.toBeInTheDocument();
+      expect(screen.getByText(translations.recipe_export_btn.zh)).toBeInTheDocument();
+      expect(screen.getByText(translations.recipe_export_sidecar_btn.zh)).toBeInTheDocument();
+      expect(screen.getByTestId("bed-size-selector")).toBeInTheDocument();
+      expect(screen.getByTestId("slicer-selector")).toBeInTheDocument();
+    },
+  );
 
   it("shows readable share-card export failures instead of raw HTTP status text", async () => {
     vi.mocked(recipeImportFlow.exportShareCard).mockRejectedValueOnce(

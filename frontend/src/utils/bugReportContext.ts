@@ -56,6 +56,7 @@ function deriveFinalArtifact(isConverterActive: boolean): FinalArtifactRef | nul
     return null;
   }
   const artifactType: FinalArtifactRef["artifact_type"] = converter.largeFormatEnabled
+    || (converter.separate_backing && converter.backingOutput === "separate_project")
     ? "zip"
     : downloadUrl.toLowerCase().includes(".zip")
       ? "zip"

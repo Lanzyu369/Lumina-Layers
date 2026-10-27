@@ -1,3 +1,4 @@
+import CloseButton from "./ui/CloseButton";
 import { useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -87,16 +88,9 @@ export default function MaterialSolverCacheDialog({
                       )}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
-                    onClick={() => setOpen(false)}
-                    aria-label={t("basic_material_picker_close")}
-                  >
-                    ✕
-                  </button>
+                  <CloseButton label={t("basic_material_picker_close")} onClick={() => setOpen(false)} />
                 </div>
-                <div className="flex-1 overflow-y-auto px-5 py-4">
+                <div className="flex-1 overflow-y-auto overscroll-y-contain px-5 py-4">
                   <MaterialSolverCacheStatusCard
                     materialDirectoryNames={materialDirectoryNames}
                     layerCount={layerCount}

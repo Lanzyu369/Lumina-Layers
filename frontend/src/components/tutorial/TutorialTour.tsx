@@ -95,7 +95,7 @@ function TutorialControlList({ step }: { step: TutorialStep }) {
     >
       {step.controlHints.map((hint) => (
         <div key={hint.gestureKey} className="contents">
-          <dt className="justify-self-start rounded-md border border-slate-300/80 bg-slate-50 px-2 py-0.5 font-semibold text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+          <dt className="justify-self-start rounded-md border border-slate-300/80 bg-slate-100 px-2 py-0.5 font-semibold text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
             {t(hint.gestureKey)}
           </dt>
           <dd className="text-slate-600 dark:text-slate-300">{t(hint.effectKey)}</dd>
@@ -339,7 +339,7 @@ export default function TutorialTour(): JSX.Element | null {
 
         <div
           ref={bodyRef}
-          className="min-h-0 flex-1 overflow-y-auto px-5"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-5"
           data-testid="tutorial-card-body"
         >
           <h2

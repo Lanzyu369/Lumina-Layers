@@ -14,7 +14,7 @@ from core.material_registry import (
     build_material_registry_catalog,
     upload_material_registry_package,
 )
-import core.single_stage.materials as materials_module
+import core.single_stage.material_package as materials_module
 from core.lumina_box_archive import save_lumina_box_material_archive
 from core.km_xyz import (
     KM_XYZ_COLOR_BRIDGE_ID,

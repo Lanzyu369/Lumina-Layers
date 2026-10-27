@@ -1,3 +1,4 @@
+import DisclosureChevron from "../ui/DisclosureChevron";
 import {
   useCallback,
   useEffect,
@@ -11,8 +12,6 @@ import type { ModelSurfacePlacement } from "../../stores/converter";
 import WikiTooltip from "../ui/WikiTooltip";
 import {
   CameraIcon,
-  ChevronDown,
-  ChevronUp,
   CubeIcon,
   EyeIcon,
   EyeOffIcon,
@@ -53,7 +52,7 @@ export interface ViewDisplayOptions {
 }
 
 function SurfaceToolButton({
-  active = false,
+  active,
   disabled = false,
   description,
   label,
@@ -87,7 +86,7 @@ function SurfaceToolButton({
         onClick={onClick}
         className={
           "inline-flex h-8 w-8 items-center justify-center rounded-xl border text-[11px] font-semibold backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 "
-          + (active
+          + (active === undefined ? "action-control" : active
             ? "border-blue-500/70 bg-blue-500/20 text-blue-700 dark:text-blue-200"
             : "border-slate-200/80 bg-slate-100/85 text-slate-600 hover:bg-slate-200/90 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80")
         }
@@ -554,7 +553,7 @@ export function ModelSurfaceToolbar({
                 onUpdatePlacement?.({ inset_mm: value });
               }
             }}
-            className="h-6 w-14 rounded-lg border border-slate-200/80 bg-slate-50 px-1.5 text-right text-[11px] font-semibold text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700/80 dark:bg-slate-950/70 dark:text-slate-200"
+            className="h-6 w-14 rounded-lg border border-slate-200/80 bg-slate-100 px-1.5 text-right text-[11px] font-semibold text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700/80 dark:bg-slate-950/70 dark:text-slate-200"
           />
           <span aria-hidden="true">{t("common_unit_mm")}</span>
         </label>
@@ -698,10 +697,11 @@ export function ModelSurfaceToolbar({
                     title={toolbarLayout.collapsed
                       ? t("model_surface_toolbar_expand")
                       : t("model_surface_toolbar_collapse")}
+                    aria-expanded={!toolbarLayout.collapsed}
                     onClick={handleToggleToolbarCollapsed}
                     className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-slate-200/80 hover:text-slate-800 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
                   >
-                    {toolbarLayout.collapsed ? <ChevronDown /> : <ChevronUp />}
+                    <DisclosureChevron expanded={!toolbarLayout.collapsed} />
                   </button>
                 </WikiTooltip>
               </div>

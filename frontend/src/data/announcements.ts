@@ -16,16 +16,165 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
-    version: "2026-10-14",
+    version: "2026-10-28",
+    title: { zh: "Lumina Layers — 10 月更新速览", en: "Lumina Layers — October updates" },
+    sections: [{ category: { zh: "校准 & 材料", en: "Calibration & Materials" }, items: [{
+      zh: "Lumina Box 支持耗材采集和叠色样片采集，可新建或重采耗材档案，用于图像转换；黑白背板可分别采集和保存，采集进度自动保存。",
+      en: "Lumina Box supports filament and stack-sample capture. Create or remeasure material profiles for image conversion, capture and save black and white backings separately, and resume automatically saved progress.",
+    }] }],
+  },
+  {
+    version: "2026-10-26",
+    title: { zh: "Lumina Layers — 10 月更新速览", en: "Lumina Layers — October updates" },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "常用转换设置可以保存为命名预设，下次一键套用；高级设置、外轮廓和透明镀层可自行选择是否一起保存，未选的部分不会被预设覆盖。",
+            en: "Save your usual conversion settings as named presets and apply them next time. Choose whether to include advanced settings, outlines and transparent coating; anything left out keeps its current settings.",
+          },
+          {
+            zh: "尺寸预设按图片长边保存，横图和竖图都能沿用同一尺寸；重新打开软件后，也会恢复上次保存的颜色来源、耗材、尺寸和单面／双面等转换设置。",
+            en: "Size presets follow the image’s long edge, so the same size works for landscape and portrait images. Reopening the app also restores saved conversion choices such as the color source, materials, size and single- or double-sided printing.",
+          },
+          {
+            zh: "桌面版可在设置中调整并保存界面缩放，切换显示器时会适配屏幕大小；macOS 新增系统菜单，可使用常见的文件、编辑和窗口操作。",
+            en: "The desktop app lets you adjust and save interface scale in Settings, adapting to the screen size when you switch displays. macOS also gains a native menu for familiar file, editing and window actions.",
+          },
+        ],
+      },
+      {
+        category: { zh: "颜色工作站", en: "Color Workstation" },
+        items: [
+          {
+            zh: "核心设置按导入、颜色设置、尺寸和底板、单面／双面打印、建模模式重新分组；耗材、层高、层数和底板耗材集中排列，常用参数更容易找到。",
+            en: "Core settings are grouped into import, color, size and backing, single- or double-sided printing, and modeling mode. Material, layer height, layer count and backing material controls now sit together for easier access.",
+          },
+          {
+            zh: "没有保存过偏好时，颜色来源默认选择“耗材档案”；已有选择会继续保留。“传统 LUT”统一称为“经典 LUT”（实拍色卡的颜色对照表），新手导览也按耗材档案、经典 LUT 的顺序介绍。",
+            en: "Material Archive is now the default color source when no preference has been saved; existing choices are retained. Traditional LUT is renamed Classic LUT (the color lookup table from photographed charts), and the beginner tour covers Material Archive first, then Classic LUT.",
+          },
+          {
+            zh: "经典 LUT 改用可搜索的选择窗口，可以跨品牌挑选，并在确认后统一应用；刷新入口也收进窗口，主面板只显示选择摘要。",
+            en: "Classic LUT selection now has a searchable dialog where you can choose across brands and apply your selection together. Refresh is inside the dialog, while the main panel shows a compact summary.",
+          },
+          {
+            zh: "裁切和旋转操作集中到同一个窗口，可向左或向右旋转 90°；SVG（矢量图）在这里可调整方向，保留原始矢量内容。",
+            en: "Cropping and rotation now share one dialog, with 90° turns to the left or right. SVG vector images can be reoriented here while retaining their original vector content.",
+          },
+          {
+            zh: "输出区精简为下载 3MF（多色打印文件）或打开切片软件，省去单独的生成入口；预览满意后选择所需操作，软件会自动生成文件。",
+            en: "The output area is simplified to downloading a 3MF multicolor print file or opening it in your slicer, without a separate Generate control. Once the preview looks right, choose either action and the app generates the file as needed.",
+          },
+          {
+            zh: "本次隐藏了掐丝珐琅设置入口，已有设置数据仍保留。",
+            en: "The cloisonné settings entry is hidden in this update; existing settings data is retained.",
+          },
+        ],
+      },
+      {
+        category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+        items: [
+          {
+            zh: "本地与云端的耗材库、LUT 库统一了浏览布局：列表展示摘要，选中条目后查看详细信息，便于查找和比较；云端条目可直接安装或更新。",
+            en: "Local and cloud material and LUT libraries now share a browsing layout: the list shows summaries, and selecting an item reveals its details for easier browsing and comparison. Cloud items can be installed or updated directly.",
+          },
+          {
+            zh: "云端耗材库的“本地历史版本”改为独立窗口，按本地安装时间列出可恢复的版本，选中后即可恢复；也可从单个耗材详情查看它的历史。",
+            en: "Local Version History in the cloud material library now opens in its own dialog. Browse restorable versions by local installation time and restore the one you select, or open the history for a single material from its details.",
+          },
+          {
+            zh: "LUT 分析页重新整理了信息和颜色分布图，查看色彩范围与详细数据更方便。",
+            en: "The LUT analysis page reorganizes its information and color distribution charts, making the color range and detailed data easier to inspect.",
+          },
+          {
+            zh: "梯度色卡页面分开说明黑白底卡的打印要求和配置包的保存步骤；桌面版可在浏览器中打开在线模型，使用前请确认模型层高与配置包一致。",
+            en: "The gradient-card page now separates the black/white card printing instructions from the steps for saving the configuration package. The desktop app opens online models in your browser; check that the model and configuration package use the same layer height.",
+          },
+        ],
+      },
+      {
+        category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+        items: [
+          {
+            zh: "设置页简化了分组和留白，左侧分类在滚动时保持可见，宽屏内容居中显示；通用设置可选择语言，模板下拉菜单中可直接导入切片模板。",
+            en: "Settings has simpler grouping and spacing, with the left-hand categories staying visible while you scroll and centered content on wide screens. Choose the language in General and import slicer templates directly from the template dropdown.",
+          },
+          {
+            zh: "桌面标题栏与主导航合并，统一了按钮、开关、关闭控件、字体和滚动条样式；颜色调整工作区也沿用相同的界面风格。",
+            en: "The desktop title bar and main navigation are combined. Buttons, switches, close controls, typography and scrollbars now use a consistent style, including in the color-adjustment workspace.",
+          },
+          {
+            zh: "深浅色切换、新手导览、问题反馈和连接状态集中在右上角菜单中，连接异常时会有红点提醒。",
+            en: "Theme switching, the beginner tour, bug reports and connection status are grouped in the top-right menu, with a red dot to alert you to connection problems.",
+          },
+          {
+            zh: "统一了二维、三维预览和裁切窗口的滚轮缩放与触控板操作，并改善页面切换、侧栏和弹窗滚动时的体验。",
+            en: "Mouse-wheel zoom and trackpad controls are more consistent across 2D and 3D previews and the crop dialog, with smoother page transitions and more reliable scrolling in sidebars and dialogs.",
+          },
+          {
+            zh: "调整了三维预览的打印平台标识与取景中心，平台顶面、侧面和底面的显示更清晰。",
+            en: "The 3D preview has updated build-plate markings and framing, with a clearer distinction between the plate’s top, sides and underside.",
+          },
+          {
+            zh: "按钮处理任务时会保持原有大小，并在中央显示等待指示；云端库的成功提示停留约 5 秒后平滑收起，错误提示会保留，方便查看和处理。",
+            en: "Busy buttons keep their size and show a centered loading indicator. Success messages in cloud libraries fade and collapse after about five seconds, while errors stay visible so you can act on them.",
+          },
+        ],
+      },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "补齐 JFIF 图片在文件选择和预览中的支持；五色配方画布中的文字也会跟随软件语言切换。",
+            en: "JFIF images are now supported throughout file selection and preview, and text on the five-color recipe canvas follows the app’s language setting.",
+          },
+          {
+            zh: "减少云端耗材同步时对其他操作的阻塞，安装或更新耗材期间软件更容易保持响应。",
+            en: "Cloud material sync is less likely to hold up other operations, helping the app stay responsive while materials are installed or updated.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-10-21",
     title: {
-      zh: "Lumina Layers — 校准 & 材料更新",
-      en: "Lumina Layers — Calibration & Materials update",
+      zh: "Lumina Layers — 10 月更新速览",
+      en: "Lumina Layers — October updates",
     },
     sections: [{
       category: { zh: "校准 & 材料", en: "Calibration & Materials" },
       items: [{
-        zh: "新增 Lumina Box 耗材采集：支持任意颜色，可新建或重采耗材档案，用于图像转换。黑、白背板可分别采集、独立保存，并按本批样片的实际用料分别选择；采集进度自动保存。",
-        en: "Added Lumina Box capture for any filament color, with separate options to create or remeasure material profiles for image conversion. Black and white backings can be measured and saved independently, then selected separately to match your actual samples. Progress is saved automatically.",
+        zh: "修正了高层数耗材配色计算遗漏大量配方的问题；之前计算过的旧数据会在下次使用时自动重新计算，原有项目和耗材档案不受影响。",
+        en: "Fixed missing recipe choices in higher-layer material colour calculations. Older calculated data is rebuilt automatically when next needed, without changing your projects or material profiles.",
+      }],
+    }],
+  },
+  {
+    version: "2026-10-15",
+    title: {
+      zh: "Lumina Layers — 10 月更新速览",
+      en: "Lumina Layers — October updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "生成打印文件前，会检查耗材预设和打印板是否兼容。遇到多个匹配预设或打印板不兼容时，可直接选择耗材、切换打印板并继续生成；分享卡也会保存耗材选择。",
+        en: "Filament presets and build plates are checked before generating print files. If several presets match or the plate is incompatible, choose a filament or switch plates and continue. Share cards also retain your filament choices.",
+      }, {
+        zh: "首次启动时会等待本机服务准备好，再自动进入工作区，无需手动刷新。耗材预设之间的共同设置冲突也会在生成前明确提示。",
+        en: "The first start now waits for the local service before opening the workspace automatically, without a manual refresh. Conflicting shared filament settings are also explained before generation.",
+      }, {
+        zh: "保存 JSON 项目或 PNG 分享卡时，会带上局部换色、区域配方和选区。重新导入后可以继续编辑；旧文件没有保存的区域信息仍会明确提示。",
+        en: "JSON projects and PNG share cards now retain local color edits, regional recipes and selections for continued editing after import. Older files still explain when region data was not saved.",
+      }, {
+        zh: "启用涂层后，需要明确选择使用哪种耗材，可沿用当前配色耗材或另选耗材档案；混用不同材料类型时会提示，生成前也会检查原生预设和打印板。",
+        en: "Coating now requires an explicit material choice from the current palette or a separate material archive. Mixed material types are explained, and native presets and plates are checked before generation.",
+      }, {
+        zh: "单面模型的分离底板可选择独立工程输出，下载的压缩包保留模型和底板原尺寸，并分别安排打印位置。自动摆放未找到安全位置时，仍会生成文件并持续提示手动检查；请分别打开每个工程，确认切片通过后再打印。",
+        en: "Single-sided models can export a separated backing as its own project. The ZIP keeps the original model and backing sizes and lays out each independently. If automatic placement cannot verify a safe layout, the files remain available with a manual-check warning. Open each project and confirm slicing succeeds before printing.",
       }],
     }],
   },

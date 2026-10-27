@@ -312,11 +312,6 @@ def test_dynamic_svg_edit_lifecycle_keeps_native_geometry_and_export_recipes(
         capture_threemf_export,
     )
     monkeypatch.setattr(
-        replace_router,
-        "schedule_glb_build",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
         generate_router,
         "_record_material_archive_usage_safe",
         lambda *_args, **_kwargs: None,
@@ -461,6 +456,13 @@ def test_dynamic_svg_edit_lifecycle_keeps_native_geometry_and_export_recipes(
                 axis=-1,
             )
         )
+
+        # Edits invalidate the previous preview. Let the real scheduler finish
+        # the latest edit before measuring the independent exact-3MF export.
+        edited_glb_url = _wait_for_lightweight_glb(client, session_id)
+        edited_glb = client.get(edited_glb_url)
+        assert edited_glb.status_code == 200
+        assert edited_glb.content.startswith(b"glTF")
 
         build_snapshots.clear()
         glb_snapshots.clear()

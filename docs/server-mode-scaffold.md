@@ -28,7 +28,7 @@ None of those are current product priorities — Lumina ships as an
 **local desktop tool**.
 
 PostgreSQL dependencies are optional: install them with
-`python -m pip install -r requirements-postgres.txt` after the normal runtime
+`python -m pip install -r api/requirements-postgres.txt` after the normal runtime
 setup. Tests use `requirements-dev.txt`; real database integration tests require
 `LUMINA_INTEGRATION_DB_URL` pointing to a disposable database.
 

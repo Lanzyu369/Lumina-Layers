@@ -15,32 +15,42 @@ import {
   stageBedTextureReplacement,
 } from "./bedPlatformTexture";
 import {
+  BED_BODY_MATERIAL_INDEX,
+  BED_SURFACE_MATERIAL_INDEX,
   computeBedPreviewCameraPose,
+  createBedPlatformMesh,
   createFallbackBedGeometry,
   loadNativeBedGeometrySource,
   prepareNativeBedGeometry,
 } from "./bedPlatformGeometry";
 
-function useBedImage(source: string | null): HTMLImageElement | null {
-  const [markImage, setMarkImage] = useState<HTMLImageElement | null>(null);
+function useBedImage(source: string | null): { image: HTMLImageElement | null; ready: boolean } {
+  const [loaded, setLoaded] = useState<{ source: string; image: HTMLImageElement | null } | null>(null);
 
   useEffect(() => {
-    setMarkImage(null);
     if (!source) return;
     let active = true;
     const image = new Image();
     const handleLoad = () => {
-      if (active) setMarkImage(image);
+      if (active) setLoaded({ source, image });
+    };
+    const handleError = () => {
+      if (active) setLoaded({ source, image: null });
     };
     image.addEventListener("load", handleLoad, { once: true });
+    image.addEventListener("error", handleError, { once: true });
     image.src = source;
     return () => {
       active = false;
       image.removeEventListener("load", handleLoad);
+      image.removeEventListener("error", handleError);
     };
   }, [source]);
 
-  return markImage;
+  return {
+    image: loaded?.source === source ? loaded.image : null,
+    ready: !source || loaded?.source === source,
+  };
 }
 
 function imageElementToDataUrl(image: HTMLImageElement | null): string | null {
@@ -69,14 +79,15 @@ function useNativeBedGeometry(
   deviceProfileId: string,
   printableWidthMm: number,
   printableHeightMm: number,
-): THREE.BufferGeometry | null {
+): { geometry: THREE.BufferGeometry | null; ready: boolean } {
   const modelUrl = useMemo(
     () => getMachineBedModelUrl(deviceProfileId),
     [deviceProfileId],
   );
+  const requestKey = JSON.stringify([deviceProfileId, modelUrl, printableWidthMm, printableHeightMm]);
   const [loaded, setLoaded] = useState<{
-    url: string;
-    geometry: THREE.BufferGeometry;
+    key: string;
+    geometry: THREE.BufferGeometry | null;
   } | null>(null);
 
   useEffect(() => {
@@ -95,7 +106,7 @@ function useNativeBedGeometry(
     })
       .then((sourceGeometry) => {
         if (!sourceGeometry) {
-          if (active) setLoaded(null);
+          if (active) setLoaded({ key: requestKey, geometry: null });
           return;
         }
         const prepared = prepareNativeBedGeometry(
@@ -109,28 +120,33 @@ function useNativeBedGeometry(
           return;
         }
         ownedGeometry = prepared;
-        setLoaded({ url: modelUrl, geometry: prepared });
+        setLoaded({ key: requestKey, geometry: prepared });
       })
       .catch(() => {
-        if (active) setLoaded(null);
+        if (active) setLoaded({ key: requestKey, geometry: null });
       });
     return () => {
       active = false;
       ownedGeometry?.dispose();
     };
-  }, [deviceProfileId, modelUrl, printableWidthMm, printableHeightMm]);
+  }, [deviceProfileId, modelUrl, printableWidthMm, printableHeightMm, requestKey]);
 
-  return loaded?.url === modelUrl ? loaded.geometry : null;
+  return {
+    geometry: loaded?.key === requestKey ? loaded.geometry : null,
+    ready: !modelUrl || loaded?.key === requestKey,
+  };
 }
 
 interface BedPlatformProps {
   surfaceModelActive?: boolean;
   gridVisible?: boolean;
+  onReadyChange?: (ready: boolean) => void;
 }
 
 export default function BedPlatform({
   surfaceModelActive = false,
   gridVisible = true,
+  onReadyChange,
 }: BedPlatformProps) {
   const bed_label = useConverterStore((s) => s.bed_label);
   const bedSizes = useConverterStore((s) => s.bedSizes);
@@ -143,25 +159,27 @@ export default function BedPlatform({
   const slicerSoftware = useSettingsStore((s) => s.slicerSoftware);
   const camera = useThree((state) => state.camera);
   const controls = useThree((state) => state.controls);
+  const invalidate = useThree((state) => state.invalidate);
 
   const selectedBed = useMemo(
     () => bedSizes.find((bed) => bed.label === bed_label),
     [bedSizes, bed_label],
   );
 
-  const bedDims = useMemo(() => {
-    return selectedBed
-      ? { w: selectedBed.width_mm, h: selectedBed.height_mm }
-      : { w: 256, h: 256 };
-  }, [selectedBed]);
+  const bedWidthMm = selectedBed?.width_mm ?? 256;
+  const bedHeightMm = selectedBed?.height_mm ?? 256;
+  const bedDims = useMemo(
+    () => ({ w: bedWidthMm, h: bedHeightMm }),
+    [bedWidthMm, bedHeightMm],
+  );
 
-  const luminaMarkImage = useBedImage(LUMINA_BED_MARK_URL);
+  const { image: luminaMarkImage, ready: luminaMarkReady } = useBedImage(LUMINA_BED_MARK_URL);
   const slicerLogoSource = useMemo(
     () => getSlicerLogoSource(slicerSoftware),
     [slicerSoftware],
   );
-  const slicerLogoImage = useBedImage(slicerLogoSource);
-  const nativeBedGeometry = useNativeBedGeometry(
+  const { image: slicerLogoImage, ready: slicerLogoReady } = useBedImage(slicerLogoSource);
+  const { geometry: nativeBedGeometry, ready: nativeBedReady } = useNativeBedGeometry(
     deviceProfileId,
     bedDims.w,
     bedDims.h,
@@ -182,12 +200,7 @@ export default function BedPlatform({
     const geo = nativeBedGeometry
       ? nativeBedGeometry.clone()
       : createFallbackBedGeometry(bedDims.w, bedDims.h);
-    const mat = new THREE.MeshStandardMaterial({
-      roughness: 0.68,
-      metalness: 0.12,
-      side: THREE.DoubleSide,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = createBedPlatformMesh(geo);
     mesh.name = "scene-build-plate";
     mesh.userData.bedGeometrySource = nativeBedGeometry
       ? "slicer-native"
@@ -197,7 +210,10 @@ export default function BedPlatform({
   }, [bedDims, nativeBedGeometry]);
 
   useLayoutEffect(() => {
-    const material = bedMesh.material as THREE.MeshStandardMaterial;
+    onReadyChange?.(false);
+    let active = true;
+    const material = bedMesh.material[BED_SURFACE_MATERIAL_INDEX];
+    bedMesh.material[BED_BODY_MATERIAL_INDEX].color.set(bedColors.bedBase);
     bedMesh.userData.gridVisible = gridVisible;
     const request = createBedTextureRequest({
       widthMm: bedDims.w,
@@ -211,11 +227,21 @@ export default function BedPlatform({
           (slicerLogoImage.naturalHeight || 1)
         : 1,
     });
-    return stageBedTextureReplacement(
+    const stop = stageBedTextureReplacement(
       material,
       request,
       bedColors.bedInner,
     );
+    void request.ready.then(() => {
+      if (!active) return;
+      // Material-map changes are imperative, so demand rendering needs a frame.
+      invalidate();
+      onReadyChange?.(luminaMarkReady && slicerLogoReady && nativeBedReady);
+    });
+    return () => {
+      active = false;
+      stop();
+    };
   }, [
     bedColors,
     bedDims.h,
@@ -224,6 +250,11 @@ export default function BedPlatform({
     gridVisible,
     luminaMarkImage,
     slicerLogoImage,
+    luminaMarkReady,
+    slicerLogoReady,
+    nativeBedReady,
+    invalidate,
+    onReadyChange,
   ]);
 
   useEffect(() => {

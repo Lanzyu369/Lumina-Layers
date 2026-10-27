@@ -11,6 +11,7 @@ from core.errors import (
     CoreProcessingError,
     CoreValidationError,
     MaterialArchiveConflictError,
+    NativeMaterialSelectionError,
 )
 from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
@@ -94,6 +95,20 @@ def to_http_exception(exc: Exception, context: str) -> HTTPException:
     """
     if isinstance(exc, HTTPException):
         return exc
+    if isinstance(exc, NativeMaterialSelectionError):
+        from core.export_material_selection import present_material_selection
+
+        selection = exc.material_selection
+        if not selection.get("device_profile_id"):
+            selection = present_material_selection(selection)
+        return HTTPException(
+            status_code=422,
+            detail={
+                "error": exc.error_type,
+                "message": exc.detail,
+                "material_selection": selection,
+            },
+        )
     if isinstance(exc, DynamicMaterialCandidateError):
         no_candidate = exc.phase in {"exact_search", "fixed_max_baseline"}
         return HTTPException(

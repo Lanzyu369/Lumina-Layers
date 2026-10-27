@@ -95,14 +95,14 @@ describe("Lumina Box material workflow", () => {
     const view = render(<LuminaBoxMaterialPanel />);
     expect(await screen.findByTestId("box-material-create-form")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Lumina Box 耗材采集" })).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "创建其他耗材档案" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "新建耗材档案" })).toBeInTheDocument();
     const toolbar = within(screen.getByTestId("box-material-toolbar"));
-    expect(toolbar.getByRole("button", { name: "创建其他耗材档案" })).toBeInTheDocument();
-    expect(toolbar.getByRole("button", { name: "连接 Lumina Box" })).toBeInTheDocument();
+    expect(toolbar.getByRole("button", { name: "新建耗材档案" })).toBeInTheDocument();
+    expect(toolbar.queryByRole("button", { name: "连接 Lumina Box" })).not.toBeInTheDocument();
     await waitFor(() => expect(captureApi.loadBackedGradientDataset).toHaveBeenCalledWith(dataset.dataset_id));
     expect(screen.getByLabelText("耗材名称")).toHaveValue("");
     expect(screen.queryByTestId("box-material-measurements")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "连接 Lumina Box" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "连接 Lumina Box" })).not.toBeInTheDocument();
     view.unmount();
     useLuminaBoxMaterialNavigation.setState({ captureRequest: { datasetId: dataset.dataset_id, materialSymbol: "R" } });
     const resumed = render(<LuminaBoxMaterialPanel />);
@@ -160,14 +160,14 @@ describe("Lumina Box material workflow", () => {
     render(<LuminaBoxMaterialPanel />);
     await screen.findByTestId("box-material-measurements");
     await waitFor(() => expect(screen.getByRole("button", { name: "生成耗材档案" })).not.toBeDisabled());
-    expect(screen.getByTestId("box-material-progress")).toHaveTextContent("14 / 14");
+    expect(screen.getByTestId("lumina-box-progress-bar")).toHaveTextContent("14 / 14");
     expect(within(screen.getByTestId("box-material-measurements")).getAllByRole("button")).toHaveLength(14);
     expect(screen.queryByText("补收未确认数据")).not.toBeInTheDocument();
     expect(screen.queryByTestId("lumina-box-connection-diagnostics")).not.toBeInTheDocument();
     expect(screen.queryByText("内部验证档")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "生成耗材档案" }));
     await screen.findByRole("button", { name: "保存到耗材库" });
-    expect(screen.getByRole("button", { name: "重新生成耗材档案" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新生成" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "生成耗材档案" })).not.toBeInTheDocument();
     expect(materialApi.startLuminaBoxMaterialFit).toHaveBeenCalledWith(dataset.dataset_id, false, "R", reference.reference_id);
     fireEvent.click(screen.getByRole("button", { name: "保存到耗材库" }));
@@ -278,7 +278,7 @@ describe("Lumina Box material workflow", () => {
       await waitFor(() => expect(commands.some((command) => command.type === "hello" && command.capture_id === transport.getState().captureId)).toBe(true));
       await act(async () => { pong(0); });
       expect(screen.getByRole("button", { name: "黑底 0.08 mm" })).not.toBeDisabled();
-      expect(screen.getByTestId("box-material-progress")).toHaveTextContent("14 / 14");
+      expect(screen.getByTestId("lumina-box-progress-bar")).toHaveTextContent("14 / 14");
       expect(dataset.captures).toEqual(savedCaptures);
       expect(captureApi.saveBackedGradientCapture).not.toHaveBeenCalled();
       expect(commands.some((command) => command.type === "ack")).toBe(false);
@@ -299,7 +299,7 @@ describe("Lumina Box material workflow", () => {
       fitted_reference_id: "reference-2", backing_id: "backing-a" }]);
     render(<LuminaBoxMaterialPanel />);
     await screen.findByRole("button", { name: "保存到耗材库" });
-    expect(screen.getByRole("button", { name: "重新生成耗材档案" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新生成" })).toBeInTheDocument();
   });
 
   it("keeps the generated material available when completing it publishes a new backing version", async () => {
@@ -371,8 +371,8 @@ describe("Lumina Box material workflow", () => {
     vi.mocked(materialApi.listLuminaBoxBackingReferences).mockResolvedValue([]);
     vi.mocked(materialApi.listLuminaBoxBackingMaterials).mockResolvedValue([]);
     render(<LuminaBoxMaterialPanel />);
-    await screen.findByText(/创建其他耗材档案前/);
-    const setup = within(screen.getByTestId("box-material-toolbar")).getByRole("button", { name: "创建黑白耗材档案" });
+    await screen.findByText(/新建耗材档案前/);
+    const setup = within(screen.getByTestId("box-material-toolbar")).getByRole("button", { name: "采集背板信息" });
     fireEvent.click(setup);
     expect(screen.getAllByLabelText("耗材名称")).toHaveLength(2);
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
@@ -394,7 +394,7 @@ describe("Lumina Box material workflow", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "黑色背板" }));
     expect(screen.queryByRole("option", { name: "Awaiting black" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("option", { name: "KYNIX PETG Black" }));
-    fireEvent.click(screen.getByRole("button", { name: "创建黑白耗材档案" }));
+    fireEvent.click(screen.getByRole("button", { name: "采集背板信息" }));
     expect(screen.queryByText("Unmeasured white")).not.toBeInTheDocument();
     expect(screen.queryByText("Awaiting black")).not.toBeInTheDocument();
   });
@@ -406,11 +406,11 @@ describe("Lumina Box material workflow", () => {
     render(<LuminaBoxMaterialPanel />);
     await screen.findByTestId("box-material-measurements");
     expect(captureApi.loadBackedGradientDataset).toHaveBeenCalledWith("black-active");
-    expect(screen.getByTestId("box-material-progress")).toHaveTextContent("0 / 8");
+    expect(screen.getByTestId("lumina-box-progress-bar")).toHaveTextContent("0 / 8");
     expect(screen.getByTestId("box-material-cell-K:W:0.08")).toBeInTheDocument();
     expect(screen.getByTestId("box-material-cell-bare:K")).toBeInTheDocument();
     expect(screen.queryByTestId("box-material-cell-bare:W")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "创建其他耗材档案" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新建耗材档案" })).not.toBeInTheDocument();
   });
 
   it("creates a subsequent white material against an existing black profile without another creation form", async () => {
@@ -433,19 +433,19 @@ describe("Lumina Box material workflow", () => {
     render(<LuminaBoxMaterialPanel />);
     await screen.findByTestId("box-backing-create-form");
     fireEvent.click(screen.getByRole("combobox", { name: "创建方式" }));
-    fireEvent.click(screen.getByRole("option", { name: "成对创建黑白耗材" }));
+    fireEvent.click(screen.getByRole("option", { name: translations.lumina_box_bw_create_pair.zh }));
     expect(screen.queryByRole("combobox", { name: "制作样片使用的黑色耗材" })).not.toBeInTheDocument();
     const white = within(screen.getByRole("group", { name: "白色耗材" }));
     fireEvent.change(white.getByLabelText("耗材名称"), { target: { value: "New White" } });
     expect(screen.getByRole("button", { name: "开始采集白色耗材" })).toBeDisabled();
     fireEvent.change(within(screen.getByRole("group", { name: "黑色耗材" })).getByLabelText("耗材名称"), { target: { value: "New Black" } });
     fireEvent.click(screen.getByRole("combobox", { name: "创建方式" }));
-    fireEvent.click(screen.getByRole("option", { name: "单独创建黑色或白色耗材" }));
+    fireEvent.click(screen.getByRole("option", { name: translations.lumina_box_bw_create_single.zh }));
     expect(screen.getByLabelText("耗材名称")).toHaveValue("New White");
     fireEvent.click(screen.getByRole("combobox", { name: "制作样片使用的黑色耗材" }));
     fireEvent.click(screen.getByRole("option", { name: "KYNIX PETG Black" }));
     fireEvent.click(screen.getByRole("combobox", { name: "创建方式" }));
-    fireEvent.click(screen.getByRole("option", { name: "成对创建黑白耗材" }));
+    fireEvent.click(screen.getByRole("option", { name: translations.lumina_box_bw_create_pair.zh }));
     expect(within(screen.getByRole("group", { name: "黑色耗材" })).getByLabelText("耗材名称")).toHaveValue("New Black");
     fireEvent.click(screen.getByRole("button", { name: "开始采集白色耗材" }));
     await screen.findByTestId("box-material-measurements");
@@ -479,7 +479,7 @@ describe("Lumina Box material workflow", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "黑色背板" }));
     fireEvent.click(screen.getByRole("option", { name: "Brand C Black" }));
     expect(screen.getByRole("button", { name: "开始采集" })).not.toBeDisabled();
-    expect(screen.getByRole("button", { name: "创建其他耗材档案" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "新建耗材档案" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "开始采集" }));
     await screen.findByTestId("box-material-measurements");
     expect(materialApi.createLuminaBoxMaterialDataset).toHaveBeenCalledWith(expect.objectContaining({ name: "Orange", white_backing_id: "white-1", black_backing_id: "black-2" }));
@@ -554,7 +554,7 @@ describe("Lumina Box material workflow", () => {
     vi.mocked(materialApi.loadLuminaBoxMaterialFitResult).mockImplementation(async () => ({ status: "awaiting_opposite",
       selected_record_ids: Object.values(dataset.selected_capture_ids) }));
     render(<LuminaBoxMaterialPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "成对创建黑白耗材档案" }));
+    fireEvent.click(await screen.findByRole("button", { name: translations.lumina_box_pair_create.zh }));
     const white = within(screen.getByRole("group", { name: "白色耗材" }));
     const black = within(screen.getByRole("group", { name: "黑色耗材" }));
     fireEvent.change(white.getByLabelText("耗材名称"), { target: { value: "New White" } });
@@ -565,7 +565,7 @@ describe("Lumina Box material workflow", () => {
     expect(materialApi.createLuminaBoxBlackWhitePair).toHaveBeenCalledWith({
       white: { name: "New White", brand: "", material_type: "" }, black: { name: "New Black", brand: "", material_type: "" },
     });
-    expect(screen.getByTestId("box-material-progress")).toHaveTextContent("8 / 8");
+    expect(screen.getByTestId("lumina-box-progress-bar")).toHaveTextContent("8 / 8");
     expect(screen.getByTestId("box-material-current-sample")).toHaveTextContent("黑底");
     fireEvent.click(screen.getByRole("button", { name: "保存当前耗材采集数据" }));
     const next = await screen.findByRole("button", { name: "继续采集黑色耗材" });
@@ -586,10 +586,10 @@ describe("Lumina Box material workflow", () => {
     vi.mocked(materialApi.loadLuminaBoxMaterialFitResult).mockResolvedValue({ status: "awaiting_opposite",
       selected_record_ids: Object.values(dataset.selected_capture_ids) });
     render(<LuminaBoxMaterialPanel />);
-    await screen.findByText(/接下来采集“KYNIX PETG Black”/);
+    await screen.findByText(/完成“KYNIX PETG Black”的测量/);
     await waitFor(() => expect(materialApi.listLuminaBoxBackingMaterials).toHaveBeenCalledTimes(2));
     await act(async () => { finishRefresh([{ ...whiteBacking, dataset_id: dataset.dataset_id, dataset_revision: dataset.revision }, blackBacking]); });
-    expect(screen.getByText("耗材档案已生成并保存到耗材库。")).toBeInTheDocument();
+    expect(screen.getByText(translations.lumina_box_backing_saved.zh)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "继续采集黑色耗材" })).not.toBeInTheDocument();
     expect(within(screen.getByTestId("box-material-result")).getByRole("button", { name: "查看耗材库" })).toBeInTheDocument();
     expect(materialApi.startLuminaBoxMaterialFit).not.toHaveBeenCalled();
@@ -605,7 +605,7 @@ describe("Lumina Box material workflow", () => {
       selected_record_ids: Object.values(dataset.selected_capture_ids) });
     render(<LuminaBoxMaterialPanel />);
     await screen.findByRole("button", { name: "继续采集黑色耗材" });
-    expect(screen.queryByText("耗材档案已生成并保存到耗材库。")).not.toBeInTheDocument();
+    expect(screen.queryByText(translations.lumina_box_backing_saved.zh)).not.toBeInTheDocument();
   });
 
   it("does not call changed backing readings ready before fitting them again", async () => {
@@ -616,8 +616,8 @@ describe("Lumina Box material workflow", () => {
       dataset_revision: dataset.revision - 1, fit_mode: "backing_material" }]);
     vi.mocked(materialApi.loadLuminaBoxMaterialFitResult).mockResolvedValue({ status: "awaiting_opposite", selected_record_ids: ["older-reading"] });
     render(<LuminaBoxMaterialPanel />);
-    await screen.findByText("读数已更新，请重新生成耗材档案。");
-    expect(screen.queryByText("耗材档案已生成并保存到耗材库。")).not.toBeInTheDocument();
+    await screen.findByText(translations.lumina_box_material_updated.zh);
+    expect(screen.queryByText(translations.lumina_box_backing_saved.zh)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "返回耗材信息" })).not.toBeInTheDocument();
   });
 
@@ -637,7 +637,7 @@ describe("Lumina Box material workflow", () => {
     expect(screen.getByTestId("box-material-bound-backings")).not.toHaveTextContent("Other White");
     fireEvent.click(screen.getByRole("button", { name: "连接 Lumina Box" }));
     expect(screen.getByRole("button", { name: "查看耗材库" })).toBeInTheDocument();
-    expect(screen.getByTestId("box-material-progress")).toHaveTextContent("14 / 14");
+    expect(screen.getByTestId("lumina-box-progress-bar")).toHaveTextContent("14 / 14");
     expect(screen.getByTestId("box-material-cell-B:W:0.08")).toHaveTextContent("10.00");
     expect(dataset.captures).toEqual(originalCaptures);
     expect(dataset.selected_capture_ids).toEqual(originalSelections);
@@ -669,7 +669,7 @@ describe("Lumina Box material workflow", () => {
     useLuminaBoxMaterialNavigation.setState({ captureRequest: { datasetId: dataset.dataset_id, materialSymbol: role } });
     render(<LuminaBoxMaterialPanel />);
     await screen.findByTestId("box-material-measurements");
-    expect(screen.getByTestId("box-material-progress")).toHaveTextContent("0 / 8");
+    expect(screen.getByTestId("lumina-box-progress-bar")).toHaveTextContent("0 / 8");
     expect(screen.getAllByRole("button", { name: role === "W" ? "3.00 mm 纯白参考片" : "3.00 mm 纯黑参考片" })).toHaveLength(1);
     expect(screen.queryByRole("button", { name: role === "W" ? "3.00 mm 纯黑参考片" : "3.00 mm 纯白参考片" })).not.toBeInTheDocument();
     expect(within(screen.getByTestId("box-material-measurements")).getAllByRole("button")).toHaveLength(7);
@@ -696,7 +696,7 @@ describe("Lumina Box material workflow", () => {
     vi.mocked(materialApi.listLuminaBoxMaterialFits).mockResolvedValue([run]);
     vi.mocked(materialApi.loadLuminaBoxMaterialFitResult).mockResolvedValue({ status: "complete", selected_record_ids: ["older-reading"] });
     render(<LuminaBoxMaterialPanel />);
-    await screen.findByText("读数已更新，请重新生成耗材档案。");
+    await screen.findByText(translations.lumina_box_material_updated.zh);
     expect(screen.queryByRole("button", { name: "保存到耗材库" })).not.toBeInTheDocument();
   });
 
@@ -708,7 +708,7 @@ describe("Lumina Box material workflow", () => {
     vi.mocked(materialApi.loadLuminaBoxMaterialFitResult).mockResolvedValue({ status: "complete", selected_record_ids: ownIds });
     render(<LuminaBoxMaterialPanel />);
     await screen.findByRole("button", { name: "保存到耗材库" });
-    expect(screen.queryByText("读数已更新，请重新生成耗材档案。")).not.toBeInTheDocument();
+    expect(screen.queryByText(translations.lumina_box_material_updated.zh)).not.toBeInTheDocument();
   });
 
   it.each([true, false])("updates an existing profile only after confirmation: %s", async (confirmed) => {

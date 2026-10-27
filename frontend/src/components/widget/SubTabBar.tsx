@@ -11,6 +11,13 @@ import type { TabId, ConverterSubTabId } from '../../types/widget';
 import { resolvePrimaryTab } from './TabNavBar';
 import { useWidgetStore } from '../../stores/widgetStore';
 import { motion } from 'framer-motion';
+import NavTabStrip from './NavTabStrip';
+import {
+  NAV_TAB_INDICATOR_CLASS,
+  NAV_TAB_INDICATOR_TRANSITION,
+  SECONDARY_NAV_TAB_ICON_CLASS,
+  secondaryNavTabClass,
+} from './navTabStyles';
 
 type LutSubTabId = 'lut-library' | 'calibration' | 'extractor' | 'lut-manager' | 'lut-cloud-sync' | 'lut-details' | 'lut-compare' | 'five-color';
 type MaterialSubTabId =
@@ -167,78 +174,79 @@ export default function SubTabBar({ activeTab, onTabChange, compact = false }: S
       : null;
 
   return (
-    <nav
-      role="tablist"
-      className={`dock-scrollbar flex max-w-full items-center overflow-x-auto border border-slate-200/80 bg-slate-100/90 dark:border-slate-800/80 dark:bg-slate-900/90 ${compact ? "rounded-[20px] p-1" : "rounded-2xl p-1.5"}`}
+    <NavTabStrip role="tablist">
+      {showConverterSecondary
+        ? CONVERTER_SUB_TAB_LIST.map(({ id, titleKey }) => (
+            <SubTabButton
+              key={id}
+              testId={`subtab-converter-${id}`}
+              label={t(titleKey)}
+              icon={CONVERTER_SUB_TAB_ICONS[id]}
+              isActive={id === activeConverterSubTab}
+              indicatorLayoutId="active-converter-sub-tab-indicator"
+              compact={compact}
+              onSelect={() => setActiveConverterSubTab(id)}
+            />
+          ))
+        : secondaryTabList?.map(({ id, titleKey }) => (
+            <SubTabButton
+              key={id}
+              testId={`subtab-${id}`}
+              label={t(titleKey)}
+              icon={SECONDARY_TAB_ICONS[id]}
+              isActive={id === activeTab}
+              indicatorLayoutId="active-secondary-tab-indicator"
+              compact={compact}
+              onSelect={() => onTabChange(id)}
+            />
+          ))}
+    </NavTabStrip>
+  );
+}
+
+interface SubTabButtonProps {
+  testId: string;
+  label: string;
+  icon: React.ReactNode;
+  isActive: boolean;
+  indicatorLayoutId: string;
+  compact: boolean;
+  onSelect: () => void;
+}
+
+function SubTabButton({
+  testId,
+  label,
+  icon,
+  isActive,
+  indicatorLayoutId,
+  compact,
+  onSelect,
+}: SubTabButtonProps) {
+  return (
+    <button
+      role="tab"
+      aria-selected={isActive}
+      data-testid={testId}
+      onClick={onSelect}
+      className={secondaryNavTabClass(isActive, compact)}
+      style={{ WebkitTapHighlightColor: 'transparent' }}
     >
-      <div className="flex min-w-max items-center gap-1">
-        {showConverterSecondary
-          ? CONVERTER_SUB_TAB_LIST.map(({ id, titleKey }) => {
-              const isActive = id === activeConverterSubTab;
-              return (
-                <button
-                  key={id}
-                  role="tab"
-                  aria-selected={isActive}
-                  data-testid={`subtab-converter-${id}`}
-                  onClick={() => setActiveConverterSubTab(id)}
-                  className={`
-                    relative z-10 shrink-0 rounded-xl font-semibold tracking-wide transition-colors duration-300 outline-none
-                    ${compact ? "px-2.5 py-2 text-xs sm:px-3" : "px-3 py-2 text-sm sm:px-4"}
-                    ${isActive ? 'text-blue-700 dark:text-blue-400' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}
-                  `}
-                  style={{ WebkitTapHighlightColor: 'transparent' }}
-                >
-                  {isActive && (
-                    <motion.div
-                      layoutId="active-converter-sub-tab-indicator"
-                      className="absolute inset-0 rounded-xl border border-slate-200/80 bg-slate-100/95 dark:border-slate-700/80 dark:bg-slate-900/85"
-                      transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
-                      style={{ zIndex: -1 }}
-                    />
-                  )}
-                  <span className="relative z-10 flex items-center gap-2">
-                    <span className="flex items-center justify-center">{CONVERTER_SUB_TAB_ICONS[id]}</span>
-                    <span className={`whitespace-nowrap ${compact ? "hidden sm:inline" : ""}`}>{t(titleKey)}</span>
-                  </span>
-                </button>
-              );
-            })
-          : secondaryTabList
-            ? secondaryTabList.map(({ id, titleKey }) => {
-                const isActive = id === activeTab;
-                return (
-                  <button
-                    key={id}
-                    role="tab"
-                    aria-selected={isActive}
-                    data-testid={`subtab-${id}`}
-                    onClick={() => onTabChange(id)}
-                    className={`
-                      relative z-10 shrink-0 rounded-xl font-semibold tracking-wide transition-colors duration-300 outline-none
-                      ${compact ? "px-2.5 py-2 text-xs sm:px-3" : "px-3 py-2 text-sm sm:px-4"}
-                      ${isActive ? 'text-blue-700 dark:text-blue-400' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}
-                    `}
-                    style={{ WebkitTapHighlightColor: 'transparent' }}
-                  >
-                    {isActive && (
-                      <motion.div
-                        layoutId="active-secondary-tab-indicator"
-                        className="absolute inset-0 rounded-xl border border-slate-200/80 bg-slate-100/95 dark:border-slate-700/80 dark:bg-slate-900/85"
-                        transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
-                        style={{ zIndex: -1 }}
-                      />
-                    )}
-                    <span className="relative z-10 flex items-center gap-2">
-                      <span className="flex items-center justify-center">{SECONDARY_TAB_ICONS[id]}</span>
-                      <span className={`whitespace-nowrap ${compact ? "hidden sm:inline" : ""}`}>{t(titleKey)}</span>
-                    </span>
-                  </button>
-                );
-              })
-            : null
-        }
-      </div>
-    </nav>
+      {isActive && (
+        // Animate only when the selected tab changes; header layout changes
+        // must not replay the slide from the old position.
+        <motion.div
+          layoutId={indicatorLayoutId}
+          layoutDependency={testId}
+          className={NAV_TAB_INDICATOR_CLASS}
+          transition={NAV_TAB_INDICATOR_TRANSITION}
+          style={{ zIndex: -1 }}
+        />
+      )}
+      <span className="relative z-10 flex items-center gap-1.5">
+        <span className={SECONDARY_NAV_TAB_ICON_CLASS}>{icon}</span>
+        <span className={`whitespace-nowrap ${compact ? "hidden sm:inline" : ""}`}>{label}</span>
+      </span>
+    </button>
   );
 }

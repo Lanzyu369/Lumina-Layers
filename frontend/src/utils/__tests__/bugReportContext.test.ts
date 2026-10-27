@@ -565,6 +565,20 @@ describe("collectBugReportContext", () => {
     expect(fixedMaterialContext.material_dynamic).toBeNull();
   });
 
+  it("captures automatic coating with its source materials and thickness", () => {
+    useConverterStore.setState({ source_version: "material", enable_coating: true,
+      coating_height_mm: 0.12, selectedMaterialDirNames: ["brand/red", "brand/white"],
+      materialBackingMaterialDirName: "brand/white" });
+    useWidgetStore.setState({ activeTab: "converter" });
+
+    const context = collectBugReportContext();
+
+    expect(context.source_material_dir_names).toEqual(["brand/red", "brand/white"]);
+    expect((context.advanced_params as AdvancedParamsFull).coating).toEqual({
+      enable_coating: true, coating_height_mm: 0.12,
+    });
+  });
+
   it("collects native LUT source details on converter tab", () => {
     useConverterStore.setState({
       sessionId: "converter-session",

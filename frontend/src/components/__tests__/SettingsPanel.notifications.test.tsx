@@ -136,7 +136,7 @@ describe("SettingsPanel completion notifications", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps permission status visible and opens explanations without requesting permission", async () => {
+  it("keeps normal permission status in help without requesting permission", async () => {
     renderPanel();
 
     const notificationSection = await screen.findByTestId(
@@ -148,10 +148,10 @@ describe("SettingsPanel completion notifications", () => {
       ),
     ).not.toBeInTheDocument();
     expect(
-      within(notificationSection).getByText(
+      within(notificationSection).queryByText(
         translations["settings.completion_notifications_default"].zh,
       ),
-    ).toBeInTheDocument();
+    ).not.toBeInTheDocument();
     const helpTrigger = within(notificationSection).getByRole("button", {
       name: translations["settings.completion_notifications_heading"].zh,
     });
@@ -166,6 +166,25 @@ describe("SettingsPanel completion notifications", () => {
     );
     expect(requestPermissionMock).not.toHaveBeenCalled();
     expect(useSettingsStore.getState().enableCompletionNotifications).toBe(false);
+  });
+
+  it.each([false, true])("keeps granted permission out of the row when enabled is %s", async (enabled) => {
+    MockNotification.permission = "granted";
+    useSettingsStore.setState({ enableCompletionNotifications: enabled });
+    renderPanel();
+
+    const section = await screen.findByTestId("settings-completion-notifications-section");
+    expect(within(section).queryByText(
+      translations["settings.completion_notifications_granted"].zh,
+    )).not.toBeInTheDocument();
+    fireEvent.click(within(section).getByRole("button", {
+      name: translations["settings.completion_notifications_heading"].zh,
+    }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      translations["settings.completion_notifications_granted"].zh,
+    );
+    expect(useSettingsStore.getState().enableCompletionNotifications).toBe(enabled);
+    expect(requestPermissionMock).not.toHaveBeenCalled();
   });
 
   it("enables the persisted setting after permission is granted", async () => {
@@ -226,10 +245,10 @@ describe("SettingsPanel completion notifications", () => {
       ).toBeEnabled();
     });
     expect(
-      screen.getByText(
+      screen.queryByText(
         translations["settings.completion_notifications_default"].zh,
       ),
-    ).toBeInTheDocument();
+    ).not.toBeInTheDocument();
     expect(
       useSettingsStore.getState().enableCompletionNotifications,
     ).toBe(false);

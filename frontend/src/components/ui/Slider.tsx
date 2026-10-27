@@ -4,6 +4,7 @@ import HelpDot from "./HelpDot";
 import type { WikiDocPath } from "../../utils/wikiDocs";
 
 interface SliderProps {
+  className?: string;
   label: string;
   value: number;
   min: number;
@@ -29,6 +30,7 @@ interface SliderProps {
 
 export default function Slider(props: SliderProps) {
   const {
+  className,
   label,
   value,
   min,
@@ -80,6 +82,9 @@ export default function Slider(props: SliderProps) {
 
   const commitValue = useCallback(
     (text: string) => {
+      // Focusing or confirming the displayed value must not round the stored
+      // value when the field shows fewer decimal places than the source.
+      if (text === formatValue(value, step, displayDecimals)) return;
       const num = parseFloat(text);
       if (!Number.isFinite(num)) {
         // 无效输入，恢复为当前值
@@ -136,14 +141,39 @@ export default function Slider(props: SliderProps) {
   const rangeValue = Math.min(max, Math.max(min, value));
 
   return (
-    <div className="flex flex-col gap-1.5">
-      {label && (
-        <label className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
-          <span>{label}</span>
-          {tooltip && <HelpDot title={label} description={tooltip} wikiPath={wikiPath} ariaLabel={tooltip} />}
-        </label>
-      )}
-      <div className="flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-slate-100/70 px-2 py-1.5 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-900/48">
+    <div className={cx("flex flex-col gap-1.5", className)}>
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        {label && (
+          <label className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
+            <span className="truncate">{label}</span>
+            {tooltip && <HelpDot title={label} description={tooltip} wikiPath={wikiPath} ariaLabel={tooltip} />}
+          </label>
+        )}
+        <div
+          className={cx(
+            "slider-value-field flex shrink-0 items-center gap-1 rounded-[8px] border border-transparent bg-[var(--surface-well)] pr-1.5 transition-all duration-200 hover:border-[color:var(--surface-card-outline)] focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-[var(--focus-ring)]",
+            disabled && "cursor-not-allowed opacity-45",
+          )}
+        >
+          <input
+            type="text"
+            inputMode="decimal"
+            value={inputText}
+            disabled={disabled}
+            onChange={(e) => setInputText(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            style={{ width: inputWidth }}
+            className="min-w-0 bg-transparent px-1.5 py-1 text-center text-sm tabular-nums text-slate-700 outline-none disabled:cursor-not-allowed dark:text-slate-100"
+            aria-label={`${label} value`}
+          />
+          <span className="min-w-6 shrink-0 text-[11px] font-medium text-slate-400 dark:text-slate-500">
+            {unit}
+          </span>
+        </div>
+      </div>
+      <div className="flex items-center py-1.5">
         <input
           type="range"
           min={min}
@@ -155,31 +185,11 @@ export default function Slider(props: SliderProps) {
           data-testid={testId}
           onChange={(e) => onChange(clampAndRound(Number(e.target.value)))}
           className={cx(
-            "slider-track min-w-0 flex-1 appearance-none cursor-pointer rounded-full accent-blue-500 transition-all duration-200",
-            "h-1.5 bg-slate-200 dark:bg-slate-700",
-            "focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
+            "slider-track w-full min-w-0 appearance-none cursor-pointer rounded-full accent-blue-500 transition-all duration-200",
+            "h-1.5 bg-[var(--surface-well)] dark:bg-slate-700",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
           )}
         />
-        <div className="flex items-center shrink-0">
-          <input
-            type="text"
-            inputMode="decimal"
-            value={inputText}
-            disabled={disabled}
-            onChange={(e) => setInputText(e.target.value)}
-            onFocus={() => setIsFocused(true)}
-            onBlur={handleBlur}
-            onKeyDown={handleKeyDown}
-            style={{ width: inputWidth }}
-            className="rounded-lg border border-slate-200/80 bg-slate-100/90 px-1.5 py-1 text-center text-sm tabular-nums text-slate-700 shadow-[var(--shadow-control)] focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-100"
-            aria-label={`${label} value`}
-          />
-          {unit && (
-            <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500">
-              {unit}
-            </span>
-          )}
-        </div>
       </div>
     </div>
   );
