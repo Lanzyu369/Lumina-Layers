@@ -120,6 +120,32 @@ def test_query_round_trip_known_stack_entry(data) -> None:
     )
 
 
+@given(data=synthetic_engine_and_row())
+@settings(max_examples=50)
+def test_match_color_exact_rgb_round_trips_to_stack_entry(data) -> None:
+    """Property: exact RGB input SHALL resolve to that LUT row's recipe."""
+    stack_lut, rgb_data, color_count, row_idx = data
+
+    # Avoid duplicate RGB rows so the nearest-row expectation is unambiguous.
+    for idx in range(rgb_data.shape[0]):
+        rgb_data[idx] = [(idx * 53) % 256, (idx * 97) % 256, (idx * 193) % 256]
+
+    engine = ColorQueryEngine(
+        stack_lut=stack_lut,
+        lut_rgb=rgb_data,
+        color_count=color_count,
+    )
+
+    result = engine.match_color(tuple(int(v) for v in rgb_data[row_idx]), neighborhood_radius=1)
+
+    assert result.found is True
+    assert result.row_index == row_idx
+    assert result.selected_indices == stack_lut[row_idx].astype(int).tolist()
+    assert result.matched_rgb == tuple(int(v) for v in rgb_data[row_idx])
+    assert result.coordinate.display_row >= 1
+    assert result.coordinate.display_col >= 1
+
+
 # ---------------------------------------------------------------------------
 # Property 3: 超范围索引拒绝
 # **Validates: Requirements 2.3**
@@ -193,23 +219,23 @@ def test_out_of_range_index_rejection(data) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Property 9: FiveColorQueryRequest 拒绝非 5 长度索引
+# Property 9: FiveColorQueryRequest 接受 5/6 层并拒绝其他长度
 # **Validates: Requirements 2.2, 7.3**
 # ---------------------------------------------------------------------------
 
 @given(
     length=st.one_of(
         st.integers(min_value=0, max_value=4),
-        st.integers(min_value=6, max_value=20),
+        st.integers(min_value=7, max_value=20),
     ),
     values=st.data(),
 )
 @settings(max_examples=100)
-def test_five_color_query_request_rejects_non_5_length(length: int, values) -> None:
-    """Property 9: For any integer list with length != 5, constructing
+def test_five_color_query_request_rejects_non_5_or_6_length(length: int, values) -> None:
+    """Property 9: For any integer list with length outside 5/6, constructing
     FiveColorQueryRequest SHALL raise a ValidationError.
 
-    Feature: five-color-query, Property 9: FiveColorQueryRequest 拒绝非 5 长度索引
+    Feature: five-color-query, Property 9: FiveColorQueryRequest 拒绝非 5/6 长度索引
     **Validates: Requirements 2.2, 7.3**
     """
     indices = values.draw(
@@ -218,3 +244,16 @@ def test_five_color_query_request_rejects_non_5_length(length: int, values) -> N
 
     with pytest.raises(ValidationError):
         FiveColorQueryRequest(lut_name="test_lut", selected_indices=indices)
+
+
+@given(length=st.sampled_from([5, 6]), values=st.data())
+@settings(max_examples=40)
+def test_five_color_query_request_accepts_5_or_6_length(length: int, values) -> None:
+    """Five-color requests accept normal 5-layer and 5C Extended 6-layer recipes."""
+    indices = values.draw(
+        st.lists(st.integers(min_value=0, max_value=7), min_size=length, max_size=length)
+    )
+
+    request = FiveColorQueryRequest(lut_name="test_lut", selected_indices=indices)
+
+    assert request.selected_indices == indices

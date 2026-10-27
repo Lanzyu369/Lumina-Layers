@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from api.app import app
+from api.routers.calibration import CALIBRATION_GENERATION_FAILED_DETAIL
 
 client: TestClient = TestClient(app)
 
@@ -35,7 +36,7 @@ def _make_join_redirector(assets_dir: str):
     """Create an os.path.join side_effect that redirects temp_5c files to assets_dir."""
     def _join(*args: Any) -> str:
         last = args[-1] if args else ""
-        if isinstance(last, str) and "temp_5c" in last:
+        if isinstance(last, str) and ("temp_5c" in last or "lumina_lut" in last):
             return _real_path_join(assets_dir, last)
         return _real_path_join(*args)
     return _join
@@ -52,13 +53,27 @@ class TestMerge5ColorExtendedSuccess:
 
     def test_merge_success_returns_200_with_extract_response(self) -> None:
         """Both temp files exist → merge produces correct result and returns 200."""
+        from utils.lut_manager import LUTManager
+        from config import LUTMetadata, PaletteEntry
+
         lut1 = np.random.randint(0, 256, (100, 3), dtype=np.uint8)
         lut2 = np.random.randint(0, 256, (80, 3), dtype=np.uint8)
+        metadata = LUTMetadata(palette=[
+            PaletteEntry(color="White", material="PLA Basic"),
+            PaletteEntry(color="Cyan", material="PLA Basic"),
+            PaletteEntry(color="Magenta", material="PLA Basic"),
+            PaletteEntry(color="Yellow", material="PLA Basic"),
+            PaletteEntry(color="Black", material="PLA Basic"),
+        ])
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            np.save(_real_path_join(tmpdir, "temp_5c_ext_page_1.npy"), lut1)
-            np.save(_real_path_join(tmpdir, "temp_5c_ext_page_2.npy"), lut2)
-            merged_path = _real_path_join(tmpdir, "lumina_lut.npy")
+            LUTManager.save_keyed_json(
+                _real_path_join(tmpdir, "temp_5c_ext_page_1.json"),
+                lut1, np.zeros((100, 5), dtype=np.int32), metadata)
+            LUTManager.save_keyed_json(
+                _real_path_join(tmpdir, "temp_5c_ext_page_2.json"),
+                lut2, np.zeros((80, 5), dtype=np.int32), metadata)
+            merged_path = _real_path_join(tmpdir, "lumina_lut.json")
 
             with (
                 patch("api.routers.extractor.os.path.join", side_effect=_make_join_redirector(tmpdir)),
@@ -75,13 +90,27 @@ class TestMerge5ColorExtendedSuccess:
 
     def test_merge_produces_correct_shape(self) -> None:
         """Merged LUT shape should be (N+M, 3) after reshape + vstack."""
+        from utils.lut_manager import LUTManager
+        from config import LUTMetadata, PaletteEntry
+
         lut1 = np.random.randint(0, 256, (50, 3), dtype=np.uint8)
         lut2 = np.random.randint(0, 256, (70, 3), dtype=np.uint8)
+        metadata = LUTMetadata(palette=[
+            PaletteEntry(color="White", material="PLA Basic"),
+            PaletteEntry(color="Cyan", material="PLA Basic"),
+            PaletteEntry(color="Magenta", material="PLA Basic"),
+            PaletteEntry(color="Yellow", material="PLA Basic"),
+            PaletteEntry(color="Black", material="PLA Basic"),
+        ])
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            np.save(_real_path_join(tmpdir, "temp_5c_ext_page_1.npy"), lut1)
-            np.save(_real_path_join(tmpdir, "temp_5c_ext_page_2.npy"), lut2)
-            merged_path = _real_path_join(tmpdir, "lumina_lut.npy")
+            LUTManager.save_keyed_json(
+                _real_path_join(tmpdir, "temp_5c_ext_page_1.json"),
+                lut1, np.zeros((50, 5), dtype=np.int32), metadata)
+            LUTManager.save_keyed_json(
+                _real_path_join(tmpdir, "temp_5c_ext_page_2.json"),
+                lut2, np.zeros((70, 5), dtype=np.int32), metadata)
+            merged_path = _real_path_join(tmpdir, "lumina_lut.json")
 
             with (
                 patch("api.routers.extractor.os.path.join", side_effect=_make_join_redirector(tmpdir)),
@@ -90,10 +119,108 @@ class TestMerge5ColorExtendedSuccess:
                 response = client.post("/api/extractor/merge-5color-extended")
 
             assert response.status_code == 200
-            merged = np.load(merged_path)
-            assert merged.shape == (120, 3)
-            np.testing.assert_array_equal(merged[:50], lut1)
-            np.testing.assert_array_equal(merged[50:], lut2)
+            merged_rgb, _, _ = LUTManager.load_lut_with_metadata(merged_path)
+            assert merged_rgb.shape == (120, 3)
+            np.testing.assert_array_equal(merged_rgb[:50], lut1)
+            np.testing.assert_array_equal(merged_rgb[50:], lut2)
+
+    def test_merge_pads_page1_and_exports_six_layer_metadata(self) -> None:
+        """5-color merged JSON should keep Page 2's 6-layer recipes."""
+        from utils.lut_manager import LUTManager
+        from config import LUTMetadata, PaletteEntry
+
+        lut1 = np.zeros((2, 3), dtype=np.uint8)
+        lut2 = np.zeros((2, 3), dtype=np.uint8)
+        metadata = LUTMetadata(palette=[
+            PaletteEntry(color="White", material="PETG"),
+            PaletteEntry(color="Red", material="PETG"),
+            PaletteEntry(color="Yellow", material="PETG"),
+            PaletteEntry(color="Blue", material="PETG"),
+            PaletteEntry(color="Black", material="PETG"),
+        ], color_mode="5-Color Extended")
+        stacks1 = np.array([[0, 0, 0, 0, 0], [0, 0, 0, 0, 1]], dtype=np.int32)
+        stacks2 = np.array([[4, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0]], dtype=np.int32)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            LUTManager.save_keyed_json(
+                _real_path_join(tmpdir, "temp_5c_ext_page_1.json"),
+                lut1,
+                stacks1,
+                metadata,
+            )
+            LUTManager.save_keyed_json(
+                _real_path_join(tmpdir, "temp_5c_ext_page_2.json"),
+                lut2,
+                stacks2,
+                metadata,
+            )
+            merged_path = _real_path_join(tmpdir, "lumina_lut.json")
+
+            with (
+                patch("api.routers.extractor.os.path.join", side_effect=_make_join_redirector(tmpdir)),
+                patch("config.LUT_FILE_PATH", merged_path),
+            ):
+                response = client.post("/api/extractor/merge-5color-extended")
+
+            assert response.status_code == 200
+            _rgb, merged_stacks, merged_meta = LUTManager.load_lut_with_metadata(merged_path)
+            assert merged_meta.max_color_layers == 6
+            assert merged_stacks is not None
+            assert merged_stacks.shape == (4, 6)
+            assert merged_stacks[0].tolist() == [-1, 0, 0, 0, 0, 0]
+            assert merged_stacks[2].tolist() == [4, 0, 0, 0, 0, 0]
+
+    def test_merge_preserves_colordb_metadata_from_temp_pages(self) -> None:
+        """Merged LUT should preserve manufacturer, type, and palette color_name metadata."""
+        from utils.lut_manager import LUTManager
+        from config import LUTMetadata, PaletteEntry
+
+        lut1 = np.random.randint(0, 256, (20, 3), dtype=np.uint8)
+        lut2 = np.random.randint(0, 256, (30, 3), dtype=np.uint8)
+        metadata = LUTMetadata(
+            palette=[
+                PaletteEntry(color="White", material="PLA Basic", color_name="Jade White"),
+                PaletteEntry(color="Cyan", material="PLA Basic", color_name="Ocean Cyan"),
+                PaletteEntry(color="Magenta", material="PLA Basic", color_name="Rose Magenta"),
+                PaletteEntry(color="Yellow", material="PLA Basic", color_name="Sun Yellow"),
+                PaletteEntry(color="Black", material="PLA Basic", color_name="Carbon Black"),
+            ],
+            manufacturer="Bambu Lab",
+            type="PLA Basic",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            LUTManager.save_keyed_json(
+                _real_path_join(tmpdir, "temp_5c_ext_page_1.json"),
+                lut1,
+                np.zeros((20, 5), dtype=np.int32),
+                metadata,
+            )
+            LUTManager.save_keyed_json(
+                _real_path_join(tmpdir, "temp_5c_ext_page_2.json"),
+                lut2,
+                np.zeros((30, 5), dtype=np.int32),
+                metadata,
+            )
+            merged_path = _real_path_join(tmpdir, "lumina_lut.json")
+
+            with (
+                patch("api.routers.extractor.os.path.join", side_effect=_make_join_redirector(tmpdir)),
+                patch("config.LUT_FILE_PATH", merged_path),
+            ):
+                response = client.post("/api/extractor/merge-5color-extended")
+
+            assert response.status_code == 200
+            _, _, merged_meta = LUTManager.load_lut_with_metadata(merged_path)
+            assert merged_meta.manufacturer == "Bambu Lab"
+            assert merged_meta.type == "PLA Basic"
+            assert [entry.color_name for entry in merged_meta.palette] == [
+                "Jade White",
+                "Ocean Cyan",
+                "Rose Magenta",
+                "Sun Yellow",
+                "Carbon Black",
+            ]
 
 
 # =========================================================================
@@ -160,7 +287,7 @@ class TestCalibration5ColorExtended:
     """Verify calibration generate endpoint dispatches to correct core function for 5-Color Extended."""
 
     def test_5color_extended_routes_to_generate_5color_extended_batch_zip(self) -> None:
-        """5-Color Extended (1444) mode dispatches to generate_5color_extended_batch_zip(block, gap)."""
+        """5-Color Extended (1444) mode dispatches to generate_5color_extended_batch_zip()."""
         mock_return = ("/tmp/fake_5c.zip", _mock_preview, "OK")
         with patch(
             "api.routers.calibration.generate_5color_extended_batch_zip",
@@ -171,12 +298,19 @@ class TestCalibration5ColorExtended:
                 json={
                     "color_mode": "5-Color Extended (1444)",
                     "block_size": 5,
-                    "gap": 0.82,
+                    "gap": 0.84,
                     "backing": "White",
                 },
             )
             assert response.status_code == 200
-            mock_fn.assert_called_once_with(5.0, 0.82)
+            mock_fn.assert_called_once()
+            kwargs = mock_fn.call_args.kwargs
+            assert kwargs["block_size_mm"] == 5.0
+            assert kwargs["gap_mm"] == 0.84
+            assert kwargs["backing_thickness_mm"] == 1.2
+            assert kwargs["printer_id"] == "bambu-h2d"
+            assert kwargs["slicer"] == "BambuStudio"
+            assert kwargs["nozzle_size"] == "0.4"
 
     def test_5color_extended_response_contains_download_and_preview_urls(self) -> None:
         """Response should contain download_url and preview_url."""
@@ -190,7 +324,7 @@ class TestCalibration5ColorExtended:
                 json={
                     "color_mode": "5-Color Extended (1444)",
                     "block_size": 5,
-                    "gap": 0.82,
+                    "gap": 0.84,
                     "backing": "White",
                 },
             )
@@ -198,22 +332,31 @@ class TestCalibration5ColorExtended:
             assert data["status"] == "ok"
             assert "/api/files/" in data["download_url"]
             assert "/api/files/" in data["preview_url"]
+            assert data["threemf_disk_path"] is None
             assert data["message"] == "5-Color Extended OK"
 
     def test_5color_extended_core_error_returns_500(self) -> None:
-        """Core function exception → HTTP 500."""
-        with patch(
-            "api.routers.calibration.generate_5color_extended_batch_zip",
-            side_effect=RuntimeError("generation failed"),
+        """Return an actionable HTTP 500 and keep core diagnostics in logs."""
+        with (
+            patch(
+                "api.routers.calibration.generate_5color_extended_batch_zip",
+                side_effect=RuntimeError("generation failed"),
+            ),
+            patch("api.routers.calibration.log.error") as log_error,
         ):
             response = client.post(
                 "/api/calibration/generate",
                 json={
                     "color_mode": "5-Color Extended (1444)",
                     "block_size": 5,
-                    "gap": 0.82,
+                    "gap": 0.84,
                     "backing": "White",
                 },
             )
             assert response.status_code == 500
-            assert "generation failed" in response.json()["detail"]
+            assert response.json()["detail"] == CALIBRATION_GENERATION_FAILED_DETAIL
+            log_error.assert_called_once()
+            diagnostics = log_error.call_args.kwargs["extra"]
+            assert diagnostics["event"] == "calibration_core_operation_failed"
+            assert diagnostics["error_type"] == "RuntimeError"
+            assert diagnostics["error_message"] == "generation failed"

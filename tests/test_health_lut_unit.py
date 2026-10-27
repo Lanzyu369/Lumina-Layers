@@ -23,6 +23,18 @@ client: TestClient = TestClient(app)
 class TestHealthEndpoint:
     """Verify the health check endpoint returns correct structure and values."""
 
+    def test_desktop_launch_identity(self, monkeypatch) -> None:
+        monkeypatch.setenv("LUMINA_DESKTOP_INSTANCE_ID", "fresh-launch-id")
+        data = client.get("/api/health").json()
+        assert data.get("service") == "lumina-studio"
+        assert data.get("desktop_instance_id") == "fresh-launch-id"
+
+    def test_non_desktop_health_remains_available(self, monkeypatch) -> None:
+        monkeypatch.delenv("LUMINA_DESKTOP_INSTANCE_ID", raising=False)
+        data = client.get("/api/health").json()
+        assert data["status"] == "ok"
+        assert data.get("desktop_instance_id") is None
+
     def test_health_returns_200(self) -> None:
         response = client.get("/api/health")
         assert response.status_code == 200

@@ -1,0 +1,1525 @@
+{
+  "schema": "lumina_material_coherence_fastpath_evidence_v1",
+  "captured_at": "2026-08-01",
+  "provenance": {
+    "base_commit": "554e7e9760ebb360035f9a863f5a4451ae37043c",
+    "measured_head_commit": "d479de11f9bdcaac5970353599d72d27333d48c1",
+    "implementation_commit": "bdfc747b1aec6cccf0939eba5e086ad94d35f84f",
+    "report_schema": "lumina_converter_multicore_profile_v2",
+    "report_schema_embeds_git_commit": false,
+    "commit_association": "Recorded by the benchmark operator; verify against the retained input, semantic, and report hashes.",
+    "self_authenticating": false
+  },
+  "environment": {
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.12.13",
+    "numpy": "2.4.6",
+    "visible_cpu": 10,
+    "ram_gib": 16
+  },
+  "cases": [
+    {
+      "id": "complex_preview_serial",
+      "phase": "preview",
+      "input": {
+        "name": "梵高星空款式西森猫猫.svg",
+        "sha256": "ba6d44586c4c9903091ade81ed331c09308ec6a6f684c72f1b8cc15aad42f717",
+        "kind": "vector",
+        "target_width_mm": 299.0,
+        "override_scenario": "none"
+      },
+      "materials": {
+        "count": 12,
+        "palette_sha256": "80156eff2ffb2509078e9bf632ef26d29269bc2e06c64c7ac41b04310ac0d0bf"
+      },
+      "parallelism": {
+        "env_var": "LUMINA_VECTOR_PARALLELISM",
+        "requested": "1",
+        "effective_workers": 1
+      },
+      "base": {
+        "report_sha256": "4b85378d7662cec896702f6473ea267a9074edef47016550b5996beb48afba2d",
+        "total_s": 57.52273929200601,
+        "material_solve_s": 37.44041341601405,
+        "peak_rss_mb": 2206.84375,
+        "semantic_sha256": "815072534bdddb985b652d685d92f61555591455f61ee4c909289615b8494f60",
+        "external_reference_match": true
+      },
+      "head": {
+        "report_sha256": "4bd7976f2ff7db0476c77ae144be1b0795f05b355410e7f15a550bcdd834c485",
+        "total_s": 53.708783791051246,
+        "material_solve_s": 33.095446667051874,
+        "peak_rss_mb": 1486.171875,
+        "semantic_sha256": "815072534bdddb985b652d685d92f61555591455f61ee4c909289615b8494f60",
+        "external_reference_match": true
+      },
+      "semantic_snapshot_equal": true,
+      "retained_semantic_snapshot": {
+        "matched_rgb": {
+          "shape": [
+            2241,
+            1600,
+            3
+          ],
+          "dtype": "|u1",
+          "sha256": "e7139c812ead8a369e8f5e05ceaf069d29beac9df31cad1826ea1d5d3ff83979"
+        },
+        "height_identity_rgb": {
+          "shape": [
+            2241,
+            1600,
+            3
+          ],
+          "dtype": "|u1",
+          "sha256": "e7139c812ead8a369e8f5e05ceaf069d29beac9df31cad1826ea1d5d3ff83979"
+        },
+        "material_matrix": {
+          "shape": [
+            2241,
+            1600,
+            10
+          ],
+          "dtype": "|i1",
+          "sha256": "fb7936566bdaf091636518111b1563ca63a638102d5c56481b09ee2a4b39c85d"
+        },
+        "mask_solid": {
+          "shape": [
+            2241,
+            1600
+          ],
+          "dtype": "|b1",
+          "sha256": "8a18f30dfe142f6c87f38e04a3f613d47c340b1f783eba31d157ca3f4cc5a313"
+        },
+        "slot_names": [
+          "纵维立方PLA白色",
+          "纵维立方PLA黑色",
+          "纵维立方PLA红色",
+          "纵维立方PLA黄色",
+          "纵维立方PLA蓝色",
+          "纵维立方PLA绿色",
+          "纵维立方PLA青色",
+          "纵维立方PLA品红色",
+          "Karvax PLA 晴山蓝",
+          "Karvax PLA 流光蓝",
+          "Karvax PLA 烟笼紫霞",
+          "Karvax PLA 暖黄"
+        ],
+        "geometry_source": null,
+        "geometry": {},
+        "scene_instances": [],
+        "artifacts": {}
+      }
+    },
+    {
+      "id": "complex_preview_parallel_4",
+      "phase": "preview",
+      "input": {
+        "name": "梵高星空款式西森猫猫.svg",
+        "sha256": "ba6d44586c4c9903091ade81ed331c09308ec6a6f684c72f1b8cc15aad42f717",
+        "kind": "vector",
+        "target_width_mm": 299.0,
+        "override_scenario": "none"
+      },
+      "materials": {
+        "count": 12,
+        "palette_sha256": "80156eff2ffb2509078e9bf632ef26d29269bc2e06c64c7ac41b04310ac0d0bf"
+      },
+      "parallelism": {
+        "env_var": "LUMINA_VECTOR_PARALLELISM",
+        "requested": "4",
+        "effective_workers": 4
+      },
+      "base": {
+        "report_sha256": "f5a0132b6f0a411b6e2224824e9f0dc58500af780497d8575dc09a505e2d6d40",
+        "total_s": 49.623539082938805,
+        "material_solve_s": 29.065861042006873,
+        "peak_rss_mb": 2880.109375,
+        "semantic_sha256": "815072534bdddb985b652d685d92f61555591455f61ee4c909289615b8494f60",
+        "external_reference_match": true
+      },
+      "head": {
+        "report_sha256": "3ce8c544fa6b213683b4666ae839c2ca96fafed03bf9f3e87c9702d951cb8139",
+        "total_s": 45.8304494159529,
+        "material_solve_s": 25.24031466699671,
+        "peak_rss_mb": 2366.140625,
+        "semantic_sha256": "815072534bdddb985b652d685d92f61555591455f61ee4c909289615b8494f60",
+        "external_reference_match": true
+      },
+      "semantic_snapshot_equal": true,
+      "retained_semantic_snapshot": {
+        "matched_rgb": {
+          "shape": [
+            2241,
+            1600,
+            3
+          ],
+          "dtype": "|u1",
+          "sha256": "e7139c812ead8a369e8f5e05ceaf069d29beac9df31cad1826ea1d5d3ff83979"
+        },
+        "height_identity_rgb": {
+          "shape": [
+            2241,
+            1600,
+            3
+          ],
+          "dtype": "|u1",
+          "sha256": "e7139c812ead8a369e8f5e05ceaf069d29beac9df31cad1826ea1d5d3ff83979"
+        },
+        "material_matrix": {
+          "shape": [
+            2241,
+            1600,
+            10
+          ],
+          "dtype": "|i1",
+          "sha256": "fb7936566bdaf091636518111b1563ca63a638102d5c56481b09ee2a4b39c85d"
+        },
+        "mask_solid": {
+          "shape": [
+            2241,
+            1600
+          ],
+          "dtype": "|b1",
+          "sha256": "8a18f30dfe142f6c87f38e04a3f613d47c340b1f783eba31d157ca3f4cc5a313"
+        },
+        "slot_names": [
+          "纵维立方PLA白色",
+          "纵维立方PLA黑色",
+          "纵维立方PLA红色",
+          "纵维立方PLA黄色",
+          "纵维立方PLA蓝色",
+          "纵维立方PLA绿色",
+          "纵维立方PLA青色",
+          "纵维立方PLA品红色",
+          "Karvax PLA 晴山蓝",
+          "Karvax PLA 流光蓝",
+          "Karvax PLA 烟笼紫霞",
+          "Karvax PLA 暖黄"
+        ],
+        "geometry_source": null,
+        "geometry": {},
+        "scene_instances": [],
+        "artifacts": {}
+      }
+    },
+    {
+      "id": "archive_preview_8",
+      "phase": "preview",
+      "input": {
+        "name": "mmexport1784271438721.svg",
+        "sha256": "88f9a92690e765e48533b344ff1b313cf2168d7952ecb96253e036fb54a07788",
+        "kind": "vector",
+        "target_width_mm": 299.0,
+        "override_scenario": "none"
+      },
+      "materials": {
+        "count": 8,
+        "palette_sha256": "92ca2d9d191a640ca7dbdfb62ee4aaa2c9064422a8355903fb37bd0653f746ba"
+      },
+      "parallelism": {
+        "env_var": "LUMINA_VECTOR_PARALLELISM",
+        "requested": "1",
+        "effective_workers": 1
+      },
+      "base": {
+        "report_sha256": "770ac599d669762edbfa6699210586b8a58eb83b380128b28027efe55d43ce9e",
+        "total_s": 7.2161449999548495,
+        "material_solve_s": 0.2539765409892425,
+        "peak_rss_mb": 881.765625,
+        "semantic_sha256": "5b4eeb256c7f683bf5be8c28389894d48b4b231e6b0b67ca6310b77b662da526",
+        "external_reference_match": true
+      },
+      "head": {
+        "report_sha256": "6b65a894b2fbc36966f72169f0d3a84ad6dea660b1e505d2c5940b7b11b0d170",
+        "total_s": 7.745575209031813,
+        "material_solve_s": 0.2772943750023842,
+        "peak_rss_mb": 884.4375,
+        "semantic_sha256": "5b4eeb256c7f683bf5be8c28389894d48b4b231e6b0b67ca6310b77b662da526",
+        "external_reference_match": true
+      },
+      "semantic_snapshot_equal": true,
+      "retained_semantic_snapshot": {
+        "matched_rgb": {
+          "shape": [
+            2472,
+            1600,
+            3
+          ],
+          "dtype": "|u1",
+          "sha256": "62f7258a6385160e8a46fc0fbed635cf593ed76dfc9a8343502e9226a99e33c7"
+        },
+        "height_identity_rgb": {
+          "shape": [
+            2472,
+            1600,
+            3
+          ],
+          "dtype": "|u1",
+          "sha256": "62f7258a6385160e8a46fc0fbed635cf593ed76dfc9a8343502e9226a99e33c7"
+        },
+        "material_matrix": {
+          "shape": [
+            2472,
+            1600,
+            10
+          ],
+          "dtype": "|i1",
+          "sha256": "19f9fe42fc4d9e5a5d4585587726bd71785fe31910a9e5f5d1405354f940cab4"
+        },
+        "mask_solid": {
+          "shape": [
+            2472,
+            1600
+          ],
+          "dtype": "|b1",
+          "sha256": "ef24f4bbaccc36e0884b8e016d40f044bcb2e4442ea3090b568123edd20a3412"
+        },
+        "slot_names": [
+          "纵维立方PLA白色",
+          "纵维立方PLA黑色",
+          "纵维立方PLA红色",
+          "纵维立方PLA黄色",
+          "纵维立方PLA蓝色",
+          "纵维立方PLA绿色",
+          "纵维立方PLA青色",
+          "纵维立方PLA品红色"
+        ],
+        "geometry_source": null,
+        "geometry": {},
+        "scene_instances": [],
+        "artifacts": {}
+      }
+    },
+    {
+      "id": "archive_preview_12",
+      "phase": "preview",
+      "input": {
+        "name": "mmexport1784271438721.svg",
+        "sha256": "88f9a92690e765e48533b344ff1b313cf2168d7952ecb96253e036fb54a07788",
+        "kind": "vector",
+        "target_width_mm": 299.0,
+        "override_scenario": "none"
+      },
+      "materials": {
+        "count": 12,
+        "palette_sha256": "80156eff2ffb2509078e9bf632ef26d29269bc2e06c64c7ac41b04310ac0d0bf"
+      },
+      "parallelism": {
+        "env_var": "LUMINA_VECTOR_PARALLELISM",
+        "requested": "1",
+        "effective_workers": 1
+      },
+      "base": {
+        "report_sha256": "b4913eead564c080cb6dfa1500ce138c99626b583f3166c47b8d659069fcf099",
+        "total_s": 7.861472541000694,
+        "material_solve_s": 0.4795189999276772,
+        "peak_rss_mb": 892.53125,
+        "semantic_sha256": "541caf418a339ee73031e89132b597d79e5d7b4147a14bbf62c0f17c99d10f3d",
+        "external_reference_match": true
+      },
+      "head": {
+        "report_sha256": "c2cee952ac83ce537ca9018c33bf4c02dbf0c4c67fa20d30286a0789380abb48",
+        "total_s": 7.897496083052829,
+        "material_solve_s": 0.47446425002999604,
+        "peak_rss_mb": 890.28125,
+        "semantic_sha256": "541caf418a339ee73031e89132b597d79e5d7b4147a14bbf62c0f17c99d10f3d",
+        "external_reference_match": true
+      },
+      "semantic_snapshot_equal": true,
+      "retained_semantic_snapshot": {
+        "matched_rgb": {
+          "shape": [
+            2472,
+            1600,
+            3
+          ],
+          "dtype": "|u1",
+          "sha256": "bde878f246bcd0f285339e91961455317761d3f1375ee17a26f8a6ca1067b035"
+        },
+        "height_identity_rgb": {
+          "shape": [
+            2472,
+            1600,
+            3
+          ],
+          "dtype": "|u1",
+          "sha256": "bde878f246bcd0f285339e91961455317761d3f1375ee17a26f8a6ca1067b035"
+        },
+        "material_matrix": {
+          "shape": [
+            2472,
+            1600,
+            10
+          ],
+          "dtype": "|i1",
+          "sha256": "582c43f908b356b1bc462e1dba9f9f53894a660a81b859e7cc6429d75b8ff54d"
+        },
+        "mask_solid": {
+          "shape": [
+            2472,
+            1600
+          ],
+          "dtype": "|b1",
+          "sha256": "ef24f4bbaccc36e0884b8e016d40f044bcb2e4442ea3090b568123edd20a3412"
+        },
+        "slot_names": [
+          "纵维立方PLA白色",
+          "纵维立方PLA黑色",
+          "纵维立方PLA红色",
+          "纵维立方PLA黄色",
+          "纵维立方PLA蓝色",
+          "纵维立方PLA绿色",
+          "纵维立方PLA青色",
+          "纵维立方PLA品红色",
+          "Karvax PLA 晴山蓝",
+          "Karvax PLA 流光蓝",
+          "Karvax PLA 烟笼紫霞",
+          "Karvax PLA 暖黄"
+        ],
+        "geometry_source": null,
+        "geometry": {},
+        "scene_instances": [],
+        "artifacts": {}
+      }
+    },
+    {
+      "id": "archive_preview_15",
+      "phase": "preview",
+      "input": {
+        "name": "mmexport1784271438721.svg",
+        "sha256": "88f9a92690e765e48533b344ff1b313cf2168d7952ecb96253e036fb54a07788",
+        "kind": "vector",
+        "target_width_mm": 299.0,
+        "override_scenario": "none"
+      },
+      "materials": {
+        "count": 15,
+        "palette_sha256": "4a05f1f6c551f1615e394c041c0ae58e2f4a2b9e915590f93b65126846d8eb6b"
+      },
+      "parallelism": {
+        "env_var": "LUMINA_VECTOR_PARALLELISM",
+        "requested": "1",
+        "effective_workers": 1
+      },
+      "base": {
+        "report_sha256": "2b131133614e9bb76eb5acbe1400e098acc1b10596e35f80783552628f66a429",
+        "total_s": 8.27513700001873,
+        "material_solve_s": 0.4798426249762997,
+        "peak_rss_mb": 803.234375,
+        "semantic_sha256": "1eeb065ca151fde598f5801ed45750846f2c179fbee9164ca3fd052cb19a873d",
+        "external_reference_match": true
+      },
+      "head": {
+        "report_sha256": "471261364de2007f982a9ce47875ebd3d3952d457fd8978fa3cd15a79f35ec7f",
+        "total_s": 7.94609624997247,
+        "material_solve_s": 0.46014183398801833,
+        "peak_rss_mb": 890.640625,
+        "semantic_sha256": "1eeb065ca151fde598f5801ed45750846f2c179fbee9164ca3fd052cb19a873d",
+        "external_reference_match": true
+      },
+      "semantic_snapshot_equal": true,
+      "retained_semantic_snapshot": {
+        "matched_rgb": {
+          "shape": [
+            2472,
+            1600,
+            3
+          ],
+          "dtype": "|u1",
+          "sha256": "a2d19c31c1eb1a9fc7d42b69b806ee75db7f7ebd706ec0538bbe082925dc7142"
+        },
+        "height_identity_rgb": {
+          "shape": [
+            2472,
+            1600,
+            3
+          ],
+          "dtype": "|u1",
+          "sha256": "a2d19c31c1eb1a9fc7d42b69b806ee75db7f7ebd706ec0538bbe082925dc7142"
+        },
+        "material_matrix": {
+          "shape": [
+            2472,
+            1600,
+            10
+          ],
+          "dtype": "|i1",
+          "sha256": "a32a078444c75c2b81e49b15955665384f9494ae962064b021f1697fc87f324b"
+        },
+        "mask_solid": {
+          "shape": [
+            2472,
+            1600
+          ],
+          "dtype": "|b1",
+          "sha256": "ef24f4bbaccc36e0884b8e016d40f044bcb2e4442ea3090b568123edd20a3412"
+        },
+        "slot_names": [
+          "纵维立方PLA白色",
+          "纵维立方PLA黑色",
+          "纵维立方PLA红色",
+          "纵维立方PLA黄色",
+          "纵维立方PLA蓝色",
+          "纵维立方PLA绿色",
+          "纵维立方PLA青色",
+          "纵维立方PLA品红色",
+          "Karvax PLA 晴山蓝",
+          "Karvax PLA 流光蓝",
+          "Karvax PLA 烟笼紫霞",
+          "Karvax PLA 暖黄",
+          "Karvax PLA 朱砂红",
+          "Karvax PLA 拓竹绿",
+          "Karvax PLA 耀石黑"
+        ],
+        "geometry_source": null,
+        "geometry": {},
+        "scene_instances": [],
+        "artifacts": {}
+      }
+    },
+    {
+      "id": "archive_generate_12",
+      "phase": "generate",
+      "input": {
+        "name": "mmexport1784271438721.svg",
+        "sha256": "88f9a92690e765e48533b344ff1b313cf2168d7952ecb96253e036fb54a07788",
+        "kind": "vector",
+        "target_width_mm": 299.0,
+        "override_scenario": "none"
+      },
+      "materials": {
+        "count": 12,
+        "palette_sha256": "80156eff2ffb2509078e9bf632ef26d29269bc2e06c64c7ac41b04310ac0d0bf"
+      },
+      "parallelism": {
+        "env_var": "LUMINA_VECTOR_PARALLELISM",
+        "requested": "1",
+        "effective_workers": 1
+      },
+      "base": {
+        "report_sha256": "510e0621aa14888d7005d770b23330957ba38b86e24925a3fd5feb72d7e31c59",
+        "total_s": 20.111801582970656,
+        "material_solve_s": 0.5672607499873266,
+        "peak_rss_mb": 1511.03125,
+        "semantic_sha256": "1bebb01962b610b522377f0de34215246a435b8dac6e73e98d2adb68cb970f7a",
+        "external_reference_match": null
+      },
+      "head": {
+        "report_sha256": "95deaa5cea70808ea4bce3c2c716b3929151700e6aad3506b435b0673ed7448f",
+        "total_s": 17.87146487494465,
+        "material_solve_s": 0.4839621669379994,
+        "peak_rss_mb": 1634.09375,
+        "semantic_sha256": "1bebb01962b610b522377f0de34215246a435b8dac6e73e98d2adb68cb970f7a",
+        "external_reference_match": true
+      },
+      "semantic_snapshot_equal": true,
+      "retained_semantic_snapshot": {
+        "matched_rgb": null,
+        "height_identity_rgb": null,
+        "material_matrix": null,
+        "mask_solid": null,
+        "slot_names": [
+          "纵维立方PLA白色",
+          "纵维立方PLA黑色",
+          "纵维立方PLA红色",
+          "纵维立方PLA黄色",
+          "纵维立方PLA蓝色",
+          "纵维立方PLA绿色",
+          "纵维立方PLA青色",
+          "纵维立方PLA品红色",
+          "Karvax PLA 晴山蓝",
+          "Karvax PLA 流光蓝",
+          "Karvax PLA 烟笼紫霞",
+          "Karvax PLA 暖黄"
+        ],
+        "geometry_source": "context",
+        "geometry": {
+          "Karvax PLA 晴山蓝": {
+            "vertices": 219532,
+            "faces": 444764,
+            "bounds": [
+              [
+                25.500000093,
+                -70.933028387,
+                0.0
+              ],
+              [
+                324.500000093,
+                390.938831307,
+                0.8
+              ]
+            ],
+            "area": 135796.840165658,
+            "volume": 6550.1992994,
+            "watertight": false,
+            "euler_number": -186,
+            "degenerate_faces": 204,
+            "canonical_triangle_sha256": "6ef76d06c54b795921cc0fcc402ba2e79d29b99b01d2f495126b6ef333a3e7e7",
+            "visual": {
+              "kind": "face",
+              "face_colors": {
+                "shape": [
+                  444764,
+                  4
+                ],
+                "dtype": "|u1",
+                "canonical_sha256": "76fa19fc57621055dac688df908aa0988ba8bc768154ba8c5d086ce4dbade452"
+              }
+            }
+          },
+          "Karvax PLA 暖黄": {
+            "vertices": 71624,
+            "faces": 142748,
+            "bounds": [
+              [
+                25.500000093,
+                -70.933028387,
+                0.08
+              ],
+              [
+                324.500000093,
+                390.938831307,
+                0.8
+              ]
+            ],
+            "area": 45402.46139137,
+            "volume": 1943.466317866,
+            "watertight": false,
+            "euler_number": 620,
+            "degenerate_faces": 80,
+            "canonical_triangle_sha256": "c3815d3ec32ca412a1e5c75b5e3431c9758a7110b566916f107edc08dd9bc1ca",
+            "visual": {
+              "kind": "face",
+              "face_colors": {
+                "shape": [
+                  142748,
+                  4
+                ],
+                "dtype": "|u1",
+                "canonical_sha256": "1bee9b9c605d5ae7994416172775e824f60ecb1a0035c1be5926670f4deb2670"
+              }
+            }
+          },
+          "Karvax PLA 流光蓝": {
+            "vertices": 45628,
+            "faces": 90452,
+            "bounds": [
+              [
+                25.500000093,
+                -70.909382979,
+                0.0
+              ],
+              [
+                324.500000093,
+                390.938831307,
+                0.8
+              ]
+            ],
+            "area": 36493.11296738,
+            "volume": 1482.749778888,
+            "watertight": false,
+            "euler_number": 534,
+            "degenerate_faces": 56,
+            "canonical_triangle_sha256": "9c36f04ea6021f5b8c38d196aba7e90689fd903a23517adf0f0330e12950c1ce",
+            "visual": {
+              "kind": "texture",
+              "material_baseColorFactor": {
+                "shape": [
+                  4
+                ],
+                "dtype": "|u1",
+                "sha256": "8eeb09443bb51214599bd8954a9c402fd4d8789b781c42f6c1c82c04496e223d"
+              },
+              "material_main_color": {
+                "shape": [
+                  4
+                ],
+                "dtype": "|u1",
+                "sha256": "8eeb09443bb51214599bd8954a9c402fd4d8789b781c42f6c1c82c04496e223d"
+              },
+              "material_name": "color_448ba7_material",
+              "uv": null
+            }
+          },
+          "Karvax PLA 烟笼紫霞": {
+            "vertices": 483601,
+            "faces": 998208,
+            "bounds": [
+              [
+                25.500000093,
+                -70.937032851,
+                0.0
+              ],
+              [
+                324.500000093,
+                390.938831307,
+                0.8
+              ]
+            ],
+            "area": 252597.327502233,
+            "volume": 14458.026396681,
+            "watertight": false,
+            "euler_number": -5727,
+            "degenerate_faces": 614,
+            "canonical_triangle_sha256": "6a7d5e72101e37a6035e2df3b791ae3e1ac25479af5e5a7972a871558c68dad9",
+            "visual": {
+              "kind": "face",
+              "face_colors": {
+                "shape": [
+                  998208,
+                  4
+                ],
+                "dtype": "|u1",
+                "canonical_sha256": "abc38119f3dbd92489e40bff2645f5bf7f27888967ec6010f17174441440a72c"
+              }
+            }
+          },
+          "纵维立方PLA品红色": {
+            "vertices": 280188,
+            "faces": 566064,
+            "bounds": [
+              [
+                25.500000093,
+                -70.933028387,
+                0.0
+              ],
+              [
+                324.500000093,
+                390.938831307,
+                0.8
+              ]
+            ],
+            "area": 137839.594719804,
+            "volume": 6957.475292697,
+            "watertight": false,
+            "euler_number": -502,
+            "degenerate_faces": 334,
+            "canonical_triangle_sha256": "345c0af48f0e62349ae70e78fc5d564a9979c2b3733884cc11ee162a8df48925",
+            "visual": {
+              "kind": "face",
+              "face_colors": {
+                "shape": [
+                  566064,
+                  4
+                ],
+                "dtype": "|u1",
+                "canonical_sha256": "9fe2bacf697a070f7a9478a3f1071034515b81129a28b4175181799570c1fdf4"
+              }
+            }
+          },
+          "纵维立方PLA白色": {
+            "vertices": 552331,
+            "faces": 1183504,
+            "bounds": [
+              [
+                25.471396777,
+                -70.967434623,
+                0.0
+              ],
+              [
+                324.528603223,
+                390.967434623,
+                2.005
+              ]
+            ],
+            "area": 757150.970074386,
+            "volume": 230715.12248222,
+            "watertight": false,
+            "euler_number": -16340,
+            "degenerate_faces": 630,
+            "canonical_triangle_sha256": "ecc8eb6b56713056ac1c357998dae536d37ee32a2355c71f8c6b435d05d81770",
+            "visual": {
+              "kind": "face",
+              "face_colors": {
+                "shape": [
+                  1183504,
+                  4
+                ],
+                "dtype": "|u1",
+                "canonical_sha256": "337563307a42ffb6bba96794dedf55f16798dd3d1c663f746b9f4142259e0bb7"
+              }
+            }
+          },
+          "纵维立方PLA红色": {
+            "vertices": 133483,
+            "faces": 267508,
+            "bounds": [
+              [
+                25.500000093,
+                -70.909382979,
+                0.0
+              ],
+              [
+                324.500000093,
+                390.938831307,
+                0.8
+              ]
+            ],
+            "area": 66723.359651182,
+            "volume": 2841.458963376,
+            "watertight": false,
+            "euler_number": 487,
+            "degenerate_faces": 146,
+            "canonical_triangle_sha256": "bf1bb072de898d7b3e6f947c86dfe4972551066df05c261421e1f3dba1dda51d",
+            "visual": {
+              "kind": "face",
+              "face_colors": {
+                "shape": [
+                  267508,
+                  4
+                ],
+                "dtype": "|u1",
+                "canonical_sha256": "fcecc9bcfa47775d30edfc9c5513a2c66a8f8c6572252828dd76a2fac86bc87f"
+              }
+            }
+          },
+          "纵维立方PLA绿色": {
+            "vertices": 47701,
+            "faces": 94748,
+            "bounds": [
+              [
+                25.500000093,
+                -70.909382979,
+                0.16
+              ],
+              [
+                324.500000093,
+                390.938831307,
+                0.8
+              ]
+            ],
+            "area": 17005.597658818,
+            "volume": 641.395430911,
+            "watertight": false,
+            "euler_number": 396,
+            "degenerate_faces": 58,
+            "canonical_triangle_sha256": "9268c5700f789a3d655eaea1c1cf1c84a35890efc95a409db35877ab066e0148",
+            "visual": {
+              "kind": "texture",
+              "material_baseColorFactor": {
+                "shape": [
+                  4
+                ],
+                "dtype": "|u1",
+                "sha256": "e65ff4dc7333bf78cddee8ed3f3a4e5d5c39b5beb3b77ee33779e9aec2f52384"
+              },
+              "material_main_color": {
+                "shape": [
+                  4
+                ],
+                "dtype": "|u1",
+                "sha256": "e65ff4dc7333bf78cddee8ed3f3a4e5d5c39b5beb3b77ee33779e9aec2f52384"
+              },
+              "material_name": "color_1a9645_material",
+              "uv": null
+            }
+          },
+          "纵维立方PLA蓝色": {
+            "vertices": 171010,
+            "faces": 344084,
+            "bounds": [
+              [
+                25.500000093,
+                -70.909382979,
+                0.0
+              ],
+              [
+                324.500000093,
+                390.938831307,
+                0.8
+              ]
+            ],
+            "area": 74758.115162935,
+            "volume": 3460.136392674,
+            "watertight": false,
+            "euler_number": -59,
+            "degenerate_faces": 198,
+            "canonical_triangle_sha256": "d0ed7d8a18fce746f1f6cc3bd3139e62c51d265a76b93a7a0dc8f2033c9d69e4",
+            "visual": {
+              "kind": "face",
+              "face_colors": {
+                "shape": [
+                  344084,
+                  4
+                ],
+                "dtype": "|u1",
+                "canonical_sha256": "77991cf60266f051313ae7f7a751a19926376af345d127fa665900c629acedcb"
+              }
+            }
+          },
+          "纵维立方PLA青色": {
+            "vertices": 248258,
+            "faces": 501148,
+            "bounds": [
+              [
+                25.500000093,
+                -70.937032851,
+                0.0
+              ],
+              [
+                324.500000093,
+                390.938831307,
+                0.8
+              ]
+            ],
+            "area": 78616.66995255,
+            "volume": 3553.958968539,
+            "watertight": false,
+            "euler_number": -675,
+            "degenerate_faces": 306,
+            "canonical_triangle_sha256": "48b6c604a0c2122cbc6f4c1445fac1900ad6f66be16018a47d8c407d0458adb0",
+            "visual": {
+              "kind": "face",
+              "face_colors": {
+                "shape": [
+                  501148,
+                  4
+                ],
+                "dtype": "|u1",
+                "canonical_sha256": "49a0e7c0c8db9834ff616f7e881294c587ed529f69ce78794661860d93a63b21"
+              }
+            }
+          },
+          "纵维立方PLA黄色": {
+            "vertices": 66347,
+            "faces": 132112,
+            "bounds": [
+              [
+                25.500000093,
+                -70.933028387,
+                0.08
+              ],
+              [
+                324.500000093,
+                390.938831307,
+                0.8
+              ]
+            ],
+            "area": 37438.124855995,
+            "volume": 1557.319970553,
+            "watertight": false,
+            "euler_number": 618,
+            "degenerate_faces": 56,
+            "canonical_triangle_sha256": "647b27dbb6eed3a5d8d0205ce9d7c8192a49933fd4a380b344ec0ad4fb211ce5",
+            "visual": {
+              "kind": "face",
+              "face_colors": {
+                "shape": [
+                  132112,
+                  4
+                ],
+                "dtype": "|u1",
+                "canonical_sha256": "937754a4de5ee173501e3e334f4893c60b7e1699f5f73e1b3ccd51768a1785fb"
+              }
+            }
+          },
+          "纵维立方PLA黑色": {
+            "vertices": 172909,
+            "faces": 347016,
+            "bounds": [
+              [
+                25.500000093,
+                -70.909382979,
+                0.0
+              ],
+              [
+                324.500000093,
+                390.938831307,
+                0.8
+              ]
+            ],
+            "area": 47409.563986766,
+            "volume": 2030.151242079,
+            "watertight": false,
+            "euler_number": -105,
+            "degenerate_faces": 238,
+            "canonical_triangle_sha256": "fb0fd62c97fe010c860a9e8dae795e2c54d2357c69c6202541f49724f824e038",
+            "visual": {
+              "kind": "face",
+              "face_colors": {
+                "shape": [
+                  347016,
+                  4
+                ],
+                "dtype": "|u1",
+                "canonical_sha256": "fda99e3ba62b3ea8c615c9039fc522a98eff8db7f5ee7b5e312cca76e99c7974"
+              }
+            }
+          }
+        },
+        "scene_instances": [
+          {
+            "geometry": "Karvax PLA 晴山蓝",
+            "world": {
+              "vertices": 219532,
+              "faces": 444764,
+              "bounds": [
+                [
+                  25.500000093,
+                  -70.933028387,
+                  0.0
+                ],
+                [
+                  324.500000093,
+                  390.938831307,
+                  0.8
+                ]
+              ],
+              "area": 135796.840165658,
+              "volume": 6550.1992994,
+              "watertight": false,
+              "euler_number": -186,
+              "degenerate_faces": 204,
+              "canonical_triangle_sha256": "6ef76d06c54b795921cc0fcc402ba2e79d29b99b01d2f495126b6ef333a3e7e7",
+              "visual": {
+                "kind": "face",
+                "face_colors": {
+                  "shape": [
+                    444764,
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "canonical_sha256": "76fa19fc57621055dac688df908aa0988ba8bc768154ba8c5d086ce4dbade452"
+                }
+              }
+            }
+          },
+          {
+            "geometry": "Karvax PLA 暖黄",
+            "world": {
+              "vertices": 71624,
+              "faces": 142748,
+              "bounds": [
+                [
+                  25.500000093,
+                  -70.933028387,
+                  0.08
+                ],
+                [
+                  324.500000093,
+                  390.938831307,
+                  0.8
+                ]
+              ],
+              "area": 45402.46139137,
+              "volume": 1943.466317866,
+              "watertight": false,
+              "euler_number": 620,
+              "degenerate_faces": 80,
+              "canonical_triangle_sha256": "c3815d3ec32ca412a1e5c75b5e3431c9758a7110b566916f107edc08dd9bc1ca",
+              "visual": {
+                "kind": "face",
+                "face_colors": {
+                  "shape": [
+                    142748,
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "canonical_sha256": "1bee9b9c605d5ae7994416172775e824f60ecb1a0035c1be5926670f4deb2670"
+                }
+              }
+            }
+          },
+          {
+            "geometry": "Karvax PLA 流光蓝",
+            "world": {
+              "vertices": 45628,
+              "faces": 90452,
+              "bounds": [
+                [
+                  25.500000093,
+                  -70.909382979,
+                  0.0
+                ],
+                [
+                  324.500000093,
+                  390.938831307,
+                  0.8
+                ]
+              ],
+              "area": 36493.11296738,
+              "volume": 1482.749778888,
+              "watertight": false,
+              "euler_number": 534,
+              "degenerate_faces": 56,
+              "canonical_triangle_sha256": "9c36f04ea6021f5b8c38d196aba7e90689fd903a23517adf0f0330e12950c1ce",
+              "visual": {
+                "kind": "texture",
+                "material_baseColorFactor": {
+                  "shape": [
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "sha256": "8eeb09443bb51214599bd8954a9c402fd4d8789b781c42f6c1c82c04496e223d"
+                },
+                "material_main_color": {
+                  "shape": [
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "sha256": "8eeb09443bb51214599bd8954a9c402fd4d8789b781c42f6c1c82c04496e223d"
+                },
+                "material_name": "color_448ba7_material",
+                "uv": null
+              }
+            }
+          },
+          {
+            "geometry": "Karvax PLA 烟笼紫霞",
+            "world": {
+              "vertices": 483601,
+              "faces": 998208,
+              "bounds": [
+                [
+                  25.500000093,
+                  -70.937032851,
+                  0.0
+                ],
+                [
+                  324.500000093,
+                  390.938831307,
+                  0.8
+                ]
+              ],
+              "area": 252597.327502233,
+              "volume": 14458.026396681,
+              "watertight": false,
+              "euler_number": -5727,
+              "degenerate_faces": 614,
+              "canonical_triangle_sha256": "6a7d5e72101e37a6035e2df3b791ae3e1ac25479af5e5a7972a871558c68dad9",
+              "visual": {
+                "kind": "face",
+                "face_colors": {
+                  "shape": [
+                    998208,
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "canonical_sha256": "abc38119f3dbd92489e40bff2645f5bf7f27888967ec6010f17174441440a72c"
+                }
+              }
+            }
+          },
+          {
+            "geometry": "纵维立方PLA品红色",
+            "world": {
+              "vertices": 280188,
+              "faces": 566064,
+              "bounds": [
+                [
+                  25.500000093,
+                  -70.933028387,
+                  0.0
+                ],
+                [
+                  324.500000093,
+                  390.938831307,
+                  0.8
+                ]
+              ],
+              "area": 137839.594719804,
+              "volume": 6957.475292697,
+              "watertight": false,
+              "euler_number": -502,
+              "degenerate_faces": 334,
+              "canonical_triangle_sha256": "345c0af48f0e62349ae70e78fc5d564a9979c2b3733884cc11ee162a8df48925",
+              "visual": {
+                "kind": "face",
+                "face_colors": {
+                  "shape": [
+                    566064,
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "canonical_sha256": "9fe2bacf697a070f7a9478a3f1071034515b81129a28b4175181799570c1fdf4"
+                }
+              }
+            }
+          },
+          {
+            "geometry": "纵维立方PLA白色",
+            "world": {
+              "vertices": 552331,
+              "faces": 1183504,
+              "bounds": [
+                [
+                  25.471396777,
+                  -70.967434623,
+                  0.0
+                ],
+                [
+                  324.528603223,
+                  390.967434623,
+                  2.005
+                ]
+              ],
+              "area": 757150.970074386,
+              "volume": 230715.12248222,
+              "watertight": false,
+              "euler_number": -16340,
+              "degenerate_faces": 630,
+              "canonical_triangle_sha256": "ecc8eb6b56713056ac1c357998dae536d37ee32a2355c71f8c6b435d05d81770",
+              "visual": {
+                "kind": "face",
+                "face_colors": {
+                  "shape": [
+                    1183504,
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "canonical_sha256": "337563307a42ffb6bba96794dedf55f16798dd3d1c663f746b9f4142259e0bb7"
+                }
+              }
+            }
+          },
+          {
+            "geometry": "纵维立方PLA红色",
+            "world": {
+              "vertices": 133483,
+              "faces": 267508,
+              "bounds": [
+                [
+                  25.500000093,
+                  -70.909382979,
+                  0.0
+                ],
+                [
+                  324.500000093,
+                  390.938831307,
+                  0.8
+                ]
+              ],
+              "area": 66723.359651182,
+              "volume": 2841.458963376,
+              "watertight": false,
+              "euler_number": 487,
+              "degenerate_faces": 146,
+              "canonical_triangle_sha256": "bf1bb072de898d7b3e6f947c86dfe4972551066df05c261421e1f3dba1dda51d",
+              "visual": {
+                "kind": "face",
+                "face_colors": {
+                  "shape": [
+                    267508,
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "canonical_sha256": "fcecc9bcfa47775d30edfc9c5513a2c66a8f8c6572252828dd76a2fac86bc87f"
+                }
+              }
+            }
+          },
+          {
+            "geometry": "纵维立方PLA绿色",
+            "world": {
+              "vertices": 47701,
+              "faces": 94748,
+              "bounds": [
+                [
+                  25.500000093,
+                  -70.909382979,
+                  0.16
+                ],
+                [
+                  324.500000093,
+                  390.938831307,
+                  0.8
+                ]
+              ],
+              "area": 17005.597658818,
+              "volume": 641.395430911,
+              "watertight": false,
+              "euler_number": 396,
+              "degenerate_faces": 58,
+              "canonical_triangle_sha256": "9268c5700f789a3d655eaea1c1cf1c84a35890efc95a409db35877ab066e0148",
+              "visual": {
+                "kind": "texture",
+                "material_baseColorFactor": {
+                  "shape": [
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "sha256": "e65ff4dc7333bf78cddee8ed3f3a4e5d5c39b5beb3b77ee33779e9aec2f52384"
+                },
+                "material_main_color": {
+                  "shape": [
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "sha256": "e65ff4dc7333bf78cddee8ed3f3a4e5d5c39b5beb3b77ee33779e9aec2f52384"
+                },
+                "material_name": "color_1a9645_material",
+                "uv": null
+              }
+            }
+          },
+          {
+            "geometry": "纵维立方PLA蓝色",
+            "world": {
+              "vertices": 171010,
+              "faces": 344084,
+              "bounds": [
+                [
+                  25.500000093,
+                  -70.909382979,
+                  0.0
+                ],
+                [
+                  324.500000093,
+                  390.938831307,
+                  0.8
+                ]
+              ],
+              "area": 74758.115162935,
+              "volume": 3460.136392674,
+              "watertight": false,
+              "euler_number": -59,
+              "degenerate_faces": 198,
+              "canonical_triangle_sha256": "d0ed7d8a18fce746f1f6cc3bd3139e62c51d265a76b93a7a0dc8f2033c9d69e4",
+              "visual": {
+                "kind": "face",
+                "face_colors": {
+                  "shape": [
+                    344084,
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "canonical_sha256": "77991cf60266f051313ae7f7a751a19926376af345d127fa665900c629acedcb"
+                }
+              }
+            }
+          },
+          {
+            "geometry": "纵维立方PLA青色",
+            "world": {
+              "vertices": 248258,
+              "faces": 501148,
+              "bounds": [
+                [
+                  25.500000093,
+                  -70.937032851,
+                  0.0
+                ],
+                [
+                  324.500000093,
+                  390.938831307,
+                  0.8
+                ]
+              ],
+              "area": 78616.66995255,
+              "volume": 3553.958968539,
+              "watertight": false,
+              "euler_number": -675,
+              "degenerate_faces": 306,
+              "canonical_triangle_sha256": "48b6c604a0c2122cbc6f4c1445fac1900ad6f66be16018a47d8c407d0458adb0",
+              "visual": {
+                "kind": "face",
+                "face_colors": {
+                  "shape": [
+                    501148,
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "canonical_sha256": "49a0e7c0c8db9834ff616f7e881294c587ed529f69ce78794661860d93a63b21"
+                }
+              }
+            }
+          },
+          {
+            "geometry": "纵维立方PLA黄色",
+            "world": {
+              "vertices": 66347,
+              "faces": 132112,
+              "bounds": [
+                [
+                  25.500000093,
+                  -70.933028387,
+                  0.08
+                ],
+                [
+                  324.500000093,
+                  390.938831307,
+                  0.8
+                ]
+              ],
+              "area": 37438.124855995,
+              "volume": 1557.319970553,
+              "watertight": false,
+              "euler_number": 618,
+              "degenerate_faces": 56,
+              "canonical_triangle_sha256": "647b27dbb6eed3a5d8d0205ce9d7c8192a49933fd4a380b344ec0ad4fb211ce5",
+              "visual": {
+                "kind": "face",
+                "face_colors": {
+                  "shape": [
+                    132112,
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "canonical_sha256": "937754a4de5ee173501e3e334f4893c60b7e1699f5f73e1b3ccd51768a1785fb"
+                }
+              }
+            }
+          },
+          {
+            "geometry": "纵维立方PLA黑色",
+            "world": {
+              "vertices": 172909,
+              "faces": 347016,
+              "bounds": [
+                [
+                  25.500000093,
+                  -70.909382979,
+                  0.0
+                ],
+                [
+                  324.500000093,
+                  390.938831307,
+                  0.8
+                ]
+              ],
+              "area": 47409.563986766,
+              "volume": 2030.151242079,
+              "watertight": false,
+              "euler_number": -105,
+              "degenerate_faces": 238,
+              "canonical_triangle_sha256": "fb0fd62c97fe010c860a9e8dae795e2c54d2357c69c6202541f49724f824e038",
+              "visual": {
+                "kind": "face",
+                "face_colors": {
+                  "shape": [
+                    347016,
+                    4
+                  ],
+                  "dtype": "|u1",
+                  "canonical_sha256": "fda99e3ba62b3ea8c615c9039fc522a98eff8db7f5ee7b5e312cca76e99c7974"
+                }
+              }
+            }
+          }
+        ],
+        "artifacts": {
+          "model": {
+            "kind": "zip_members",
+            "suffix": ".3mf",
+            "members": [
+              {
+                "name": "3D/3dmodel.model",
+                "size_bytes": 1445,
+                "sha256": "f7f28e442a2b992ba8e780c51f6303a46345ad36d0a9d8f9f05d8d6cddef22fe",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "3D/Objects/object_1.model",
+                "size_bytes": 343948331,
+                "sha256": "61e8dcfda2fda4c4d8f09e1b8db442d45deb05365b64e26188ffa7c86551d39f",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "3D/_rels/3dmodel.model.rels",
+                "size_bytes": 1063,
+                "sha256": "097a81842b71eb16adcd9f59f9781b0375f33061e56d5e5ddb7304daf1f2e7a4",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "Auxiliaries/.thumbnails/thumbnail_3mf.png",
+                "size_bytes": 48106,
+                "sha256": "7c948811c52c4d2c235f0e41b9cf316b1e746a4561d2ca0ca51da87e2c5c1e25",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "Auxiliaries/.thumbnails/thumbnail_middle.png",
+                "size_bytes": 285160,
+                "sha256": "11ef0f4ba2dd506affc0fbee78ad1fddad61683da20e99b2b6f1d43b4b7cd3cf",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "Auxiliaries/.thumbnails/thumbnail_small.png",
+                "size_bytes": 51891,
+                "sha256": "14bf61bc958593f6987bc7a2b12b18524c423d22e60b751883e327c637b81a4b",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "Metadata/cut_information.xml",
+                "size_bytes": 141,
+                "sha256": "ebf4639b20a7dd1bb8c673e14b14a2256bcb385c72990bdeda5fc7e58b9654e9",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "Metadata/filament_sequence.json",
+                "size_bytes": 29,
+                "sha256": "4eef37183a19de262ecc44ff90fc039e7832666dc0fe30963e8b4483aba75b3f",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "Metadata/layer_config_ranges.xml",
+                "size_bytes": 251,
+                "sha256": "a9ca332851f82c545033d93a4593e1d7e8225852ef845370c8d3570ff6e238d5",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "Metadata/model_settings.config",
+                "size_bytes": 8569,
+                "sha256": "522a9a5f1d36c51bed448676a514dd06398bcac3144a0fac695f7b22a2d6b963",
+                "canonicalization": "xml_without_source_filename"
+              },
+              {
+                "name": "Metadata/pick_1.png",
+                "size_bytes": 77,
+                "sha256": "7e6bc7f354be3501fc71d0c2867e9f6f42110901a900487acfa2c35e9e4dca18",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "Metadata/plate_1.png",
+                "size_bytes": 284768,
+                "sha256": "6858e6f3184dee2a915da9f699b506f7334e79e6e640847605eaa42e9b000fd0",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "Metadata/plate_no_light_1.png",
+                "size_bytes": 284768,
+                "sha256": "6858e6f3184dee2a915da9f699b506f7334e79e6e640847605eaa42e9b000fd0",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "Metadata/project_settings.config",
+                "size_bytes": 85170,
+                "sha256": "c82563f299de5b34c2bbc258f5d1e8effb72c288d564d671ff60c703de65eae0",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "Metadata/slice_info.config",
+                "size_bytes": 206,
+                "sha256": "b0dc1b7cc1d8be0ee5ef16dbc15e001ae38590e0c767a5c1753fb1c58cbe6685",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "Metadata/top_1.png",
+                "size_bytes": 77,
+                "sha256": "7e6bc7f354be3501fc71d0c2867e9f6f42110901a900487acfa2c35e9e4dca18",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "[Content_Types].xml",
+                "size_bytes": 1838,
+                "sha256": "a1ac1f4fa08a6e108a50d35140b1b548716c2deae331d3c4d5d4e6328999d1a5",
+                "canonicalization": "raw_member"
+              },
+              {
+                "name": "_rels/.rels",
+                "size_bytes": 752,
+                "sha256": "4b8dc5e0d4f5c6f01b3934d0469d4f817c1a7f48f60422f8afb9f237a0643435",
+                "canonicalization": "raw_member"
+              }
+            ]
+          },
+          "preview": {
+            "kind": "file",
+            "suffix": ".glb",
+            "size_bytes": 47215868,
+            "sha256": "525af466f6e9da534c6d2b1a8b115869f62e28ff61868f7447609b6b1ee27091"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="50mm" height="50mm" viewBox="0 0 50 50">
+  <circle
+    cx="25"
+    cy="25"
+    r="12"
+    fill="#ff0000"
+    stroke="#ff0000"
+    stroke-width="4"
+    stroke-linejoin="round"
+    paint-order="stroke fill"
+  />
+</svg>

@@ -17,12 +17,17 @@ from core.naming import (
     generate_batch_filename,
     generate_calibration_filename,
     generate_model_filename,
+    generate_preserved_upload_3mf_filename,
     generate_preview_filename,
+    generate_segmented_glb_filename,
     parse_filename,
 )
 
 # Timestamp pattern used across tests
 TS_RE = r"\d{8}_\d{6}"
+
+# Pattern for segmented GLB filenames: segmented_{prefix<=8}_{uuid12}.{ext}
+SEGMENTED_GLB_RE = re.compile(r"^segmented_([A-Za-z0-9_]{1,8})_([0-9a-f]{12})\.glb$")
 
 
 # =========================================================================
@@ -41,6 +46,9 @@ class TestModelingModeTags:
     def test_vector_maps_to_vector(self):
         assert MODELING_MODE_TAGS[ModelingMode.VECTOR] == "Vector"
 
+    def test_color_card_maps_to_color_card(self):
+        assert MODELING_MODE_TAGS[ModelingMode.COLOR_CARD] == "ColorCard"
+
     def test_all_enum_members_have_mapping(self):
         for mode in ModelingMode:
             assert mode in MODELING_MODE_TAGS, f"{mode} missing from MODELING_MODE_TAGS"
@@ -53,7 +61,7 @@ class TestModelingModeTags:
 class TestColorModeTags:
     """Verify every known color mode string maps to the correct tag."""
 
-    @pytest.mark.parametrize("color_mode", ["CMYW", "RYBW"])
+    @pytest.mark.parametrize("color_mode", ["4-Color", "CMYW", "RYBW"])
     def test_4color_variants_map_to_4c(self, color_mode):
         assert COLOR_MODE_TAGS[color_mode] == "4C"
 
@@ -77,7 +85,7 @@ class TestEdgeCases:
     """Edge cases: empty strings, special characters, unicode, unknown modes."""
 
     def test_empty_base_name_uses_untitled(self):
-        filename = generate_model_filename("", ModelingMode.PIXEL, "RYBW")
+        filename = generate_model_filename("", ModelingMode.PIXEL, "4-Color")
         assert filename.startswith("untitled_Lumina_")
 
     def test_whitespace_only_base_name_uses_untitled(self):
@@ -102,7 +110,7 @@ class TestEdgeCases:
             assert ch not in filename
 
     def test_unicode_base_name(self):
-        filename = generate_model_filename("日本語テスト", ModelingMode.VECTOR, "RYBW")
+        filename = generate_model_filename("日本語テスト", ModelingMode.VECTOR, "4-Color")
         assert "日本語テスト" in filename
         assert "_Lumina_Vector_4C_" in filename
 
@@ -113,7 +121,7 @@ class TestEdgeCases:
     def test_unknown_modeling_mode_uses_unknown(self):
         # Simulate an unknown mode by passing a value not in the mapping
         # We use a mock enum value that isn't in MODELING_MODE_TAGS
-        filename = generate_model_filename("test", "not_a_real_mode", "RYBW")
+        filename = generate_model_filename("test", "not_a_real_mode", "4-Color")
         assert "_Unknown_" in filename
 
     def test_unknown_color_mode_uses_unknown(self):
@@ -126,6 +134,90 @@ class TestEdgeCases:
     def test_sanitize_replaces_forbidden(self):
         result = _sanitize('a<b>c:d"e/f\\g|h?i*j')
         assert result == "a_b_c_d_e_f_g_h_i_j"
+
+
+@pytest.mark.parametrize(
+    ("source_basename", "expected"),
+    [
+        ("海报", "海报.3mf"),
+        ("海报 final", "海报 final.3mf"),
+        ("海报.final", "海报.final.3mf"),
+        ('bad<name>:*', "bad_name___.3mf"),
+        ("tmpabcd1234_poster", "poster.3mf"),
+        ("line\nbreak", "line_break.3mf"),
+        ("  poster.  ", "poster.3mf"),
+    ],
+)
+def test_generate_preserved_upload_3mf_filename(source_basename, expected):
+    assert generate_preserved_upload_3mf_filename(source_basename) == expected
+
+
+@pytest.mark.parametrize(
+    "source_basename",
+    [
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+        "con",
+        "PrN",
+        "AuX.foo",
+        "nUl.final",
+        "cOm9.part",
+        "lPt1.part",
+        "COM¹",
+        "COM²",
+        "COM³",
+        "LPT¹",
+        "LPT²",
+        "LPT³",
+        "CON .foo",
+        "COM1 .part",
+    ],
+)
+def test_generate_preserved_upload_3mf_filename_prefixes_windows_reserved_names(
+    source_basename,
+):
+    assert (
+        generate_preserved_upload_3mf_filename(source_basename)
+        == f"_{source_basename}.3mf"
+    )
+
+
+@pytest.mark.parametrize("source_basename", ["CONSOLE", "COM0", "COM10", "LPT0", "LPT10"])
+def test_generate_preserved_upload_3mf_filename_keeps_non_reserved_names(
+    source_basename,
+):
+    assert (
+        generate_preserved_upload_3mf_filename(source_basename)
+        == f"{source_basename}.3mf"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_basename", "expected"),
+    [
+        ("a" * 400, f"{'a' * 251}.3mf"),
+        ("界" * 100, f"{'界' * 83}.3mf"),
+    ],
+)
+def test_generate_preserved_upload_3mf_filename_limits_utf8_component_bytes(
+    source_basename,
+    expected,
+):
+    result = generate_preserved_upload_3mf_filename(source_basename)
+
+    assert result == expected
+    assert len(result.encode("utf-8")) <= 255
+
+
+@pytest.mark.parametrize("source_basename", [None, "", "   ", ".", ".."])
+def test_generate_preserved_upload_3mf_filename_returns_none_without_safe_stem(
+    source_basename,
+):
+    assert generate_preserved_upload_3mf_filename(source_basename) is None
 
 
 # =========================================================================
@@ -141,7 +233,7 @@ class TestGeneratedFilenameFormat:
     @patch("core.naming._get_timestamp", return_value=FIXED_TS)
     def test_model_filename_structure(self, _mock_ts):
         result = generate_model_filename(
-            "photo", ModelingMode.HIGH_FIDELITY, "RYBW"
+            "photo", ModelingMode.HIGH_FIDELITY, "4-Color"
         )
         assert result == f"photo_Lumina_HiFi_4C_{FIXED_TS}.3mf"
 
@@ -169,7 +261,7 @@ class TestGeneratedFilenameFormat:
 
     @patch("core.naming._get_timestamp", return_value=FIXED_TS)
     def test_calibration_filename_structure(self, _mock_ts):
-        result = generate_calibration_filename("RYBW", "Standard")
+        result = generate_calibration_filename("4-Color", "Standard")
         assert result == f"Lumina_Calibration_Standard_4C_{FIXED_TS}.3mf"
 
     @patch("core.naming._get_timestamp", return_value=FIXED_TS)
@@ -186,10 +278,10 @@ class TestGeneratedFilenameFormat:
 
     def test_model_filename_matches_regex(self):
         pattern = re.compile(
-            rf"^.+_Lumina_(HiFi|Pixel|Vector)_(4C|6C|8C|BW)_{TS_RE}\.3mf$"
+            rf"^.+_Lumina_(HiFi|Pixel|Vector|ColorCard)_(4C|6C|8C|BW)_{TS_RE}\.3mf$"
         )
         for mode in ModelingMode:
-            for color in ["RYBW", "6-Color", "8-Color Max", "BW"]:
+            for color in ["4-Color", "6-Color", "8-Color Max", "BW"]:
                 filename = generate_model_filename("test", mode, color)
                 assert pattern.match(filename), f"No match: {filename}"
 
@@ -215,7 +307,7 @@ class TestParseFilename:
 
     @patch("core.naming._get_timestamp", return_value=FIXED_TS)
     def test_parse_model_filename(self, _mock_ts):
-        filename = generate_model_filename("photo", ModelingMode.HIGH_FIDELITY, "RYBW")
+        filename = generate_model_filename("photo", ModelingMode.HIGH_FIDELITY, "4-Color")
         parsed = parse_filename(filename)
         assert parsed is not None
         assert parsed["base_name"] == "photo"
@@ -246,3 +338,80 @@ class TestParseFilename:
         parsed = parse_filename(filename)
         assert parsed is not None
         assert parsed["file_type"] == "batch"
+
+
+# =========================================================================
+# 5. Segmented GLB filename: session-scoped + collision-free
+# =========================================================================
+
+class TestGenerateSegmentedGlbFilename:
+    """Tests for ``generate_segmented_glb_filename`` session-scoped uniqueness.
+    ``generate_segmented_glb_filename`` 会话级唯一性测试.
+
+    The helper exists to eliminate the cross-session GLB overwrite class of
+    bug documented in ``progress/glb-internals-audit-2026-04-30.md``: every
+    filename it returns must be unique on disk regardless of how rapidly the
+    same or different sessions call it.
+    该助手函数专门为了消除《分色 GLB 跨会话覆写》这类缺陷；
+    详见 ``progress/glb-internals-audit-2026-04-30.md``。不论同会话还是
+    跨会话，调用多频时返回的文件名都必须在磁盘上保持唯一。
+    """
+
+    def test_format_matches_expected_pattern(self):
+        """Returned name must match ``segmented_<prefix>_<uuid12>.glb``."""
+        name = generate_segmented_glb_filename("abcdef0123456789")
+        assert SEGMENTED_GLB_RE.match(name), f"Unexpected filename: {name}"
+
+    def test_session_id_prefix_truncated_to_8_chars(self):
+        """Long session_ids must be truncated so the prefix stays bounded.
+        较长的 session_id 必须被截取，防止文件名过长。
+        """
+        long_sid = "A" * 64
+        name = generate_segmented_glb_filename(long_sid)
+        m = SEGMENTED_GLB_RE.match(name)
+        assert m is not None
+        assert m.group(1) == "AAAAAAAA"
+        assert len(m.group(1)) == 8
+
+    @pytest.mark.parametrize("session_id", [None, ""])
+    def test_falsy_session_id_falls_back_to_anon(self, session_id):
+        """None / empty session_id must not raise; fallback prefix is ``anon``.
+        ``None`` 或空字符串不能报错，回退前缀为 ``anon``。
+        """
+        name = generate_segmented_glb_filename(session_id)
+        m = SEGMENTED_GLB_RE.match(name)
+        assert m is not None
+        assert m.group(1) == "anon"
+
+    def test_unsafe_session_id_chars_get_sanitized(self):
+        """Forbidden FS characters in session_id must be replaced.
+        session_id 中的非法文件系统字符必须被转为下划线。
+        """
+        name = generate_segmented_glb_filename("ab/cd:ef")
+        m = SEGMENTED_GLB_RE.match(name)
+        assert m is not None
+        prefix = m.group(1)
+        for ch in '<>:"/\\|?*':
+            assert ch not in prefix
+
+    def test_repeated_calls_produce_unique_filenames(self):
+        """100 calls with identical session_id must yield 100 distinct names.
+        同一 session_id 调用 100 次必须返回 100 个不同名字。
+
+        This is the core anti-collision guarantee: even if a single session
+        races multiple GLB builds within the same second, no two builds
+        ever target the same path on disk.
+        这是防止跨调用冲突的核心契约：同一会话在同一秒内起多个 GLB
+        任务也不会出现同一路径。
+        """
+        names = {
+            generate_segmented_glb_filename("sess0001")
+            for _ in range(100)
+        }
+        assert len(names) == 100
+
+    def test_custom_extension_is_honoured(self):
+        """Caller-supplied extension must replace the default ``.glb``."""
+        name = generate_segmented_glb_filename("sess0001", extension=".gltf")
+        assert name.endswith(".gltf")
+        assert not name.endswith(".glb")

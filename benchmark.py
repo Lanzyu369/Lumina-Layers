@@ -1,8 +1,8 @@
 """
 Lumina Studio — headless benchmark script.
 
-Runs both SVG mode (Lanz1.svg) and High-Fidelity mode (Lanz2.jpg) without
-starting the Gradio UI, measures wall-clock time for each stage, and prints
+Runs both SVG mode and High-Fidelity mode on project-owned synthetic inputs without
+starting the UI, measures wall-clock time for each stage, and prints
 [BENCH] summary lines that can be grepped from log files for easy comparison
 across optimisation iterations.
 
@@ -135,7 +135,7 @@ def _pick_first_existing(candidates):
 
 
 def _pick_latest_lut():
-    lut_dir = os.path.join(_ROOT, "lut-npy预设", "Aliz", "PETG", "5色")
+    lut_dir = os.path.join(_ROOT, "lut-preset", "Aliz", "PETG", "5色")
     matches = glob.glob(os.path.join(lut_dir, "*.npy"))
     if not matches:
         raise FileNotFoundError(f"No LUT .npy file found in: {lut_dir}")
@@ -144,12 +144,10 @@ def _pick_latest_lut():
 
 LUT_PATH = _pick_latest_lut()
 SVG_PATH = _pick_first_existing([
-    os.path.join(_ROOT, "test_images", "benchmark.svg"),
-    os.path.join(_ROOT, "Lanz1.svg"),
+    os.path.join(_ROOT, "native", "lumina-svg-core", "benchmarks", "supported_scale_fixture.svg"),
 ])
 HIFI_PATH = _pick_first_existing([
-    os.path.join(_ROOT, "test_images", "benchmark.jpg"),
-    os.path.join(_ROOT, "Lanz2.jpg"),
+    os.path.join(_ROOT, "test_images", "LUT_Stress_Test_HD.png"),
 ])
 COLOR_MODE = "5-Color Extended"
 LONG_EDGE  = 240.0          # mm — long-edge constraint
@@ -219,8 +217,6 @@ def run_svg_benchmark(run_preview: bool = True):
             image_path=SVG_PATH,
             lut_path=LUT_PATH,
             target_width_mm=target_w,
-            auto_bg=False,
-            bg_tol=20,
             color_mode=COLOR_MODE,
             modeling_mode=ModelingMode.VECTOR,
             quantize_colors=QUANTIZE,
@@ -239,8 +235,6 @@ def run_svg_benchmark(run_preview: bool = True):
         target_width_mm=target_w,
         spacer_thick=SPACER_MM,
         structure_mode="Single-sided",
-        auto_bg=False,
-        bg_tol=20,
         color_mode=COLOR_MODE,
         add_loop=False,
         loop_width=8.0,
@@ -274,8 +268,6 @@ def run_hifi_benchmark(run_preview: bool = True):
             image_path=HIFI_PATH,
             lut_path=LUT_PATH,
             target_width_mm=target_w,
-            auto_bg=False,
-            bg_tol=20,
             color_mode=COLOR_MODE,
             modeling_mode=ModelingMode.HIGH_FIDELITY,
             quantize_colors=QUANTIZE,
@@ -299,8 +291,6 @@ def run_hifi_benchmark(run_preview: bool = True):
         target_width_mm=target_w,
         spacer_thick=SPACER_MM,
         structure_mode="Single-sided",
-        auto_bg=False,
-        bg_tol=20,
         color_mode=COLOR_MODE,
         add_loop=False,
         loop_width=8.0,
@@ -320,6 +310,10 @@ def run_hifi_benchmark(run_preview: bool = True):
 
 
 def main():
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     parser = argparse.ArgumentParser(description="Lumina headless benchmark")
     parser.add_argument('--svg-only',    action='store_true', help='Only run SVG benchmark')
     parser.add_argument('--hifi-only',   action='store_true', help='Only run HiFi benchmark')

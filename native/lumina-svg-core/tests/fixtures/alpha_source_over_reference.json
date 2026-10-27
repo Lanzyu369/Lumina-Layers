@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "canvas": {
+    "width_user_units": 12,
+    "height_user_units": 8,
+    "background_rgba_u8": [0, 0, 0, 0]
+  },
+  "render": {
+    "width_pixels": 120,
+    "height_pixels": 80,
+    "target_width_mm": 12.0,
+    "tolerance_mm": 0.02,
+    "boundary_exclusion_pixels": 1,
+    "maximum_interior_channel_error_u8": 1
+  },
+  "regions": [
+    {
+      "name": "red_only",
+      "rgba_f64": [1.0, 0.0, 0.0, 0.5],
+      "rgba_u8": [255, 0, 0, 128],
+      "area_user_units_squared": 24.0
+    },
+    {
+      "name": "source_over_overlap",
+      "rgba_f64": [0.3333333333333333, 0.0, 0.6666666666666666, 0.75],
+      "rgba_u8": [85, 0, 170, 191],
+      "area_user_units_squared": 24.0
+    },
+    {
+      "name": "blue_only",
+      "rgba_f64": [0.0, 0.0, 1.0, 0.5],
+      "rgba_u8": [0, 0, 255, 128],
+      "area_user_units_squared": 24.0
+    }
+  ],
+  "transparent_area_user_units_squared": 24.0
+}

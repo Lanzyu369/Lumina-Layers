@@ -1,0 +1,8 @@
+# Test tools; includes the normal application dependencies.
+-r requirements.txt
+# Full pytest collection also imports the optional GLB v2 preview tests.
+-r core/requirements-glb-v2.txt
+
+pytest>=8.0,<9.0
+pytest-asyncio>=0.23.0
+hypothesis>=6.0,<7.0

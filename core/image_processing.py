@@ -1,54 +1,85 @@
 """
-Lumina Studio - Image Processing Core
+Lumina Studio - Image Processing Core (图像处理核心)
 
 Handles image loading, preprocessing, color quantization and matching.
+处理图像加载、预处理、色彩量化和匹配。主要逻辑已抽取到 core/pipeline/processing_ops/ 子模块。
 """
 
 import os
-import sys
+import time
 import numpy as np
 import cv2
 from PIL import Image
-from scipy.spatial import KDTree
 
-from config import PrinterConfig, ModelingMode, ColorSystem, get_asset_path
+from api.structured_logging import get_logger
+from config import (
+    SVG_PIXELS_PER_MM_DEFAULT,
+    PrinterConfig,
+    ModelingMode,
+    ColorSystem,
+    normalize_svg_pixels_per_mm,
+)
 
 # HEIC/HEIF support (optional dependency)
 try:
     from pillow_heif import register_heif_opener
+
     register_heif_opener()
 except ImportError:
     pass
 
-# SVG support (optional dependency)
-try:
-    from svglib.svglib import svg2rlg
-    from reportlab.graphics import renderPM
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-    print("⚠️ [SVG] svglib/reportlab not installed. SVG support disabled.")
+log = get_logger(__name__)
 
-_SVG_RASTER_CACHE = {}
-_SVG_RASTER_CACHE_MAX = 4
+# ========== processing_ops 子模块导入 ==========
+from core.pipeline.processing_ops.lut_loader import load_lut
+from core.pipeline.processing_ops.bilateral_filter import apply_bilateral_filter
+from core.pipeline.processing_ops.median_filter import apply_median_filter
+from core.pipeline.processing_ops.kmeans_quantizer import quantize_colors as kmeans_quantize
+from core.pipeline.processing_ops.lut_color_matcher import match_colors_to_lut, map_pixels_to_lut
+from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
+from core.pipeline.processing_ops.wireframe_extractor import extract_wireframe_mask
+from core.pipeline.processing_ops.dynamic_range_compressor import (
+    apply_auto_dynamic_range,
+    compute_target_l_range,
+)
+
+
+def _unique_rgb_rows_fast(rgb: np.ndarray) -> np.ndarray:
+    """Return unique RGB rows using a packed 24-bit representation."""
+
+    rgb_u8 = np.ascontiguousarray(np.asarray(rgb)[:, :3], dtype=np.uint8)
+    if rgb_u8.size == 0:
+        return np.empty((0, 3), dtype=np.uint8)
+    packed = (
+        (rgb_u8[:, 0].astype(np.uint32) << 16)
+        | (rgb_u8[:, 1].astype(np.uint32) << 8)
+        | rgb_u8[:, 2].astype(np.uint32)
+    )
+    unique_packed = np.unique(packed)
+    unique_rgb = np.empty((len(unique_packed), 3), dtype=np.uint8)
+    unique_rgb[:, 0] = (unique_packed >> 16) & 0xFF
+    unique_rgb[:, 1] = (unique_packed >> 8) & 0xFF
+    unique_rgb[:, 2] = unique_packed & 0xFF
+    return unique_rgb
 
 
 class LuminaImageProcessor:
     """
-    Image processor class.
-    
+    Image processor class — 图像处理核心类。
+
+    主要逻辑已抽取到 processing_ops 子模块。
     Handles LUT loading, image processing, and color matching.
     """
 
     @staticmethod
     def _rgb_to_lab(rgb_array):
-        """将 RGB 数组转换为 CIELAB 空间（感知均匀色彩空间）。
+        """将 RGB 数组转换为 CIELAB 色彩空间，用于色差计算。
 
         Args:
             rgb_array: numpy array, shape (N, 3) 或 (H, W, 3), dtype uint8
 
         Returns:
-            numpy array, 同 shape, dtype float64, Lab 值
+            numpy array, 同输入 shape, dtype float64, Lab 色彩空间
         """
         original_shape = rgb_array.shape
         if rgb_array.ndim == 2:
@@ -61,881 +92,683 @@ class LuminaImageProcessor:
             return lab.reshape(original_shape)
         return lab
 
-    def __init__(self, lut_path, color_mode, hue_weight: float = 0.0):
-        """
-        Initialize image processor.
-        
+    def __init__(
+        self,
+        lut_path,
+        color_mode,
+        hue_weight: float = 0.0,
+        chroma_gate: float = 15.0,
+        color_layers: int | None = None,
+        layer_height_mm: float | None = None,
+        model_enable: bool = False,
+        model_only: bool = False,
+        model_threshold: float | None = None,
+        model_margin: float | None = None,
+        use_lut_constrained: bool = False,
+        auto_dynamic_range: bool = False,
+        svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
+    ):
+        """Initialize image processor.
+        加载 LUT 文件并初始化图像处理器。
         Args:
-            lut_path: LUT file path (.npy)
-            color_mode: Color mode string (CMYW/RYBW/6-Color)
-            hue_weight: 色相感知权重 (0.0-1.0)
-                        0.0 = 纯 CIELAB 距离（默认，兼容原有行为）
-                        0.3-0.5 = 平衡模式（推荐）
-                        1.0 = 最强色相保护
+            lut_path: LUT 文件路径 (.npy/.npz/.json)
+            color_mode: 颜色模式字符串 (CMYW/RYBW/6-Color)
+            hue_weight: 色相权重 (0.0-1.0)
+            chroma_gate: 色度门限 (0-50)
+            use_lut_constrained: 启用 LUT-Constrained K-Means 量化
+            auto_dynamic_range: 启用自动动态范围压缩（实验性，仅作用于 L*）
+            svg_pixels_per_mm: 高保真 SVG 光栅化采样密度（px/mm）
         """
-        self.lut_path = lut_path  # Store LUT path for color recipe logging
+        self.lut_path = lut_path
         self.color_mode = color_mode
         self.hue_weight = float(hue_weight)
-        self.layer_count = ColorSystem.get(color_mode).get('layer_count', PrinterConfig.COLOR_LAYERS)
-        self.lut_rgb = None
-        self.lut_lab = None  # CIELAB 空间的 LUT 颜色（用于 KDTree 匹配）
-        self.ref_stacks = None
-        self.kdtree = None
-        self.hue_matcher = None  # 色相感知匹配器（hue_weight > 0 时初始化）
-        self.enable_cleanup = True  # 默认开启孤立像素清理
-        
-        self._load_lut(lut_path)
-    
-    def _load_svg(self, svg_path, target_width_mm, pixels_per_mm: float = 20.0):
+        self.chroma_gate = float(chroma_gate)
+        self.requested_color_layers = int(color_layers) if color_layers is not None else None
+        self.requested_layer_height_mm = float(layer_height_mm) if layer_height_mm is not None else None
+        self.model_enable = bool(model_enable)
+        self.model_only = bool(model_only)
+        self.model_threshold = float(model_threshold) if model_threshold is not None else None
+        self.model_margin = float(model_margin) if model_margin is not None else None
+        self.use_lut_constrained = bool(use_lut_constrained)
+        self.auto_dynamic_range = bool(auto_dynamic_range)
+        self.svg_pixels_per_mm = normalize_svg_pixels_per_mm(svg_pixels_per_mm)
+        self.hue_matcher = None
+        self.enable_cleanup = True
+        self._last_unique_colors = 0
+        self._last_pixel_skip_count = 0
+        lut_data = self._load_lut_data()
+        self._apply_lut_data(lut_data)
+        self.last_match_info = self._build_initial_match_info()
+        self._disable_hue_protection_for_lut_matching()
+        self._init_hue_matcher()
+        self._log_init_summary()
+
+    def _disable_hue_protection_for_lut_matching(self) -> None:
+        """Disable incompatible hue protection and record the requested value."""
+
+        if not self.use_lut_constrained or self.hue_weight <= 0:
+            return
+        requested_hue_weight = self.hue_weight
+        self.hue_weight = 0.0
+        log.info(
+            "Hue protection ignored for LUT-constrained matching",
+            extra={
+                "event": "image_processor_hue_protection_disabled",
+                "requested_hue_weight": requested_hue_weight,
+                "reason": "lut_constrained",
+            },
+        )
+
+    def _load_lut_data(self):
+        return load_lut(
+            self.lut_path,
+            self.color_mode,
+            color_layers=self.requested_color_layers,
+            layer_height_mm=self.requested_layer_height_mm,
+            model_enable=self.model_enable,
+            model_only=self.model_only,
+            model_threshold=self.model_threshold,
+            model_margin=self.model_margin,
+        )
+
+    def _apply_lut_data(self, lut_data):
+        self.lut_rgb = lut_data["lut_rgb"]
+        self.lut_lab = lut_data["lut_lab"]
+        self.ref_stacks = lut_data["ref_stacks"]
+        self.kdtree = lut_data["kdtree"]
+        self.layer_count = lut_data["layer_count"]
+        self.predictive_runtime = lut_data.get("predictive_runtime")
+        self.predictive_modes = lut_data.get("predictive_modes", [])
+        self.supported_modes = lut_data.get("supported_modes", [])
+        self.source_kind = lut_data.get("source_kind", "legacy_lookup")
+        self.requested_color_layers = lut_data.get("requested_color_layers", self.layer_count)
+        self.requested_layer_height_mm = lut_data.get("requested_layer_height_mm")
+        self.predictive_warnings = lut_data.get("predictive_warnings", [])
+        self.predictive_threshold = lut_data.get("predictive_threshold")
+        self.predictive_margin = lut_data.get("predictive_margin")
+        self.native_reference_source = bool(lut_data.get("native_reference_source", False))
+
+    def _build_initial_match_info(self):
+        return {
+            "match_mode": (
+                "predictive"
+                if self.predictive_runtime is not None
+                and (self.model_only or self.model_enable or not self.native_reference_source)
+                else "legacy"
+            ),
+            "source_kind": self.source_kind,
+            "native_reference_source": self.native_reference_source,
+            "predictive_modes": list(self.predictive_modes),
+            "supported_modes": list(self.supported_modes),
+            "requested_color_layers": self.requested_color_layers,
+            "requested_layer_height_mm": self.requested_layer_height_mm,
+            "warnings": list(self.predictive_warnings),
+            "predictive_threshold": self.predictive_threshold,
+            "predictive_margin": self.predictive_margin,
+            "model_enable": self.model_enable,
+            "model_only": self.model_only,
+        }
+
+    def _log_init_summary(self):
+        log.debug(
+            "Initialized LUT processor",
+            extra={
+                "event": "image_processor_init",
+                "color_mode": self.color_mode,
+                "layer_count": self.layer_count,
+                "source_kind": self.source_kind,
+                "match_mode": self.last_match_info.get("match_mode"),
+                "hue_weight": self.hue_weight,
+                "chroma_gate": self.chroma_gate,
+            },
+        )
+
+    def _init_hue_matcher(self):
+        """Initialize hue-aware color matcher if hue_weight > 0.
+        如果 hue_weight > 0，则初始化色相感知的颜色匹配器。
         """
-        [Final Fix] Safe Padding + Dual-Pass Transparency Detection.
-        
-        Method: Render twice (White BG / Black BG).
-        - If pixel changes color -> It's background (Transparent) -> Remove it.
-        - If pixel stays same -> It's content (Opaque) -> Keep it 100% intact.
-        
-        This guarantees NO internal image damage.
-        
-        Args:
-            pixels_per_mm: Rasterization density. 20.0 for final output, 10.0 for previews.
-        """
-        if not HAS_SVG:
-            raise ImportError("Please install 'svglib' and 'reportlab'.")
-
-        cache_key = None
-        try:
-            svg_abs = os.path.abspath(svg_path)
-            svg_mtime = os.path.getmtime(svg_abs)
-            cache_key = (svg_abs, round(float(target_width_mm), 4), round(float(pixels_per_mm), 2), svg_mtime)
-            cached = _SVG_RASTER_CACHE.get(cache_key)
-            if cached is not None:
-                print(f"[SVG] Cache hit: {os.path.basename(svg_abs)} @ {pixels_per_mm}px/mm")
-                return cached.copy()
-        except Exception:
-            cache_key = None
-        
-        print(f"[SVG] Rasterizing: {svg_path}")
-        
-        # 1. 读取 SVG
-        drawing = svg2rlg(svg_path)
-        
-        # --- 步骤 A: 用几何边界确定内容区域 ---
-        # getBounds() 返回 SVG 几何坐标系下的内容边界，不依赖像素透明度检测，
-        # 在任何分辨率下都完全可靠，彻底消除因抗锯齿导致的内容被裁切问题。
-        x1, y1, x2, y2 = drawing.getBounds()
-        raw_w = x2 - x1
-        raw_h = y2 - y1
-
-        # 平移至原点，仅保留 2px 的固定安全边距（不再使用百分比浮动边距）
-        BORDER_PX_PRE = 4  # 渲染前在画布上留的固定余量（坐标单位）
-        drawing.translate(-x1, -y1)
-        drawing.width  = raw_w
-        drawing.height = raw_h
-
-        # 2. 缩放到目标像素宽度（强制最低渲染质量保证 Dual-Pass 效果）
-        target_width_px = int(target_width_mm * pixels_per_mm)
-        MIN_QUALITY_PX  = 800
-        render_width_px = max(target_width_px, MIN_QUALITY_PX)
-
-        if raw_w > 0:
-            scale_factor = render_width_px / raw_w
-        else:
-            scale_factor = 1.0
-
-        drawing.scale(scale_factor, scale_factor)
-        render_w = max(1, int(raw_w  * scale_factor))
-        render_h = max(1, int(raw_h  * scale_factor))
-        drawing.width  = render_w
-        drawing.height = render_h
-
-        # ================== 【终极方案】双重渲染差分法 ==================
-        try:
-            # Pass 1: 白底渲染 (0xFFFFFF)
-            # 强制不使用透明通道，完全模拟打印在白纸上的效果
-            pil_white = renderPM.drawToPIL(drawing, bg=0xFFFFFF, configPIL={'transparent': False})
-            arr_white = np.array(pil_white.convert('RGB'))  # 丢弃 Alpha，只看颜色
-            
-            # Pass 2: 黑底渲染 (0x000000)
-            # 强制不使用透明通道，完全模拟打印在黑纸上的效果
-            pil_black = renderPM.drawToPIL(drawing, bg=0x000000, configPIL={'transparent': False})
-            arr_black = np.array(pil_black.convert('RGB'))
-            
-            # 计算差异 (Difference)
-            # diff = |白底图 - 黑底图|
-            # 如果像素是实心的，它挡住了背景，所以在白底和黑底上颜色一样 -> diff 为 0
-            # 如果像素是透明的，它透出了背景，所以在白底是白，黑底是黑 -> diff 很大
-            diff = np.abs(arr_white.astype(int) - arr_black.astype(int))
-            diff_sum = np.sum(diff, axis=2)
-            
-            # 生成 Alpha 掩膜（严格阈值，保证下游色彩精度）
-            alpha_mask = np.where(diff_sum < 10, 255, 0).astype(np.uint8)
-            
-            # 合成最终图像
-            r, g, b = cv2.split(arr_white)
-            img_final = cv2.merge([r, g, b, alpha_mask])
-
-            # ── 几何裁切（替代原 Dual-Pass Crop 像素检测）──────────────────
-            # 渲染画布已对齐到内容原点，直接取 render_w × render_h 即为完整内容。
-            # 仅在数组边界内添加 2px 固定留白，避免抗锯齿边缘被截断。
-            BORDER = 2
-            h_arr, w_arr = img_final.shape[:2]
-            x_start = max(0, -BORDER)
-            y_start = max(0, -BORDER)
-            x_end   = min(w_arr, render_w + BORDER)
-            y_end   = min(h_arr, render_h + BORDER)
-            img_final = img_final[y_start:y_end, x_start:x_end]
-            print(f"[SVG] Geometry Crop: {img_final.shape[1]}x{img_final.shape[0]} (bounds-based, lossless)")
-
-            # 若渲染时为保证质量而放大，缩回目标像素宽度
-            if render_width_px > target_width_px and target_width_px > 0:
-                scale_back = target_width_px / render_width_px
-                out_w = max(1, round(img_final.shape[1] * scale_back))
-                out_h = max(1, round(img_final.shape[0] * scale_back))
-                img_final = cv2.resize(img_final, (out_w, out_h), interpolation=cv2.INTER_AREA)
-                print(f"[SVG] Scaled to target: {out_w}x{out_h} px")
-
-            print(f"[SVG] Final resolution: {img_final.shape[1]}x{img_final.shape[0]} px")
-            if cache_key is not None:
-                _SVG_RASTER_CACHE[cache_key] = img_final.copy()
-                while len(_SVG_RASTER_CACHE) > _SVG_RASTER_CACHE_MAX:
-                    _SVG_RASTER_CACHE.pop(next(iter(_SVG_RASTER_CACHE)))
-            return img_final
-            
-        except Exception as e:
-            print(f"[SVG] Dual-Pass failed: {e}")
-            import traceback
-            traceback.print_exc()
-            
-            # 最后的保底：如果双重渲染失败，回退到普通渲染
-            pil_img = renderPM.drawToPIL(drawing, bg=None, configPIL={'transparent': True})
-            img_fallback = np.array(pil_img.convert('RGBA'))
-            if cache_key is not None:
-                _SVG_RASTER_CACHE[cache_key] = img_fallback.copy()
-                while len(_SVG_RASTER_CACHE) > _SVG_RASTER_CACHE_MAX:
-                    _SVG_RASTER_CACHE.pop(next(iter(_SVG_RASTER_CACHE)))
-            return img_fallback
-    
-    def _load_lut(self, lut_path):
-        """
-        Load and validate LUT file (Supports 2-Color, 4-Color, 6-Color, 8-Color, and Merged).
-        
-        Automatically detects LUT type based on size:
-        - .npz files: Merged LUT (contains rgb + stacks arrays)
-        - 32 colors: 2-Color BW (Black & White)
-        - 1024 colors: 4-Color Standard (CMYW/RYBW)
-        - 1296 colors: 6-Color Smart 1296
-        - 2738 colors: 8-Color Max
-        - Other sizes: Merged LUT (try .npz companion file)
-        """
-        # 合并 LUT 支持：.npz 格式直接加载 rgb + stacks
-        if lut_path.endswith('.npz'):
-            try:
-                data = np.load(lut_path)
-                self.lut_rgb = data['rgb']
-                self.ref_stacks = data['stacks']
-                if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
-                    self.layer_count = int(self.ref_stacks.shape[1])
-                self.lut_lab = self._rgb_to_lab(self.lut_rgb)
-                self.kdtree = KDTree(self.lut_lab)
-                print(f"✅ Merged LUT loaded: {len(self.lut_rgb)} colors (.npz format, Lab KDTree)")
-                
-                # 初始化色相感知匹配器（仅当 hue_weight > 0 时）
-                if self.hue_weight > 0:
-                    from core.color_matching_hue_aware import HueAwareColorMatcher
-                    self.hue_matcher = HueAwareColorMatcher(
-                        self.lut_rgb, self.lut_lab, hue_weight=self.hue_weight
-                    )
-                return
-            except Exception as e:
-                raise ValueError(f"❌ Merged LUT file corrupted: {e}")
-
-        try:
-            lut_grid = np.load(lut_path)
-            measured_colors = lut_grid.reshape(-1, 3)
-            total_colors = measured_colors.shape[0]
-        except Exception as e:
-            raise ValueError(f"❌ LUT file corrupted: {e}")
-        
-        valid_rgb = []
-        valid_stacks = []
-        
-        print(f"[IMAGE_PROCESSOR] Loading LUT with {total_colors} points...")
-        
-        # Branch 0: 2-Color BW (32)
-        if self.color_mode == "BW (Black & White)" or self.color_mode == "BW" or total_colors == 32:
-            print("[IMAGE_PROCESSOR] Detected 2-Color BW mode")
-            
-            # Generate all 32 combinations (2^5 = 32)
-            for i in range(32):
-                if i >= total_colors:
-                    break
-                
-                # Rebuild 2-base stacking (0..31)
-                digits = []
-                temp = i
-                for _ in range(5):
-                    digits.append(temp % 2)
-                    temp //= 2
-                stack = digits[::-1]  # [顶...底] format
-                
-                valid_rgb.append(measured_colors[i])
-                valid_stacks.append(stack)
-            
-            self.lut_rgb = np.array(valid_rgb)
-            self.ref_stacks = np.array(valid_stacks)
-            if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
-                self.layer_count = int(self.ref_stacks.shape[1])
-            
-            print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (2-Color BW mode)")
-        
-        # Branch 1: 8-Color Max (2738)
-        elif "8-Color" in self.color_mode or total_colors == 2738:
-            print("[IMAGE_PROCESSOR] Detected 8-Color Max mode")
-            
-            # Load pre-generated 8-color stacks
-            stacks_path = get_asset_path('smart_8color_stacks.npy')
-            
-            smart_stacks = np.load(stacks_path).tolist()
-            
-            # 约定转换：smart_8color_stacks.npy 存储底到顶约定（stack[0]=背面），
-            # 转换为顶到底约定（stack[0]=观赏面, stack[4]=背面），与 4 色模式统一
-            smart_stacks = [tuple(reversed(s)) for s in smart_stacks]
-            print("[IMAGE_PROCESSOR] Stacks converted from bottom-to-top to top-to-bottom convention (matching 4-color mode).")
-            
-            if len(smart_stacks) != total_colors:
-                print(f"⚠️ Warning: Stacks count ({len(smart_stacks)}) != LUT count ({total_colors})")
-                min_len = min(len(smart_stacks), total_colors)
-                smart_stacks = smart_stacks[:min_len]
-                measured_colors = measured_colors[:min_len]
-            
-            self.lut_rgb = measured_colors
-            self.ref_stacks = np.array(smart_stacks)
-            if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
-                self.layer_count = int(self.ref_stacks.shape[1])
-            
-            print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (8-Color mode)")
-        
-        # Branch 2: 6-Color Smart 1296
-        elif "6-Color" in self.color_mode or total_colors == 1296:
-            print("[IMAGE_PROCESSOR] Detected 6-Color Smart 1296 mode")
-            
-            from core.calibration import get_top_1296_colors
-            
-            smart_stacks = get_top_1296_colors()
-            # 约定转换：get_top_1296_colors() 返回底到顶约定（stack[0]=背面），
-            # 转换为顶到底约定（stack[0]=观赏面, stack[4]=背面），与 4 色模式统一
-            smart_stacks = [tuple(reversed(s)) for s in smart_stacks]
-            print("[IMAGE_PROCESSOR] Stacks converted from bottom-to-top to top-to-bottom convention (matching 4-color mode).")
-            
-            if len(smart_stacks) != total_colors:
-                print(f"⚠️ Warning: Stacks count ({len(smart_stacks)}) != LUT count ({total_colors})")
-                min_len = min(len(smart_stacks), total_colors)
-                smart_stacks = smart_stacks[:min_len]
-                measured_colors = measured_colors[:min_len]
-            
-            self.lut_rgb = measured_colors
-            self.ref_stacks = np.array(smart_stacks)
-            if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
-                self.layer_count = int(self.ref_stacks.shape[1])
-            
-            print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (6-Color mode)")
-        
-        # Branch 3: 5-Color Extended (2468)
-        elif "5-Color Extended" in self.color_mode or total_colors == 2468:
-            print("[IMAGE_PROCESSOR] Detected 5-Color Extended (2468) mode")
-            
-            # For .npz files, load stacks directly
-            if lut_path.endswith('.npz'):
-                try:
-                    data = np.load(lut_path)
-                    stacks = data['stacks']
-                    # Ensure 6-layer stacks and convert to top-to-bottom convention
-                    if stacks.shape[1] == 6:
-                        self.ref_stacks = np.array([tuple(reversed(s)) for s in stacks])
-                        self.layer_count = int(self.ref_stacks.shape[1])
-                        self.lut_rgb = measured_colors
-                        print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (5-Color Extended, 6-layer stacks)")
-                        
-                        # Build KD-Tree and hue matcher for early-return path
-                        self.lut_lab = self._rgb_to_lab(self.lut_rgb)
-                        self.kdtree = KDTree(self.lut_lab)
-                        if self.hue_weight > 0:
-                            from core.color_matching_hue_aware import HueAwareColorMatcher
-                            self.hue_matcher = HueAwareColorMatcher(
-                                self.lut_rgb, self.lut_lab, hue_weight=self.hue_weight
-                            )
-                        return
-                except Exception as e:
-                    print(f"⚠️ Failed to load stacks from .npz: {e}")
-            
-            # Fallback: generate stacks from index
-            # First 1024: base 5-layer (4^5 combinations), pad to 6 layers
-            # Next 1444: extended 6-layer from select_extended_1444_colors()
-            ref_stacks = []
-            
-            # Generate base 1024 stacks (5-layer, pad with air(-1) at viewing end)
-            # Air at index 0 offsets the base viewing surface by 1 Z level
-            # so it doesn't share the same Z as extended viewing surfaces.
-            for i in range(min(1024, total_colors)):
-                digits = []
-                temp = i
-                for _ in range(5):
-                    digits.append(temp % 4)
-                    temp //= 4
-                stack = (-1,) + tuple(reversed(digits))
-                ref_stacks.append(stack)
-            
-            # Generate extended 1444 stacks using select_extended_1444_colors
-            if total_colors > 1024:
-                from core.calibration import select_extended_1444_colors
-                base_5layer = [tuple(reversed([i//4**j%4 for j in range(5)])) for i in range(1024)]
-                extended_stacks = select_extended_1444_colors(base_5layer)
-                
-                # Add extended stacks (already in correct 6-layer format)
-                for i in range(min(len(extended_stacks), total_colors - 1024)):
-                    ref_stacks.append(extended_stacks[i])
-            
-            self.lut_rgb = measured_colors
-            self.ref_stacks = np.array(ref_stacks)
-            if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
-                self.layer_count = int(self.ref_stacks.shape[1])
-            
-            print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (5-Color Extended)")
-        
-        # Branch 4: Merged LUT (non-standard size or "Merged" mode)
-        elif self.color_mode == "Merged" or total_colors not in (32, 1024, 1296, 2468, 2738):
-            print(f"[IMAGE_PROCESSOR] Detected non-standard LUT size ({total_colors}), trying companion .npz...")
-            
-            # 尝试查找同名 .npz 文件
-            npz_path = lut_path.rsplit('.', 1)[0] + '.npz'
-            if os.path.exists(npz_path):
-                try:
-                    data = np.load(npz_path)
-                    self.lut_rgb = data['rgb']
-                    self.ref_stacks = data['stacks']
-                    if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
-                        self.layer_count = int(self.ref_stacks.shape[1])
-                    self.lut_lab = self._rgb_to_lab(self.lut_rgb)
-                    self.kdtree = KDTree(self.lut_lab)
-                    print(f"✅ Merged LUT loaded from companion .npz: {len(self.lut_rgb)} colors (Lab KDTree)")
-                    
-                    # 初始化色相感知匹配器（仅当 hue_weight > 0 时）
-                    if self.hue_weight > 0:
-                        from core.color_matching_hue_aware import HueAwareColorMatcher
-                        self.hue_matcher = HueAwareColorMatcher(
-                            self.lut_rgb, self.lut_lab, hue_weight=self.hue_weight
-                        )
-                    return
-                except Exception as e:
-                    print(f"⚠️ Failed to load companion .npz: {e}")
-            
-            # 无 .npz 伴随文件，使用 RGB 数据但无堆叠信息
-            # 生成占位堆叠（全0）
-            print(f"⚠️ No companion .npz found, using placeholder stacks")
-            self.lut_rgb = measured_colors
-            self.ref_stacks = np.zeros((total_colors, self.layer_count), dtype=np.int32)
-            
-            print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (Merged mode, placeholder stacks)")
-        
-        # Branch 5: 4-Color Standard (1024)
-        else:
-            print("[IMAGE_PROCESSOR] Detected 4-Color Standard mode")
-            
-            # Keep original outlier filtering logic (Blue Check)
-            base_blue = np.array([30, 100, 200])
-            dropped = 0
-            
-            for i in range(1024):
-                if i >= total_colors:
-                    break
-                
-                # Rebuild 4-base stacking (0..1023)
-                digits = []
-                temp = i
-                for _ in range(5):
-                    digits.append(temp % 4)
-                    temp //= 4
-                stack = digits[::-1]
-                
-                real_rgb = measured_colors[i]
-                
-                # Filter outliers: close to blue but doesn't contain blue
-                dist = np.linalg.norm(real_rgb - base_blue)
-                if dist < 60 and 3 not in stack:  # 3 is Blue in RYBW/CMYW
-                    dropped += 1
-                    continue
-                
-                valid_rgb.append(real_rgb)
-                valid_stacks.append(stack)
-            
-            self.lut_rgb = np.array(valid_rgb)
-            self.ref_stacks = np.array(valid_stacks)
-            if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
-                self.layer_count = int(self.ref_stacks.shape[1])
-            
-            print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (filtered {dropped} outliers)")
-        
-        # Build KD-Tree in CIELAB space for perceptually accurate color matching
-        self.lut_lab = self._rgb_to_lab(self.lut_rgb)
-        self.kdtree = KDTree(self.lut_lab)
-        
-        # 初始化色相感知匹配器（仅当 hue_weight > 0 时）
         if self.hue_weight > 0:
+            if self.lut_rgb.size == 0 or self.lut_lab.size == 0:
+                return
             from core.color_matching_hue_aware import HueAwareColorMatcher
+
             self.hue_matcher = HueAwareColorMatcher(
-                self.lut_rgb, self.lut_lab, hue_weight=self.hue_weight
+                self.lut_rgb, self.lut_lab, hue_weight=self.hue_weight, chroma_gate=self.chroma_gate
             )
-    
-    def process_image(self, image_path, target_width_mm, modeling_mode,
-                     quantize_colors, auto_bg, bg_tol,
-                     blur_kernel=0, smooth_sigma=10):
+
+    def _load_svg(self, svg_path, target_width_mm, pixels_per_mm: float = 20.0):
+        """Rasterize SVG input through shared svg_rasterizer helper.
+        通过 svg_rasterizer 辅助函数栅格化 SVG 输入。
         """
-        Main image processing method
-        
-        Args:
-            image_path: Image file path
-            target_width_mm: Target width (millimeters)
-            modeling_mode: Modeling mode ("high-fidelity", "pixel")
-            quantize_colors: K-Means quantization color count
-            auto_bg: Whether to auto-remove background
-            bg_tol: Background tolerance
-            blur_kernel: Median filter kernel size (0=disabled, recommended 0-5)
-            smooth_sigma: Bilateral filter sigma value (recommended 5-20)
-        
+        return rasterize_svg(svg_path, target_width_mm, pixels_per_mm)
+
+    def _extract_wireframe_mask(self, rgb_arr, target_w, pixel_scale, wire_width_mm=0.6):
+        """Extract wireframe mask through shared wireframe_extractor helper.
+        通过 wireframe_extractor 辅助函数提取线框蒙版。
+        """
+        return extract_wireframe_mask(rgb_arr, pixel_scale, wire_width_mm)
+
+    def process_image(
+        self,
+        image_path,
+        target_width_mm,
+        modeling_mode,
+        quantize_colors,
+        blur_kernel=0,
+        smooth_sigma=10,
+    ):
+        """Main image processing method.
+        主要图像处理方法。
+
         Returns:
-            dict: Dictionary containing processing results
-                - matched_rgb: (H, W, 3) Matched RGB array
-                - material_matrix: (H, W, Layers) Material index matrix
-                - mask_solid: (H, W) Solid mask
-                - dimensions: (width, height) Pixel dimensions
-                - pixel_scale: mm/pixel ratio
-                - mode_info: Mode information dictionary
-                - debug_data: Debug data (high-fidelity mode only)
+            dict with matched_rgb, material_matrix, mask_solid, dimensions,
+                 pixel_scale, mode_info, quantized_image, debug_data
         """
-        print(f"[IMAGE_PROCESSOR] Mode: {modeling_mode.get_display_name()}")
-        print(f"[IMAGE_PROCESSOR] Filter settings: blur_kernel={blur_kernel}, smooth_sigma={smooth_sigma}")
-        
-        # ========== Image Loading Logic Branch ==========
-        is_svg = image_path.lower().endswith('.svg')
-        
-        if is_svg:
-            print("[IMAGE_PROCESSOR] SVG detected - Engaging Ultra-High-Fidelity Vector Mode")
-            img_arr = self._load_svg(image_path, target_width_mm, pixels_per_mm=10.0)
-            # SVG reset to PIL object to reuse subsequent logic (e.g., get dimensions)
-            img = Image.fromarray(img_arr)
-            
-            # [CRITICAL] SVG is also a type of High-Fidelity, but it doesn't need denoising
-            # Force override filter parameters, because vector graphics have no noise, no need to blur
-            # 
-            # [SUPER-SAMPLING STRATEGY]
-            # We render at 20 px/mm (2x standard), which physically eliminates jaggies
-            # through super-sampling. This is superior to blur-based anti-aliasing
-            # because it preserves sharp edges while making curves smooth.
-            blur_kernel = 0
-            smooth_sigma = 0
-            print("[IMAGE_PROCESSOR] SVG Mode: Filters disabled (Vector source is clean)")
-            print("[IMAGE_PROCESSOR] Super-sampling at 20 px/mm eliminates jagged edges naturally")
-            
-            # Recalculate target_w/h (based on rendered dimensions)
-            target_w, target_h = img.size
-            pixel_to_mm_scale = 0.05  # 20 px/mm (1/20) - Ultra-High-Fidelity
+        started = time.perf_counter()
+        self._log_processing_started(modeling_mode, blur_kernel, smooth_sigma, target_width_mm)
+        img, target_w, target_h, px_scale, blur_kernel, smooth_sigma = self._load_and_resize_image(
+            image_path, target_width_mm, modeling_mode, blur_kernel, smooth_sigma
+        )
+        rgb_arr, mask_transparent = self._extract_rgba_arrays(img)
+        rgb_arr = self._maybe_apply_auto_dynamic_range(rgb_arr)
+        matched_rgb, material_matrix, debug_data = self._run_mode_pipeline(
+            modeling_mode, rgb_arr, target_h, target_w, quantize_colors, blur_kernel, smooth_sigma
+        )
+        matched_rgb, material_matrix = self._apply_cleanup(modeling_mode, matched_rgb, material_matrix)
+        # Result contract keys: 'matched_rgb', 'material_matrix', 'mask_solid',
+        # 'dimensions', 'pixel_scale', 'mode_info', 'quantized_image'.
+        result = self._finalize_process_result(
+            matched_rgb,
+            material_matrix,
+            mask_transparent,
+            target_w,
+            target_h,
+            px_scale,
+            modeling_mode,
+            rgb_arr,
+            debug_data,
+        )
+        self._log_processing_done(started, target_w, target_h, px_scale, modeling_mode)
+        return result
+
+    def _log_processing_started(self, modeling_mode, blur_kernel, smooth_sigma, target_width_mm):
+        log.debug(
+            "Image processing started",
+            extra={
+                "event": "image_processor_started",
+                "mode": modeling_mode.get_display_name(),
+                "blur_kernel": blur_kernel,
+                "smooth_sigma": smooth_sigma,
+                "target_width_mm": target_width_mm,
+            },
+        )
+
+    def _finalize_process_result(
+        self,
+        matched_rgb,
+        material_matrix,
+        mask_transparent,
+        target_w,
+        target_h,
+        px_scale,
+        modeling_mode,
+        rgb_arr,
+        debug_data,
+    ):
+        material_matrix[mask_transparent] = -1
+        return self._build_process_result(
+            matched_rgb,
+            material_matrix,
+            mask_transparent,
+            target_w,
+            target_h,
+            px_scale,
+            modeling_mode,
+            rgb_arr,
+            debug_data,
+        )
+
+    def _log_processing_done(self, started, target_w, target_h, px_scale, modeling_mode):
+        log.info(
+            "Image processing completed",
+            extra={
+                "event": "image_processor_done",
+                "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                "unique_colors": self._last_unique_colors,
+                "final_size": [target_w, target_h],
+                "pixel_skip_count": self._last_pixel_skip_count,
+                "mode": modeling_mode.get_display_name(),
+                "pixel_scale": px_scale,
+                "match_mode": self.last_match_info.get("match_mode"),
+            },
+        )
+
+    def _maybe_apply_auto_dynamic_range(self, rgb_arr):
+        """Apply auto dynamic range compression in-place if enabled.
+        若启用自动动态范围，则将输入压缩到 LUT/耗材调色板可达的 L* 区间。
+        """
+        if not self.auto_dynamic_range:
+            return rgb_arr
+        target = compute_target_l_range(getattr(self, "lut_lab", None))
+        if target is None:
+            log.debug(
+                "Auto dynamic range skipped: no target L* range available",
+                extra={
+                    "event": "auto_dynamic_range_skipped",
+                    "reason": "no_target_range",
+                },
+            )
+            return rgb_arr
+        target_lo, target_hi = target
+        rgb_out, info = apply_auto_dynamic_range(rgb_arr, target_lo, target_hi)
+        if info.get("applied"):
+            log.info(
+                "Auto dynamic range applied",
+                extra={
+                    "event": "auto_dynamic_range_applied",
+                    "src_l_range": list(info.get("src_l_range") or ()),
+                    "tgt_l_range": list(info.get("tgt_l_range") or ()),
+                },
+            )
         else:
-            # [Original Logic] Bitmap loading
-            # Load image
-            img = Image.open(image_path).convert('RGBA')
-            
-            # DEBUG: Check original image properties
-            print(f"[IMAGE_PROCESSOR] Original image: {image_path}")
-            print(f"[IMAGE_PROCESSOR] Image mode: {Image.open(image_path).mode}")
-            print(f"[IMAGE_PROCESSOR] Image size: {Image.open(image_path).size}")
-            
-            # Check if image has transparency
-            original_img = Image.open(image_path)
-            has_alpha = original_img.mode in ('RGBA', 'LA') or (original_img.mode == 'P' and 'transparency' in original_img.info)
-            print(f"[IMAGE_PROCESSOR] Has alpha channel: {has_alpha}")
-            
-            if has_alpha:
-                # Check alpha channel statistics
-                if original_img.mode != 'RGBA':
-                    original_img = original_img.convert('RGBA')
-                alpha_data = np.array(original_img)[:, :, 3]
-                print(f"[IMAGE_PROCESSOR] Alpha stats: min={alpha_data.min()}, max={alpha_data.max()}, mean={alpha_data.mean():.1f}")
-                print(f"[IMAGE_PROCESSOR] Transparent pixels (alpha<10): {np.sum(alpha_data < 10)}")
-            
-            # Calculate target resolution
-            if modeling_mode == ModelingMode.HIGH_FIDELITY:
-                # High-precision mode: 10 pixels/mm
-                PIXELS_PER_MM = 10
-                target_w = int(target_width_mm * PIXELS_PER_MM)
-                pixel_to_mm_scale = 1.0 / PIXELS_PER_MM  # 0.1 mm per pixel
-                print(f"[IMAGE_PROCESSOR] High-res mode: {PIXELS_PER_MM} px/mm")
-            else:
-                # Pixel mode: Based on nozzle width
-                target_w = int(target_width_mm / PrinterConfig.NOZZLE_WIDTH)
-                pixel_to_mm_scale = PrinterConfig.NOZZLE_WIDTH
-                print(f"[IMAGE_PROCESSOR] Pixel mode: {1.0/pixel_to_mm_scale:.2f} px/mm")
-            
-            target_h = int(target_w * img.height / img.width)
-            print(f"[IMAGE_PROCESSOR] Target: {target_w}×{target_h}px ({target_w*pixel_to_mm_scale:.1f}×{target_h*pixel_to_mm_scale:.1f}mm)")
-        
-        # ========== End of Image Loading Logic Branch ==========
-        
-        # ========== CRITICAL FIX: Use NEAREST for both modes ==========
-        # REASON: LANCZOS anti-aliasing creates light transition pixels at edges.
-        # These light pixels map to stacks with WHITE bases (Layer 1),
-        # causing the mesh to "float" above the build plate.
-        # 
-        # SOLUTION: Use NEAREST to preserve hard edges and ensure dark pixels
-        # map to solid dark stacks from Layer 1 upwards.
-        print(f"[IMAGE_PROCESSOR] Using NEAREST interpolation (no anti-aliasing)")
-        img = img.resize((target_w, target_h), Image.Resampling.NEAREST)
-        
+            log.debug(
+                "Auto dynamic range skipped",
+                extra={
+                    "event": "auto_dynamic_range_skipped",
+                    "reason": info.get("reason"),
+                },
+            )
+        return rgb_out
+
+    def _extract_rgba_arrays(self, img):
+        """Extract RGB data and transparent mask from RGBA image.
+        从 RGBA 图像中提取 RGB 数据和透明蒙版。
+        """
         img_arr = np.array(img)
-        rgb_arr = img_arr[:, :, :3]
-        alpha_arr = img_arr[:, :, 3]
-        
-        # CRITICAL FIX: Identify transparent pixels BEFORE color processing
-        # This prevents transparent areas from being matched to LUT colors
-        mask_transparent_initial = alpha_arr < 10
-        print(f"[IMAGE_PROCESSOR] Found {np.sum(mask_transparent_initial)} transparent pixels (alpha<10)")
-        
-        # Color processing and matching
-        debug_data = None
+        rgb_arr, alpha_arr = img_arr[:, :, :3], img_arr[:, :, 3]
+        mask_transparent = alpha_arr < 10
+        transparent_count = int(np.sum(mask_transparent))
+        self._last_pixel_skip_count = transparent_count
+        log.debug(
+            "Transparent pixels detected",
+            extra={
+                "event": "image_transparency_detected",
+                "transparent_pixels": transparent_count,
+                "alpha_threshold": 10,
+            },
+        )
+        return rgb_arr, mask_transparent
+
+    def _run_mode_pipeline(
+        self, modeling_mode, rgb_arr, target_h, target_w, quantize_colors, blur_kernel, smooth_sigma
+    ):
+        """Run processing pipeline for current modeling mode.
+        运行当前建模模式的处理流程。
+        """
         if modeling_mode == ModelingMode.HIGH_FIDELITY:
-            matched_rgb, material_matrix, bg_reference, debug_data = self._process_high_fidelity_mode(
+            return self._process_high_fidelity_mode(
                 rgb_arr, target_h, target_w, quantize_colors, blur_kernel, smooth_sigma
             )
-        else:
-            matched_rgb, material_matrix, bg_reference = self._process_pixel_mode(
-                rgb_arr, target_h, target_w
-            )
-        
-        # >>> 孤立像素清理（可选后处理）<<<
+        matched_rgb, material_matrix = self._process_pixel_mode(rgb_arr, target_h, target_w)
+        return matched_rgb, material_matrix, None
+
+    def _build_process_result(
+        self,
+        matched_rgb,
+        material_matrix,
+        mask_transparent,
+        target_w,
+        target_h,
+        px_scale,
+        modeling_mode,
+        rgb_arr,
+        debug_data,
+    ):
+        """Build process_image result payload.
+        构建 process_image 方法的返回值。
+        """
+        result = {
+            "matched_rgb": matched_rgb,
+            "material_matrix": material_matrix,
+            "mask_solid": ~mask_transparent,
+            "dimensions": (target_w, target_h),
+            "pixel_scale": px_scale,
+            "mode_info": {
+                "mode": modeling_mode,
+                "lut_match_mode": self.last_match_info.get("match_mode", "legacy"),
+            },
+            "lut_match_info": dict(self.last_match_info),
+            "quantized_image": debug_data["quantized_image"] if debug_data else rgb_arr.copy(),
+        }
+        if debug_data is not None:
+            result["debug_data"] = debug_data
+        return result
+
+    def _apply_cleanup(self, modeling_mode, matched_rgb, material_matrix):
+        """Apply isolated pixel cleanup if enabled.
+        如果启用，则应用孤立像素清理。
+
+        Runs in every high-fidelity match mode (legacy LUT lookup *and*
+        predictive model matching). The palette-preserving implementation
+        in :func:`core.isolated_pixel_cleanup.cleanup_isolated_pixels` no
+        longer requires the LUT ``ref_stacks`` to be present, so the
+        predictive-mode silent-skip that used to make this checkbox a
+        no-op has been removed.
+        无论经典 LUT 匹配还是预测匹配路径，只要处于高保真模式且勾选了
+        清理开关就会运行；新版清理函数不再依赖 LUT ``ref_stacks``，
+        因此预测匹配路径下也能生效（原先是静默跳过）。
+        """
         if modeling_mode == ModelingMode.HIGH_FIDELITY and self.enable_cleanup:
             try:
                 from core.isolated_pixel_cleanup import cleanup_isolated_pixels
-                matched_rgb, material_matrix = cleanup_isolated_pixels(
-                    material_matrix, matched_rgb, self.lut_rgb, self.ref_stacks
-                )
+
+                return cleanup_isolated_pixels(material_matrix, matched_rgb)
             except ImportError:
-                print("[IMAGE_PROCESSOR] ⚠️ isolated_pixel_cleanup module not found, skipping")
-        
-        # Background removal - combine alpha transparency with optional auto-bg
-        mask_transparent = mask_transparent_initial.copy()
-        if auto_bg:
-            bg_color = bg_reference[0, 0]
-            diff = np.sum(np.abs(bg_reference - bg_color), axis=-1)
-            mask_transparent = np.logical_or(mask_transparent, diff < bg_tol)
-        
-        # Apply transparency mask to material matrix
-        material_matrix[mask_transparent] = -1
-        mask_solid = ~mask_transparent
-        
-        result = {
-            'matched_rgb': matched_rgb,
-            'material_matrix': material_matrix,
-            'mask_solid': mask_solid,
-            'dimensions': (target_w, target_h),
-            'pixel_scale': pixel_to_mm_scale,
-            'mode_info': {
-                'mode': modeling_mode
+                log.debug(
+                    "Isolated pixel cleanup module unavailable",
+                    extra={"event": "isolated_pixel_cleanup_unavailable"},
+                )
+        return matched_rgb, material_matrix
+
+    def _load_and_resize_image(self, image_path, target_width_mm, modeling_mode, blur_kernel, smooth_sigma):
+        """加载图像并缩放到目标尺寸，对 SVG 自动禁用滤波器。
+        Load image and resize to target dimensions. Returns (img, w, h, scale, blur, sigma).
+        """
+        is_svg = image_path.lower().endswith(".svg")
+        if is_svg:
+            modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
+            svg_pixels_per_mm = (
+                self.svg_pixels_per_mm
+                if modeling_mode_value == ModelingMode.HIGH_FIDELITY.value
+                else SVG_PIXELS_PER_MM_DEFAULT
+            )
+            log.debug(
+                "SVG input detected",
+                extra={
+                    "event": "svg_input_detected",
+                    "pixels_per_mm": svg_pixels_per_mm,
+                    "mode": str(modeling_mode_value),
+                },
+            )
+            img = Image.fromarray(
+                self._load_svg(
+                    image_path,
+                    target_width_mm,
+                    pixels_per_mm=svg_pixels_per_mm,
+                )
+            )
+            blur_kernel, smooth_sigma = 0, 0
+            log.debug(
+                "SVG filters disabled",
+                extra={"event": "svg_filters_disabled", "blur_kernel": blur_kernel, "smooth_sigma": smooth_sigma},
+            )
+            target_w, target_h = img.size[0], img.size[1]
+            # The rasterizer alpha-crops canvas margins; map the cropped width to
+            # the requested width like the preview GLB and preview-reuse paths.
+            # 光栅化会裁掉画布边距；与预览 GLB 及预览复用路径一致，按裁后宽度映射到目标宽度。
+            pixel_scale = float(target_width_mm) / float(max(1, target_w))
+        else:
+            img = Image.open(image_path).convert("RGBA")
+            self._log_image_info(img, image_path)
+            target_w, target_h, pixel_scale = self._calc_dimensions(img, target_width_mm, modeling_mode)
+        log.debug(
+            "Image resize interpolation selected",
+            extra={"event": "image_resize_interpolation_selected", "interpolation": "nearest"},
+        )
+        img = img.resize((target_w, target_h), Image.Resampling.NEAREST)
+        return img, target_w, target_h, pixel_scale, blur_kernel, smooth_sigma
+
+    def _log_image_info(self, img, image_path):
+        """Log image properties for debugging (reuses already-loaded image).
+        记录图像属性信息，用于调试，复用已加载的图像以避免重复 I/O。
+
+        Args:
+            img (PIL.Image.Image): Already loaded RGBA image. (已加载的 RGBA 图像)
+            image_path (str): Path for display only. (仅用于显示的路径)
+        """
+        has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
+        extra = {
+            "event": "source_image_loaded",
+            "image_path": image_path,
+            "image_mode": img.mode,
+            "image_size": list(img.size),
+            "has_alpha": has_alpha,
+        }
+        if has_alpha:
+            alpha_img = img if img.mode == "RGBA" else img.convert("RGBA")
+            alpha_data = np.array(alpha_img)[:, :, 3]
+            extra.update({
+                "alpha_min": int(alpha_data.min()),
+                "alpha_max": int(alpha_data.max()),
+                "alpha_mean": round(float(alpha_data.mean()), 3),
+                "transparent_pixels": int(np.sum(alpha_data < 10)),
+            })
+        log.debug("Source image loaded", extra=extra)
+
+    def _calc_dimensions(self, img, target_width_mm, modeling_mode):
+        """计算目标尺寸和像素比例。 Calculate target dimensions and pixel scale."""
+        if modeling_mode == ModelingMode.HIGH_FIDELITY:
+            PIXELS_PER_MM = 10
+            target_w = int(target_width_mm * PIXELS_PER_MM)
+            pixel_scale = 1.0 / PIXELS_PER_MM
+            scale_mode = "high_fidelity"
+            pixels_per_mm = PIXELS_PER_MM
+        else:
+            target_w = int(target_width_mm / PrinterConfig.NOZZLE_WIDTH)
+            pixel_scale = PrinterConfig.NOZZLE_WIDTH
+            scale_mode = "pixel"
+            pixels_per_mm = 1.0 / pixel_scale
+        target_w = max(1, target_w)
+        target_h = max(1, int(target_w * img.height / img.width))
+        log.debug(
+            "Image target dimensions resolved",
+            extra={
+                "event": "image_target_dimensions_resolved",
+                "scale_mode": scale_mode,
+                "pixels_per_mm": round(float(pixels_per_mm), 3),
+                "target_size": [target_w, target_h],
+                "target_width_mm": round(float(target_w * pixel_scale), 3),
+                "target_height_mm": round(float(target_h * pixel_scale), 3),
             },
-            # 统一返回契约：全路径提供 quantized_image
-            'quantized_image': debug_data['quantized_image'] if debug_data is not None else rgb_arr.copy()
-        }
-        
-        # Add debug data (high-fidelity mode only)
-        if debug_data is not None:
-            result['debug_data'] = debug_data
-        
-        return result
-
-    
-    def _process_high_fidelity_mode(self, rgb_arr, target_h, target_w, quantize_colors,
-                                    blur_kernel, smooth_sigma):
-        """
-        High-fidelity mode image processing
-        Includes configurable filtering, K-Means quantization and color matching
-        
-        优化：
-        1. K-Means++ 初始化（OpenCV 默认支持）
-        2. 预缩放：在小图上做 K-Means，然后映射回原图
-        
-        Args:
-            rgb_arr: Input RGB array
-            target_h: Target height
-            target_w: Target width
-            quantize_colors: K-Means color count
-            blur_kernel: Median filter kernel size (0=disabled)
-            smooth_sigma: Bilateral filter sigma value
-        
-        Returns:
-            tuple: (matched_rgb, material_matrix, quantized_image, debug_data)
-        """
-        import time
-        total_start = time.time()
-        
-        print(f"[IMAGE_PROCESSOR] Starting edge-preserving processing...")
-        
-        # Step 1: Bilateral filter (edge-preserving smoothing)
-        t0 = time.time()
-        if smooth_sigma > 0:
-            print(f"[IMAGE_PROCESSOR] Applying bilateral filter (sigma={smooth_sigma})...")
-            rgb_processed = cv2.bilateralFilter(
-                rgb_arr.astype(np.uint8), 
-                d=9,
-                sigmaColor=smooth_sigma, 
-                sigmaSpace=smooth_sigma
-            )
-        else:
-            print(f"[IMAGE_PROCESSOR] Bilateral filter disabled (sigma=0)")
-            rgb_processed = rgb_arr.astype(np.uint8)
-        print(f"[IMAGE_PROCESSOR] ⏱️ Bilateral filter: {time.time() - t0:.2f}s")
-        
-        # Step 2: Optional median filter (remove salt-and-pepper noise)
-        t0 = time.time()
-        if blur_kernel > 0:
-            kernel_size = blur_kernel if blur_kernel % 2 == 1 else blur_kernel + 1
-            print(f"[IMAGE_PROCESSOR] Applying median blur (kernel={kernel_size})...")
-            rgb_processed = cv2.medianBlur(rgb_processed, kernel_size)
-        else:
-            print(f"[IMAGE_PROCESSOR] Median blur disabled (kernel=0)")
-        print(f"[IMAGE_PROCESSOR] ⏱️ Median blur: {time.time() - t0:.2f}s")
-        
-        # Step 3: Skip sharpening to prevent noise amplification
-        # Sharpening creates high-contrast noise in flat color areas
-        print(f"[IMAGE_PROCESSOR] Skipping sharpening to reduce noise...")
-        rgb_sharpened = rgb_processed
-        
-        # Step 4: K-Means quantization with pre-scaling optimization
-        h, w = rgb_sharpened.shape[:2]
-        total_pixels = h * w
-        
-        # 方案 3：预缩放优化
-        # 如果像素数超过 50 万，先缩小做 K-Means，再映射回原图
-        KMEANS_PIXEL_THRESHOLD = 500_000
-        
-        t0 = time.time()
-        if total_pixels > KMEANS_PIXEL_THRESHOLD:
-            # 计算缩放比例，目标 50 万像素
-            scale_factor = np.sqrt(total_pixels / KMEANS_PIXEL_THRESHOLD)
-            small_h = int(h / scale_factor)
-            small_w = int(w / scale_factor)
-            
-            print(f"[IMAGE_PROCESSOR] 🚀 Pre-scaling optimization: {w}×{h} → {small_w}×{small_h} ({total_pixels:,} → {small_w*small_h:,} pixels)")
-            
-            # 缩小图片
-            rgb_small = cv2.resize(rgb_sharpened, (small_w, small_h), interpolation=cv2.INTER_AREA)
-            
-            # 在小图上做 K-Means（使用 K-Means++ 初始化）
-            pixels_small = rgb_small.reshape(-1, 3).astype(np.float32)
-            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 50, 0.5)
-            flags = cv2.KMEANS_PP_CENTERS  # K-Means++ 初始化
-            
-            t_kmeans = time.time()
-            print(f"[IMAGE_PROCESSOR] K-Means++ on downscaled image ({quantize_colors} colors)...")
-            _, _, centers = cv2.kmeans(
-                pixels_small, quantize_colors, None, criteria, 5, flags
-            )
-            print(f"[IMAGE_PROCESSOR] ⏱️ K-Means: {time.time() - t_kmeans:.2f}s")
-            
-            # 用得到的 centers 直接映射原图（不再迭代，只做最近邻查找）
-            t_map = time.time()
-            print(f"[IMAGE_PROCESSOR] Mapping centers to full image...")
-            centers = centers.astype(np.float32)
-            pixels_full = rgb_sharpened.reshape(-1, 3).astype(np.float32)
-            
-            # 批量计算每个像素到所有 centers 的距离，找最近的
-            # 使用 KDTree 加速
-            from scipy.spatial import KDTree
-            centers_tree = KDTree(centers)
-            _, labels = centers_tree.query(pixels_full)
-            print(f"[IMAGE_PROCESSOR] ⏱️ KDTree query: {time.time() - t_map:.2f}s")
-            
-            centers = centers.astype(np.uint8)
-            quantized_pixels = centers[labels]
-            quantized_image = quantized_pixels.reshape(h, w, 3)
-            
-            print(f"[IMAGE_PROCESSOR] ✅ Pre-scaling optimization complete!")
-        else:
-            # 小图直接做 K-Means
-            print(f"[IMAGE_PROCESSOR] K-Means++ quantization to {quantize_colors} colors...")
-            pixels = rgb_sharpened.reshape(-1, 3).astype(np.float32)
-            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
-            flags = cv2.KMEANS_PP_CENTERS
-            
-            _, labels, centers = cv2.kmeans(
-                pixels, quantize_colors, None, criteria, 10, flags
-            )
-            
-            centers = centers.astype(np.uint8)
-            quantized_pixels = centers[labels.flatten()]
-            quantized_image = quantized_pixels.reshape(h, w, 3)
-        print(f"[IMAGE_PROCESSOR] ⏱️ Total quantization: {time.time() - t0:.2f}s")
-        
-        # [CRITICAL FIX] Post-Quantization Cleanup
-        # Removes isolated "salt-and-pepper" noise pixels that survive quantization
-        t0 = time.time()
-        print(f"[IMAGE_PROCESSOR] Applying post-quantization cleanup (Denoising)...")
-        quantized_image = cv2.medianBlur(quantized_image, 3)  # Kernel size 3 is optimal for detail preservation
-        print(f"[IMAGE_PROCESSOR] ⏱️ Post-quantization cleanup: {time.time() - t0:.2f}s")
-        
-        print(f"[IMAGE_PROCESSOR] Quantization complete!")
-        
-        # Find unique colors
-        t0 = time.time()
-        unique_colors = np.unique(quantized_image.reshape(-1, 3), axis=0)
-        print(f"[IMAGE_PROCESSOR] Found {len(unique_colors)} unique colors")
-        print(f"[IMAGE_PROCESSOR] ⏱️ Find unique colors: {time.time() - t0:.2f}s")
-        
-        # Match to LUT (in CIELAB space for perceptual accuracy)
-        t0 = time.time()
-        print(f"[IMAGE_PROCESSOR] Matching colors to LUT (CIELAB space)...")
-        if self.hue_matcher is not None:
-            print(f"[IMAGE_PROCESSOR] 🎨 Hue-aware matching enabled (hue_weight={self.hue_weight})")
-            unique_indices = self.hue_matcher.match_colors_batch(unique_colors, k=32)
-        else:
-            unique_lab = self._rgb_to_lab(unique_colors)
-            _, unique_indices = self.kdtree.query(unique_lab)
-        print(f"[IMAGE_PROCESSOR] ⏱️ LUT matching: {time.time() - t0:.2f}s")
-        
-        # 🚀 优化：构建颜色编码查找表
-        # 把 RGB 编码成单个整数：R*65536 + G*256 + B
-        # 这样可以用 NumPy 向量化操作一次性完成映射
-        t0 = time.time()
-        print(f"[IMAGE_PROCESSOR] Building color lookup table...")
-        
-        # 为每个 unique_color 计算编码
-        unique_codes = (unique_colors[:, 0].astype(np.int32) * 65536 + 
-                        unique_colors[:, 1].astype(np.int32) * 256 + 
-                        unique_colors[:, 2].astype(np.int32))
-        
-        # 构建编码 → 索引的映射数组（用于 np.searchsorted）
-        sort_idx = np.argsort(unique_codes)
-        sorted_codes = unique_codes[sort_idx]
-        sorted_lut_indices = unique_indices[sort_idx]
-        
-        # 计算所有像素的颜色编码
-        print(f"[IMAGE_PROCESSOR] Mapping to full image (optimized)...")
-        flat_quantized = quantized_image.reshape(-1, 3)
-        pixel_codes = (flat_quantized[:, 0].astype(np.int32) * 65536 + 
-                       flat_quantized[:, 1].astype(np.int32) * 256 + 
-                       flat_quantized[:, 2].astype(np.int32))
-        
-        # 使用 searchsorted 找到每个像素对应的 unique_color 索引
-        insert_positions = np.searchsorted(sorted_codes, pixel_codes)
-        # 获取对应的 LUT 索引
-        lut_indices_for_pixels = sorted_lut_indices[insert_positions]
-        
-        # 一次性映射所有像素
-        matched_rgb = self.lut_rgb[lut_indices_for_pixels].reshape(target_h, target_w, 3)
-        material_matrix = self.ref_stacks[lut_indices_for_pixels].reshape(
-            target_h, target_w, self.layer_count
         )
-        print(f"[IMAGE_PROCESSOR] ⏱️ Color mapping (optimized): {time.time() - t0:.2f}s")
-        
-        # [色相保护后处理] 消除匹配边界的色块跳变
-        # 色相感知匹配可能让相邻的量化色映射到不同 LUT 颜色，
-        # 在边界处形成"块状"。用 medianBlur 平滑后重新匹配到最近 LUT 色。
-        if self.hue_matcher is not None:
-            t_post = time.time()
-            print(f"[IMAGE_PROCESSOR] 🎨 Post-match smoothing for hue-aware mode...")
-            # 两轮平滑：先 5x5 消除大色块，再 3x3 精修边缘
-            smoothed = cv2.medianBlur(matched_rgb, 5)
-            smoothed = cv2.medianBlur(smoothed, 3)
-            # 重新匹配平滑后的颜色到最近的 LUT 颜色
-            flat_smoothed = smoothed.reshape(-1, 3)
-            smooth_lab = self._rgb_to_lab(flat_smoothed)
-            _, smooth_indices = self.kdtree.query(smooth_lab)
-            matched_rgb = self.lut_rgb[smooth_indices].reshape(target_h, target_w, 3)
-            material_matrix = self.ref_stacks[smooth_indices].reshape(
-                target_h, target_w, self.layer_count
-            )
-            print(f"[IMAGE_PROCESSOR] ⏱️ Post-match smoothing: {time.time() - t_post:.2f}s")
-        
-        print(f"[IMAGE_PROCESSOR] ✅ Total processing time: {time.time() - total_start:.2f}s")
-        
-        # Prepare debug data
-        debug_data = {
-            'quantized_image': quantized_image.copy(),
-            'num_colors': len(unique_colors),
-            'bilateral_filtered': rgb_processed.copy(),
-            'sharpened': rgb_sharpened.copy(),
-            'filter_settings': {
-                'blur_kernel': blur_kernel,
-                'smooth_sigma': smooth_sigma
+        return target_w, target_h, pixel_scale
+
+    def _process_high_fidelity_mode(self, rgb_arr, target_h, target_w, quantize_colors, blur_kernel, smooth_sigma):
+        """高保真模式处理流程：bilateral -> median -> kmeans -> lut match。
+        High-fidelity mode image processing with filtering, quantization and LUT matching.
+
+        Returns:
+            tuple: (matched_rgb, material_matrix, debug_data)
+        """
+        quantized_image, unique_colors, rgb_processed = self._prepare_high_fidelity_images(
+            rgb_arr, quantize_colors, blur_kernel, smooth_sigma
+        )
+        unique_indices = self._match_high_fidelity_unique_colors(unique_colors)
+        matched_rgb, material_matrix = map_pixels_to_lut(
+            quantized_image,
+            unique_colors,
+            unique_indices,
+            self.lut_rgb,
+            self.ref_stacks,
+            target_h,
+            target_w,
+            self.layer_count,
+        )
+        debug_data = self._build_high_fidelity_debug_data(
+            quantized_image, unique_colors, rgb_processed, blur_kernel, smooth_sigma
+        )
+        return matched_rgb, material_matrix, debug_data
+
+    def _prepare_high_fidelity_images(self, rgb_arr, quantize_colors, blur_kernel, smooth_sigma):
+        """Run filtering + quantization and compute unique colors."""
+        log.debug(
+            "Edge-preserving processing started",
+            extra={"event": "edge_preserving_processing_started"},
+        )
+        rgb_processed = apply_bilateral_filter(rgb_arr, smooth_sigma)
+        rgb_processed = apply_median_filter(rgb_processed, blur_kernel)
+        log.debug(
+            "Sharpening skipped",
+            extra={"event": "image_sharpening_skipped", "reason": "reduce_noise"},
+        )
+        quantized_image = kmeans_quantize(
+            rgb_processed, quantize_colors,
+            lut_lab=self.lut_lab if self.use_lut_constrained else None,
+            lut_rgb=self.lut_rgb if self.use_lut_constrained else None,
+            lut_tree=self.kdtree if self.use_lut_constrained else None,
+            use_lut_constrained=self.use_lut_constrained,
+        )
+        t0 = time.perf_counter()
+        unique_colors = _unique_rgb_rows_fast(quantized_image.reshape(-1, 3))
+        self._last_unique_colors = int(len(unique_colors))
+        log.debug(
+            "Unique colors extracted",
+            extra={
+                "event": "unique_colors_extracted",
+                "unique_colors": self._last_unique_colors,
+                "duration_ms": round((time.perf_counter() - t0) * 1000, 3),
+            },
+        )
+        return quantized_image, unique_colors, rgb_processed
+
+    def _match_high_fidelity_unique_colors(self, unique_colors):
+        """Match unique colors to LUT indices in high-fidelity mode."""
+        log.debug(
+            "High-fidelity colors matching",
+            extra={
+                "event": "high_fidelity_colors_matching",
+                "hue_weight": self.hue_weight,
+                "hue_matcher_enabled": self.hue_matcher is not None,
+                "unique_colors": int(len(unique_colors)),
+            },
+        )
+        match_result = match_colors_to_lut(
+            unique_colors,
+            self.lut_rgb,
+            self.lut_lab,
+            self.kdtree,
+            self.hue_matcher,
+            predictive_runtime=self.predictive_runtime,
+            source_kind=self.source_kind,
+            native_reference_source=self.native_reference_source,
+            model_enable=self.model_enable,
+            model_only=self.model_only,
+            ref_stacks=self.ref_stacks,
+        )
+        if isinstance(match_result, dict):
+            self.last_match_info = {
+                "match_mode": "predictive",
+                "runtime_mode_key": match_result.get("runtime_mode_key"),
+                "source_kind": self.source_kind,
+                "native_reference_source": self.native_reference_source,
+                "predictive_modes": list(self.predictive_modes),
+                "supported_modes": list(self.supported_modes),
+                "requested_color_layers": self.requested_color_layers,
+                "requested_layer_height_mm": self.requested_layer_height_mm,
+                "warnings": list(self.predictive_warnings),
+                "predictive_threshold": match_result.get("threshold"),
+                "predictive_margin": match_result.get("margin"),
+                "model_enable": self.model_enable,
+                "model_only": self.model_only,
             }
-        }
-        
-        return matched_rgb, material_matrix, quantized_image, debug_data
-    
-    def _process_pixel_mode(self, rgb_arr, target_h, target_w):
-        """
-        Pixel art mode image processing
-        Direct pixel-level color matching, no smoothing
-        """
-        print(f"[IMAGE_PROCESSOR] Direct pixel-level matching (Pixel Art mode, CIELAB space)...")
-        
-        flat_rgb = rgb_arr.reshape(-1, 3)
-        
-        if self.hue_matcher is not None:
-            print(f"[IMAGE_PROCESSOR] 🎨 Hue-aware matching enabled (hue_weight={self.hue_weight})")
-            indices = self.hue_matcher.match_colors_batch(flat_rgb, k=32)
         else:
-            flat_lab = self._rgb_to_lab(flat_rgb)
-            _, indices = self.kdtree.query(flat_lab)
-        
-        matched_rgb = self.lut_rgb[indices].reshape(target_h, target_w, 3)
-        material_matrix = self.ref_stacks[indices].reshape(
-            target_h, target_w, self.layer_count
-        )
-        
-        print(f"[IMAGE_PROCESSOR] Direct matching complete!")
-        
-        return matched_rgb, material_matrix, rgb_arr
+            self.last_match_info = {
+                "match_mode": "legacy",
+                "source_kind": self.source_kind,
+                "native_reference_source": self.native_reference_source,
+                "predictive_modes": list(self.predictive_modes),
+                "supported_modes": list(self.supported_modes),
+                "requested_color_layers": self.requested_color_layers,
+                "requested_layer_height_mm": self.requested_layer_height_mm,
+                "warnings": list(self.predictive_warnings),
+                "predictive_threshold": self.predictive_threshold,
+                "predictive_margin": self.predictive_margin,
+                "model_enable": self.model_enable,
+                "model_only": self.model_only,
+            }
+        return match_result
 
-    def _extract_wireframe_mask(self, rgb_arr, target_w, pixel_scale, wire_width_mm=0.6):
-        """
-        Extract cloisonné wireframe mask using edge detection + dilation.
+    def _build_high_fidelity_debug_data(self, quantized_image, unique_colors, rgb_processed, blur_kernel, smooth_sigma):
+        """Build debug payload for high-fidelity mode."""
+        filtered_copy = rgb_processed.copy()
+        return {
+            "quantized_image": quantized_image.copy(),
+            "num_colors": len(unique_colors),
+            "bilateral_filtered": filtered_copy,
+            "sharpened": filtered_copy,
+            "filter_settings": {"blur_kernel": blur_kernel, "smooth_sigma": smooth_sigma},
+        }
 
-        The mask marks pixels that should become raised "gold wire" in the
-        final 3D model.  The dilation kernel is sized so that the wire is
-        physically printable (≥ nozzle width).
-
-        Args:
-            rgb_arr:        (H, W, 3) uint8 – colour-matched or quantised image.
-            target_w:       int – image width in pixels (used only for logging).
-            pixel_scale:    float – mm per pixel.
-            wire_width_mm:  float – desired physical wire width in mm (default 0.6).
+    def _process_pixel_mode(self, rgb_arr, target_h, target_w):
+        """像素模式：去重颜色后匹配 LUT，不做平滑处理。
+        Pixel art mode: deduplicate colors then match, no smoothing.
 
         Returns:
-            mask_wireframe: (H, W) bool ndarray – True where wire should be.
+            tuple: (matched_rgb, material_matrix)
         """
-        import time
-        t0 = time.time()
+        self._log_pixel_mode_step("start")
+        flat_rgb = rgb_arr.reshape(-1, 3)
+        unique_colors = np.unique(flat_rgb, axis=0)
+        self._last_unique_colors = int(len(unique_colors))
+        self._log_pixel_mode_step("dedup", pixel_count=len(flat_rgb), unique_count=len(unique_colors))
+        unique_match = self._match_pixel_unique_colors(unique_colors)
+        matched_rgb, material_matrix = map_pixels_to_lut(
+            rgb_arr,
+            unique_colors,
+            unique_match,
+            self.lut_rgb,
+            self.ref_stacks,
+            target_h,
+            target_w,
+            self.layer_count,
+        )
+        self._log_pixel_mode_step("complete")
+        return matched_rgb, material_matrix
 
-        # 1. Greyscale + light blur to suppress quantisation noise
-        gray = cv2.cvtColor(rgb_arr.astype(np.uint8), cv2.COLOR_RGB2GRAY)
-        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    def _match_pixel_unique_colors(self, unique_colors):
+        unique_match = match_colors_to_lut(
+            unique_colors,
+            self.lut_rgb,
+            self.lut_lab,
+            self.kdtree,
+            self.hue_matcher,
+            predictive_runtime=self.predictive_runtime,
+            source_kind=self.source_kind,
+            native_reference_source=self.native_reference_source,
+            model_enable=self.model_enable,
+            model_only=self.model_only,
+            ref_stacks=self.ref_stacks,
+        )
+        self._update_pixel_match_info(unique_match)
+        return unique_match
 
-        # 2. Adaptive Canny thresholds (Otsu-based)
-        otsu_thresh, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        low = max(10, int(otsu_thresh * 0.4))
-        high = max(30, int(otsu_thresh * 0.8))
-        edges = cv2.Canny(gray, low, high)
+    def _update_pixel_match_info(self, unique_match):
+        if isinstance(unique_match, dict):
+            self.last_match_info = {
+                "match_mode": "predictive",
+                "runtime_mode_key": unique_match.get("runtime_mode_key"),
+                "source_kind": self.source_kind,
+                "native_reference_source": self.native_reference_source,
+                "predictive_modes": list(self.predictive_modes),
+                "supported_modes": list(self.supported_modes),
+                "requested_color_layers": self.requested_color_layers,
+                "requested_layer_height_mm": self.requested_layer_height_mm,
+                "warnings": list(self.predictive_warnings),
+                "predictive_threshold": unique_match.get("threshold"),
+                "predictive_margin": unique_match.get("margin"),
+                "model_enable": self.model_enable,
+                "model_only": self.model_only,
+            }
+            return
+        self.last_match_info = self._build_initial_match_info()
 
-        # 3. Dilate to physical wire width
-        wire_px = max(1, int(round(wire_width_mm / pixel_scale)))
-        if wire_px % 2 == 0:
-            wire_px += 1  # kernel must be odd
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (wire_px, wire_px))
-        dilated = cv2.dilate(edges, kernel, iterations=1)
-
-        mask_wireframe = dilated > 0
-
-        dt = time.time() - t0
-        print(f"[CLOISONNE] Wireframe extracted: Canny({low},{high}), "
-              f"dilate {wire_px}px ({wire_width_mm}mm), "
-              f"{np.sum(mask_wireframe)} wire pixels, {dt:.2f}s")
-
-        return mask_wireframe
+    def _log_pixel_mode_step(self, step, **fields):
+        messages = {
+            "start": "Direct pixel-level matching started",
+            "dedup": (
+                "Pixel colors deduplicated"
+            ),
+            "complete": "Direct pixel-level matching completed",
+        }
+        extra = {"event": f"image_processor_pixel_mode_{step}", **fields}
+        log.debug(messages[step], extra=extra)

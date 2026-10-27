@@ -20,31 +20,91 @@ LAYER_HEIGHT = PrinterConfig.LAYER_HEIGHT  # 0.08mm
 OPTICAL_THICKNESS_MM = OPTICAL_LAYERS * LAYER_HEIGHT  # 0.4mm
 
 
+@pytest.mark.parametrize("channels", [1, 3, 4])
+def test_uint16_png_preserves_smooth_absolute_heights(tmp_path, channels):
+    # Exercise decoding, not just an array helper: uploaded PNGs retain bit depth.
+    row = np.linspace(0, 65535, 600).astype(np.uint16)
+    image = np.tile(row, (8, 1))
+    if channels > 1:
+        image = np.repeat(image[..., None], channels, axis=2)
+        if channels == 4:
+            image[..., 3] = 65535
+    path = tmp_path / "heightmap16.png"
+    assert cv2.imwrite(str(path), image)
+
+    result = HeightmapLoader.load_and_validate(str(path))
+    expected = np.rint(row / 257.0).astype(np.uint8)
+    assert result["success"]
+    np.testing.assert_array_equal(result["grayscale"][0], expected)
+    assert np.all(np.diff(result["thumbnail"][0].astype(int)) >= 0)
+
+    processed = HeightmapLoader.load_and_process(str(path), 600, 8, 3.0, 0.08)
+    np.testing.assert_allclose(
+        processed["height_matrix"][0], 0.08 + expected / 255.0 * 2.92,
+        atol=1e-6,
+    )
+
+
+@pytest.mark.parametrize("values", [[32768, 32768], [16384, 16448]])
+def test_uint16_heightmap_does_not_stretch_image_contrast(tmp_path, values):
+    path = tmp_path / "low_contrast16.png"
+    image = np.array([values], dtype=np.uint16)
+    assert cv2.imwrite(str(path), image)
+    result = HeightmapLoader.load_and_validate(str(path))
+    np.testing.assert_array_equal(
+        result["grayscale"], np.rint(image / 257.0).astype(np.uint8),
+    )
+
+
+@pytest.mark.parametrize("channels", [1, 3, 4])
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16])
+def test_heightmap_retains_existing_channel_interpretation(channels, dtype):
+    image = np.arange(24, dtype=np.uint8).reshape(2, 4, 3) * 10
+    if channels == 1:
+        image = image[..., 0]
+    elif channels == 4:
+        image = np.concatenate([image, np.full((2, 4, 1), 255, np.uint8)], axis=2)
+    image = image.astype(dtype)
+    if dtype == np.uint16:
+        image *= 257
+    if channels == 1:
+        expected = image
+    elif channels == 3:
+        expected = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        expected = cv2.cvtColor(
+            cv2.cvtColor(image, cv2.COLOR_RGBA2BGR), cv2.COLOR_BGR2GRAY,
+        )
+    if dtype == np.uint16:
+        expected = np.rint(expected / 257.0).astype(np.uint8)
+    np.testing.assert_array_equal(HeightmapLoader._to_grayscale(image), expected)
+
+
 # ========== 9.1 灰度映射边界条件 (需求 3.1) ==========
 
 class TestGrayscaleMapping:
     """灰度映射边界条件测试"""
 
-    def test_pure_black_maps_to_max_height(self):
-        """纯黑图（全 0）映射为最大高度"""
+    def test_pure_black_maps_to_base_thickness(self):
+        """纯黑图（全 0）映射为底板厚度"""
         grayscale = np.zeros((10, 10), dtype=np.uint8)
         max_height = 5.0
         base_thickness = 1.0
 
         result = HeightmapLoader._map_grayscale_to_height(grayscale, max_height, base_thickness)
 
-        np.testing.assert_allclose(result, max_height, atol=1e-5)
+        np.testing.assert_allclose(result, base_thickness, atol=1e-5)
         assert result.dtype == np.float32
 
-    def test_pure_white_maps_to_base_thickness(self):
-        """纯白图（全 255）映射为底板厚度"""
+    def test_pure_white_maps_to_max_height(self):
+        """纯白图（全 255）映射为最大高度"""
         grayscale = np.full((10, 10), 255, dtype=np.uint8)
         max_height = 5.0
         base_thickness = 1.0
 
         result = HeightmapLoader._map_grayscale_to_height(grayscale, max_height, base_thickness)
 
-        np.testing.assert_allclose(result, base_thickness, atol=1e-5)
+        np.testing.assert_allclose(result, max_height, atol=1e-5)
 
     def test_mid_gray_maps_to_middle_value(self):
         """中灰图（128）映射为中间值"""
@@ -54,8 +114,8 @@ class TestGrayscaleMapping:
 
         result = HeightmapLoader._map_grayscale_to_height(grayscale, max_height, base_thickness)
 
-        # 公式: height = 5.0 - (128/255) * (5.0 - 1.0)
-        expected = max_height - (128.0 / 255.0) * (max_height - base_thickness)
+        # 公式: height = 1.0 + (128/255) * (5.0 - 1.0)
+        expected = base_thickness + (128.0 / 255.0) * (max_height - base_thickness)
         np.testing.assert_allclose(result, expected, atol=1e-4)
 
 
@@ -181,6 +241,153 @@ class TestHeightClamping:
                     f"像素 ({y},{x}) 只有 {filled_layers} 层被填充，"
                     f"应至少有 {OPTICAL_LAYERS} 层"
                 )
+
+    def test_relief_preserves_material_archive_layers_above_five(self):
+        """Material-archive relief must preserve every optical layer.
+
+        耗材档案浮雕不能把 6 层以上的叠色截断为传统 5 层。
+        """
+        from core.converter import _build_relief_voxel_matrix
+
+        matched_rgb = np.array([[[255, 0, 0]]], dtype=np.uint8)
+        material_matrix = np.arange(10, dtype=np.int32).reshape(1, 1, 10)
+        mask_solid = np.array([[True]])
+
+        full_matrix, _metadata = _build_relief_voxel_matrix(
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            color_height_map={"ff0000": 1.2},
+            default_height=0.4,
+            structure_mode="Single-sided",
+            backing_color_id=99,
+            pixel_scale=0.5,
+        )
+
+        filled_column = full_matrix[:, 0, 0]
+        optical_layers = [
+            int(value)
+            for value in filled_column
+            if value not in (-1, 99)
+        ]
+
+        assert optical_layers == list(reversed(range(10)))
+
+    def test_relief_preserves_material_archive_layers_in_heightmap_mode(self):
+        """Heightmap relief uses the same dynamic optical layer depth."""
+        from core.converter import _build_relief_voxel_matrix
+
+        matched_rgb = np.array([[[255, 0, 0]]], dtype=np.uint8)
+        material_matrix = np.arange(10, dtype=np.int32).reshape(1, 1, 10)
+        mask_solid = np.array([[True]])
+        height_matrix = np.array([[1.2]], dtype=np.float32)
+
+        full_matrix, _metadata = _build_relief_voxel_matrix(
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            color_height_map={},
+            default_height=0.4,
+            structure_mode="Single-sided",
+            backing_color_id=99,
+            pixel_scale=0.5,
+            height_matrix=height_matrix,
+        )
+
+        filled_column = full_matrix[:, 0, 0]
+        optical_layers = [
+            int(value)
+            for value in filled_column
+            if value not in (-1, 99)
+        ]
+
+        assert optical_layers == list(reversed(range(10)))
+
+    def test_relief_keeps_legacy_five_layer_order(self):
+        """Legacy five-layer relief still writes top-to-bottom as 4..0."""
+        from core.converter import _build_relief_voxel_matrix
+
+        matched_rgb = np.array([[[255, 0, 0]]], dtype=np.uint8)
+        material_matrix = np.arange(5, dtype=np.int32).reshape(1, 1, 5)
+        mask_solid = np.array([[True]])
+
+        full_matrix, _metadata = _build_relief_voxel_matrix(
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            color_height_map={"ff0000": 0.6},
+            default_height=0.4,
+            structure_mode="Single-sided",
+            backing_color_id=99,
+            pixel_scale=0.5,
+        )
+
+        filled_column = full_matrix[:, 0, 0]
+        optical_layers = [
+            int(value)
+            for value in filled_column
+            if value not in (-1, 99)
+        ]
+
+        assert optical_layers == [4, 3, 2, 1, 0]
+
+    def test_relief_uses_stable_height_identity_when_two_sources_share_achieved_rgb(self):
+        """Display-colour collisions must not collapse distinct source heights."""
+        from core.converter import _build_relief_voxel_matrix
+
+        achieved_rgb = np.array([244, 100, 41], dtype=np.uint8)
+        source_low = np.array([190, 230, 248], dtype=np.uint8)
+        source_high = np.array([17, 34, 51], dtype=np.uint8)
+        matched_rgb = np.array([[achieved_rgb, achieved_rgb]], dtype=np.uint8)
+        height_identity_rgb = np.array(
+            [[source_low, source_high]],
+            dtype=np.uint8,
+        )
+        material_matrix = np.zeros((1, 2, 5), dtype=np.int32)
+        mask_solid = np.ones((1, 2), dtype=bool)
+
+        full_matrix, _metadata = _build_relief_voxel_matrix(
+            matched_rgb=matched_rgb,
+            height_identity_rgb=height_identity_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            color_height_map={"bee6f8": 0.48, "112233": 2.0},
+            default_height=0.4,
+            structure_mode="Single-sided",
+            backing_color_id=9,
+            pixel_scale=0.5,
+        )
+
+        assert np.count_nonzero(full_matrix[:, 0, 0] != -1) == 6
+        assert np.count_nonzero(full_matrix[:, 0, 1] != -1) == 25
+
+    def test_relief_region_replace_keeps_source_identity_for_changed_and_unchanged_pixels(self):
+        """Replacing one region must leave both pixels on their original height."""
+        from core.converter import _build_relief_voxel_matrix
+
+        source_rgb = np.array([190, 230, 248], dtype=np.uint8)
+        achieved_rgb = np.array([244, 100, 41], dtype=np.uint8)
+        matched_rgb = np.array([[achieved_rgb, source_rgb]], dtype=np.uint8)
+        height_identity_rgb = np.array([[source_rgb, source_rgb]], dtype=np.uint8)
+        material_matrix = np.zeros((1, 2, 5), dtype=np.int32)
+        mask_solid = np.ones((1, 2), dtype=bool)
+
+        full_matrix, _metadata = _build_relief_voxel_matrix(
+            matched_rgb=matched_rgb,
+            height_identity_rgb=height_identity_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            color_height_map={"bee6f8": 0.48},
+            default_height=0.4,
+            structure_mode="Single-sided",
+            backing_color_id=9,
+            pixel_scale=0.5,
+        )
+
+        filled_heights = [
+            np.count_nonzero(full_matrix[:, 0, x] != -1) for x in range(2)
+        ]
+        assert filled_heights == [6, 6]
 
 
 # ========== 9.5 错误处理 (需求 8.1, 8.2, 8.3) ==========

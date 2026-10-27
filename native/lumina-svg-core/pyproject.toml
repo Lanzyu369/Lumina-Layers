@@ -1,0 +1,76 @@
+[build-system]
+requires = [
+  "scikit-build-core==1.0.3",
+  "pybind11==3.1.0",
+  "numpy==2.5.2",
+  "cmake==4.3.4",
+  "ninja==1.13.2",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "lumina-svg-core"
+version = "0.3.0"
+description = "Print-oriented native SVG geometry analysis"
+readme = "README.md"
+requires-python = "==3.12.*"
+license = "Apache-2.0"
+license-files = [
+  "LICENSE",
+  "THIRD_PARTY_NOTICES.md",
+  "THIRD_PARTY_LICENSES/*",
+]
+authors = [{ name = "Lumina Layer Studio" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: C++",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = ["numpy>=2.0,<3"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "shapely>=2,<3"]
+
+[project.urls]
+Repository = "https://github.com/lumina-layer-studio/lumina-svg-core"
+
+[tool.scikit-build]
+cmake.version = "==4.3.4"
+cmake.build-type = "Release"
+wheel.packages = ["python/lumina_svg_core"]
+wheel.install-dir = "lumina_svg_core"
+install.components = ["lumina_svg_core"]
+sdist.include = [
+  ".github/**",
+  "CMakeLists.txt",
+  "cmake/**",
+  "include/**",
+  "benchmarks/**",
+  "patches/**",
+  "python/**",
+  "src/**",
+  "tests/**",
+  "tools/**",
+  "LICENSE",
+  "THIRD_PARTY_NOTICES.md",
+  "THIRD_PARTY_LICENSES/**",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.cibuildwheel]
+build = [
+  "cp312-win_amd64",
+  "cp312-macosx_arm64",
+  "cp312-macosx_x86_64",
+]
+test-extras = ["test"]
+test-command = "python {package}/tools/verify_wheel.py --installed && pytest {package}/tests -q"
+
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET = "12.0" }
+repair-wheel-command = "python {package}/tools/verify_wheel.py {wheel} --contents-only && delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
+
+[tool.cibuildwheel.windows]
+repair-wheel-command = "python {package}/tools/verify_wheel.py {wheel} --contents-only && delvewheel repair -w {dest_dir} -v {wheel}"

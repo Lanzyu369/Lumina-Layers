@@ -1,0 +1,49 @@
+{
+  "duplicate_event_count": 0,
+  "duplicate_event_ratio": 0.0,
+  "event_counts": {
+    "converter_generate_timing": 1,
+    "converter_preview_timing": 1,
+    "gradient_groups_computed": 1,
+    "log_file_configured": 1,
+    "worker_pool_shutdown": 1,
+    "worker_pool_started": 1
+  },
+  "generated_at": "2026-04-26T07:45:43.172155+00:00",
+  "input_files": [
+    "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\progress\\flow_after_logs\\lumina_20260426_154520.log"
+  ],
+  "label": "flow_after",
+  "request_completed_count": 0,
+  "request_completed_ratio": 0.0,
+  "structured_lines": 6,
+  "top_events": [
+    {
+      "count": 1,
+      "event": "log_file_configured"
+    },
+    {
+      "count": 1,
+      "event": "worker_pool_started"
+    },
+    {
+      "count": 1,
+      "event": "gradient_groups_computed"
+    },
+    {
+      "count": 1,
+      "event": "converter_preview_timing"
+    },
+    {
+      "count": 1,
+      "event": "converter_generate_timing"
+    },
+    {
+      "count": 1,
+      "event": "worker_pool_shutdown"
+    }
+  ],
+  "total_bytes": 1686,
+  "total_lines": 6,
+  "unstructured_lines": 0
+}
