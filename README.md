@@ -217,7 +217,7 @@ Open the frontend address printed by the launcher, normally `http://localhost:41
 
 Source installs do not connect to an online material library by default. Local material profiles work offline. To connect a Registry you host or are authorized to use, configure its service URL separately; see the [Registry connection guide](docs/material-registry-connection.md).
 
-This branch requires the unpublished FatCat 0.1.3 fix; until it is released, build its pinned SDK source and install with `--find-links <wheelhouse>` as described in [the native dependency guide](docs/desktop-electron.md). The SVG dependency remains `lumina-svg-core==0.3.4`.
+This branch requires the unpublished FatCat 0.1.3 and writer 0.4.0+fatcat.production.2 fixes. Until both are released, build their pinned sources and install with `--find-links <wheelhouse>` as described in [the native dependency guide](docs/desktop-electron.md). The SVG dependency remains `lumina-svg-core==0.3.4`.
 
 ### Optional: desktop window
 

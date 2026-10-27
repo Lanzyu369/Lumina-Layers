@@ -958,6 +958,18 @@ def read_placement_warnings(payload: str | None) -> list[str]:
     return json.loads(_load_fatcat().read_placement_warnings(payload))
 
 
+def read_project_material_slots(
+    project: Mapping[str, object], *, target: MetadataTarget,
+) -> list[dict[str, Any]]:
+    """Read a template's native material capacity without guessing its array shape.
+
+    由 FatCat 读取模板材料槽容量，不在调用方猜测原生数组结构。
+    """
+    return json.loads(_load_fatcat().extract_source_material_slots(
+        json.dumps(dict(project), ensure_ascii=False), "<config/>", _target_selection_json(target),
+    ))
+
+
 def read_model_object_metadata(model_xml: str) -> list[dict[str, Any]]:
     """Read object metadata without interpreting mesh geometry.
 

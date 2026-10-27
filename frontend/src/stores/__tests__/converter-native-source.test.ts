@@ -311,15 +311,16 @@ describe("native bundle converter flow", () => {
     expect(state.model_margin).toBeNull();
   });
 
-  it("clears isGenerating and stores warnings after large-format generate", async () => {
+  it.each(["ok", "partial"])("retains available tiles and reports %s large-format results", async (status) => {
     mocks.convertGenerateLargeFormat.mockResolvedValue({
-      status: "ok",
+      status,
       message: "Generated 4 tiles",
       download_url: "http://localhost:8000/api/files/lf-zip",
       tile_count: 4,
       grid_cols: 2,
       grid_rows: 2,
       warnings: ["Raster fallback was used for this large-format SVG request."],
+      failed_tiles: status === "partial" ? ["R2C2"] : [],
     });
 
     useConverterStore.setState({
@@ -355,10 +356,12 @@ describe("native bundle converter flow", () => {
     expect(state.largeFormatWarnings).toEqual([
       "Raster fallback was used for this large-format SVG request.",
     ]);
-    expect(mocks.showBrowserCompletionNotification).toHaveBeenCalledWith(
-      "generation",
-      "en",
-    );
+    expect(state.largeFormatFailedTiles).toEqual(status === "partial" ? ["R2C2"] : []);
+    if (status === "partial") {
+      expect(mocks.showBrowserCompletionNotification).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.showBrowserCompletionNotification).toHaveBeenCalledWith("generation", "en");
+    }
   });
 
   it("submitGenerate omits recipe_overrides when local override state is empty", async () => {

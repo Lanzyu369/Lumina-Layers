@@ -61,7 +61,7 @@ def test_fatcat_build_contract_uses_public_root_and_writer_source() -> None:
     assert FATCAT_VERSION == "0.1.3"
     assert len(FATCAT_SOURCE_COMMIT) == 40
     assert len(FATCAT_WRITER_SOURCE_COMMIT) == 40
-    assert FATCAT_WRITER_VERSION == "0.4.0+fatcat.production.1"
+    assert FATCAT_WRITER_VERSION == "0.4.0+fatcat.production.2"
     assert FATCAT_WRITER_REPOSITORY == "https://github.com/MOVIBALE/neroued_3mf.git"
     assert 'fatcat_root / "pyproject.toml"' in build_script
     assert '"source_commit": writer_commit' in build_script

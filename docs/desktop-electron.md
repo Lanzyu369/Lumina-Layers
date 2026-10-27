@@ -22,9 +22,10 @@ Windows ARM、32 位或 free-threaded Python 尚无完整应用所需的 wheel �
 - 元数据 SDK：`fatcat-metadata==0.1.3`，Python 导入名为 `fatcat_metadata`。
   本分支使用 Windows 长路径和精确机型查询修复，0.1.3 尚未由本次变更发布。
   发布前请用下方固定源码构建 wheel，再通过 `--find-links <wheelhouse>` 安装 requirements。
-- 写包库：`neroued-3mf==0.4.0+fatcat.production.1`，由
-  [公开 fork 的 GitHub Release](https://github.com/MOVIBALE/neroued_3mf/releases/tag/fatcat-production-1)
-  提供相同 Python/系统/架构的预编译包。这是等待
+- 写包库：`neroued-3mf==0.4.0+fatcat.production.2`，增加 Windows 中文及长输出路径修复。
+  候选版本尚未发布，当前同样需要从固定源码构建匹配 Python/系统/架构的 wheel；
+  发布后由[公开 fork 的 GitHub Release](https://github.com/MOVIBALE/neroued_3mf/releases/tag/fatcat-production-2)
+  提供预编译包。这是等待
   [上游 PR #17](https://github.com/Neroued/neroued_3mf/pull/17) 的临时兼容版本，
   属于写包库的版本，与 FatCat SDK 的版本独立。
 
@@ -37,7 +38,7 @@ python -m pip install --upgrade pip
 python -m pip install --find-links <wheelhouse> -r requirements.txt
 ```
 
-将 `<wheelhouse>` 替换为包含本分支 FatCat 0.1.3 wheel 的目录。
+将 `<wheelhouse>` 替换为同时包含本分支 FatCat 0.1.3 与 writer production.2 wheel 的目录。
 拿到匹配平台的候选 wheel 后，无需在应用机器上安装 C++ 编译器。
 `requirements.txt` 对四个原生核心包要求二进制 wheel；平台或 Python 不匹配时会
 在安装阶段失败。GitHub Release 资产可公开下载，不依赖有时限的 Actions artifact。
@@ -56,23 +57,22 @@ python -m pip install --force-reinstall --no-index --find-links <wheelhouse> fat
 来源提交、仓库和版本由 `scripts/fatcat_packaging_contract.py`
 统一维护。FatCat 来自公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata)，固定
-完整提交 `b58e8d73f57dda6baec72c5505f1802206c77a95`。构建脚本从其根目录
+完整提交 `419866b24f0af7e5f2c31ca17bc320ca9e10d847`。构建脚本从其根目录
 的 `pyproject.toml` 构建 `0.1.3` wheel，无需进入 `cpp/`，不会修改 SDK 源码。
 以下供维护者准备候选 wheel；已有匹配 wheel 的机器可跳过本节。
 它需要 Git、CMake 和 C++20 编译器（FatCat 本身使用 C++17）。
-该修复提交尚未推送，先取得包含此提交的本地 SDK checkout 或 Git bundle；
-发布前不能仅从公开仓库克隆获得此提交。
+源码提交可从修复分支获取；有源码不表示对应 wheel 已发布。
 
-writer 固定在公开提交 `a6043434d6cd9a2a76553ffdcdf0dda081d9b19c`，
-版本为 `neroued-3mf==0.4.0+fatcat.production.1`。两个源码目录都应保持干净；
+writer 固定在公开提交 `d4cfaae39fa77a3458d9ad079b5d1bb1eafc5522`，
+版本为 `neroued-3mf==0.4.0+fatcat.production.2`。两个源码目录都应保持干净；
 Lumina 不再保存或应用 writer 补丁。上游合并并正式发布后，再切换到官方版本。
 从 Lumina 仓库根目录准备本地源码并构建：
 
 ```powershell
-git clone <local-fatcat-checkout-or-bundle> ..\fatcat-metadata
-git -C ..\fatcat-metadata checkout b58e8d73f57dda6baec72c5505f1802206c77a95
+git clone https://github.com/MOVIBALE/fatcat-metadata.git ..\fatcat-metadata
+git -C ..\fatcat-metadata checkout 419866b24f0af7e5f2c31ca17bc320ca9e10d847
 git clone https://github.com/MOVIBALE/neroued_3mf.git ..\neroued-3mf
-git -C ..\neroued-3mf checkout a6043434d6cd9a2a76553ffdcdf0dda081d9b19c
+git -C ..\neroued-3mf checkout d4cfaae39fa77a3458d9ad079b5d1bb1eafc5522
 
 python scripts/build_3mf_native_wheels.py `
   --fatcat-root ..\fatcat-metadata `
@@ -110,10 +110,12 @@ Windows PowerShell 用 `.\.venv\Scripts\Activate.ps1` 激活；macOS/Linux 用
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install --find-links <wheelhouse> -r requirements.txt
 pnpm --dir frontend install --frozen-lockfile
 pnpm --dir electron install --frozen-lockfile
 ```
+
+`<wheelhouse>` 必须包含上一节指定的两个候选依赖。正式发布并确认可下载前，不要省略此参数。
 
 运行测试时另外安装 `requirements-dev.txt`；仅在明确启用 PostgreSQL 后端时安装 `api/requirements-postgres.txt`，配置方法见 [server-mode-scaffold.md](server-mode-scaffold.md)。
 

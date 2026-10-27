@@ -217,7 +217,7 @@ python start_all.py
 
 源码运行默认不连接在线耗材库，本地耗材档案可离线使用。连接自建或已获授权的云库时，需要另外配置服务地址，见 [Registry 连接说明](docs/material-registry-connection.md)。
 
-本分支依赖尚未发布的 FatCat 0.1.3 修复；发布前需要按[原生依赖指南](docs/desktop-electron.md)从固定 SDK 提交构建 wheel，并用 `--find-links <wheelhouse>` 安装。SVG 依赖仍为 `lumina-svg-core==0.3.4`。
+本分支依赖尚未发布的 FatCat 0.1.3 和 writer 0.4.0+fatcat.production.2 修复；两者发布前，需要按[原生依赖指南](docs/desktop-electron.md)从各自固定提交构建 wheel，并用 `--find-links <wheelhouse>` 安装。SVG 依赖仍为 `lumina-svg-core==0.3.4`。
 
 ### 可选：桌面窗口
 

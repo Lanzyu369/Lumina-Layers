@@ -14,6 +14,8 @@ import trimesh
 
 from utils.bambu_3mf_writer import BambuStudio3MFWriter
 from utils.fatcat_metadata import native_project_source_catalog
+from core.export_material_selection import resolve_export_material_selection
+from types import SimpleNamespace
 
 
 @pytest.mark.parametrize("machine", ["p2s", "x2d"])
@@ -28,6 +30,15 @@ def test_export_with_unrelated_machine_sources_missing(
     for name in ("Bambu Lab H2D Pro 0.4 nozzle template wrapping_detection_gcode.json",
                  "Bambu Lab A1 mini 0.4 nozzle template machine_start_gcode.json"):
         (sources / name).unlink()
+    selection = resolve_export_material_selection(
+        {"printer_id": "bambu-p2s" if machine == "p2s" else "bambu-lab-x2d",
+         "slicer": "BambuStudio", "nozzle_size": "0.4",
+         "device_profile_id": f"BambuStudio:bbl:bambu-lab-{machine}:0.4",
+         "build_plate_id": "textured-pei-plate", "color_mode": "4-Color (RYBW)"},
+        source_context={"lut_metadata": SimpleNamespace(palette=[], extensions={})},
+    )
+    assert selection["ready"]
+    assert selection["device_profile_id"] == f"BambuStudio:bbl:bambu-lab-{machine}:0.4"
     output = tmp_path / f"{machine}.3mf"
     writer = BambuStudio3MFWriter(
         str(output), printer_id="bambu-p2s" if machine == "p2s" else "bambu-lab-x2d",
