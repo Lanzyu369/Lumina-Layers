@@ -1077,8 +1077,12 @@ class Slicer3MFWriter:
             "auto" if self.preserve_template_filament_slots is None
             else "preserve" if self.preserve_template_filament_slots else "compact"
         )
-        slot_policy = native_project_source_catalog(target.slicer_id).get(
-            "filament_slot_policy"
+        # Only Prusa's aggregate catalog owns a native-capacity slot policy.
+        # Other catalogs resolve every machine's profiles; an export must not
+        # depend on files belonging to unrelated printers.
+        slot_policy = (
+            native_project_source_catalog(target.slicer_id).get("filament_slot_policy")
+            if target.slicer_id == "PrusaSlicer" else None
         )
         if slot_policy == "preserve_native_capacity":
             slot_mode = "preserve"

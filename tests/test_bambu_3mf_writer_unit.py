@@ -2041,7 +2041,7 @@ def test_load_export_project_settings_rejects_registry_only_printer_id(tmp_path,
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
 
-    with pytest.raises(ValueError, match="Fat Cat has no exact native machine identity"):
+    with pytest.raises(ValueError, match="no unique native source for requested machine/nozzle"):
         load_export_project_settings(
             printer_id="snapmaker-artisan",
             slicer="OrcaSlicer",

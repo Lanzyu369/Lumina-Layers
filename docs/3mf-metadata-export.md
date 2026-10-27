@@ -64,27 +64,24 @@ validation stays at the existing SDK, source parser and writer boundaries.
 - **neroued-3mf** owns the one final 3MF package write.
 
 FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`.
-This branch requires [PyPI 0.1.2](https://pypi.org/project/fatcat-metadata/0.1.2/)
-for native material preflight and inherited filament IDs used by startup G-code.
-Requirements select matching published wheels
-automatically; no SDK checkout, local wheelhouse or C++ compiler is needed.
-Lumina consumes the same public SDK without a downstream patch or version suffix.
+This branch requires `fatcat-metadata==0.1.3` for Windows long paths and the
+exact `native_project_source` query. This change does not publish that version;
+until its release, install a locally built wheel from the pinned source below.
+Lumina resolves only the selected machine's native dependencies during export.
 Maintainer builds use the public
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) root
-project at source revision `acdf8abdf00560759ecdf660eb080bb2083fd5bb` and pins
+project at source revision `b58e8d73f57dda6baec72c5505f1802206c77a95` and pins
 the writer contract in
 `scripts/fatcat_packaging_contract.py`; build and installation steps are in
 [the desktop setup guide](desktop-electron.md).
 
 FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`。
-本分支需要 [PyPI 0.1.2](https://pypi.org/project/fatcat-metadata/0.1.2/)，
-保留原生耗材继承的 ID，供启动 G-code 使用。
-requirements 自动选择匹配的已发布 wheel，
-无需额外克隆 SDK、准备本地 wheelhouse 或安装 C++ 编译器。
-Lumina 直接使用公共 SDK，不再维护 FatCat 补丁或额外版本后缀。
+本分支需要 `fatcat-metadata==0.1.3`，修复 Windows 长路径读取，并用
+`native_project_source` 只解析所选机型依赖。本次变更没有发布 SDK；
+发布前需要从下方固定提交构建并安装本地 wheel。
 维护者从公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) 的根项目构建，
-源码提交固定为 `acdf8abdf00560759ecdf660eb080bb2083fd5bb`，并在
+源码提交固定为 `b58e8d73f57dda6baec72c5505f1802206c77a95`，并在
 `scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
 [桌面环境指南](desktop-electron.md)。
 

@@ -208,7 +208,7 @@ From the repository root, with the environment active:
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install --find-links <wheelhouse> -r requirements.txt
 pnpm --dir frontend install --frozen-lockfile
 python start_all.py
 ```
@@ -217,7 +217,7 @@ Open the frontend address printed by the launcher, normally `http://localhost:41
 
 Source installs do not connect to an online material library by default. Local material profiles work offline. To connect a Registry you host or are authorized to use, configure its service URL separately; see the [Registry connection guide](docs/material-registry-connection.md).
 
-Requirements pin `lumina-svg-core==0.3.4` and `fatcat-metadata==0.1.2` and automatically install the native SVG, 3MF, and material-metadata packages. Ordinary source use needs no separate SDK checkout, local wheelhouse, internal commit checkout, or C++ compilation. If no matching wheel is found, check Python, OS, and architecture against the table above. The [SVG distribution guide](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.4/docs/DISTRIBUTIONS.md) describes that library's wheels; the complete app still requires the platforms listed above. See the [native dependency and desktop guide](docs/desktop-electron.md) for details.
+This branch requires the unpublished FatCat 0.1.3 fix; until it is released, build its pinned SDK source and install with `--find-links <wheelhouse>` as described in [the native dependency guide](docs/desktop-electron.md). The SVG dependency remains `lumina-svg-core==0.3.4`.
 
 ### Optional: desktop window
 

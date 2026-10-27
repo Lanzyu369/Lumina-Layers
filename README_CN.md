@@ -208,7 +208,7 @@ macOS/Linux 若只有 `python3`，用 `python3 -m venv .venv` 创建。然后按
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install --find-links <wheelhouse> -r requirements.txt
 pnpm --dir frontend install --frozen-lockfile
 python start_all.py
 ```
@@ -217,7 +217,7 @@ python start_all.py
 
 源码运行默认不连接在线耗材库，本地耗材档案可离线使用。连接自建或已获授权的云库时，需要另外配置服务地址，见 [Registry 连接说明](docs/material-registry-connection.md)。
 
-依赖中已固定 `lumina-svg-core==0.3.4` 和 `fatcat-metadata==0.1.2`，SVG、3MF 和材料元数据用到的原生包会一起装好，不用再克隆 SDK、找本地 wheelhouse、检出内部提交或编译 C++。如果安装时找不到匹配的 wheel，先核对上面的 Python、系统和架构要求。SVG 包的范围见 [发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.4/docs/DISTRIBUTIONS.md)；完整应用仍按上表安装，排障可看 [原生依赖与桌面运行指南](docs/desktop-electron.md)。
+本分支依赖尚未发布的 FatCat 0.1.3 修复；发布前需要按[原生依赖指南](docs/desktop-electron.md)从固定 SDK 提交构建 wheel，并用 `--find-links <wheelhouse>` 安装。SVG 依赖仍为 `lumina-svg-core==0.3.4`。
 
 ### 可选：桌面窗口
 

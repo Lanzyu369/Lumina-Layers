@@ -362,18 +362,12 @@ def native_source_for_target(target: MetadataTarget) -> dict[str, Any]:
     按 Fat Cat 稳定身份返回唯一来源记录，不读取安装包内部目录。
     """
 
-    matches = [
-        source
-        for source in native_project_source_catalog(target.slicer_id).get("sources", [])
-        if source.get("machine_uid") == target.machine_uid
-        and source.get("nozzle_uid") == target.nozzle_uid
-    ]
-    if len(matches) != 1:
-        raise ValueError(
-            "Fat Cat native source identity is not unique for "
-            f"{target.slicer_id}/{target.machine_uid}/{target.nozzle_uid}"
-        )
-    return matches[0]
+    return _load_fatcat().native_project_source({
+        "slicer_id": target.slicer_id,
+        "application_version": target.application_version,
+        "machine_uid": target.machine_uid,
+        "nozzle_uid": target.nozzle_uid,
+    })
 
 
 def select_metadata_target(
@@ -456,18 +450,12 @@ def select_metadata_target(
 
     target_identity = _metadata_target_identity(target_slicer_id)
     nozzle_uid = f"nozzle:{nozzle}mm"
-    catalog = native_project_source_catalog(target_slicer_id)
-    matches = [
-        source for source in catalog.get("sources", [])
-        if source.get("source_machine_profile_name") == profile.source_profile_name
-        and source.get("nozzle_uid") == nozzle_uid
-    ]
-    if len(matches) != 1:
-        raise ValueError(
-            "Fat Cat has no exact native machine identity for "
-            f"{target_slicer_id}/{profile.source_profile_name}/{nozzle_uid}"
-        )
-    source = matches[0]
+    source = _load_fatcat().native_project_source({
+        "slicer_id": target_slicer_id,
+        "application_version": target_identity["application_version"],
+        "source_machine_profile_name": profile.source_profile_name,
+        "nozzle_uid": nozzle_uid,
+    })
     availability = source.get("availability") or {}
     if availability.get("machine") != "available":
         raise ValueError(
@@ -813,6 +801,7 @@ def _load_fatcat() -> Any:
         for name in (
             "compose_project_settings",
             "native_project_source_catalog",
+            "native_project_source",
             "list_native_fields",
             "compose_model_metadata",
             "patch_wipe_tower",
