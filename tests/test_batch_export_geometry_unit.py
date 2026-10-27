@@ -176,6 +176,7 @@ def test_real_batch_footprint_matches_export_across_sources(
     monkeypatch.setenv("LUMINA_RUNTIME_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr(material_lut_provider, "MATERIALS_DIR", str(tmp_path))
     monkeypatch.setattr(material_lut_synthesis, "MATERIALS_DIR", str(tmp_path))
+    monkeypatch.setattr("core.pipeline._input_validation_common.MATERIALS_DIR", str(tmp_path))
     for name, level in (("White", 1.0), ("Black", 0.01)):
         directory = tmp_path / name
         directory.mkdir()

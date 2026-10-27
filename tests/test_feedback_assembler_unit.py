@@ -772,6 +772,7 @@ def test_finalize_ticket_async_packages_lumina_box_archives_without_lut(
     (archive_dir / "runtime-cache.json").write_text("runtime", encoding="utf-8")
     (archive_dir / "secret.txt").write_text("secret", encoding="utf-8")
     monkeypatch.setattr("api.feedback_assembler.REPO_ROOT", repo_root)
+    monkeypatch.setattr("api.feedback_assembler.MATERIALS_DIR", str(repo_root / "materials"))
 
     ticket_dir = tmp_path / "LUM-20260820-001"
     ticket_dir.mkdir()

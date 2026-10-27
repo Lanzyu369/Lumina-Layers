@@ -55,7 +55,10 @@ from utils.merged_bambu_3mf_writer import MaterialSlot
 @pytest.mark.parametrize("mode", ["vector", "high-fidelity"])
 @pytest.mark.parametrize("source", ["lut", "material_archive"])
 def test_batch_worker_forwards_coating(enabled, mode, source):
-    with patch("core.converter.convert_image_to_3d", return_value=(None, None, None, "test", None)) as convert:
+    with (
+        patch("core.converter.convert_image_to_3d", return_value=(None, None, None, "test", None)) as convert,
+        patch("core.pipeline._input_validation_common.load_and_validate_material_archive_profile", return_value=("stage_a", [])),
+    ):
         worker_batch_convert_item(
             image_path="test.svg", lut_path="test.npy", target_width_mm=60,
             spacer_thick=1.2, structure_mode="Single-sided", color_mode="4-Color (RYBW)",
@@ -169,6 +172,7 @@ def test_automatic_coating_type_survives_real_export(tmp_path, monkeypatch, sour
     monkeypatch.setenv("LUMINA_RUNTIME_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr(material_lut_provider, "MATERIALS_DIR", str(tmp_path))
     monkeypatch.setattr(material_lut_synthesis, "MATERIALS_DIR", str(tmp_path))
+    monkeypatch.setattr("core.pipeline._input_validation_common.MATERIALS_DIR", str(tmp_path))
 
     for name, kind, level in zip(("White", "Black"), kinds, (1.0, 0.01)):
         directory = tmp_path / name

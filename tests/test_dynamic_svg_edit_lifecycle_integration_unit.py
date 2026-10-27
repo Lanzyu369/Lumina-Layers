@@ -296,6 +296,7 @@ def test_dynamic_svg_edit_lifecycle_keeps_native_geometry_and_export_recipes(
         "MATERIALS_DIR",
         str(_FIXTURE_MATERIALS),
     )
+    monkeypatch.setattr("core.pipeline._input_validation_common.MATERIALS_DIR", str(_FIXTURE_MATERIALS))
     monkeypatch.setattr(
         vector_processor_class,
         "build_mesh",
@@ -639,6 +640,7 @@ def test_dynamic_svg_global_replacement_rebuilds_exact_recipe_after_fresh_previe
         "MATERIALS_DIR",
         str(_FIXTURE_MATERIALS),
     )
+    monkeypatch.setattr("core.pipeline._input_validation_common.MATERIALS_DIR", str(_FIXTURE_MATERIALS))
     monkeypatch.setattr(vector_processor_class, "build_mesh", capture_build_mesh)
     monkeypatch.setattr(
         vector_glb_preview,
