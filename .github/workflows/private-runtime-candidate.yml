@@ -82,6 +82,9 @@ jobs:
       RELEASE_PROFILE: ${{ inputs.profile }}
       TARGET: ${{ matrix.target }}
     steps:
+      - name: Preserve source bytes on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.source_sha }}
