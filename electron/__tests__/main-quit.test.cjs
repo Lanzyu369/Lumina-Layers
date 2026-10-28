@@ -229,12 +229,14 @@ test("source desktop reports an exited backend and quits", async t => {
   assert.equal(f.mainWindow(), undefined);
 });
 
-test("source desktop opens at native scale and only its page may change it", async t => {
+test("source desktop opens on the shared layout room and only its page may change it", async t => {
   const f = await fixture(t, "win32");
   await f.healthy();
   const window = f.mainWindow();
-  assert.equal(window.options.webPreferences.zoomFactor, 1);
-  assert.equal(window.maximized, undefined);
+  // A 1920×1080 display at 100% needs 125% zoom to give the page the shared
+  // 1536×864 room, where the old 1440x900 window no longer fits.
+  assert.equal(window.options.webPreferences.zoomFactor, 1.25);
+  assert.equal(window.maximized, true);
   assert.equal(window.visible, true);
 
   const page = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
@@ -244,7 +246,7 @@ test("source desktop opens at native scale and only its page may change it", asy
   assert.deepEqual(await getScale(page), { status: "ok", preference: "100" });
   assert.deepEqual(await setScale(workshopFrame, "150"), { status: "error", code: "denied" });
   assert.deepEqual(await setScale(page, "150"), { status: "ok", preference: "150" });
-  assert.equal(window.webContents.zoomFactor, 1.5);
+  assert.equal(window.webContents.zoomFactor, 1.875);
   assert.deepEqual(JSON.parse(fs.readFileSync(f.interfaceScalePath, "utf8")), { schemaVersion: 1, preference: "150" });
 });
 
@@ -254,10 +256,12 @@ test("source desktop reopens at the interface scale saved last time", async t =>
   });
   await f.healthy();
   const window = f.mainWindow();
-  assert.equal(window.options.webPreferences.zoomFactor, 0.8);
+  // 80% of the 125% room cancels out to no page zoom, and 1440x900 fits, so
+  // the window opens centered instead of maximized.
+  assert.equal(window.options.webPreferences.zoomFactor, 1);
   assert.deepEqual(
     [window.options.x, window.options.y, window.options.width, window.options.height],
-    [384, 156, 1152, 720],
+    [240, 66, 1440, 900],
   );
   assert.equal(window.maximized, undefined);
 });
