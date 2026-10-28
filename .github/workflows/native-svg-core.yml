@@ -27,6 +27,12 @@ on:
       - ".github/workflows/native-svg-core.yml"
   workflow_dispatch:
 
+# PR runs share one group per workflow and cancel older runs; non-PR runs use a
+# unique run_id in the group so a pending push/manual run is not replaced.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.event_name, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
