@@ -1655,6 +1655,69 @@ describe('ColorPreview2D hover inspector', () => {
     expect(screen.queryByTestId('main-2d-hover-inspector')).not.toBeInTheDocument();
   });
 
+  it.each(['pointer', 'Shift'] as const)('switches on %s without reloading or changing the zoomed and panned viewport', async (input) => {
+    useConverterStore.setState({ imagePreviewUrl: '/original-upload.png' });
+    render(<ColorPreview2D />);
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    flushPendingImages('/preview.png');
+    const original = getPendingImages('/original-upload.png')[0];
+    original.naturalWidth = 2400;
+    original.naturalHeight = 1800;
+    await act(async () => { original.dispatchLoad(); });
+
+    fireEvent.wheel(container, { deltaY: -500, clientX: 180, clientY: 120 });
+    fireEvent.pointerDown(container, { pointerId: 1, button: 2, clientX: 180, clientY: 120 });
+    fireEvent.pointerMove(container, { pointerId: 1, buttons: 2, clientX: 225, clientY: 150 });
+    fireEvent.pointerUp(container, { pointerId: 1, button: 2, clientX: 225, clientY: 150 });
+
+    const context = getVisiblePreviewContext()!;
+    const drawImage = vi.mocked(context.drawImage);
+    const processedDraw = drawImage.mock.calls.at(-1)!;
+    const transform = vi.mocked(context.translate).mock.calls.at(-1);
+    const scale = vi.mocked(context.scale).mock.calls.at(-1);
+    expect(scale?.[0]).toBeGreaterThan(1);
+    const imageCount = TestImage.instances.length;
+    const bufferReads = sharedGetImageDataMock.mock.calls.length;
+    const holdButton = screen.getByTestId('color-preview-2d-hold-original');
+
+    for (let press = 0; press < 3; press += 1) {
+      if (input === 'pointer') fireEvent.pointerDown(holdButton, { button: 0 });
+      else fireEvent.keyDown(window, { key: 'Shift' });
+      expect(drawImage.mock.calls.at(-1)).toEqual([original, ...processedDraw.slice(1)]);
+      expect(vi.mocked(context.translate).mock.calls.at(-1)).toEqual(transform);
+      expect(vi.mocked(context.scale).mock.calls.at(-1)).toEqual(scale);
+      if (input === 'pointer') fireEvent.pointerUp(holdButton);
+      else fireEvent.keyUp(window, { key: 'Shift' });
+      expect(drawImage.mock.calls.at(-1)).toEqual(processedDraw);
+      expect(vi.mocked(context.translate).mock.calls.at(-1)).toEqual(transform);
+      expect(vi.mocked(context.scale).mock.calls.at(-1)).toEqual(scale);
+    }
+    expect(TestImage.instances).toHaveLength(imageCount);
+    expect(sharedGetImageDataMock).toHaveBeenCalledTimes(bufferReads);
+  });
+
+  it.each(['pointerLeave', 'pointerCancel', 'lostPointerCapture'] as const)(
+    'restores the processed image on %s without loading it again', async (releaseEvent) => {
+      useConverterStore.setState({ imagePreviewUrl: '/original-upload.png' });
+      render(<ColorPreview2D />);
+      const container = screen.getByTestId('color-preview-2d-container');
+      mockPreviewRect(container);
+      flushPendingImages('/preview.png');
+      await act(async () => { flushPendingImages('/original-upload.png'); });
+      const button = screen.getByTestId('color-preview-2d-hold-original');
+      const drawImage = vi.mocked(getVisiblePreviewContext()!.drawImage);
+      const processedDraw = drawImage.mock.calls.at(-1);
+      const imageCount = TestImage.instances.length;
+      fireEvent.pointerDown(button, { button: 0 });
+      expect(button).toHaveAttribute('data-active', 'true');
+      fireEvent[releaseEvent](button);
+      expect(button).not.toHaveAttribute('data-active');
+      expect(drawImage.mock.calls.at(-1)).toEqual(processedDraw);
+      expect(TestImage.instances).toHaveLength(imageCount);
+    },
+  );
+
   it('shows the original image while Shift is held and releases it on keyup', () => {
     useConverterStore.setState({
       ...DEFAULT_STATE,

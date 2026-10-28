@@ -309,6 +309,7 @@ export default function ColorPreview2D({
   // Shift 键盘快捷键：在非文本输入环境下按住 Shift 即可临时查看原图，
   // keyup 或窗口失焦时自动恢复，与长按按钮行为一致。
   useEffect(() => {
+    setShowOriginal(false);
     if (!originalUploadUrl) {
       return;
     }
@@ -474,10 +475,10 @@ export default function ColorPreview2D({
   const handleSurfaceReady = useCallback((payload: { previewBuffer: PreviewCanvasBuffer | null } | null) => {
     const nextPreviewBuffer = payload?.previewBuffer ?? null;
     previewCanvasBufferRef.current = nextPreviewBuffer;
-    previewCanvasBufferSourceRef.current = nextPreviewBuffer ? activeCanvasSrc : null;
+    previewCanvasBufferSourceRef.current = nextPreviewBuffer ? displayUrl : null;
     setPreviewCanvasBuffer(nextPreviewBuffer);
     surfaceSampleCacheRef.current.clear();
-  }, [activeCanvasSrc]);
+  }, [displayUrl]);
 
   const readActivePreviewPixel = useCallback((sample: CanvasPreviewHoverSample): string | null => {
     const activeBuffer =
@@ -1814,6 +1815,7 @@ export default function ColorPreview2D({
           aria-label={t('color_2d_hold_view_original')}
           title={t('color_2d_hold_view_original')}
           onPointerDown={(e) => {
+            if (e.button !== 0) return;
             e.preventDefault();
             e.stopPropagation();
             setShowOriginal(true);
@@ -1821,6 +1823,7 @@ export default function ColorPreview2D({
           onPointerUp={releaseOriginalView}
           onPointerLeave={releaseOriginalView}
           onPointerCancel={releaseOriginalView}
+          onLostPointerCapture={releaseOriginalView}
           onContextMenu={(e) => e.preventDefault()}
           data-testid="color-preview-2d-hold-original"
           data-active={showOriginal || undefined}
@@ -1858,7 +1861,7 @@ export default function ColorPreview2D({
   );
 
 
-  if (!activeCanvasSrc) {
+  if (!displayUrl) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-slate-500 dark:text-slate-400">
         {isLoading ? (
@@ -1876,7 +1879,9 @@ export default function ColorPreview2D({
   return (
     <>
       <CanvasPreviewSurface
-        src={activeCanvasSrc}
+        src={displayUrl}
+        comparisonSrc={originalUploadUrl}
+        showComparison={showOriginal}
         alt={previewAltText}
         dataTestId="color-preview-2d-container"
         className={
@@ -1895,7 +1900,7 @@ export default function ColorPreview2D({
         overlay={scaledPixelOverlay}
         screenSpaceOverlay={renderSelectionScreenOverlay}
         floatingOverlay={floatingOverlay}
-        interactionsDisabled={replacePreviewLoading}
+        interactionsDisabled={replacePreviewLoading || showOriginal}
         minScale={MIN_ZOOM}
         maxScale={MAX_ZOOM}
         wheelZoomStepMultiplier={ZOOM_STEP}
@@ -1912,7 +1917,7 @@ export default function ColorPreview2D({
         spacePanEnabled
         canStartDrag={(event) => event.button === 2}
       />
-      {hoverInspectorOverlay}
+      {!showOriginal && hoverInspectorOverlay}
     </>
   );
 }

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -50,6 +51,9 @@ interface CanvasPreviewSurfaceDragContext {
 
 interface CanvasPreviewSurfaceProps {
   src: string
+  /** Preload a comparison image and draw it in the primary image's viewport. */
+  comparisonSrc?: string | null
+  showComparison?: boolean
   alt: string
   dataTestId?: string
   className?: string
@@ -94,6 +98,8 @@ interface CanvasPreviewSurfaceProps {
 
 export default function CanvasPreviewSurface({
   src,
+  comparisonSrc,
+  showComparison = false,
   alt,
   dataTestId = "canvas-preview-surface",
   className,
@@ -161,6 +167,14 @@ export default function CanvasPreviewSurface({
   const [scale, setScale] = useState(1)
   const [translate, setTranslate] = useState({ x: 0, y: 0 })
   const [failedSrc, setFailedSrc] = useState<string | null>(null)
+  const [failedComparisonSrc, setFailedComparisonSrc] = useState<string | null>(null)
+  const [comparisonImage, setComparisonImage] = useState<{
+    src: string
+    image: HTMLImageElement
+  } | null>(null)
+  const activeComparisonImage = showComparison && comparisonImage && comparisonImage.src === comparisonSrc
+    ? comparisonImage.image
+    : null
 
   const finishActiveDrag = useCallback((pointerId?: number, cancelled = false) => {
     const activePointerId = activePointerIdRef.current
@@ -418,6 +432,39 @@ export default function CanvasPreviewSurface({
     }
   }, [emitHoverSample, notifySurfaceReady, src, updateContainerSize])
 
+  // Decode before the first press. Switching must not reload either source,
+  // rebuild the picking buffer, or change the primary image's geometry.
+  useEffect(() => {
+    let cancelled = false
+    setComparisonImage(null)
+    setFailedComparisonSrc(null)
+    if (!comparisonSrc) return
+
+    const image = new Image()
+    image.crossOrigin = "anonymous"
+    const reportFailure = () => {
+      if (!cancelled) setFailedComparisonSrc(comparisonSrc)
+    }
+    image.onload = async () => {
+      try {
+        await image.decode?.()
+        if (!cancelled) {
+          setFailedComparisonSrc(null)
+          setComparisonImage({ src: comparisonSrc, image })
+        }
+      } catch {
+        reportFailure()
+      }
+    }
+    image.onerror = reportFailure
+    image.src = comparisonSrc
+    return () => {
+      cancelled = true
+      image.onload = null
+      image.onerror = null
+    }
+  }, [comparisonSrc])
+
   const imageRect = useMemo(
     () => resolveCanvasPreviewImageRect(containerSize, naturalSize),
     [containerSize, naturalSize],
@@ -441,11 +488,13 @@ export default function CanvasPreviewSurface({
       translate,
     }
   }, [containerSize, imageRect, naturalSize, scale, translate])
-  const loadFailed = failedSrc === src
+  const loadFailed = failedSrc === src || (
+    showComparison && Boolean(comparisonSrc) && failedComparisonSrc === comparisonSrc
+  )
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current
-    const image = imageRef.current
+    const image = activeComparisonImage ?? imageRef.current
     const context = canvas?.getContext("2d")
     if (!canvas || !context) {
       return
@@ -468,7 +517,7 @@ export default function CanvasPreviewSurface({
       devicePixelRatio: window.devicePixelRatio,
       renderingQuality,
     })
-  }, [containerSize, imageRect, renderingQuality, scale, translate])
+  }, [activeComparisonImage, containerSize, imageRect, renderingQuality, scale, translate])
 
   const resetZoom = useCallback(() => {
     setScale(1)
@@ -839,6 +888,7 @@ export default function CanvasPreviewSurface({
           <div
             className="pointer-events-none absolute inset-0"
             style={{
+              opacity: activeComparisonImage ? 0 : undefined,
               transformOrigin: "0 0",
               transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
             }}
@@ -857,7 +907,12 @@ export default function CanvasPreviewSurface({
           </div>
         ) : null}
         {screenSpaceOverlay && viewport ? (
-          <div className="pointer-events-none absolute inset-0">
+          <div
+            className="pointer-events-none absolute inset-0"
+            // GPU overlays set their own visibility; opacity hides the whole
+            // layer without unmounting or rebuilding their cached geometry.
+            style={{ opacity: activeComparisonImage ? 0 : undefined }}
+          >
             {typeof screenSpaceOverlay === "function"
               ? screenSpaceOverlay(viewport)
               : screenSpaceOverlay}
