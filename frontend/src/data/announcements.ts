@@ -16,6 +16,29 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-28",
+    title: { zh: "Lumina Layers — 10 月更新速览", en: "Lumina Layers — October updates" },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "单独导出底板时，保留所选耗材的颜色、温度和流量等设置，避免在切片软件中套用到其他耗材。",
+            en: "Exporting a separate backing preserves the selected material’s color, temperature and flow settings, so the slicer does not apply another material’s settings.",
+          },
+          {
+            zh: "合并与批量排版保留模型原有的高度位置，并按所选打印机的实际打印区域摆放；无法安全合并的模型会给出提示。",
+            en: "Merging and batch layout preserve each model’s vertical position and use the selected printer’s actual print area. Models that cannot be merged safely now show an explanation.",
+          },
+          {
+            zh: "大画幅生成只有部分分块成功时，仍可下载已生成的文件，并明确提示缺失的分块；提示会随对应下载结果一起保留或清除。",
+            en: "If only some large-format tiles finish generating, you can still download the completed files and see which tiles are missing. The warning stays with its download result and clears when that result is removed.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-10-26",
     title: { zh: "Lumina Layers — 10 月更新速览", en: "Lumina Layers — October updates" },
     sections: [

@@ -311,15 +311,16 @@ describe("native bundle converter flow", () => {
     expect(state.model_margin).toBeNull();
   });
 
-  it("clears isGenerating and stores warnings after large-format generate", async () => {
+  it.each(["ok", "partial"])("retains available tiles and reports %s large-format results", async (status) => {
     mocks.convertGenerateLargeFormat.mockResolvedValue({
-      status: "ok",
+      status,
       message: "Generated 4 tiles",
       download_url: "http://localhost:8000/api/files/lf-zip",
       tile_count: 4,
       grid_cols: 2,
       grid_rows: 2,
       warnings: ["Raster fallback was used for this large-format SVG request."],
+      failed_tiles: status === "partial" ? ["R2C2"] : [],
     });
 
     useConverterStore.setState({
@@ -355,10 +356,110 @@ describe("native bundle converter flow", () => {
     expect(state.largeFormatWarnings).toEqual([
       "Raster fallback was used for this large-format SVG request.",
     ]);
-    expect(mocks.showBrowserCompletionNotification).toHaveBeenCalledWith(
-      "generation",
-      "en",
-    );
+    expect(state.largeFormatFailedTiles).toEqual(status === "partial" ? ["R2C2"] : []);
+    if (status === "partial") {
+      expect(mocks.showBrowserCompletionNotification).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.showBrowserCompletionNotification).toHaveBeenCalledWith("generation", "en");
+    }
+  });
+
+  it.each(["preview", "generate"] as const)(
+    "keeps partial ZIP warnings during and after a failed %s retry",
+    async (action) => {
+      seedLegacyGenerateState("partial-session", {
+        imageFile: new File(["png"], "partial.png", { type: "image/png" }),
+        largeFormatEnabled: true,
+        downloadUrl: "/api/files/partial.zip",
+        largeFormatFailedTiles: ["R2C2"],
+        largeFormatWarnings: ["Raster fallback"],
+      });
+      const response = deferred<never>();
+      const requestMock = action === "preview"
+        ? mocks.convertPreview
+        : mocks.convertGenerateLargeFormat;
+      requestMock.mockReturnValueOnce(response.promise);
+
+      const request = action === "preview"
+        ? useConverterStore.getState().submitPreview()
+        : useConverterStore.getState().submitGenerate();
+      await vi.waitFor(() => expect(requestMock).toHaveBeenCalledOnce());
+      const pendingState = useConverterStore.getState();
+      response.reject(new Error("Retry failed"));
+      await request;
+
+      for (const state of [pendingState, useConverterStore.getState()]) {
+        expect(state.downloadUrl).toBe("/api/files/partial.zip");
+        expect(state.largeFormatFailedTiles).toEqual(["R2C2"]);
+        expect(state.largeFormatWarnings).toEqual(["Raster fallback"]);
+      }
+    },
+  );
+
+  it("keeps partial ZIP warnings when a successful preview retains the download", async () => {
+    seedLegacyGenerateState("partial-session", {
+      imageFile: new File(["png"], "partial.png", { type: "image/png" }),
+      largeFormatEnabled: true,
+      downloadUrl: "/api/files/partial.zip",
+      largeFormatFailedTiles: ["R2C2"],
+      largeFormatWarnings: ["Raster fallback"],
+    });
+    mocks.convertPreview.mockResolvedValueOnce({
+      session_id: "new-preview-session", status: "ok", message: "Preview generated",
+      preview_url: "/api/files/new-preview", preview_glb_url: "/api/files/new.glb",
+      palette: [], dimensions: { width: 200, height: 160 },
+    });
+    await useConverterStore.getState().submitPreview();
+    const state = useConverterStore.getState();
+    expect(mocks.convertPreview).toHaveBeenCalledOnce();
+    expect(state.sessionId).toBe("new-preview-session");
+    expect(state.downloadUrl).toBe("/api/files/partial.zip");
+    expect(state.largeFormatFailedTiles).toEqual(["R2C2"]);
+    expect(state.largeFormatWarnings).toEqual(["Raster fallback"]);
+  });
+
+  it.each(["replace image", "remove image", "change databases"])(
+    "clears partial ZIP warnings with its download when users %s",
+    (action) => {
+      seedLegacyGenerateState("partial-session", {
+        imageFile: new File(["png"], "partial.png", { type: "image/png" }),
+        largeFormatEnabled: true,
+        downloadUrl: "/api/files/partial.zip",
+        largeFormatFailedTiles: ["R2C2"],
+        largeFormatWarnings: ["Raster fallback"],
+      });
+      if (action === "change databases") {
+        useConverterStore.getState().setNativeDbNames(["A2"]);
+      } else {
+        useConverterStore.getState().setImageFile(action === "replace image"
+          ? new File(["png"], "replacement.png", { type: "image/png" })
+          : null);
+      }
+      const state = useConverterStore.getState();
+      expect(state.sessionId).toBeNull();
+      expect(state.downloadUrl).toBeNull();
+      expect(state.largeFormatFailedTiles).toEqual([]);
+      expect(state.largeFormatWarnings).toEqual([]);
+    },
+  );
+
+  it("replaces partial ZIP warnings when generation succeeds completely", async () => {
+    seedLegacyGenerateState("partial-session", {
+      largeFormatEnabled: true,
+      downloadUrl: "/api/files/partial.zip",
+      largeFormatFailedTiles: ["R2C2"],
+      largeFormatWarnings: ["Raster fallback"],
+    });
+    mocks.convertGenerateLargeFormat.mockResolvedValueOnce({
+      status: "ok", message: "Generated 4 tiles",
+      download_url: "/api/files/complete.zip", tile_count: 4,
+      grid_cols: 2, grid_rows: 2, warnings: [], failed_tiles: [],
+    });
+    await useConverterStore.getState().submitGenerate();
+    const state = useConverterStore.getState();
+    expect(state.downloadUrl).toBe("/api/files/complete.zip");
+    expect(state.largeFormatFailedTiles).toEqual([]);
+    expect(state.largeFormatWarnings).toEqual([]);
   });
 
   it("submitGenerate omits recipe_overrides when local override state is empty", async () => {

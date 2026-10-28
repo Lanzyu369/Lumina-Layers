@@ -330,6 +330,7 @@ export interface ConverterState {
   previewWarnings: string[];
   generateWarnings: string[];
   largeFormatWarnings: string[];
+  largeFormatFailedTiles: string[];
 
   // 模型边界（供 KeychainRing3D 定位）
   modelBounds: {

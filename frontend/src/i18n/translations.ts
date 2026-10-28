@@ -5951,6 +5951,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "原生矢量切片生成失败，已自动改用栅格切片。",
     en: "Native vector tiling failed, so raster tiling was used automatically.",
   },
+  large_format_partial_result: {
+    zh: "仅部分切片生成成功。下载包缺少以下切片：{tiles}。请重新生成这些部分后再拼装。",
+    en: "Only some tiles were generated. The download is missing: {tiles}. Generate these tiles again before assembling the model.",
+  },
   wipe_tower_manual_adjustment_title: {
     zh: "打印前请手动检查摆放",
     en: "Check the layout before printing",
