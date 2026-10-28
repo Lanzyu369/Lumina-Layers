@@ -533,9 +533,7 @@ export function createGenerationActions(
         isGenerating: true,
         error: null,
         generatePerformanceTiming: null,
-        generateWarnings: [],
-        largeFormatWarnings: [],
-        largeFormatFailedTiles: [],
+        // The previous download and its warnings remain available while retrying.
       });
       _generateRequestSequence += 1;
       const generateSequence = _generateRequestSequence;
@@ -651,6 +649,8 @@ export function createGenerationActions(
             downloadUrl,
             threemfDiskPath: null,
             generateWarnings: puzzleResponse.warnings ?? [],
+            largeFormatWarnings: [],
+            largeFormatFailedTiles: [],
             puzzleWarnings: puzzleResponse.warnings ?? [],
             puzzleResolvedRows: puzzleResponse.grid_rows ?? null,
             puzzleResolvedCols: puzzleResponse.grid_cols ?? null,

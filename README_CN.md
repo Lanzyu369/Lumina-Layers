@@ -208,7 +208,7 @@ macOS/Linux 若只有 `python3`，用 `python3 -m venv .venv` 创建。然后按
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install --find-links <wheelhouse> -r requirements.txt
+python -m pip install -r requirements.txt
 pnpm --dir frontend install --frozen-lockfile
 python start_all.py
 ```

@@ -208,7 +208,7 @@ From the repository root, with the environment active:
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install --find-links <wheelhouse> -r requirements.txt
+python -m pip install -r requirements.txt
 pnpm --dir frontend install --frozen-lockfile
 python start_all.py
 ```

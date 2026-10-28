@@ -1482,6 +1482,8 @@ function buildPreviewSessionResetState(
     threemfDiskPath: null,
     downloadUrl: null,
     generateWarnings: [],
+    largeFormatWarnings: [],
+    largeFormatFailedTiles: [],
     palette: [],
     materialDynamicRecipes: [],
     materialLayerBenefitCurve: [],
@@ -7058,9 +7060,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         previewAutoRefreshPending: false,
         previewSubmissionSequence: state.previewSubmissionSequence + 1,
         previewWarnings: [],
-        generateWarnings: [],
-        largeFormatWarnings: [],
-        largeFormatFailedTiles: [],
+        // Keep export warnings with the retained download until it is replaced or invalidated.
         ...DEFAULT_LAYER_IMAGES_STATE,
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
       });
@@ -7270,8 +7270,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewPixelWidth: response.dimensions?.width ?? null,
           previewPixelHeight: response.dimensions?.height ?? null,
           previewWarnings: response.warnings ?? [],
-          largeFormatWarnings: [],
-          largeFormatFailedTiles: [],
           hasManualPreview: true,
           previewAutoRefreshPending: false,
           layerImages: [],

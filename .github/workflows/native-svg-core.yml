@@ -92,7 +92,9 @@ jobs:
       - name: Install and exercise the published runtime
         shell: bash
         run: |
-          python -m pip install --force-reinstall wheelhouse/*.whl pytest "shapely>=2,<3" cmake==4.3.4
+          # Exercise the frozen release tests with the same pytest major supported
+          # by requirements-dev.txt; their nested approx assertions reject pytest 9.
+          python -m pip install --force-reinstall wheelhouse/*.whl "pytest>=8,<9" "shapely>=2,<3" cmake==4.3.4
           python .ci-svg-core-034/tools/verify_wheel.py --installed
           # The vendored source is a frozen 0.3.0 snapshot, not the released runtime.
           (cd .ci-svg-core-034 && LUMINA_SVG_REPLAY_THREADS=4 python -m pytest tests -q)
