@@ -217,7 +217,7 @@ Open the frontend address printed by the launcher, normally `http://localhost:41
 
 Source installs do not connect to an online material library by default. Local material profiles work offline. To connect a Registry you host or are authorized to use, configure its service URL separately; see the [Registry connection guide](docs/material-registry-connection.md).
 
-This branch requires the unpublished FatCat 0.1.3 and writer 0.4.0+fatcat.production.2 fixes. Until both are released, build their pinned sources and install with `--find-links <wheelhouse>` as described in [the native dependency guide](docs/desktop-electron.md). The SVG dependency remains `lumina-svg-core==0.3.4`.
+The native 3MF dependencies are `fatcat-metadata==0.1.3` and the official `neroued-3mf==0.4.2` release. Both install from PyPI through `requirements.txt`; no custom writer wheelhouse is needed. See [the native dependency guide](docs/desktop-electron.md) for supported platforms. The SVG dependency remains `lumina-svg-core==0.3.4`.
 
 ### Optional: desktop window
 

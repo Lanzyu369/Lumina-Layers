@@ -17,12 +17,12 @@ FATCAT_MODULE = "fatcat_metadata"
 FATCAT_ADAPTER_MODULE = "fatcat_metadata_neroued"
 FATCAT_VERSION = "0.1.3"
 FATCAT_REPOSITORY = "https://github.com/MOVIBALE/fatcat-metadata"
-FATCAT_SOURCE_COMMIT = "419866b24f0af7e5f2c31ca17bc320ca9e10d847"
+FATCAT_SOURCE_COMMIT = "5023982e03680e0cd89fb9175dd0ca401d41f6f4"
 FATCAT_LEGACY_DISTRIBUTION = "lumina-3mf-metadata-cpp"
 FATCAT_WRITER_DISTRIBUTION = "neroued-3mf"
-FATCAT_WRITER_VERSION = "0.4.0+fatcat.production.2"
-FATCAT_WRITER_REPOSITORY = "https://github.com/MOVIBALE/neroued_3mf.git"
-FATCAT_WRITER_SOURCE_COMMIT = "d4cfaae39fa77a3458d9ad079b5d1bb1eafc5522"
+FATCAT_WRITER_VERSION = "0.4.2"
+FATCAT_WRITER_REPOSITORY = "https://github.com/Neroued/neroued_3mf.git"
+FATCAT_WRITER_SOURCE_COMMIT = "656f87c55caf742cef2e958a7fc5199cdba2c6f0"
 FATCAT_REQUIRED_ENTRY_POINTS = (
     "metadata_target",
     "metadata_resource_specs",

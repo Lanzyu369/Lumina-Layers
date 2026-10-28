@@ -20,14 +20,12 @@ Windows ARM、32 位或 free-threaded Python 尚无完整应用所需的 wheel �
 3MF 导出链路使用两个独立依赖：
 
 - 元数据 SDK：`fatcat-metadata==0.1.3`，Python 导入名为 `fatcat_metadata`。
-  本分支使用 Windows 长路径和精确机型查询修复，0.1.3 尚未由本次变更发布。
-  发布前请用下方固定源码构建 wheel，再通过 `--find-links <wheelhouse>` 安装 requirements。
-- 写包库：`neroued-3mf==0.4.0+fatcat.production.2`，增加 Windows 中文及长输出路径修复。
-  候选版本尚未发布，当前同样需要从固定源码构建匹配 Python/系统/架构的 wheel；
-  发布后由[公开 fork 的 GitHub Release](https://github.com/MOVIBALE/neroued_3mf/releases/tag/fatcat-production-2)
-  提供预编译包。这是等待
-  [上游 PR #17](https://github.com/Neroued/neroued_3mf/pull/17) 的临时兼容版本，
-  属于写包库的版本，与 FatCat SDK 的版本独立。
+  包含 Windows 长路径和精确机型查询修复。
+- 写包库：`neroued-3mf==0.4.2`，使用原作者正式发布的 PyPI wheel。
+  通用 Production 接口和 Windows 中文/长路径修复已分别在上游
+  [PR #17](https://github.com/Neroued/neroued_3mf/pull/17) 和
+  [PR #18](https://github.com/Neroued/neroued_3mf/pull/18) 合并。
+  无需安装 fork 版本或应用补丁；写包库与 FatCat SDK 的版本独立。
 
 ### 使用预编译包
 
@@ -35,44 +33,36 @@ Windows ARM、32 位或 free-threaded Python 尚无完整应用所需的 wheel �
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install --find-links <wheelhouse> -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-将 `<wheelhouse>` 替换为同时包含本分支 FatCat 0.1.3 与 writer production.2 wheel 的目录。
-拿到匹配平台的候选 wheel 后，无需在应用机器上安装 C++ 编译器。
+两个依赖均从 PyPI 获取匹配平台的 wheel，无需在应用机器上安装 C++ 编译器。
 `requirements.txt` 对四个原生核心包要求二进制 wheel；平台或 Python 不匹配时会
-在安装阶段失败。GitHub Release 资产可公开下载，不依赖有时限的 Actions artifact。
+在安装阶段失败。安装不依赖 GitHub 登录或有时限的 Actions artifact。
 已有实验环境含旧版 `lumina-3mf-metadata-cpp` 或本地同版本构建时，建议重新创建
 虚拟环境，避免共享包文件或旧依赖混入；这不是首次安装步骤。
-
-验证候选包时，使用由下方固定提交构建的本地 wheel，不复用旧 0.1.2：
-
-```bash
-python -m pip install --force-reinstall --no-index --find-links <wheelhouse> fatcat-metadata==0.1.3
-```
-
 
 ### 维护者从源码构建
 
 来源提交、仓库和版本由 `scripts/fatcat_packaging_contract.py`
 统一维护。FatCat 来自公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata)，固定
-完整提交 `419866b24f0af7e5f2c31ca17bc320ca9e10d847`。构建脚本从其根目录
+完整提交 `5023982e03680e0cd89fb9175dd0ca401d41f6f4`。构建脚本从其根目录
 的 `pyproject.toml` 构建 `0.1.3` wheel，无需进入 `cpp/`，不会修改 SDK 源码。
-以下供维护者准备候选 wheel；已有匹配 wheel 的机器可跳过本节。
+以下供维护者复现源码构建；普通用户使用上方 PyPI 安装即可。
 它需要 Git、CMake 和 C++20 编译器（FatCat 本身使用 C++17）。
-源码提交可从修复分支获取；有源码不表示对应 wheel 已发布。
+源码提交和版本必须与下方固定值一致。
 
-writer 固定在公开提交 `d4cfaae39fa77a3458d9ad079b5d1bb1eafc5522`，
-版本为 `neroued-3mf==0.4.0+fatcat.production.2`。两个源码目录都应保持干净；
-Lumina 不再保存或应用 writer 补丁。上游合并并正式发布后，再切换到官方版本。
+writer 固定在上游 v0.4.2 提交 `656f87c55caf742cef2e958a7fc5199cdba2c6f0`，
+版本为 `neroued-3mf==0.4.2`。两个源码目录都应保持干净；
+构建脚本从上游标签解析真实版本，不注入定制版本号，也不应用 writer 补丁。
 从 Lumina 仓库根目录准备本地源码并构建：
 
 ```powershell
 git clone https://github.com/MOVIBALE/fatcat-metadata.git ..\fatcat-metadata
-git -C ..\fatcat-metadata checkout 419866b24f0af7e5f2c31ca17bc320ca9e10d847
-git clone https://github.com/MOVIBALE/neroued_3mf.git ..\neroued-3mf
-git -C ..\neroued-3mf checkout d4cfaae39fa77a3458d9ad079b5d1bb1eafc5522
+git -C ..\fatcat-metadata checkout 5023982e03680e0cd89fb9175dd0ca401d41f6f4
+git clone https://github.com/Neroued/neroued_3mf.git ..\neroued-3mf
+git -C ..\neroued-3mf checkout 656f87c55caf742cef2e958a7fc5199cdba2c6f0
 
 python scripts/build_3mf_native_wheels.py `
   --fatcat-root ..\fatcat-metadata `
@@ -110,12 +100,12 @@ Windows PowerShell 用 `.\.venv\Scripts\Activate.ps1` 激活；macOS/Linux 用
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install --find-links <wheelhouse> -r requirements.txt
+python -m pip install -r requirements.txt
 pnpm --dir frontend install --frozen-lockfile
 pnpm --dir electron install --frozen-lockfile
 ```
 
-`<wheelhouse>` 必须包含上一节指定的两个候选依赖。正式发布并确认可下载前，不要省略此参数。
+上述命令直接安装上一节指定的两个正式依赖。
 
 运行测试时另外安装 `requirements-dev.txt`；仅在明确启用 PostgreSQL 后端时安装 `api/requirements-postgres.txt`，配置方法见 [server-mode-scaffold.md](server-mode-scaffold.md)。
 

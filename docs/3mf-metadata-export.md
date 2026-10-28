@@ -65,38 +65,36 @@ validation stays at the existing SDK, source parser and writer boundaries.
 
 FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`.
 This branch requires `fatcat-metadata==0.1.3` for Windows long paths and the
-exact `native_project_source` query. This change does not publish that version;
-until its release, install a locally built wheel from the pinned source below.
+exact `native_project_source` query. Install the released wheel from PyPI
+through `requirements.txt`.
 Lumina resolves only the selected machine's native dependencies during export.
 Maintainer builds use the public
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) root
-project at source revision `419866b24f0af7e5f2c31ca17bc320ca9e10d847` and pins
+project at source revision `5023982e03680e0cd89fb9175dd0ca401d41f6f4` and pins
 the writer contract in
 `scripts/fatcat_packaging_contract.py`; build and installation steps are in
 [the desktop setup guide](desktop-electron.md).
 
 FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`。
 本分支需要 `fatcat-metadata==0.1.3`，修复 Windows 长路径读取，并用
-`native_project_source` 只解析所选机型依赖。本次变更没有发布 SDK；
-发布前需要从下方固定提交构建并安装本地 wheel。
+`native_project_source` 只解析所选机型依赖。通过 `requirements.txt`
+从 PyPI 安装正式 wheel。
 维护者从公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) 的根项目构建，
-源码提交固定为 `419866b24f0af7e5f2c31ca17bc320ca9e10d847`，并在
+源码提交固定为 `5023982e03680e0cd89fb9175dd0ca401d41f6f4`，并在
 `scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
 [桌面环境指南](desktop-electron.md)。
 
-The writer uses `neroued-3mf==0.4.0+fatcat.production.2`, built from a fixed
-public source commit without a Lumina patch. Its generic Production APIs are
-submitted in [upstream PR #17](https://github.com/Neroued/neroued_3mf/pull/17).
-This candidate adds native Windows Unicode and long output paths. Until its
-[temporary GitHub Release](https://github.com/MOVIBALE/neroued_3mf/releases/tag/fatcat-production-2)
-is published, build matching wheels from the pinned source; production.1 is not a substitute.
-The writer will switch to an official upstream version after acceptance and release.
+The writer uses the official PyPI release `neroued-3mf==0.4.2`.
+Generic Production APIs and Windows Unicode/long-path output are included
+after [upstream PR #17](https://github.com/Neroued/neroued_3mf/pull/17) and
+[PR #18](https://github.com/Neroued/neroued_3mf/pull/18) were merged.
+Source builds pin release commit `656f87c55caf742cef2e958a7fc5199cdba2c6f0`;
+no downstream writer patch, version suffix, or fork download channel is required.
 
-写包库使用固定公开源码构建的 `neroued-3mf==0.4.0+fatcat.production.2`，
-Lumina 不再维护 writer 补丁。候选新增 Windows 中文及长输出路径修复，发布前
-需要按固定提交构建，不能用 production.1 替代。通用 Production 接口已提交上游
-PR #17；上游接受并发布后切换官方版本。
+写包库使用 PyPI 正式版 `neroued-3mf==0.4.2`，已包含上游合并的通用
+Production 接口及 Windows 中文/长路径修复。源码构建固定同一发行提交，
+无需下游补丁、定制版本后缀或 fork 下载渠道。
 
 The current source pin includes Bambu Studio 02.08.02.61, OrcaSlicer 2.4.2,
 QIDI Studio 02.07.02.60, ElegooSlicer 1.5.3.5, Anycubic Slicer Next macOS
