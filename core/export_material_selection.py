@@ -19,15 +19,18 @@ from core.pipeline.preview_color_utils import build_lut_material_types, build_pa
 from utils.fatcat_metadata import (
     build_builtin_project_settings_request,
     native_build_plate_uid,
-    native_project_source_catalog,
+    MetadataTarget,
+    native_source_for_target,
     resolve_project_materials,
     select_metadata_target,
+    select_user_template_metadata_target,
 )
 from utils.lut_manager import LUTManager
 
 
 def present_material_selection(
     selection: Mapping[str, Any], *, device_profile_id: str | None = None,
+    target: MetadataTarget | None = None,
 ) -> dict[str, Any]:
     """Bind SDK identities to the existing device and plate settings.
 
@@ -35,9 +38,15 @@ def present_material_selection(
     """
     result = dict(selection)
     registry = load_machine_registry(resolve_machine_registry_root() / "registry.json")
-    sources = native_project_source_catalog(str(selection["slicer_id"]))["sources"]
-    source = next(item for item in sources if item["machine_uid"] == selection["machine_uid"]
-                  and item["nozzle_uid"] == selection["nozzle_uid"])
+    source = native_source_for_target(target or MetadataTarget(
+        slicer_id=str(selection["slicer_id"]),
+        application_version=select_user_template_metadata_target(
+            slicer=str(selection["slicer_id"]), build_plate_id=None,
+        ).application_version,
+        machine_uid=str(selection["machine_uid"]),
+        nozzle_uid=str(selection["nozzle_uid"]),
+        build_plate_uid=str(selection["build_plate_uid"]),
+    ))
     profiles = [profile for profile in registry.devices_by_id.values()
                 if profile.slicer_id == selection["slicer_id"]
                 and profile.source_profile_name == source["source_machine_profile_name"]
@@ -158,7 +167,7 @@ def resolve_export_material_selection(
     request = build_builtin_project_settings_request({}, _source_materials(params, source_context),
                                                       target=target)
     return present_material_selection(resolve_project_materials(request),
-                                      device_profile_id=params.get("device_profile_id"))
+                                      device_profile_id=params.get("device_profile_id"), target=target)
 
 
 def require_export_material_selection(

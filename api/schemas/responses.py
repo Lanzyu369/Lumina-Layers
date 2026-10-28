@@ -1024,6 +1024,7 @@ class LargeFormatGenerateResponse(BaseModel):
     message: str
     download_url: str
     tile_count: int
+    failed_tiles: list[str] = Field(default_factory=list)
     grid_cols: int
     grid_rows: int
     warnings: list[str] = Field(default_factory=list)
