@@ -81,6 +81,7 @@ from utils.fatcat_metadata import (
     select_user_template_metadata_target,
     patch_wipe_tower,
     read_project_layout,
+    read_project_material_slots,
     read_placement_warnings,
     serialize_layer_config_ranges,
     template_import_parts,
@@ -434,9 +435,9 @@ def build_layer_config_ranges_data(
         fine_layer_height_mm (float): Fine printing layer height in millimetres.
             （细层高打印层高，单位为毫米）
         initial_layer_height_mm (float | None): Actual slicer first-layer height.
-            Required for ``face="up"``; an unknown value safely skips the
-            modifier.（切片器实际首层层高；``face="up"`` 时必须提供，
-            未知时安全跳过修改器）
+            Required when the backing starts at the build plate; an unknown
+            value safely skips that modifier.（切片器实际首层层高；背板从热床
+            开始时必须提供，未知时安全跳过该修改器）
         min_layer_height_mm (float | None): Optional printer minimum layer height.
             （打印机允许的可选最小层高）
         max_layer_height_mm (float | None): Optional printer maximum layer height.
@@ -483,31 +484,27 @@ def build_layer_config_ranges_data(
 
     overrides: list[tuple[float, float, dict[str, float | int | bool]]] = []
     if enable_base_layer_height_modifier and normalized_face != "double":
+        coarse_min_z = 0.0 if normalized_face == "up" else color_height
+        coarse_max_z = coarse_min_z + base_height
         has_valid_initial_layer = (
             initial_layer_height is not None
             and math.isfinite(initial_layer_height)
             and initial_layer_height > 0
         )
-        if normalized_face != "up" or has_valid_initial_layer:
+        if coarse_min_z > 0 or has_valid_initial_layer:
+            first_layer_overlap = (
+                max(0.0, min(float(initial_layer_height), coarse_max_z) - coarse_min_z)
+                if has_valid_initial_layer else 0.0
+            )
             coarse_lh = _resolve_compatible_base_layer_height_mm(
                 base_height_mm=base_height,
                 nozzle_mm=nozzle,
                 fine_layer_height_mm=fine_layer_height,
-                fixed_first_layer_height_mm=(
-                    float(initial_layer_height)
-                    if normalized_face == "up" and initial_layer_height is not None
-                    else 0.0
-                ),
+                fixed_first_layer_height_mm=first_layer_overlap,
                 min_layer_height_mm=min_layer_height_mm,
                 max_layer_height_mm=max_layer_height_mm,
             )
             if coarse_lh is not None:
-                if normalized_face == "up":
-                    coarse_min_z = 0.0
-                    coarse_max_z = base_height
-                else:
-                    coarse_min_z = color_height
-                    coarse_max_z = color_height + base_height
                 overrides.append(
                     (
                         coarse_min_z,
@@ -913,6 +910,7 @@ class Slicer3MFWriter:
                 )
         self._project_slot_names: list[str] = []
         self._project_preview_colors: dict | None = None
+        self._source_slot_indices: dict[str, int] = {}
         self.cover_source: "str | bytes | Image.Image | None" = cover_source
         self.cover_bundle: Optional[CoverPngBundle] = None
         self.preserve_template_filament_slots = preserve_template_filament_slots
@@ -974,7 +972,10 @@ class Slicer3MFWriter:
         )
         self._wipe_tower_placement_cache = None
 
-    def _set_project_palette(self, slot_names: list[str], preview_colors: Dict) -> None:
+    def _set_project_palette(
+        self, slot_names: list[str], preview_colors: Dict,
+        source_slot_indices: Mapping[str, int] | None = None,
+    ) -> None:
         """Configure the project-wide palette used for exported metadata.
 
         配置导出元数据使用的项目级完整调色板。
@@ -982,6 +983,7 @@ class Slicer3MFWriter:
 
         self._project_slot_names = [str(name) for name in slot_names if str(name)]
         self._project_preview_colors = dict(preview_colors or {})
+        self._source_slot_indices = dict(source_slot_indices or {})
         self._wipe_tower_placement_cache = None
 
     def _build_object_material_palette(self) -> tuple[list[tuple[str, tuple[int, int, int]]], dict[str, int]]:
@@ -1077,13 +1079,18 @@ class Slicer3MFWriter:
             "auto" if self.preserve_template_filament_slots is None
             else "preserve" if self.preserve_template_filament_slots else "compact"
         )
-        slot_policy = native_project_source_catalog(target.slicer_id).get(
-            "filament_slot_policy"
+        # Only Prusa's aggregate catalog owns a native-capacity slot policy.
+        # Other catalogs resolve every machine's profiles; an export must not
+        # depend on files belonging to unrelated printers.
+        slot_policy = (
+            native_project_source_catalog(target.slicer_id).get("filament_slot_policy")
+            if target.slicer_id == "PrusaSlicer" else None
         )
         if slot_policy == "preserve_native_capacity":
             slot_mode = "preserve"
         if self._custom_template is not None:
             aliases = process_setting_aliases(self.slicer)
+            source_slot_count = len(read_project_material_slots(self._custom_template, target=target))
             geometry_fields = {
                 aliases.get(key, key) for key in (
                     "layer_height", "initial_layer_print_height", "initial_layer_height",
@@ -1113,6 +1120,11 @@ class Slicer3MFWriter:
                 "process_settings": process,
                 "preserve_source_material_settings": True,
                 "filament_slot_mode": slot_mode,
+                "filament_source_slots": [
+                    index if index < source_slot_count else None
+                    for i, (name, _colour) in enumerate(material_palette)
+                    for index in [self._source_slot_indices.get(name, i)]
+                ],
                 "source_profile": {
                     "registry": profile is not None,
                     "brand": getattr(profile, "brand", ""),
@@ -1884,9 +1896,16 @@ def read_wipe_tower_placement_warnings(
         list[str]: Warning codes requiring user attention. (需要用户处理的警告代码)
     """
 
-    metadata_path = template_import_parts("BambuStudio")["wipe_tower_placement"]
-
     def package_warnings(package: zipfile.ZipFile) -> list[str]:
+        from utils.fatcat_metadata import detect_template_source
+
+        common = template_import_parts("BambuStudio")
+        members = set(package.namelist())
+        source = detect_template_source(*(
+            package.read(common[role]).decode("utf-8") if common[role] in members else None
+            for role in ("source_model", "slice_info")
+        ))
+        metadata_path = template_import_parts(source["source_slicer"] or "BambuStudio")["wipe_tower_placement"]
         if metadata_path not in package.namelist():
             return []
         return read_placement_warnings(package.read(metadata_path).decode("utf-8"))
@@ -1900,7 +1919,7 @@ def read_wipe_tower_placement_warnings(
                 if name.lower().endswith(".3mf"):
                     with zipfile.ZipFile(io.BytesIO(package.read(name))) as project:
                         warnings.extend(package_warnings(project))
-    except (OSError, zipfile.BadZipFile, KeyError, UnicodeDecodeError):
+    except (OSError, zipfile.BadZipFile, KeyError, UnicodeDecodeError, ValueError):
         return []
     return list(dict.fromkeys(warnings))
 
@@ -1933,6 +1952,7 @@ def export_scene_with_slicer_metadata(
     material_types: Mapping[str, str | None] | None = None,
     native_filament_profiles: Mapping[str, str] | None = None,
     backing_output: str = "same_project",
+    source_slot_indices: Mapping[str, int] | None = None,
 ):
     """Export a Trimesh scene as the selected slicer's native 3MF project.
     将 Trimesh 场景导出为所选切片软件的原生 3MF 工程。
@@ -2004,11 +2024,24 @@ def export_scene_with_slicer_metadata(
         from functools import partial
         from core.export_plates import export_separate_backing_projects
 
+        source_palette = list(dict.fromkeys(project_slot_names or [
+            str(mesh.metadata.get("bambu_material_name") or name)
+            for name, mesh in scene.geometry.items()
+        ]))
+        source_indices = dict(source_slot_indices or {
+            name: index for index, name in enumerate(source_palette)
+        })
+        named_colors = dict(preview_colors)
+        for index, name in enumerate(source_palette):
+            named_colors[name] = _resolve_preview_color_for_slot_name(
+                slot_name=name, slot_index=index, preview_colors=preview_colors,
+            )[0]
         return export_separate_backing_projects(
-            scene, output_path, project_slot_names=project_slot_names or [],
+            scene, output_path, project_slot_names=source_palette,
             base_height_mm=base_height_mm, color_height_mm=color_height_mm,
             exporter=partial(
-                export_scene_with_slicer_metadata, preview_colors=preview_colors,
+                export_scene_with_slicer_metadata, preview_colors=named_colors,
+                source_slot_indices=source_indices,
                 settings=settings, color_mode=color_mode, printer_id=printer_id,
                 slicer=slicer, nozzle_size=nozzle_size, watermark=watermark,
                 enable_base_layer_height_modifier=enable_base_layer_height_modifier,
@@ -2070,15 +2103,17 @@ def export_scene_with_slicer_metadata(
         backing_infill_density_percent=backing_infill_density_percent,
     )
     if resolved_project_slot_names:
-        writer._set_project_palette(resolved_project_slot_names, preview_colors)
+        writer._set_project_palette(resolved_project_slot_names, preview_colors, source_slot_indices)
 
     name_to_color: dict[str, tuple[int, int, int]] = {}
     project_slot_indices = {name: idx for idx, name in enumerate(resolved_project_slot_names)}
     color_sources: dict[str, int] = {}
     for idx, slot_name in enumerate(slot_names):
-        resolved_slot_index = project_slot_indices.get(slot_name, idx)
+        mesh = scene.geometry.get(slot_name)
+        material_name = str(mesh.metadata.get("bambu_material_name") or slot_name) if mesh is not None else slot_name
+        resolved_slot_index = project_slot_indices.get(material_name, idx)
         color_rgb, source = _resolve_preview_color_for_slot_name(
-            slot_name=slot_name,
+            slot_name=material_name,
             slot_index=resolved_slot_index,
             preview_colors=preview_colors,
         )

@@ -170,12 +170,13 @@ def test_face_up_z_range() -> None:
     assert layer_height == 0.16
 
 
-def test_face_up_accounts_for_fixed_initial_layer_height() -> None:
+@pytest.mark.parametrize("face,color_height", [("up", 0.4), ("down", 0.0)])
+def test_base_on_bed_accounts_for_fixed_initial_layer_height(face, color_height) -> None:
     xml_bytes = _call_build_layer_config_ranges_xml(
         base_height_mm=0.24,
-        color_height_mm=0.4,
+        color_height_mm=color_height,
         nozzle_mm=0.4,
-        face="up",
+        face=face,
         fine_layer_height_mm=0.08,
         initial_layer_height_mm=0.08,
     )

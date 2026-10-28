@@ -84,7 +84,7 @@ from utils.merged_bambu_3mf_writer import (
     MergedItem,
     MaterialSlot as WriterMaterialSlot,
 )
-from utils.fatcat_metadata import select_metadata_target
+from utils.fatcat_metadata import MetadataTarget, select_metadata_target
 from config import (
     PrinterConfig,
     SVG_PIXELS_PER_MM_DEFAULT,
@@ -92,7 +92,6 @@ from config import (
     SVG_PIXELS_PER_MM_MIN,
     TEMP_DIR,
     ModelingMode as CoreModelingMode,
-    get_printer_profile,
     normalize_svg_pixels_per_mm,
 )
 from core.pipeline.processing_ops.svg_rasterizer import (
@@ -271,8 +270,6 @@ log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Batch merge constants (not exposed via API / UI / settings)
 # ---------------------------------------------------------------------------
-_BATCH_FALLBACK_PLATE_WIDTH_MM: float = 256.0
-_BATCH_FALLBACK_PLATE_DEPTH_MM: float = 256.0
 _BATCH_PREVIEW_BROWSER_SAFE_LIMIT: int = 96
 BATCH_PLATE_OVERFLOW_FALLBACK_MESSAGE: str = (
     "部分模型可能超出热床范围，请在切片软件中调整 / "
@@ -3380,6 +3377,7 @@ async def _generate_large_format_raster(
     route_local_cleanup_paths: set[str] = set()
     cleanup_paths: set[str] = set()
     errors: list[str] = []
+    failed_tiles: list[str] = []
     zip_path: str | None = None
     zip_ready = False
     full_matched_rgb: np.ndarray | None = None
@@ -3620,6 +3618,7 @@ async def _generate_large_format_raster(
     try:
         futures = []
         tile_labels: list[str] = []
+        tile_ids: list[str] = []
         for r in range(rows):
             for c in range(cols):
                 x0_mm = c * tile_width_mm
@@ -3808,6 +3807,7 @@ async def _generate_large_format_raster(
                     tile_label=f"R{r + 1}C{c + 1}",
                 )
                 tile_labels.append(label)
+                tile_ids.append(f"R{r + 1}C{c + 1}")
                 futures.append(
                     pool.submit(
                         worker_generate_model,
@@ -3832,6 +3832,7 @@ async def _generate_large_format_raster(
                         if warning_code not in tile_warnings:
                             tile_warnings.append(warning_code)
                 else:
+                    failed_tiles.append(tile_ids[future_index])
                     errors.append(f"{label}: generation failed — {result.get('status_msg', 'unknown')}")
             except MemoryError:
                 _discard_pending_awaitables(futures, future_index + 1)
@@ -3849,6 +3850,7 @@ async def _generate_large_format_raster(
                 _discard_pending_awaitables(futures, future_index + 1)
                 raise to_http_exception(exc, "large-format tile layout") from exc
             except ROUTER_HANDLED_ERRORS as e:
+                failed_tiles.append(tile_ids[future_index])
                 errors.append(f"{label}: {e}")
 
         if not successful_paths:
@@ -3892,8 +3894,9 @@ async def _generate_large_format_raster(
         if errors:
             msg += f" — {len(errors)} failed"
         return {
-            "status": "ok",
+            "status": "partial" if failed_tiles else "ok",
             "message": msg,
+            "failed_tiles": failed_tiles,
             "download_url": f"/api/files/{download_id}",
             "tile_count": len(successful_paths),
             "grid_cols": cols,
@@ -4497,17 +4500,24 @@ def _log_batch_item_failure(
     )
 
 
-def _resolve_batch_plate_dimensions(printer_id: str) -> tuple[float, float]:
+def _resolve_batch_plate_dimensions(
+    source_3mf_path: str, *, metadata_target: MetadataTarget,
+) -> tuple[float, float]:
     """Return the batch layout plate dimensions for the selected printer.
 
     根据当前打印机配置返回批量排布使用的热床尺寸。
     """
-    profile = get_printer_profile(printer_id)
-    width_mm = float(profile.bed_width or _BATCH_FALLBACK_PLATE_WIDTH_MM)
-    depth_mm = float(profile.bed_depth or _BATCH_FALLBACK_PLATE_DEPTH_MM)
-    if width_mm <= 0 or depth_mm <= 0:
-        return (_BATCH_FALLBACK_PLATE_WIDTH_MM, _BATCH_FALLBACK_PLATE_DEPTH_MM)
-    return (width_mm, depth_mm)
+    from utils.fatcat_metadata import read_source_metadata
+
+    source = read_source_metadata(source_3mf_path, target=metadata_target)
+    points = source["layout"]["printable_area"]
+    if len(points) < 3:
+        raise ValueError("Selected native printer has no printable area")
+    width_mm = max(point[0] for point in points) - min(point[0] for point in points)
+    depth_mm = max(point[1] for point in points) - min(point[1] for point in points)
+    if not (math.isfinite(width_mm) and math.isfinite(depth_mm) and width_mm > 0 and depth_mm > 0):
+        raise ValueError("Selected native printer has an invalid printable area")
+    return float(width_mm), float(depth_mm)
 
 
 def _xy_bbox_from_worker_result(worker_result: dict) -> XYBBox:
@@ -5038,7 +5048,6 @@ async def convert_batch(
 
     # --- Merge phase: layout -> writers -> FileRegistry -> cleanup ---
     successes = successful_entries
-    plate_width_mm, plate_depth_mm = _resolve_batch_plate_dimensions(printer_id)
 
     # Zero successes → return immediately with null URLs
     if len(successes) == 0:
@@ -5054,16 +5063,6 @@ async def convert_batch(
             results=results,
         )
 
-    # Log merge init
-    _safe_log(
-        "info",
-        "batch_merge_3mf_init",
-        session_id=batch_run_id,
-        model_count=len(successes),
-        plate_width_mm=plate_width_mm,
-        plate_depth_mm=plate_depth_mm,
-    )
-
     warnings: list[WarningEntry] = []
     merged_outputs: list[Path] = []
     stage = "layout"
@@ -5071,6 +5070,14 @@ async def convert_batch(
     try:
         # Step 1: Layout
         stage = "layout"
+        plate_width_mm, plate_depth_mm = _resolve_batch_plate_dimensions(
+            successes[0]["threemf_path"], metadata_target=merged_metadata_target,
+        )
+        _safe_log(
+            "info", "batch_merge_3mf_init", session_id=batch_run_id,
+            model_count=len(successes), plate_width_mm=plate_width_mm,
+            plate_depth_mm=plate_depth_mm,
+        )
         bboxes = [_xy_bbox_from_worker_result(wr) for wr in successes]
 
         layout_result = layout_shelf_by_row(

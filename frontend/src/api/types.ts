@@ -510,6 +510,7 @@ export interface LargeFormatGenerateResponse {
   message: string;
   download_url: string;
   tile_count: number;
+  failed_tiles?: string[];
   grid_cols: number;
   grid_rows: number;
   warnings: string[];
