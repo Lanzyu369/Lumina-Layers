@@ -73,7 +73,7 @@ from core.workshop.registry_client import select_install_candidate
 router = APIRouter(prefix="/api/workshop/v1", tags=["Creative Workshop"])
 log = get_logger(__name__)
 
-LUMINA_VERSION = "2.0.0"
+LUMINA_VERSION = "2.0.1"
 _PUBLIC_ASSET_EXTENSIONS = frozenset(
     {".png", ".jpg", ".jpeg", ".webp"}
 )
