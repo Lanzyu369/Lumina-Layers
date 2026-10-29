@@ -761,7 +761,7 @@ describe('PalettePanel 双色显示', () => {
     expect(screen.getByRole('button', { name: '重做' })).toBeDisabled();
     expect(mockMutateEditorSelection).toHaveBeenCalledWith(
       expect.objectContaining({
-        operation: 'point-toggle',
+        operation: 'point-remove',
         x: 1,
         y: 2,
         base_selection_revision: 5,

@@ -9,7 +9,6 @@ import {
   applyRecipeOverride as apiApplyRecipeOverride,
   autoDetectColors as apiAutoDetectColors,
   cleanupSessionFiles as apiCleanupSessionFiles,
-  colorHighlight as apiColorHighlight,
   convertPreview as apiConvertPreview,
   convertPuzzleLayoutPreview as apiConvertPuzzleLayoutPreview,
   cropImage as apiCropImage,
@@ -121,7 +120,7 @@ import {
   newestEditorContentRevision
 } from "./editorRevision";
 import {
-  buildCurrentVisibleColorRemapMap,buildSourceChangeProjectColorState,chooseLastSelectedColor,clonePortableProjectColorState,cloneRecipeOverrides,cloneRemapHistory,cloneReplacementRegions,colorRemapFromReplacementRegions,createAdjustmentSnapshot,editorCommitResultStateFromResponse,EMPTY_LUT_MATCH_STATE,getPreviewBaseUrl,hasAdjustmentState,historyFlagsFromResponse,INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,matchesColorHighlightSnapshot,normalizeHexNoHash,normalizeReplacementRegionsFromHistory,selectionModeForTool,selectionStateFromDocument,selectionToolForLegacyMode,toggleHexInSet,
+  buildCurrentVisibleColorRemapMap,buildSourceChangeProjectColorState,chooseLastSelectedColor,clonePortableProjectColorState,cloneRecipeOverrides,cloneRemapHistory,cloneReplacementRegions,colorRemapFromReplacementRegions,createAdjustmentSnapshot,editorCommitResultStateFromResponse,EMPTY_LUT_MATCH_STATE,getPreviewBaseUrl,hasAdjustmentState,historyFlagsFromResponse,INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,normalizeHexNoHash,normalizeReplacementRegionsFromHistory,selectionModeForTool,selectionStateFromDocument,selectionToolForLegacyMode,toggleHexInSet,
 } from "./editorState";
 import {
   CONVERTER_ERROR_KEYS,createGenerationActions,getElapsedMsSince,getErrorType,invalidateGenerationRequests,notifyCompletion,
@@ -144,7 +143,7 @@ import {
   buildConversionSourceParams,buildNativeModelDefaults,buildNativeModelState,clampValue,filterNativeBrandGroups,getMaterialArchiveReliefMinimumExtraHeight,getNativeBrandGroupByKey,getNativeDbNamesForGroup,getNativeDbOptionNames,getSelectedNativeBrandGroup,getSupportedModeByPair,inferDefaultMaterialBackingDirName,isDynamicMaterialActive,MATERIAL_DYNAMIC_LAYER_COUNT_MAX,MATERIAL_DYNAMIC_LAYER_COUNT_MIN,normalizeDynamicMaterialLayerCount,normalizeLegacyLutNames,normalizeLutColorMode,normalizeLutDrivenReliefState,normalizeLutGroups,normalizeNativeBrandGroups,normalizePublicColorMode,normalizeStringArray,RELIEF_MAX_EXTRA_HEIGHT_MM,resolveConverterSourceSelection,resolveMaterialPrintLayerCount,resolveNativeBrandSelection,resolveNativeSupportedModeForBrand,resolvePreferredSupportedMode,
 } from "./sources";
 import type {
-  ConverterActions,ConverterState,ModelSurfaceModelRotation,ModelSurfacePlacement,PendingReplacement,RegionData,SelectionDocument,SelectionMode,SelectionTool,SourceVersion,
+  ConverterActions,ConverterState,ModelSurfaceModelRotation,ModelSurfacePlacement,PendingReplacement,RegionData,SelectionMode,SelectionTool,SourceVersion,
 } from "./types";
 export { CONVERTER_ERROR_KEYS } from "./generationActions";
 export { buildLayerImagesSourceKey } from "./previewArtifacts";
@@ -394,9 +393,6 @@ function buildHistoryRestoreState(
   const replacementRegions = normalizeReplacementRegionsFromHistory(
     response.replacement_regions ?? [],
   );
-  const selectionRegions = response.selection
-    ? selectionStateFromDocument(response.selection, activePreviewUrl ?? "")
-    : {};
   return {
     previewImageUrl: activePreviewUrl,
     previewBaseImageUrl: activePreviewUrl,
@@ -415,7 +411,6 @@ function buildHistoryRestoreState(
     // to the preview session; history responses no longer carry it, so undo/redo
     // must preserve the current local map.
     free_color_set: new Set(response.free_color_set ?? []),
-    ...(response.selection ? selectionRegions : {}),
     selectedGradientRegions: [],
     gradientSelection: null,
     pendingReplacement: null,
@@ -1218,6 +1213,7 @@ function invalidateReplacementPreviewCommits(): void {
 }
 
 const selectionMutationQueues = new Map<string, Promise<boolean>>();
+let nextSelectionMutationId = 0;
 const confirmedSelectionRevisions = new Map<
   string,
   {
@@ -1229,10 +1225,23 @@ const confirmedSelectionRevisions = new Map<
 
 function queueSelectionMutation(
   sessionId: string,
+  mutationId: number,
   work: () => Promise<boolean>,
 ): Promise<boolean> {
   const previous = selectionMutationQueues.get(sessionId) ?? Promise.resolve(true);
-  const next = previous.then(work, work);
+  const run = async (): Promise<boolean> => {
+    try {
+      return await work();
+    } finally {
+      // Covers cancellation/session changes as well as failures. Successful
+      // responses remove their intent atomically with the confirmed document.
+      useConverterStore.setState((state) => {
+        if (!state.pendingSelectionMutations.some((item) => item.id === mutationId)) return state;
+        return { pendingSelectionMutations: state.pendingSelectionMutations.filter((item) => item.id !== mutationId) };
+      });
+    }
+  };
+  const next = previous.then(run, run);
   const settled = next.catch(() => false);
   selectionMutationQueues.set(sessionId, settled);
   void settled.then(() => {
@@ -1296,6 +1305,30 @@ function rememberConfirmedSelectionDocument(
     ),
   });
   return true;
+}
+
+async function readConfirmedSelectionDocument(
+  sessionId: string,
+  canPublish: () => boolean = () => true,
+): Promise<void> {
+  try {
+    const document = await apiGetEditorSelection(sessionId);
+    const current = useConverterStore.getState();
+    if (current.sessionId !== sessionId || !canPublish()) return;
+    const confirmed = confirmedSelectionRevisions.get(sessionId);
+    if (
+      isSelectionDocumentOlder(document, confirmed ?? null) ||
+      (current.selectionDocument && isSelectionDocumentOlder(document, {
+        selectionRevision: current.selectionDocument.selection_revision,
+        contentRevision: current.selectionDocument.content_revision,
+      }))
+    ) return;
+    rememberConfirmedSelectionDocument(sessionId, document);
+    useConverterStore.setState(selectionStateFromDocument(document, getPreviewBaseUrl(current) ?? ""));
+  } catch {
+    // Startup and error reconciliation are best-effort. Mutations expose their
+    // own errors and keep using only server-confirmed revisions.
+  }
 }
 
 const freeColorMutationQueues = new Map<string, Promise<void>>();
@@ -1514,6 +1547,7 @@ function buildPreviewSessionResetState(
     selectionBlinkEnabled: false,
     selectionTool: "point",
     selectionDocument: null,
+    pendingSelectionMutations: [],
     brushSizePx: 24,
     pendingReplacement: null,
     preview_width_mm: null,
@@ -2042,6 +2076,7 @@ export const DEFAULT_STATE: ConverterState = {
   selectionMode: "multi-select" as SelectionMode,
   selectionTool: "point" as SelectionTool,
   selectionDocument: null,
+  pendingSelectionMutations: [],
   brushSizePx: 24,
   colorRangeTolerance: DEFAULT_COLOR_RANGE_TOLERANCE,
   selectedColors: new Set<string>(),
@@ -3923,7 +3958,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     clearSelection: async () => {
       const state = _get();
-      if (state.sessionId && state.selectionDocument) {
+      if (state.sessionId) {
         // Use the unified selection mutation to clear the server-authoritative
         // selection. This also works after custom recipe / gradient operations
         // that may have cleared legacy state but kept the selectionDocument.
@@ -3987,66 +4022,31 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     hydrateSelectionDocument: async () => {
-      const state = _get();
-      if (!state.sessionId) return;
-      try {
-        const document = await apiGetEditorSelection(state.sessionId);
-        if (_get().sessionId !== state.sessionId) return;
-        // Never regress an already-confirmed (or optimistically newer) revision:
-        // a GET can land after a concurrent mutation and return an older
-        // document; applying it would roll the frontend's confirmed revision
-        // backward and the next click would 409 against the server.
-        // 不回退已确认（或乐观更新的）revision：GET 可能晚于并发 mutation
-        // 返回旧文档，应用它会倒回 confirmed revision，下次点击将 409。
-        const confirmed = confirmedSelectionRevisions.get(state.sessionId);
-        const currentDocument = _get().selectionDocument;
-        if (
-          isSelectionDocumentOlder(document, confirmed ?? null) ||
-          (currentDocument &&
-            isSelectionDocumentOlder(document, {
-              selectionRevision: currentDocument.selection_revision,
-              contentRevision: currentDocument.content_revision,
-            }))
-        ) {
-          return;
-        }
-        rememberConfirmedSelectionDocument(state.sessionId, document);
-        // Always replace the local selectionDocument with the authoritative
-        // server state. This is critical after custom recipe / content changes
-        // so the frontend's components, contours, and counts stay in sync.
-        set({
-          ...selectionStateFromDocument(
-            document,
-            getPreviewBaseUrl(_get()) ?? "",
-          ),
-        });
-      } catch {
-        if (_get().sessionId !== state.sessionId) return;
-        // Selection hydration is best-effort: a brand-new session may have no
-        // selection document yet, and legacy sessions may not support the
-        // endpoint. Do not surface a blocking error from preview startup.
-      }
+      const sessionId = _get().sessionId;
+      if (!sessionId) return;
+      const pending = waitForSelectionMutation(sessionId);
+      if (pending) await pending;
+      if (_get().sessionId !== sessionId) return;
+      // A GET may already include a POST whose response is still in flight.
+      // Publishing it with that gesture pending would visually toggle twice.
+      // A gesture started during this GET will publish its own confirmation.
+      await readConfirmedSelectionDocument(sessionId, () => waitForSelectionMutation(sessionId) === null);
     },
 
     applySelectionMutation: async (input) => {
       const initial = _get();
       if (!initial.sessionId) {
         set({ error: "请先预览图片" });
-        return;
+        return false;
       }
       const requestedSessionId = initial.sessionId;
-      if (input.optimisticDocument) {
-        set({
-          ...selectionStateFromDocument(
-            input.optimisticDocument,
-            getPreviewBaseUrl(initial) ?? "",
-          ),
-          error: null,
-        });
-      } else {
-        set({ error: null });
-      }
-      await queueSelectionMutation(requestedSessionId, async (): Promise<boolean> => {
+      // A free-color operation may itself be waiting for an earlier selection.
+      // Capture it now so later gestures keep their place after it without
+      // making earlier gestures wait for a subsequently queued free-color edit.
+      const pendingFreeColor = freeColorMutationQueues.get(requestedSessionId);
+      const mutationId = ++nextSelectionMutationId;
+      const result = queueSelectionMutation(requestedSessionId, mutationId, async (): Promise<boolean> => {
+        if (pendingFreeColor) await pendingFreeColor;
         const pendingContentCommit = waitForContentCommits(requestedSessionId);
         if (pendingContentCommit) {
           const contentCommitSucceeded = await pendingContentCommit;
@@ -4054,14 +4054,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             return false;
           }
         }
+        if (_get().sessionId !== requestedSessionId) return false;
+        if (!_get().selectionDocument) await readConfirmedSelectionDocument(requestedSessionId);
         const state = _get();
         if (state.sessionId !== requestedSessionId) return false;
         const previousDocument = state.selectionDocument;
         const confirmed = confirmedSelectionRevisions.get(requestedSessionId);
         const baseRevision =
-          confirmed?.selectionRevision ?? initial.selectionDocument?.selection_revision ?? 0;
+          confirmed?.selectionRevision ?? state.selectionDocument?.selection_revision ?? 0;
         const contentRevision =
-          confirmed?.contentRevision ?? initial.selectionDocument?.content_revision ?? 0;
+          confirmed?.contentRevision ?? state.selectionDocument?.content_revision ?? 0;
         try {
           const document = await apiMutateEditorSelection({
             session_id: requestedSessionId,
@@ -4071,6 +4073,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ...(input.x !== undefined ? { x: input.x } : {}),
             ...(input.y !== undefined ? { y: input.y } : {}),
             ...(input.colorHex ? { color_hex: input.colorHex } : {}),
+            ...(input.colorHexes ? { color_hexes: input.colorHexes } : {}),
+            ...(input.gradientGroupIndex !== undefined
+              ? { gradient_group_index: input.gradientGroupIndex } : {}),
+            ...(input.gradientRegionIndex !== undefined
+              ? { gradient_region_index: input.gradientRegionIndex } : {}),
             ...(input.colorTolerance !== undefined
               ? { color_tolerance: input.colorTolerance }
               : {}),
@@ -4080,6 +4087,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ...(input.brushPoints && input.brushPoints.length > 0
               ? { brush_points: input.brushPoints }
               : {}),
+            ...(input.brushStrokes ? { brush_strokes: input.brushStrokes } : {}),
           });
           const current = _get();
           if (current.sessionId !== requestedSessionId) return false;
@@ -4092,33 +4100,23 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             void _get().hydrateSelectionDocument();
             return false;
           }
-          const hasLaterOptimisticDocument = Boolean(
-            input.optimisticDocument &&
-            current.selectionDocument &&
-            current.selectionDocument.selection_revision > document.selection_revision,
-          );
-          if (hasLaterOptimisticDocument) {
-            return true;
-          }
-          // Always apply the server's authoritative selection state unless a
-          // newer local optimistic click is already visible. Older confirmations
-          // still advance confirmedSelectionRevisions above so queued clicks use
-          // the correct base revision, but they must not repaint the UI backward.
+          // The document, union outline and history flags come from the same
+          // confirmed operation. Pending gestures never invent server revisions.
           set({
             ...selectionStateFromDocument(
               document,
               getPreviewBaseUrl(current) ?? "",
             ),
+            gradientSelection: input.selectionSource ?? null,
+            selectedGradientRegions: [],
+            pendingSelectionMutations: current.pendingSelectionMutations.filter((item) => item.id !== mutationId),
+            ...(input.operation === "clear" ? { pendingReplacement: null } : {}),
           });
           return true;
         } catch (err) {
           if (_get().sessionId !== requestedSessionId) return false;
-          // Roll back to the *confirmed* state, never to an optimistic one:
-          // previousDocument captured above is usually the optimistic document
-          // of this very click, so restoring it would leave a phantom selection
-          // diverged from the server (next toggle flips the wrong way).
-          // 只回滚到"已确认"状态，绝不回滚到乐观态：上面捕获的 previousDocument
-          // 通常就是本次点击的乐观文档，恢复它会造成与服务端发散的幻影选区。
+          // A failed response may still have committed. Read the server before
+          // the next queued gesture; never replay a toggle to recover it.
           const confirmedSelection = confirmedSelectionRevisions.get(
             requestedSessionId,
           );
@@ -4138,24 +4136,55 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 getPreviewBaseUrl(_get()) ?? "",
               ),
               error,
+              pendingSelectionMutations: _get().pendingSelectionMutations.filter((item) => item.id !== mutationId),
             });
           } else {
-            // The visible document is unconfirmed; clear it and re-hydrate the
-            // authoritative server state (a failed GET leaves no selection,
-            // which is safe — no phantom state).
-            // 可见文档未确认：清掉并重新从服务端 hydrate 权威状态。
-            set({ selectionDocument: null, error });
-            void _get().hydrateSelectionDocument();
+            set({
+              selectionDocument: null,
+              selectedColor: null,
+              selectedColors: new Set<string>(),
+              selectedRegions: [],
+              regionData: null,
+              error,
+              pendingSelectionMutations: _get().pendingSelectionMutations.filter((item) => item.id !== mutationId),
+            });
           }
+          await readConfirmedSelectionDocument(requestedSessionId);
           return false;
         }
       });
+      // Reserve the queue before publishing the visual intent so a synchronous
+      // subscriber's replacement/undo action also waits for this selection.
+      set((state) => ({
+        error: null,
+        pendingSelectionMutations: [...state.pendingSelectionMutations, { id: mutationId, sessionId: requestedSessionId, input }],
+      }));
+      return result;
     },
 
     // --- Legacy colour-set compatibility ---
+    removeColorFromSelection: (hex: string) => {
+      const normalized = normalizeHexNoHash(hex);
+      if (!normalized) return;
+      const state = _get();
+      if (state.sessionId) {
+        void state.applySelectionMutation({ operation: "same-color-remove", colorHex: normalized });
+        return;
+      }
+      const next = new Set(Array.from(state.selectedColors).filter(
+        (color) => color.toLowerCase() !== normalized.toLowerCase(),
+      ));
+      set({ selectedColors: next, selectedColor: chooseLastSelectedColor(next), gradientSelection: null });
+    },
+
     toggleColorInSelection: (hex: string) => {
       const normalized = normalizeHexNoHash(hex);
       if (!normalized) return;
+      const current = _get();
+      if (current.sessionId) {
+        void current.applySelectionMutation({ operation: "same-color-toggle", colorHex: normalized });
+        return;
+      }
       const prev = _get().selectedColors;
       const next = toggleHexInSet(prev, normalized);
       // Any manual tweak to the multi-select set implies the user is no
@@ -4170,49 +4199,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         selectedColor: chooseLastSelectedColor(next),
         gradientSelection: null,
       });
-
-      // 2D 预览高亮：调用后端生成颜色高亮预览（与 detectRegion 同风格）
-      const state = _get();
-      const sid = state.sessionId;
-      if (!sid) return;
-
-      if (next.size === 0) {
-        set({ previewImageUrl: getPreviewBaseUrl(state) });
-      } else {
-        const hexes = Array.from(next);
-        const canRenderLocally = hexes.every((hex) => {
-          const noHash = hex.replace(/^#/, "");
-          const candidates = [
-            noHash,
-            noHash.toLowerCase(),
-            noHash.toUpperCase(),
-            `#${noHash}`,
-            `#${noHash.toLowerCase()}`,
-            `#${noHash.toUpperCase()}`,
-          ];
-          return candidates.some((key) => {
-            const contours = state.colorContours[key];
-            return Boolean(contours && contours.length > 0);
-          });
-        });
-        if (canRenderLocally) {
-          set({ previewImageUrl: getPreviewBaseUrl(state) });
-          return;
-        }
-        const snapshot = {
-          sessionId: sid,
-          selectionMode: state.selectionMode,
-          selectedColors: hexes,
-        };
-        void apiColorHighlight(sid, hexes)
-          .then((res) => {
-            if (!matchesColorHighlightSnapshot(_get(), snapshot)) return;
-            set({ previewImageUrl: normalizeResourceUrl(res.preview_url) });
-          })
-          .catch(() => {
-            // 静默忽略高亮失败（不影响核心流程）
-          });
-      }
     },
 
     // --- 批量颜色替换 ---
@@ -4475,39 +4461,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       ) ?? -1;
       if (document && componentIndex >= 0) {
         const component = document.components[componentIndex];
-        const remainingComponents = document.components.filter(
-          (_component, index) => index !== componentIndex,
-        );
-        const remainingColorHexes = Array.from(
-          new Set(remainingComponents.map((item) => item.color_hex)),
-        );
-        const componentContours = remainingComponents.flatMap(
-          (item) => item.contours ?? [],
-        );
-        const optimisticDocument: SelectionDocument = {
-          ...document,
-          selection_revision: document.selection_revision + 1,
-          selected_pixel_count: Math.max(
-            0,
-            document.selected_pixel_count - component.pixel_count,
-          ),
-          selected_component_count: remainingComponents.length,
-          selected_color_hexes: remainingColorHexes,
-          region_ids: remainingComponents.map((item) => item.region_id),
-          components: remainingComponents,
-          contours:
-            remainingComponents.length === 0
-              ? []
-              : componentContours.length > 0
-              ? componentContours
-              : document.contours,
-        };
         markRegionRemoved(regionId);
         void _get().applySelectionMutation({
-          operation: "point-toggle",
+          operation: "point-remove",
           x: component.anchor[0],
           y: component.anchor[1],
-          optimisticDocument,
         });
         return;
       }
@@ -5541,8 +5499,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         currentSelectionState = _get();
         if (
           currentSelectionState.sessionId !== currentSessionId ||
-          currentSelectionState.selectionDocument?.selection_revision === undefined
+          currentSelectionState.selectionDocument?.selection_revision === undefined ||
+          currentSelectionState.selectionDocument.selected_pixel_count === 0
         ) {
+          // A target pick may have been queued behind a clear/toggle-off. It
+          // consumes that intent without falling back to a global recolour.
           releaseContentCommit(contentReservation, false);
           return true;
         }
@@ -5645,6 +5606,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         await _get().applyMultiRegionPixelReplace(pending.targetHex);
         return;
       }
+      // Tool choice and the source button do not change the selected pixels.
+      // Every colour picker targets the shared mask, including same-colour LUT
+      // picks and selections initiated by the gradient panel.
+      if (
+        mayUseSharedSelectionReplace(_get()) &&
+        (await _get().replaceSharedSelectionColor(pending.targetHex))
+      ) {
+        return;
+      }
       if (gradSel?.kind === "region") {
         await _get().applyGradientRegionPixelReplace(
           gradSel.groupIndex,
@@ -5668,15 +5638,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           }
           break;
         case "multi-select": {
-          // Only yield when the shared-selection path can apply, so the
-          // legacy fallback keeps its synchronous request shape.
-          // 仅在共享选区路径可能生效时才等待，旧版回退路径保持同步发起请求。
-          if (
-            mayUseSharedSelectionReplace(_get()) &&
-            (await _get().replaceSharedSelectionColor(pending.targetHex))
-          ) {
-            break;
-          }
           // Legacy multi-region fallback.
           // one batch request. The server rebuilds each mask via the same
           // flood-fill kernel /region-detect uses, applies all mutations
@@ -5844,7 +5805,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
         return;
       }
-      if (state.historyBusy || !state.historyCanUndo) return;
+      if (state.historyBusy) return;
       const sid = state.sessionId;
       const pendingSelection = waitForSelectionMutation(sid);
       if (pendingSelection && !(await pendingSelection)) return;
@@ -5921,7 +5882,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
         return;
       }
-      if (state.historyBusy || !state.historyCanRedo) return;
+      if (state.historyBusy) return;
       const sid = state.sessionId;
       const pendingSelection = waitForSelectionMutation(sid);
       if (pendingSelection && !(await pendingSelection)) return;
@@ -6741,65 +6702,30 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (normalised.length === 0) {
         return;
       }
-      // Enter multi-colour mode and overwrite selectedColors atomically so
-      // the existing MaterialColorPicker flow picks this up as a normal
-      // "select-all" batch replacement source. The ``gradientSelection``
-      // state records which panel row (group vs specific region) initiated
-      // the batch, so the UI can highlight exactly one button even when a
-      // region shares its material breakdown with the enclosing group.
-      // 切到 select-all 模式并原子覆盖选中集合；``gradientSelection`` 记录
-      // 此次批量的发起方（整组 / 哪个区域），供按钮排它性高亮使用。
-      const baseUrl = getPreviewBaseUrl(_get());
+      const state = _get();
+      if (state.sessionId) {
+        state.setSelectionTool("same-color");
+        void state.applySelectionMutation(
+          source?.kind === "region"
+            ? {
+                operation: "gradient-region-set",
+                gradientGroupIndex: source.groupIndex,
+                gradientRegionIndex: source.regionIndex,
+                selectionSource: source,
+              }
+            : { operation: "colors-set", colorHexes: normalised, selectionSource: source },
+        );
+        return;
+      }
       set({
         selectionMode: "select-all",
         selectedColors: new Set(normalised),
         selectedColor: null,
         regionData: null,
         selectedRegions: [],
-        previewImageUrl: baseUrl,
+        previewImageUrl: getPreviewBaseUrl(state),
         gradientSelection: source ?? null,
       });
-      const sid = _get().sessionId;
-      if (!sid) return;
-      // If this batch originated from a specific region row, forward the
-      // (group_index, region_index) identifiers so the backend clips the
-      // highlight to that sub-region's *exact* pixel mask (via the cached
-      // per-pixel region_id_map). A rectangular bbox is nowhere near
-      // precise enough — a region's external rectangle almost always
-      // contains many same-coloured pixels belonging to other regions of
-      // the same group or unrelated background, which is exactly why
-      // clicking a sub-region used to "light up the whole group".
-      // 区域来源时传 (group_index, region_index) 让后端用精确像素 mask
-      // 裁剪；矩形 bbox 无法避免把同色其他区域一起点亮。
-      const scope =
-        source?.kind === "region"
-          ? {
-              gradientGroupIndex: source.groupIndex,
-              gradientRegionIndex: source.regionIndex,
-            }
-          : undefined;
-      // Fire a single highlight request so the preview shows every chosen
-      // colour at once, mirroring the visual feedback users already get
-      // from :func:`toggleColorInSelection`.
-      // 触发一次高亮请求，让预览整体高亮所有选中色块。
-      void apiColorHighlight(sid, normalised, scope)
-        .then((res) => {
-          // Stale-response guard: if the user clicked a *different* group or
-          // region while this request was in flight, the selection has
-          // already changed and the returned preview URL would overwrite the
-          // newer highlight with stale pixels. Only apply when the current
-          // selection still equals the one this request asked for.
-          // 过期响应丢弃：请求期间用户切换了别的分组/区域时，忽略本次返回。
-          const current = _get().selectedColors;
-          if (current.size !== normalised.length) return;
-          if (!normalised.every((h) => current.has(h))) return;
-          set({
-            previewImageUrl: normalizeResourceUrl(res.preview_url),
-          });
-        })
-        .catch(() => {
-          // Silent: highlight is a best-effort UX nicety.
-        });
     },
 
     applyGradientReplaceForGroup: async (
@@ -7258,6 +7184,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           selectionTool: "point",
           selectionMode: "multi-select",
           selectionDocument: null,
+          pendingSelectionMutations: [],
           brushSizePx: state.brushSizePx,
           selectionBlinkEnabled: false,
           selectedGradientRegions: [],
@@ -8112,9 +8039,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     // --- 自由色 ---
     toggleFreeColor: (hex: string) => {
       const state = _get();
-      const selectionColors = state.selectionDocument?.selected_color_hexes ?? [];
-      const colors = selectionColors.length > 0 ? selectionColors : [hex];
       if (!state.sessionId) {
+        const selectionColors = state.selectionDocument?.selected_color_hexes ?? [];
+        const colors = selectionColors.length > 0 ? selectionColors : [hex];
         set((current) => {
           const next = new Set(current.free_color_set);
           for (const value of colors) {
@@ -8131,11 +8058,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return;
       }
       const sid = state.sessionId;
+      // Capture only earlier gestures: a later gesture waits for this content
+      // operation and must not become a dependency of it.
+      const pendingSelection = waitForSelectionMutation(sid);
       void queueFreeColorMutation(sid, async () => {
+        if (pendingSelection && !(await pendingSelection)) return;
         const pendingContentCommit = waitForContentCommits(sid);
         if (pendingContentCommit && !(await pendingContentCommit)) return;
         if (_get().sessionId !== sid) return;
         const latest = _get();
+        const selectionColors = latest.selectionDocument?.selected_color_hexes ?? [];
+        const colors = selectionColors.length > 0 ? selectionColors : [hex];
         const previewCommit = captureReplacementPreviewCommit(latest);
         set({
           contentCommitStatus: "pending",
@@ -8188,7 +8121,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return;
       }
       const sid = state.sessionId;
+      const pendingSelection = waitForSelectionMutation(sid);
       void queueFreeColorMutation(sid, async () => {
+        if (pendingSelection && !(await pendingSelection)) return;
         const pendingContentCommit = waitForContentCommits(sid);
         if (pendingContentCommit && !(await pendingContentCommit)) return;
         if (_get().sessionId !== sid) return;

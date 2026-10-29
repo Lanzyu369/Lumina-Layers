@@ -18,6 +18,7 @@ vi.mock("../api/converter", async () => {
     regionReplace: vi.fn(),
     mutateFreeColors: vi.fn(),
     getEditorCommitStatus: vi.fn(),
+    replacementHistory: vi.fn(),
   };
 });
 
@@ -28,6 +29,7 @@ import {
   regionReplace,
   mutateFreeColors,
   getEditorCommitStatus,
+  replacementHistory,
 } from "../api/converter";
 
 const mockedGet = vi.mocked(getEditorSelection);
@@ -36,6 +38,7 @@ const mockedReplaceColorsBatch = vi.mocked(replaceColorsBatch);
 const mockedRegionReplace = vi.mocked(regionReplace);
 const mockedMutateFreeColors = vi.mocked(mutateFreeColors);
 const mockedGetEditorCommitStatus = vi.mocked(getEditorCommitStatus);
+const mockedHistory = vi.mocked(replacementHistory);
 let sessionCounter = 0;
 
 function deferred<T>() {
@@ -78,6 +81,7 @@ beforeEach(() => {
   useConverterStore.setState({
     sessionId: `session-a-${sessionCounter}`,
     selectionDocument: null,
+    pendingSelectionMutations: [],
     selectionTool: "point",
     selectionMode: "multi-select",
     selectedRegions: [],
@@ -91,10 +95,123 @@ beforeEach(() => {
     pendingReplacement: null,
     contentCommitStatus: "idle",
     contentCommitOperationId: null,
+    historyCanUndo: false,
+    historyCanRedo: false,
+    historyBusy: false,
+    gradientSelection: null,
+    selectedGradientRegions: [],
   });
 });
 
-describe("selection optimistic reconciliation", () => {
+describe("selection confirmation and ordering", () => {
+  it.each(["select-all", "multi-select", "current", "region"] as const)(
+    "replaces the shared pixels regardless of the picker's %s mode",
+    async (mode) => {
+      const selected = document(1);
+      useConverterStore.setState({
+        selectionDocument: selected,
+        pendingReplacement: { sourceHex: "aabbcc", targetHex: "ff0000", mode },
+      });
+      mockedRegionReplace.mockResolvedValueOnce({
+        preview_url: "/api/files/replaced.png", message: "ok", selection: document(2, 2),
+      });
+      await useConverterStore.getState().confirmReplacement();
+      expect(mockedRegionReplace).toHaveBeenCalledWith(
+        useConverterStore.getState().sessionId, "#ff0000", undefined, 1, expect.any(String),
+      );
+      expect(mockedReplaceColorsBatch).not.toHaveBeenCalled();
+      expect(useConverterStore.getState().selectedColors).toEqual(new Set(["aabbcc"]));
+      expect(useConverterStore.getState().historyCanUndo).toBe(true);
+    },
+  );
+
+  it("submits repeated region removal as idempotent removal commands", async () => {
+    useConverterStore.setState({ selectionDocument: document(1) });
+    const removal = deferred<SelectionDocumentResponse>();
+    const empty = { ...document(0), selection_revision: 2, can_undo: true };
+    mockedMutate.mockReturnValueOnce(removal.promise).mockResolvedValueOnce(empty);
+    useConverterStore.getState().removeRegionFromSelection("__editor_selection__:1");
+    useConverterStore.getState().removeRegionFromSelection("__editor_selection__:1");
+    await vi.waitFor(() => expect(mockedMutate).toHaveBeenCalledOnce());
+    expect(useConverterStore.getState().selectionDocument?.selected_pixel_count).toBe(10);
+    removal.resolve(empty);
+    await vi.waitFor(() => expect(mockedMutate).toHaveBeenCalledTimes(2));
+    expect(mockedMutate.mock.calls.map(([request]) => request.operation)).toEqual(["point-remove", "point-remove"]);
+    await vi.waitFor(() => expect(useConverterStore.getState().selectionDocument?.selected_pixel_count).toBe(0));
+  });
+
+  it("records clear even when the first selection is still being initialized", async () => {
+    const firstSelection = deferred<SelectionDocumentResponse>();
+    mockedGet.mockResolvedValueOnce(document(0));
+    mockedMutate.mockReturnValueOnce(firstSelection.promise);
+    mockedMutate.mockResolvedValueOnce({ ...document(0), selection_revision: 2, can_undo: true });
+    const first = useConverterStore.getState().applySelectionMutation({ operation: "point-toggle", x: 5, y: 5 });
+    const clear = useConverterStore.getState().clearSelection();
+    expect(useConverterStore.getState().pendingSelectionMutations.map((item) => item.input.operation))
+      .toEqual(["point-toggle", "clear"]);
+    await vi.waitFor(() => expect(mockedMutate).toHaveBeenCalledOnce());
+    expect(useConverterStore.getState().selectionDocument?.selection_revision).toBe(0);
+    firstSelection.resolve(document(1));
+    await Promise.all([first, clear]);
+    expect(mockedMutate.mock.calls[1][0]).toMatchObject({ operation: "clear", base_selection_revision: 1 });
+    expect(useConverterStore.getState().selectionDocument?.selected_pixel_count).toBe(0);
+    expect(useConverterStore.getState().historyCanUndo).toBe(true);
+    expect(useConverterStore.getState().pendingSelectionMutations).toEqual([]);
+  });
+
+  it("publishes a confirmed document and removes its visual intent atomically", async () => {
+    const firstResponse = deferred<SelectionDocumentResponse>();
+    const secondResponse = deferred<SelectionDocumentResponse>();
+    useConverterStore.setState({ selectionDocument: document(0) });
+    mockedMutate.mockReturnValueOnce(firstResponse.promise).mockReturnValueOnce(secondResponse.promise);
+    const first = useConverterStore.getState().applySelectionMutation({ operation: "point-toggle", x: 5, y: 5 });
+    const firstId = useConverterStore.getState().pendingSelectionMutations[0].id;
+    const second = useConverterStore.getState().applySelectionMutation({ operation: "point-toggle", x: 15, y: 5 });
+    expect(useConverterStore.getState().selectionDocument?.selection_revision).toBe(0);
+    expect(useConverterStore.getState().historyCanUndo).toBe(false);
+    const publications: Array<{ revision: number | undefined; ids: number[] }> = [];
+    const unsubscribe = useConverterStore.subscribe((state) => publications.push({
+      revision: state.selectionDocument?.selection_revision,
+      ids: state.pendingSelectionMutations.map((item) => item.id),
+    }));
+    firstResponse.resolve(document(1));
+    await first;
+    expect(useConverterStore.getState().pendingSelectionMutations).toHaveLength(1);
+    expect(publications.some((state) => state.revision === 1 && state.ids.includes(firstId))).toBe(false);
+    secondResponse.resolve(document(2));
+    await second;
+    unsubscribe();
+    expect(useConverterStore.getState().pendingSelectionMutations).toEqual([]);
+  });
+
+  it("waits for the first selection to enable undo, then orders the next click after undo", async () => {
+    const firstSelection = deferred<SelectionDocumentResponse>();
+    const undoResponse = deferred<Awaited<ReturnType<typeof replacementHistory>>>();
+    useConverterStore.setState({ selectionDocument: document(0) });
+    mockedMutate.mockReturnValueOnce(firstSelection.promise);
+    mockedMutate.mockResolvedValueOnce(document(3));
+    mockedHistory.mockReturnValueOnce(undoResponse.promise);
+    const first = useConverterStore.getState().applySelectionMutation({ operation: "point-toggle", x: 5, y: 5 });
+    const undo = useConverterStore.getState().undoColorRemap();
+    const next = useConverterStore.getState().applySelectionMutation({ operation: "point-toggle", x: 15, y: 5 });
+    await vi.waitFor(() => expect(mockedMutate).toHaveBeenCalledOnce());
+    firstSelection.resolve(document(1));
+    await vi.waitFor(() => expect(mockedHistory).toHaveBeenCalledOnce());
+    expect(mockedMutate).toHaveBeenCalledTimes(1);
+    undoResponse.resolve({
+      status: "ok", action: "undo", entry_kind: "selection", message: "ok",
+      preview_url: "/api/files/preview.png", can_undo: false, can_redo: true,
+      replacement_regions: [], recipe_overrides: [], recipe_override_count: 0,
+      selection: { ...document(0), selection_revision: 2, can_redo: true },
+    });
+    await Promise.all([first, undo, next]);
+    expect(mockedMutate.mock.calls[1][0]).toMatchObject({
+      operation: "point-toggle", base_selection_revision: 2, x: 15,
+    });
+    expect(useConverterStore.getState().selectionDocument?.selection_revision).toBe(3);
+    expect(useConverterStore.getState().historyCanRedo).toBe(false);
+  });
+
   it("hydration never regresses an already-confirmed revision", async () => {
     // 1) A mutation confirms rev=2.
     mockedMutate.mockResolvedValueOnce(document(2));
@@ -102,7 +219,6 @@ describe("selection optimistic reconciliation", () => {
       operation: "point-toggle",
       x: 5,
       y: 5,
-      optimisticDocument: document(2),
     });
     await mutate;
 
@@ -118,29 +234,25 @@ describe("selection optimistic reconciliation", () => {
       .toBe(2);
   });
 
-  it("rolls a failed mutation back to the confirmed state, not an optimistic one", async () => {
+  it("keeps confirmed selection visible when a mutation fails", async () => {
     // Seed a confirmed rev=1 via a successful mutation.
     mockedMutate.mockResolvedValueOnce(document(1));
     await useConverterStore.getState().applySelectionMutation({
       operation: "point-toggle",
       x: 5,
       y: 5,
-      optimisticDocument: document(1),
     });
     expect(useConverterStore.getState().selectionDocument?.selection_revision)
       .toBe(1);
 
-    // Second click fails (network / 409): the optimistic doc (rev=2) was
-    // applied optimistically, then the server rejects. The store must roll
-    // back to the confirmed rev=1 — not keep the phantom rev=2. The rollback
-    // re-hydrates from the server, which still reports the confirmed rev=1.
+    // A failed click keeps the last confirmed selection and reconciles it
+    // before allowing another queued gesture to run.
     mockedMutate.mockRejectedValueOnce(new Error("network"));
     mockedGet.mockResolvedValueOnce(document(1));
     await useConverterStore.getState().applySelectionMutation({
       operation: "point-toggle",
       x: 6,
       y: 6,
-      optimisticDocument: document(2),
     });
 
     const state = useConverterStore.getState();
@@ -149,10 +261,8 @@ describe("selection optimistic reconciliation", () => {
   });
 
   it("fast successive toggles converge to the same terminal state as the server", async () => {
-    // Click component A twice rapidly. The optimistic chain says:
-    //   none → A (rev1) → none (rev2, toggle-off).
-    // The server, replaying the same operations, must agree. The rev2
-    // documents (both optimistic and confirmed) are therefore empty.
+    // Click component A twice rapidly: none → A → none. Each gesture must
+    // use the preceding server confirmation as its base revision.
     const emptyDoc = (rev: number): SelectionDocumentResponse => ({
       selection_revision: rev,
       content_revision: 1,
@@ -173,19 +283,17 @@ describe("selection optimistic reconciliation", () => {
       Promise.resolve(serverSequence[1]),
     );
 
-    // Click 1 (optimistic rev1, confirmed rev1).
+    // Click 1, confirmed rev1.
     const first = useConverterStore.getState().applySelectionMutation({
       operation: "point-toggle",
       x: 5,
       y: 5,
-      optimisticDocument: document(1),
     });
     // Click 2 fires while click 1 is still in flight (queued serially).
     const second = useConverterStore.getState().applySelectionMutation({
       operation: "point-toggle",
       x: 5,
       y: 5,
-      optimisticDocument: emptyDoc(2),
     });
     await Promise.all([first, second]);
 
@@ -301,7 +409,6 @@ describe("selection optimistic reconciliation", () => {
       operation: "point-toggle",
       x: 5,
       y: 5,
-      optimisticDocument: document(4, 7),
     });
 
     expect(mockedMutate).toHaveBeenCalledWith(
@@ -455,7 +562,6 @@ describe("selection optimistic reconciliation", () => {
       operation: "point-toggle",
       x: 5,
       y: 5,
-      optimisticDocument: document(2, 1),
     });
     await Promise.resolve();
     await Promise.resolve();
@@ -520,7 +626,6 @@ describe("selection optimistic reconciliation", () => {
       operation: "point-toggle",
       x: 5,
       y: 5,
-      optimisticDocument: document(2, 1),
     });
     await Promise.resolve();
     await Promise.resolve();
@@ -577,7 +682,6 @@ describe("selection optimistic reconciliation", () => {
       operation: "point-toggle",
       x: 5,
       y: 5,
-      optimisticDocument: document(2, 1),
     });
     expect(mockedMutate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -586,6 +690,96 @@ describe("selection optimistic reconciliation", () => {
       }),
     );
   });
+
+  it.each(["toggle", "clear"] as const)(
+    "waits for an earlier selection before a free-color %s and its receipt hydration",
+    async (action) => {
+      const selectionResponse = deferred<SelectionDocumentResponse>();
+      const selected = { ...document(1), selected_color_hexes: ["112233"], editor_content_revision: 2 };
+      useConverterStore.setState({ selectionDocument: document(0) });
+      mockedMutate.mockReturnValueOnce(selectionResponse.promise);
+      mockedMutateFreeColors.mockRejectedValueOnce(new Error("response lost after commit"));
+      mockedGetEditorCommitStatus.mockResolvedValueOnce({
+        status: "committed", operation_id: "free-color-after-selection", operation: "free_colors",
+        editor_content_revision: 2, visible_content_revision: 1, selection_revision: 1,
+        result: { free_color_set: action === "toggle" ? ["112233"] : [], can_undo: true, can_redo: false },
+      });
+      mockedGet.mockResolvedValueOnce(selected);
+      const publications: Array<{ revision: number | undefined; pending: number }> = [];
+      const unsubscribe = useConverterStore.subscribe((state) => publications.push({
+        revision: state.selectionDocument?.selection_revision,
+        pending: state.pendingSelectionMutations.length,
+      }));
+      const selection = useConverterStore.getState().applySelectionMutation({ operation: "point-toggle", x: 5, y: 5 });
+      await vi.waitFor(() => expect(mockedMutate).toHaveBeenCalledOnce());
+      if (action === "toggle") useConverterStore.getState().toggleFreeColor("aabbcc");
+      else useConverterStore.getState().clearFreeColors();
+      // Let the queued free-color action reach its selection barrier.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const sentBeforeSelection = mockedMutateFreeColors.mock.calls.length;
+      selectionResponse.resolve(selected);
+      await selection;
+      await vi.waitFor(() => expect(useConverterStore.getState().contentCommitStatus).toBe("committed"));
+      unsubscribe();
+
+      expect(sentBeforeSelection).toBe(0);
+      expect(publications.some((state) => state.revision === 1 && state.pending > 0)).toBe(false);
+      expect(mockedMutateFreeColors).toHaveBeenCalledWith(
+        useConverterStore.getState().sessionId, action, action === "toggle" ? ["112233"] : [], expect.any(String),
+      );
+      expect(useConverterStore.getState().selectionDocument).toBe(selected);
+    },
+  );
+
+  it.each(["toggle", "clear"] as const)(
+    "lets a free-color %s started first finish before a later selection",
+    async (action) => {
+      const freeColorResponse = deferred<Awaited<ReturnType<typeof mutateFreeColors>>>();
+      useConverterStore.setState({ selectionDocument: document(1) });
+      mockedMutateFreeColors.mockReturnValueOnce(freeColorResponse.promise);
+      mockedMutate.mockResolvedValueOnce(document(2));
+      if (action === "toggle") useConverterStore.getState().toggleFreeColor("aabbcc");
+      else useConverterStore.getState().clearFreeColors();
+      const selection = useConverterStore.getState().applySelectionMutation({ operation: "point-toggle", x: 5, y: 5 });
+      await vi.waitFor(() => expect(mockedMutateFreeColors).toHaveBeenCalledOnce());
+      expect(mockedMutate).not.toHaveBeenCalled();
+      freeColorResponse.resolve({
+        status: "ok", free_color_set: action === "toggle" ? ["aabbcc"] : [],
+        can_undo: true, can_redo: false, editor_content_revision: 2,
+      });
+      await selection;
+      expect(mockedMutate).toHaveBeenCalledOnce();
+      expect(useConverterStore.getState().selectionDocument?.selection_revision).toBe(2);
+    },
+  );
+
+  it.each(["toggle", "clear"] as const)(
+    "keeps a free-color %s between earlier and later queued selections",
+    async (action) => {
+      const firstSelection = deferred<SelectionDocumentResponse>();
+      const secondSelection = deferred<SelectionDocumentResponse>();
+      const freeColorResponse = deferred<Awaited<ReturnType<typeof mutateFreeColors>>>();
+      useConverterStore.setState({ selectionDocument: document(0) });
+      mockedMutate.mockReturnValueOnce(firstSelection.promise).mockReturnValueOnce(secondSelection.promise);
+      mockedMutateFreeColors.mockReturnValueOnce(freeColorResponse.promise);
+      const first = useConverterStore.getState().applySelectionMutation({ operation: "point-toggle", x: 5, y: 5 });
+      await vi.waitFor(() => expect(mockedMutate).toHaveBeenCalledOnce());
+      if (action === "toggle") useConverterStore.getState().toggleFreeColor("aabbcc");
+      else useConverterStore.getState().clearFreeColors();
+      const second = useConverterStore.getState().applySelectionMutation({ operation: "point-toggle", x: 15, y: 5 });
+      firstSelection.resolve(document(1));
+      await vi.waitFor(() => expect(mockedMutateFreeColors).toHaveBeenCalledOnce());
+      const selectionsBeforeFreeColorConfirmation = mockedMutate.mock.calls.length;
+      freeColorResponse.resolve({
+        status: "ok", free_color_set: action === "toggle" ? ["aabbcc"] : [],
+        can_undo: true, can_redo: false, editor_content_revision: 2,
+      });
+      secondSelection.resolve(document(2));
+      await Promise.all([first, second]);
+      expect(selectionsBeforeFreeColorConfirmation).toBe(1);
+      expect(mockedMutate).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("keeps the draft and blocks dependent edits when the operation receipt is unknown", async () => {
     const sessionId = "unknown-replacement-response";
@@ -622,7 +816,6 @@ describe("selection optimistic reconciliation", () => {
       operation: "point-toggle",
       x: 5,
       y: 5,
-      optimisticDocument: document(2, 1),
     });
     await Promise.resolve();
     await Promise.resolve();
@@ -675,7 +868,6 @@ describe("selection optimistic reconciliation", () => {
       operation: "point-toggle",
       x: 5,
       y: 5,
-      optimisticDocument: document(2, 1),
     });
     const replacementRequest = useConverterStore.getState().confirmReplacement();
 
@@ -723,7 +915,6 @@ describe("selection optimistic reconciliation", () => {
       operation: "point-toggle",
       x: 5,
       y: 5,
-      optimisticDocument: document(2, 1),
     });
 
     await Promise.resolve();
@@ -749,33 +940,24 @@ describe("selection optimistic reconciliation", () => {
     );
   });
 
-  it("does not restore a confirmed selection whose content revision is stale", async () => {
-    const sessionId = "stale-content-rollback";
-    useConverterStore.setState({ sessionId });
-
-    mockedMutate.mockResolvedValueOnce(document(1, 4));
-    await useConverterStore.getState().applySelectionMutation({
-      operation: "point-toggle",
-      x: 5,
-      y: 5,
-      optimisticDocument: document(1, 1),
-    });
-
+  it("reconciles a lost selection response before the next queued gesture", async () => {
+    useConverterStore.setState({ selectionDocument: document(1, 4) });
     const hydration = deferred<SelectionDocumentResponse>();
-    mockedMutate.mockRejectedValueOnce(new Error("selection request failed"));
+    mockedMutate.mockRejectedValueOnce(new Error("response lost"));
     mockedGet.mockReturnValueOnce(hydration.promise);
-    await useConverterStore.getState().applySelectionMutation({
-      operation: "point-toggle",
-      x: 6,
-      y: 6,
-      optimisticDocument: document(1, 1),
+    const failed = useConverterStore.getState().applySelectionMutation({
+      operation: "point-toggle", x: 6, y: 6,
     });
-
-    expect(useConverterStore.getState().selectionDocument).toBeNull();
-
-    hydration.resolve(document(1, 4));
-    await hydration.promise;
-    await Promise.resolve();
+    const clear = useConverterStore.getState().clearSelection();
+    await vi.waitFor(() => expect(mockedGet).toHaveBeenCalledOnce());
+    expect(mockedMutate).toHaveBeenCalledTimes(1);
+    mockedMutate.mockResolvedValueOnce({ ...document(0, 4), selection_revision: 3 });
+    hydration.resolve(document(2, 4));
+    await Promise.all([failed, clear]);
+    expect(mockedMutate.mock.calls[1][0]).toMatchObject({
+      operation: "clear", base_selection_revision: 2, content_revision: 4,
+    });
+    expect(useConverterStore.getState().selectionDocument?.selected_pixel_count).toBe(0);
   });
 
   it("keeps selection mutation queues isolated per session", async () => {
@@ -795,7 +977,6 @@ describe("selection optimistic reconciliation", () => {
       operation: "point-toggle",
       x: 1,
       y: 1,
-      optimisticDocument: document(1, 1),
     });
 
     useConverterStore.setState({
@@ -806,16 +987,12 @@ describe("selection optimistic reconciliation", () => {
       operation: "point-toggle",
       x: 2,
       y: 2,
-      optimisticDocument: document(1, 2),
     });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(
+    await vi.waitFor(() => expect(
       mockedMutate.mock.calls.some(
         ([request]) => request.session_id === "parallel-session-b",
       ),
-    ).toBe(true);
+    ).toBe(true));
 
     first.resolve(document(1, 1));
     await Promise.all([firstRequest, secondRequest]);
