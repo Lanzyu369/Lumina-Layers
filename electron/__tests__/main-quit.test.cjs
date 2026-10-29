@@ -18,7 +18,7 @@ async function until(check) {
   }
 }
 
-async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}) {
+async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}, pythonPaths = null) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "lumina-source-desktop-"));
   prepareUserData(root);
   const windows = [], children = [], dialogs = [], errors = [], commands = [], signals = [];
@@ -129,7 +129,16 @@ async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}
       queueMicrotask(connected);
       return socket;
     } },
-    fs: { ...fs, createWriteStream: () => ({ write() {} }) },
+    fs: {
+      ...fs,
+      existsSync(file) {
+        if (pythonPaths && /^python(?:3|\.exe)?$/.test(path.basename(file))) {
+          return pythonPaths.includes(file);
+        }
+        return fs.existsSync(file);
+      },
+      createWriteStream: () => ({ write() {} }),
+    },
   };
   t.after(() => {
     for (const timer of timers) clearTimeout(timer);
@@ -184,6 +193,16 @@ test('macOS installs a menu during startup and accepts state only from its trust
 });
 
 for (const platform of ["win32", "darwin"]) {
+  test(`source desktop on ${platform} uses the project Python 3.12 environment before PATH`, async t => {
+    const python = path.join(path.dirname(mainPath), "..", ".venv312",
+      ...(platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
+    const f = await fixture(t, platform, "healthy", () => {}, [python]);
+    assert.equal(f.children[0].command, python);
+    await f.healthy();
+    assert.equal(f.errors.length, 0);
+    assert.equal(f.mainWindow().visible, true);
+  });
+
   test(`source desktop on ${platform} launches Python and Vite, then confirms and cleans up on exit`, async t => {
     const f = await fixture(t, platform);
     assert.equal(path.basename(f.children[0].args[0]), "api_server.py");

@@ -335,12 +335,15 @@ function findPython() {
     ? [
         path.join(ROOT_DIR, "venv", "Scripts", "python.exe"),
         path.join(ROOT_DIR, ".venv", "Scripts", "python.exe"),
+        path.join(ROOT_DIR, ".venv312", "Scripts", "python.exe"),
       ]
     : [
         path.join(ROOT_DIR, ".venv", "bin", "python"),
         path.join(ROOT_DIR, "venv", "bin", "python"),
+        path.join(ROOT_DIR, ".venv312", "bin", "python"),
         path.join(ROOT_DIR, ".venv", "bin", "python3"),
         path.join(ROOT_DIR, "venv", "bin", "python3"),
+        path.join(ROOT_DIR, ".venv312", "bin", "python3"),
       ];
   for (const p of candidates) {
     if (fs.existsSync(p)) return p;
