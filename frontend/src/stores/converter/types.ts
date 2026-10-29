@@ -35,6 +35,7 @@ import type {
   RecipeOverrideApplyRequest,
   RecipeOverrideApplyResponse,
   SelectionDocumentResponse,
+  SelectionMutationRequest,
   StructureMode,
   VirtualMaterial,
 } from "../../api/types";
@@ -52,6 +53,27 @@ export type SelectionMode =
 export type SelectionTool = "same-color" | "color-range" | "point" | "brush";
 
 export type SelectionDocument = SelectionDocumentResponse;
+
+export interface SelectionMutationInput {
+  operation: SelectionMutationRequest["operation"];
+  x?: number;
+  y?: number;
+  colorHex?: string;
+  colorHexes?: string[];
+  gradientGroupIndex?: number;
+  gradientRegionIndex?: number;
+  selectionSource?: GradientSelectionSource;
+  colorTolerance?: number;
+  brushRadius?: number;
+  brushPoints?: Array<{ x: number; y: number }>;
+  brushStrokes?: Array<Array<{ x: number; y: number }>>;
+}
+
+export interface PendingSelectionMutation {
+  id: number;
+  sessionId: string;
+  input: SelectionMutationInput;
+}
 
 export type SourceVersion = "legacy" | "native" | "material";
 
@@ -444,6 +466,8 @@ export interface ConverterState {
   selectionMode: SelectionMode;
   selectionTool: SelectionTool;
   selectionDocument: SelectionDocument | null;
+  /** Unconfirmed gesture intents for immediate visual feedback only. */
+  pendingSelectionMutations: PendingSelectionMutation[];
   brushSizePx: number;
   /** CIEDE2000 tolerance used by the colour-range selection tool. */
   colorRangeTolerance: number;
@@ -601,22 +625,9 @@ export interface ConverterActions {
   setBrushSizePx: (size: number) => void;
   setColorRangeTolerance: (tolerance: number) => void;
   hydrateSelectionDocument: () => Promise<void>;
-  applySelectionMutation: (input: {
-    operation:
-    | "point-toggle"
-    | "same-color-toggle"
-    | "color-range-toggle"
-    | "brush-add"
-    | "clear";
-    x?: number;
-    y?: number;
-    colorHex?: string;
-    colorTolerance?: number;
-    brushRadius?: number;
-    brushPoints?: Array<{ x: number; y: number }>;
-    optimisticDocument?: SelectionDocument;
-  }) => Promise<void>;
+  applySelectionMutation: (input: SelectionMutationInput) => Promise<boolean>;
   toggleColorInSelection: (hex: string) => void;
+  removeColorFromSelection: (hex: string) => void;
   applyBatchColorRemap: (newHex: string) => Promise<void>;
   detectRegion: (x: number, y: number) => Promise<void>;
   detectAndAccumulateRegion: (x: number, y: number) => Promise<void>;

@@ -180,6 +180,8 @@ function LutColorGridInner() {
   const selectionMode = useConverterStore((s) => s.selectionMode);
   const selectedColors = useConverterStore((s) => s.selectedColors);
   const selectedRegions = useConverterStore((s) => s.selectedRegions);
+  const hasPendingSelection = useConverterStore((s) => Boolean(s.sessionId &&
+    s.pendingSelectionMutations.some((mutation) => mutation.sessionId === s.sessionId)));
   const replacePreviewLoading = useConverterStore((s) => s.replacePreviewLoading);
   const setPendingReplacement = useConverterStore((s) => s.setPendingReplacement);
   const pendingReplacement = useConverterStore((s) => s.pendingReplacement);
@@ -346,6 +348,18 @@ function LutColorGridInner() {
     if (replacePreviewLoading) return;
 
     const hexNoHash = clickedHex.replace("#", "");
+
+    // Capture the target while the visible selection is awaiting confirmation.
+    // confirmReplacement waits for the shared mask before applying this intent.
+    if (hasPendingSelection) {
+      setPendingReplacement({
+        sourceHex: selectedColor ?? '',
+        targetHex: hexNoHash,
+        mode: 'multi-select',
+        sourceRegions: [...selectedRegions],
+      });
+      return;
+    }
 
     // Gradient-region-aware routing lives in ``confirmReplacement`` so
     // the user still sees the familiar source→target preview bar and can

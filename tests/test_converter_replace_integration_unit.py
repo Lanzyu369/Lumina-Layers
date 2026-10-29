@@ -75,6 +75,399 @@ def _seed_preview_session(store: SessionStore) -> str:
     return session_id
 
 
+def test_selection_history_uses_fresh_revisions_for_clear_and_new_click(
+    _isolate_dependency_overrides,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api.selection_state import get_selection_mask
+
+    store = _isolate_dependency_overrides["store"]
+    session_id = _seed_preview_session(store)
+    schedule_glb = []
+    monkeypatch.setattr(
+        replace_router, "_schedule_glb_build_best_effort",
+        lambda *args, **kwargs: schedule_glb.append(True),
+    )
+    document = client.get(f"/api/convert/selection/{session_id}").json()
+    revisions = [document["selection_revision"]]
+
+    def mutate(operation: str, **fields: object) -> dict:
+        nonlocal document
+        response = client.post("/api/convert/selection/mutate", json={
+            "session_id": session_id,
+            "operation": operation,
+            "base_selection_revision": document["selection_revision"],
+            "content_revision": document["content_revision"],
+            **fields,
+        })
+        assert response.status_code == 200, response.text
+        document = response.json()
+        revisions.append(document["selection_revision"])
+        return document
+
+    def history(action: str) -> dict:
+        nonlocal document
+        response = client.post("/api/convert/replacement-history", json={
+            "session_id": session_id, "action": action,
+        })
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["entry_kind"] == "selection"
+        assert body["editor_content_revision"] == 0
+        document = body["selection"]
+        assert body["can_undo"] == document["can_undo"]
+        assert body["can_redo"] == document["can_redo"]
+        revisions.append(document["selection_revision"])
+        return document
+
+    assert mutate("point-toggle", x=0, y=0)["selected_pixel_count"] == 8
+    stale_revision = document["selection_revision"]
+    assert mutate("point-toggle", x=0, y=3)["selected_pixel_count"] == 16
+    assert history("undo")["selected_pixel_count"] == 8
+    assert history("redo")["selected_pixel_count"] == 16
+    assert mutate("clear")["selected_pixel_count"] == 0
+    assert history("undo")["selected_pixel_count"] == 16
+    assert mutate("point-toggle", x=0, y=3)["selected_pixel_count"] == 8
+    assert document["can_redo"] is False
+    assert mutate("point-toggle", x=0, y=3)["selected_pixel_count"] == 16
+    assert all(later > earlier for earlier, later in zip(revisions, revisions[1:]))
+    assert not schedule_glb
+    session = store.get(session_id)
+    assert np.all(get_selection_mask(session, (4, 4)))
+
+    stale = client.post("/api/convert/selection/mutate", json={
+        "session_id": session_id, "operation": "clear",
+        "base_selection_revision": stale_revision,
+        "content_revision": document["content_revision"],
+    })
+    assert stale.status_code == 409
+    assert np.all(get_selection_mask(session, (4, 4)))
+
+
+def test_unchanged_selection_preserves_redo_history(
+    _isolate_dependency_overrides,
+) -> None:
+    store = _isolate_dependency_overrides["store"]
+    session_id = _seed_preview_session(store)
+    document = client.get(f"/api/convert/selection/{session_id}").json()
+
+    def mutate(operation: str, **fields: object) -> dict:
+        response = client.post("/api/convert/selection/mutate", json={
+            "session_id": session_id, "operation": operation,
+            "base_selection_revision": document["selection_revision"],
+            "content_revision": document["content_revision"], **fields,
+        })
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def undo() -> dict:
+        response = client.post("/api/convert/replacement-history", json={
+            "session_id": session_id, "action": "undo",
+        })
+        assert response.status_code == 200, response.text
+        return response.json()["selection"]
+
+    document = mutate("point-toggle", x=0, y=0)
+    document = mutate("point-toggle", x=0, y=3)
+    document = undo()
+    session = store.get(session_id)
+    unchanged = mutate("brush-add", brush_points=[{"x": 0, "y": 0}], brush_radius=0.5)
+    assert unchanged["selection_revision"] == document["selection_revision"]
+    assert unchanged["selected_pixel_count"] == 8
+    assert unchanged["can_redo"] is True
+    assert len(session["replacement_undo_stack"]) == 1
+    assert len(session["replacement_redo_stack"]) == 1
+
+    document = undo()
+    unchanged = mutate("clear")
+    assert unchanged["selection_revision"] == document["selection_revision"]
+    assert unchanged["selected_pixel_count"] == 0
+    assert unchanged["can_undo"] is False
+    assert unchanged["can_redo"] is True
+    assert session["replacement_undo_stack"] == []
+    assert len(session["replacement_redo_stack"]) == 2
+
+
+def test_selection_and_replacement_history_round_trips_every_step(
+    _isolate_dependency_overrides,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api.selection_state import get_selection_mask, selection_region_id
+
+    store = _isolate_dependency_overrides["store"]
+    session_id = _seed_preview_session(store)
+    monkeypatch.setattr(
+        replace_router, "_schedule_or_run_overridden_glb_build", lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        replace_router, "_schedule_glb_build_best_effort", lambda *args, **kwargs: None,
+    )
+    document = client.get(f"/api/convert/selection/{session_id}").json()
+    session = store.get(session_id)
+
+    def capture() -> tuple[np.ndarray, np.ndarray]:
+        cache = session["preview_cache"]
+        if is_preview_cache_artifact_ref(cache):
+            cache = hydrate_preview_cache(cache)
+        return cache["matched_rgb"].copy(), get_selection_mask(session, (4, 4))
+
+    def mutate(operation: str, **fields: object) -> None:
+        nonlocal document
+        response = client.post("/api/convert/selection/mutate", json={
+            "session_id": session_id, "operation": operation,
+            "base_selection_revision": document["selection_revision"],
+            "content_revision": document["content_revision"], **fields,
+        })
+        assert response.status_code == 200, response.text
+        document = response.json()
+
+    states = [capture()]
+    mutate("point-toggle", x=0, y=0)
+    states.append(capture())
+    replaced = client.post("/api/convert/region-replace", json={
+        "session_id": session_id, "replacement_color": "#00ff00",
+        "selection_revision": document["selection_revision"],
+    })
+    assert replaced.status_code == 200, replaced.text
+    document = replaced.json()["selection"]
+    states.append(capture())
+    mutate("same-color-toggle", color_hex="#ff0000")
+    states.append(capture())
+    mutate("clear")
+    states.append(capture())
+
+    assert [item["kind"] for item in session["replacement_undo_stack"]] == [
+        "selection", "content", "selection", "selection",
+    ]
+    previous_revision = document["selection_revision"]
+    previous_generation = document["content_revision"]
+    previous_content = document["editor_content_revision"]
+    for action, indices in (("undo", range(3, -1, -1)), ("redo", range(1, 5))):
+        for index in indices:
+            response = client.post("/api/convert/replacement-history", json={
+                "session_id": session_id, "action": action,
+            })
+            assert response.status_code == 200, response.text
+            body = response.json()
+            document = body["selection"]
+            actual_rgb, actual_mask = capture()
+            expected_rgb, expected_mask = states[index]
+            assert np.array_equal(actual_rgb, expected_rgb)
+            assert np.array_equal(actual_mask, expected_mask)
+            assert document["selected_pixel_count"] == int(expected_mask.sum())
+            assert document["selection_revision"] > previous_revision
+            assert document["content_revision"] >= previous_generation
+            expected_content = previous_content + (body["entry_kind"] == "content")
+            assert document["editor_content_revision"] == expected_content
+            assert body["editor_content_revision"] == expected_content
+            assert body["can_undo"] == document["can_undo"] == (index > 0)
+            assert body["can_redo"] == document["can_redo"] == (index < 4)
+            if np.any(expected_mask):
+                region_id = selection_region_id(document["selection_revision"])
+                assert document["region_ids"] == [region_id]
+                assert np.array_equal(session["selected_region_masks"][region_id], expected_mask)
+            else:
+                assert document["region_ids"] == []
+            previous_revision = document["selection_revision"]
+            previous_generation = document["content_revision"]
+            previous_content = document["editor_content_revision"]
+
+    # Returning through content history must leave the next ordinary gesture
+    # usable with the versions the server just returned.
+    for _ in range(3):
+        response = client.post("/api/convert/replacement-history", json={
+            "session_id": session_id, "action": "undo",
+        })
+        assert response.status_code == 200, response.text
+        document = response.json()["selection"]
+    assert response.json()["entry_kind"] == "content"
+    mutate("point-toggle", x=0, y=3)
+    assert document["selected_pixel_count"] == 16
+    assert document["can_redo"] is False
+    mutate("clear")
+    assert document["selected_pixel_count"] == 0
+
+
+@pytest.mark.parametrize("remove_fields", [
+    {"operation": "point-remove", "x": 0, "y": 0},
+    {"operation": "same-color-remove", "color_hex": "#ffffff"},
+    {"operation": "same-color-remove", "x": 0, "y": 0},
+])
+def test_explicit_deselection_is_idempotent_and_preserves_redo(
+    _isolate_dependency_overrides,
+    remove_fields: dict,
+) -> None:
+    store = _isolate_dependency_overrides["store"]
+    session_id = _seed_preview_session(store)
+    document = client.get(f"/api/convert/selection/{session_id}").json()
+
+    def mutate(fields: dict) -> dict:
+        response = client.post("/api/convert/selection/mutate", json={
+            "session_id": session_id,
+            "base_selection_revision": document["selection_revision"],
+            "content_revision": document["content_revision"], **fields,
+        })
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    document = mutate({"operation": "colors-set", "color_hexes": ["#ffffff", "#ff0000"]})
+    assert document["selected_pixel_count"] == 16
+    document = mutate(remove_fields)
+    assert document["selected_pixel_count"] == 8
+    assert mutate(remove_fields)["selection_revision"] == document["selection_revision"]
+    session = store.get(session_id)
+    assert len(session["replacement_undo_stack"]) == 2
+    for expected_pixels in (16, 0):
+        response = client.post("/api/convert/replacement-history", json={
+            "session_id": session_id, "action": "undo",
+        })
+        assert response.status_code == 200, response.text
+        document = response.json()["selection"]
+        assert document["selected_pixel_count"] == expected_pixels
+    unchanged = mutate(remove_fields)
+    assert unchanged["selection_revision"] == document["selection_revision"]
+    assert unchanged["selected_pixel_count"] == 0
+    assert unchanged["can_redo"] is True
+    assert len(session["replacement_redo_stack"]) == 2
+    assert session["replacement_undo_stack"] == []
+
+
+def test_gradient_and_color_set_selection_use_exact_masks_and_one_history_step(
+    _isolate_dependency_overrides,
+) -> None:
+    from api.selection_state import get_selection_mask
+
+    store = _isolate_dependency_overrides["store"]
+    session_id = _seed_preview_session(store)
+    session = store.get(session_id)
+    session["preview_cache"]["mask_solid"][0, 0] = False
+    region_ids = np.zeros((4, 4), dtype=np.uint32)
+    multiplier = replace_router.REGION_ID_ENCODING_MULTIPLIER
+    region_ids[:2, 0] = multiplier + 1
+    region_ids[:2, 1] = multiplier + 2
+    region_ids[2:, 0] = 2 * multiplier + 1
+    store.put(session_id, "gradient_region_id_map", region_ids)
+    document = client.get(f"/api/convert/selection/{session_id}").json()
+
+    def mutate(fields: dict) -> dict:
+        response = client.post("/api/convert/selection/mutate", json={
+            "session_id": session_id,
+            "base_selection_revision": document["selection_revision"],
+            "content_revision": document["content_revision"], **fields,
+        })
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    document = mutate({
+        "operation": "gradient-region-set", "gradient_group_index": 1,
+        "gradient_region_index": 1,
+    })
+    assert document["selected_pixel_count"] == 1
+    mask = get_selection_mask(session, (4, 4))
+    assert mask[1, 0] and not mask[:, 1:].any()
+    assert len(session["replacement_undo_stack"]) == 1
+    missing_region = client.post("/api/convert/selection/mutate", json={
+        "session_id": session_id, "operation": "gradient-region-set",
+        "base_selection_revision": document["selection_revision"],
+        "content_revision": document["content_revision"],
+        "gradient_group_index": 1, "gradient_region_index": 99,
+    })
+    assert missing_region.status_code == 404
+    assert np.array_equal(get_selection_mask(session, (4, 4)), mask)
+    document = mutate({"operation": "gradient-region-set", "gradient_group_index": 1})
+    assert document["selected_pixel_count"] == 3
+    assert len(session["replacement_undo_stack"]) == 2
+    response = client.post("/api/convert/replacement-history", json={
+        "session_id": session_id, "action": "undo",
+    })
+    assert response.status_code == 200, response.text
+    document = response.json()["selection"]
+    assert document["selected_pixel_count"] == 1
+    document = mutate({"operation": "colors-set", "color_hexes": ["FFFFFF", "#ffffff"]})
+    assert document["selected_pixel_count"] == 7
+    assert not get_selection_mask(session, (4, 4))[2:, :].any()
+    assert len(session["replacement_undo_stack"]) == 2
+    assert document["can_redo"] is False
+    document = mutate({"operation": "colors-set", "color_hexes": []})
+    assert document["selected_pixel_count"] == 0
+    assert len(session["replacement_undo_stack"]) == 3
+    response = client.post("/api/convert/replacement-history", json={
+        "session_id": session_id, "action": "undo",
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["selection"]["selected_pixel_count"] == 7
+
+
+def test_brush_strokes_do_not_select_the_space_between_pen_lifts(
+    _isolate_dependency_overrides,
+) -> None:
+    from api.selection_state import get_selection_mask
+
+    store = _isolate_dependency_overrides["store"]
+    session_id = _seed_preview_session(store)
+    rgb = np.zeros((3, 9, 3), dtype=np.uint8)
+    rgb[:, :3, 0] = 255
+    rgb[:, 3:6, 1] = 255
+    rgb[:, 6:, 2] = 255
+    session = store.get(session_id)
+    cache = session["preview_cache"]
+    cache.update({
+        "matched_rgb": rgb, "quantized_image": rgb.copy(),
+        "mask_solid": np.ones((3, 9), dtype=bool), "target_w": 9, "target_h": 3,
+    })
+    document = client.get(f"/api/convert/selection/{session_id}").json()
+    response = client.post("/api/convert/selection/mutate", json={
+        "session_id": session_id, "operation": "brush-add",
+        "base_selection_revision": document["selection_revision"],
+        "content_revision": document["content_revision"], "brush_radius": 0.5,
+        "brush_strokes": [[{"x": 0, "y": 1}], [{"x": 8, "y": 1}]],
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["brush_hit_component_count"] == 2
+    mask = get_selection_mask(session, (3, 9))
+    assert mask[:, :3].all() and mask[:, 6:].all()
+    assert not mask[:, 3:6].any()
+    assert len(session["replacement_undo_stack"]) == 1
+    for action, pixels in (("undo", 0), ("redo", 18)):
+        response = client.post("/api/convert/replacement-history", json={
+            "session_id": session_id, "action": action,
+        })
+        assert response.status_code == 200, response.text
+        assert response.json()["selection"]["selected_pixel_count"] == pixels
+
+
+@pytest.mark.parametrize("fields, status", [
+    ({"operation": "point-remove"}, 400),
+    ({"operation": "same-color-remove"}, 400),
+    ({"operation": "colors-set"}, 400),
+    ({"operation": "colors-set", "color_hexes": ["invalid"]}, 400),
+    ({"operation": "gradient-region-set"}, 400),
+    ({"operation": "gradient-region-set", "gradient_region_index": 1}, 400),
+    ({"operation": "gradient-region-set", "gradient_group_index": 0}, 422),
+    ({"operation": "gradient-region-set", "gradient_group_index": 1}, 409),
+    ({"operation": "brush-add", "brush_radius": 1, "brush_strokes": []}, 400),
+    ({"operation": "brush-add", "brush_radius": 1, "brush_strokes": [[]]}, 400),
+])
+def test_selection_set_operations_validate_missing_or_invalid_inputs(
+    _isolate_dependency_overrides,
+    fields: dict,
+    status: int,
+) -> None:
+    store = _isolate_dependency_overrides["store"]
+    session_id = _seed_preview_session(store)
+    document = client.get(f"/api/convert/selection/{session_id}").json()
+    response = client.post("/api/convert/selection/mutate", json={
+        "session_id": session_id,
+        "base_selection_revision": document["selection_revision"],
+        "content_revision": document["content_revision"], **fields,
+    })
+    assert response.status_code == status, response.text
+    after = client.get(f"/api/convert/selection/{session_id}").json()
+    assert after["selection_revision"] == document["selection_revision"]
+    assert after["selected_pixel_count"] == 0
+    assert not after["can_undo"] and not after["can_redo"]
+
+
 def _seed_transparent_region_session(store: SessionStore) -> str:
     """Create a preview cache whose transparent background keeps stale RGB."""
     session_id = store.create()

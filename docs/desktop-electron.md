@@ -11,6 +11,9 @@ Electron 为 Python + React 应用提供原生窗口、文件选择与保存、�
 
 macOS/Linux 可使用 `python3`。桌面窗口会管理自己的后端和前端进程，无需先运行 `start_all.py`。
 
+Electron 会查找项目内的 `venv`、`.venv` 和 `.venv312` 虚拟环境；没有找到时才使用
+PATH 中的 Python。更新依赖时应使用实际启动后端的解释器，启动输出会显示其路径。
+
 ## 2. 原生 3MF 依赖
 
 本分支支持普通 64 位 CPython 3.12～3.14：Windows x64、Linux x86-64

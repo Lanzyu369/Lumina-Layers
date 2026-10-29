@@ -2179,7 +2179,11 @@ export interface SelectionMutationRequest {
   session_id: string;
   operation:
     | "point-toggle"
+    | "point-remove"
     | "same-color-toggle"
+    | "same-color-remove"
+    | "colors-set"
+    | "gradient-region-set"
     | "color-range-toggle"
     | "brush-add"
     | "clear";
@@ -2188,10 +2192,14 @@ export interface SelectionMutationRequest {
   x?: number;
   y?: number;
   color_hex?: string;
+  color_hexes?: string[];
+  gradient_group_index?: number;
+  gradient_region_index?: number;
   /** CIEDE2000 tolerance for ``color-range-toggle`` (0 = exact colour). */
   color_tolerance?: number;
   brush_radius?: number;
   brush_points?: Array<{ x: number; y: number }>;
+  brush_strokes?: Array<Array<{ x: number; y: number }>>;
 }
 
 /** 连通区域检测响应 */

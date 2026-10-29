@@ -1,164 +1,141 @@
+import { waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SelectionDocumentResponse } from "../api/types";
 
-const colorHighlightMock = vi.hoisted(() => vi.fn());
+const apiMocks = vi.hoisted(() => ({
+  colorHighlight: vi.fn(),
+  getEditorSelection: vi.fn(),
+  mutateEditorSelection: vi.fn(),
+}));
 
-vi.mock("../api/converter", async () => {
-  const actual =
-    await vi.importActual<typeof import("../api/converter")>("../api/converter");
-  return {
-    ...actual,
-    colorHighlight: colorHighlightMock,
-  };
-});
+vi.mock("../api/converter", async () => ({
+  ...await vi.importActual<typeof import("../api/converter")>("../api/converter"),
+  ...apiMocks,
+}));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
+function selection(revision: number, colors: string[]): SelectionDocumentResponse {
+  const components = colors.map((hex, index) => ({
+    label: index + 1,
+    region_id: `region-${hex}`,
+    color_hex: `#${hex}`,
+    pixel_count: 10,
+    bbox: [index * 10, 0, 10, 1],
+    anchor: [index * 10, 0],
+  }));
+  return {
+    selection_revision: revision,
+    content_revision: 1,
+    selected_pixel_count: colors.length * 10,
+    selected_component_count: colors.length,
+    selected_color_hexes: colors.map((hex) => `#${hex}`),
+    region_ids: components.map((component) => component.region_id),
+    components,
+    contours: [],
+    can_undo: revision > 0,
+    can_redo: false,
+  };
 }
 
 async function loadStore() {
-  const mod = await import("../stores/converter");
-  return mod.useConverterStore;
+  const { useConverterStore } = await import("../stores/converter");
+  useConverterStore.setState({
+    sessionId: "session-highlight",
+    selectionMode: "select-all",
+    selectionTool: "same-color",
+    previewImageUrl: "/api/files/base.png",
+    previewBaseImageUrl: "/api/files/base.png",
+    originalPreviewUrl: "/api/files/base.png",
+  });
+  return useConverterStore;
 }
 
-describe("converter store color highlight", () => {
+describe("converter store palette selection", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.resetModules();
   });
 
-  it("keeps the latest manual multi-select highlight when an older response resolves later", async () => {
-    const fifthHighlight = deferred<{ preview_url: string }>();
-    const sixthHighlight = deferred<{ preview_url: string }>();
-    colorHighlightMock
-      .mockReturnValueOnce(fifthHighlight.promise)
-      .mockReturnValueOnce(sixthHighlight.promise);
-
+  it("hydrates a new session and serializes rapid palette clicks into its selection history", async () => {
+    const firstSelection = deferred<SelectionDocumentResponse>();
+    apiMocks.getEditorSelection.mockResolvedValueOnce(selection(0, []));
+    apiMocks.mutateEditorSelection
+      .mockReturnValueOnce(firstSelection.promise)
+      .mockResolvedValueOnce(selection(2, ["555555", "666666"]));
     const useConverterStore = await loadStore();
-    useConverterStore.setState({
-      sessionId: "session-highlight",
-      selectionMode: "select-all",
-      selectedColors: new Set(["111111", "222222", "333333", "444444"]),
-      previewImageUrl: "/api/files/base.png",
-      previewBaseImageUrl: "/api/files/base.png",
-      originalPreviewUrl: "/api/files/base.png",
-    });
 
     useConverterStore.getState().toggleColorInSelection("555555");
     useConverterStore.getState().toggleColorInSelection("666666");
+    await waitFor(() => expect(apiMocks.mutateEditorSelection).toHaveBeenCalledTimes(1));
+    expect(apiMocks.mutateEditorSelection).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      operation: "same-color-toggle",
+      color_hex: "555555",
+      base_selection_revision: 0,
+      content_revision: 1,
+    }));
 
-    expect(colorHighlightMock).toHaveBeenNthCalledWith(1, "session-highlight", [
-      "111111",
-      "222222",
-      "333333",
-      "444444",
-      "555555",
-    ]);
-    expect(colorHighlightMock).toHaveBeenNthCalledWith(2, "session-highlight", [
-      "111111",
-      "222222",
-      "333333",
-      "444444",
-      "555555",
-      "666666",
-    ]);
-
-    sixthHighlight.resolve({ preview_url: "/api/files/highlight-6.png" });
-    await Promise.resolve();
-    expect(useConverterStore.getState().previewImageUrl).toBe(
-      "/api/files/highlight-6.png",
-    );
-
-    fifthHighlight.resolve({ preview_url: "/api/files/highlight-5.png" });
-    await Promise.resolve();
-    expect(useConverterStore.getState().previewImageUrl).toBe(
-      "/api/files/highlight-6.png",
-    );
+    firstSelection.resolve(selection(1, ["555555"]));
+    await waitFor(() => expect(useConverterStore.getState().selectionDocument?.selection_revision).toBe(2));
+    expect(apiMocks.mutateEditorSelection).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      color_hex: "666666",
+      base_selection_revision: 1,
+      content_revision: 1,
+    }));
+    expect(useConverterStore.getState().selectedColors).toEqual(new Set(["555555", "666666"]));
+    expect(useConverterStore.getState().historyCanUndo).toBe(true);
+    expect(apiMocks.colorHighlight).not.toHaveBeenCalled();
+    expect(useConverterStore.getState().previewImageUrl).toBe("/api/files/base.png");
   });
 
-  it("drops a manual highlight response when the session changes before it resolves", async () => {
-    const highlight = deferred<{ preview_url: string }>();
-    colorHighlightMock.mockReturnValueOnce(highlight.promise);
-
+  it("drops an old palette selection response after switching sessions", async () => {
+    const response = deferred<SelectionDocumentResponse>();
+    apiMocks.mutateEditorSelection.mockReturnValueOnce(response.promise);
     const useConverterStore = await loadStore();
-    useConverterStore.setState({
-      sessionId: "session-before",
-      selectionMode: "select-all",
-      selectedColors: new Set(["111111", "222222", "333333", "444444"]),
-      previewImageUrl: "/api/files/base.png",
-      previewBaseImageUrl: "/api/files/base.png",
-      originalPreviewUrl: "/api/files/base.png",
-    });
+    useConverterStore.setState({ selectionDocument: selection(0, []) });
 
     useConverterStore.getState().toggleColorInSelection("555555");
-    useConverterStore.setState({ sessionId: "session-after" });
-
-    highlight.resolve({ preview_url: "/api/files/stale-session.png" });
+    await waitFor(() => expect(apiMocks.mutateEditorSelection).toHaveBeenCalledTimes(1));
+    useConverterStore.setState({ sessionId: "session-after", selectionDocument: selection(0, []) });
+    response.resolve(selection(1, ["555555"]));
+    await response.promise;
     await Promise.resolve();
 
-    expect(useConverterStore.getState().previewImageUrl).toBe(
-      "/api/files/base.png",
-    );
+    expect(useConverterStore.getState().sessionId).toBe("session-after");
+    expect(useConverterStore.getState().selectionDocument?.selection_revision).toBe(0);
+    expect(useConverterStore.getState().selectedColors.size).toBe(0);
+    expect(useConverterStore.getState().previewImageUrl).toBe("/api/files/base.png");
   });
 
-  it("drops a manual highlight response when selection mode changes before it resolves", async () => {
-    const highlight = deferred<{ preview_url: string }>();
-    colorHighlightMock.mockReturnValueOnce(highlight.promise);
-
+  it("keeps a pending palette selection when the user switches tools", async () => {
+    const response = deferred<SelectionDocumentResponse>();
+    apiMocks.mutateEditorSelection.mockReturnValueOnce(response.promise);
     const useConverterStore = await loadStore();
-    useConverterStore.setState({
-      sessionId: "session-highlight",
-      selectionMode: "select-all",
-      selectedColors: new Set(["111111", "222222", "333333", "444444"]),
-      previewImageUrl: "/api/files/base.png",
-      previewBaseImageUrl: "/api/files/base.png",
-      originalPreviewUrl: "/api/files/base.png",
-    });
+    useConverterStore.setState({ selectionDocument: selection(0, []) });
 
     useConverterStore.getState().toggleColorInSelection("555555");
-    useConverterStore.setState({ selectionMode: "current" });
+    await waitFor(() => expect(apiMocks.mutateEditorSelection).toHaveBeenCalledTimes(1));
+    useConverterStore.getState().setSelectionTool("point");
+    response.resolve(selection(1, ["555555"]));
+    await waitFor(() => expect(useConverterStore.getState().selectionDocument?.selection_revision).toBe(1));
 
-    highlight.resolve({ preview_url: "/api/files/stale-mode.png" });
-    await Promise.resolve();
-
-    expect(useConverterStore.getState().previewImageUrl).toBe(
-      "/api/files/base.png",
-    );
+    expect(useConverterStore.getState().selectionTool).toBe("point");
+    expect(useConverterStore.getState().selectedColors).toEqual(new Set(["555555"]));
+    expect(useConverterStore.getState().historyCanUndo).toBe(true);
   });
 
-  it("uses local contour overlay instead of requesting highlight PNG when contours are cached", async () => {
+  it("preserves local palette toggles when no session exists", async () => {
     const useConverterStore = await loadStore();
-    useConverterStore.setState({
-      sessionId: "session-highlight",
-      selectionMode: "select-all",
-      selectedColors: new Set<string>(),
-      previewImageUrl: "/api/files/base.png",
-      previewBaseImageUrl: "/api/files/base.png",
-      originalPreviewUrl: "/api/files/base.png",
-      colorContours: {
-        "555555": [
-          [
-            [0, 0],
-            [1, 0],
-            [1, 1],
-          ],
-        ],
-      },
-    });
-
+    useConverterStore.setState({ sessionId: null });
     useConverterStore.getState().toggleColorInSelection("555555");
-
-    expect(colorHighlightMock).not.toHaveBeenCalled();
-    expect(useConverterStore.getState().previewImageUrl).toBe(
-      "/api/files/base.png",
-    );
-    expect(useConverterStore.getState().selectedColors).toEqual(
-      new Set(["555555"]),
-    );
+    expect(useConverterStore.getState().selectedColors).toEqual(new Set(["555555"]));
+    useConverterStore.getState().toggleColorInSelection("555555");
+    expect(useConverterStore.getState().selectedColors.size).toBe(0);
+    expect(apiMocks.mutateEditorSelection).not.toHaveBeenCalled();
+    expect(apiMocks.colorHighlight).not.toHaveBeenCalled();
   });
 });

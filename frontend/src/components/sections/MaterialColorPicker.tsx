@@ -21,6 +21,8 @@ export default function MaterialColorPicker() {
 
   const selectedColor = useConverterStore((s) => s.selectedColor);
   const selectionDocument = useConverterStore((s) => s.selectionDocument);
+  const hasPendingSelection = useConverterStore((s) => Boolean(s.sessionId &&
+    s.pendingSelectionMutations.some((mutation) => mutation.sessionId === s.sessionId)));
   const selectedMaterialDirNames = useConverterStore(
     (s) => s.selectedMaterialDirNames,
   );
@@ -50,7 +52,7 @@ export default function MaterialColorPicker() {
   const stagePendingReplacement = useCallback(
     (target: string, options: { requireSource: boolean } = { requireSource: true }) => {
       const hexNoHash = target.replace(/^#/, "").toLowerCase();
-      if (selectionDocument && selectionDocument.selected_component_count > 0) {
+      if (hasPendingSelection || (selectionDocument && selectionDocument.selected_component_count > 0)) {
         setPendingReplacement({
           sourceHex: selectedColor ?? "",
           targetHex: hexNoHash,
@@ -99,6 +101,7 @@ export default function MaterialColorPicker() {
       }
     },
     [
+      hasPendingSelection,
       selectionDocument,
       selectionMode,
       selectedColors,
