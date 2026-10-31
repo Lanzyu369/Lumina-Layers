@@ -55,6 +55,22 @@ function resolveMinimumWindowSize(zoomFactor) {
   };
 }
 
+/**
+ * Bounds that grow an existing window to the minimum size, or null when it is
+ * already large enough. A raised minimum does not resize an open window on
+ * every platform, so the window is grown explicitly. It grows from its
+ * top-left corner and moves back inside the work area if that would overflow.
+ */
+function resolveGrownWindowBounds(bounds, minimum, workArea) {
+  if (bounds.width >= minimum.width && bounds.height >= minimum.height) return null;
+  const width = Math.max(bounds.width, minimum.width);
+  const height = Math.max(bounds.height, minimum.height);
+  const area = workArea ?? { x: bounds.x, y: bounds.y, width, height };
+  const x = Math.max(area.x, Math.min(bounds.x, area.x + area.width - width));
+  const y = Math.max(area.y, Math.min(bounds.y, area.y + area.height - height));
+  return { x, y, width, height };
+}
+
 /** Next preference for a zoom shortcut; stays put at either end. */
 function stepInterfaceScalePreference(preference, direction) {
   if (direction === "reset") return DEFAULT_PREFERENCE;
@@ -149,6 +165,11 @@ function createInterfaceScaleController({
     const factor = effectiveZoomFactor(display);
     const minimum = resolveMinimumWindowSize(factor);
     window.setMinimumSize(minimum.width, minimum.height);
+    // Maximized, minimized and full-screen windows take their size from the OS.
+    if (!window.isMaximized() && !window.isMinimized() && !window.isFullScreen()) {
+      const grown = resolveGrownWindowBounds(window.getBounds(), minimum, display.workArea);
+      if (grown) window.setBounds(grown);
+    }
     if (Math.abs(window.webContents.getZoomFactor() - factor) < 0.001) return;
     window.webContents.setZoomFactor(factor);
     log(`Interface scale ${preference}: zoom ${factor} on a ${display.size.width}x${display.size.height} display`);
@@ -229,6 +250,7 @@ module.exports = {
   interfaceScaleShortcut,
   isInterfaceScalePreference,
   readInterfaceScalePreference,
+  resolveGrownWindowBounds,
   resolveInitialWindowPlacement,
   resolveMinimumWindowSize,
   resolveZoomFactor,

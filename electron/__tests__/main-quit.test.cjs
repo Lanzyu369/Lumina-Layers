@@ -61,6 +61,10 @@ async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}
     focus() {}
     getBounds() { return { x: this.options.x, y: this.options.y, width: this.options.width, height: this.options.height }; }
     setMinimumSize(width, height) { this.minimumSize = { width, height }; }
+    setBounds(bounds) { Object.assign(this.options, bounds); }
+    isMaximized() { return Boolean(this.maximized); }
+    isMinimized() { return false; }
+    isFullScreen() { return false; }
     maximize() { this.maximized = true; this.show(); }
     show() { this.visible = true; this.emit('show'); }
     isVisible() { return !!this.visible; }
