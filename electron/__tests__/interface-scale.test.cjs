@@ -241,6 +241,37 @@ test("raising the step grows a small window; lowering it leaves the window alone
   assert.deepEqual(window.bounds, { x: 0, y: 25, width: 1470, height: 843 });
 });
 
+test("restoring after a maximized scale increase keeps the enlarged window on screen", t => {
+  const mac = { bounds: { x: 0, y: 0, width: 1470, height: 956 }, size: { width: 1470, height: 956 },
+    workArea: { x: 0, y: 33, width: 1470, height: 843 } };
+  const stateFile = tempStateFile(t);
+  writeInterfaceScalePreference(stateFile, "80");
+  const controller = createInterfaceScaleController({ screen: fakeScreen([mac]), stateFile });
+  const window = fakeWindow({ x: 600, y: 350, width: 768, height: 496 });
+  controller.attach(window);
+  window.webContents.emit("did-navigate");
+
+  window.maximized = true;
+  window.bounds = { ...mac.workArea };
+  controller.choose("150");
+  assert.deepEqual(window.bounds, mac.workArea);
+
+  // Native macOS restoration applies the raised minimum but retains the old x.
+  window.maximized = false;
+  window.bounds = { x: 600, y: 33, width: 1305, height: 843 };
+  window.emit("unmaximize");
+  assert.deepEqual(window.bounds, { x: 165, y: 33, width: 1305, height: 843 });
+  assert.equal(window.webContents.getZoomFactor(), 1.359);
+
+  // Do not pull a sufficiently large window back during ordinary dragging.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  window.bounds.x = 200;
+  window.emit("move");
+  t.mock.timers.tick(200);
+  assert.equal(window.bounds.x, 200);
+  window.emit("closed");
+});
+
 test("the controller applies, saves and announces a new preference", t => {
   const stateFile = tempStateFile(t);
   const screen = fakeScreen([display({ x: 0, y: 0, width: 1920, height: 1080 })]);

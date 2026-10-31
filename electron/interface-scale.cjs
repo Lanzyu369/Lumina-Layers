@@ -57,17 +57,19 @@ function resolveMinimumWindowSize(zoomFactor) {
 
 /**
  * Bounds that grow an existing window to the minimum size, or null when it is
- * already large enough. A raised minimum does not resize an open window on
- * every platform, so the window is grown explicitly. It grows from its
+ * already large enough. On restoration, also fit an OS-enlarged window's position.
+ * A raised minimum does not resize an open window on every platform, so the
+ * window is grown explicitly. It grows from its
  * top-left corner and moves back inside the work area if that would overflow.
  */
-function resolveGrownWindowBounds(bounds, minimum, workArea) {
-  if (bounds.width >= minimum.width && bounds.height >= minimum.height) return null;
+function resolveGrownWindowBounds(bounds, minimum, workArea, fitPosition = false) {
+  if (!fitPosition && bounds.width >= minimum.width && bounds.height >= minimum.height) return null;
   const width = Math.max(bounds.width, minimum.width);
   const height = Math.max(bounds.height, minimum.height);
   const area = workArea ?? { x: bounds.x, y: bounds.y, width, height };
   const x = Math.max(area.x, Math.min(bounds.x, area.x + area.width - width));
   const y = Math.max(area.y, Math.min(bounds.y, area.y + area.height - height));
+  if (x === bounds.x && y === bounds.y && width === bounds.width && height === bounds.height) return null;
   return { x, y, width, height };
 }
 
@@ -159,7 +161,7 @@ function createInterfaceScaleController({
   const effectiveZoomFactor = display =>
     fitZoomFactorToWorkArea(resolveZoomFactor(preference, display.size), display.workArea);
 
-  function apply() {
+  function apply(fitPosition = false) {
     if (!isLive()) return;
     const display = currentDisplay();
     const factor = effectiveZoomFactor(display);
@@ -167,7 +169,7 @@ function createInterfaceScaleController({
     window.setMinimumSize(minimum.width, minimum.height);
     // Maximized, minimized and full-screen windows take their size from the OS.
     if (!window.isMaximized() && !window.isMinimized() && !window.isFullScreen()) {
-      const grown = resolveGrownWindowBounds(window.getBounds(), minimum, display.workArea);
+      const grown = resolveGrownWindowBounds(window.getBounds(), minimum, display.workArea, fitPosition);
       if (grown) window.setBounds(grown);
     }
     if (Math.abs(window.webContents.getZoomFactor() - factor) < 0.001) return;
@@ -199,6 +201,8 @@ function createInterfaceScaleController({
     };
     for (const name of DISPLAY_EVENTS) screen.on(name, reapply);
     target.on("move", reapplyAfterMove);
+    // macOS can enlarge restored bounds to the minimum without moving them on screen.
+    target.on("unmaximize", () => apply(true));
     // setZoomFactor is ignored until the first navigation commits.
     target.webContents.on("did-navigate", reapply);
     target.webContents.on("before-input-event", (event, input) => {
