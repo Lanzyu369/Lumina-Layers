@@ -15,18 +15,19 @@ from typing import Any
 FATCAT_DISTRIBUTION = "fatcat-metadata"
 FATCAT_MODULE = "fatcat_metadata"
 FATCAT_ADAPTER_MODULE = "fatcat_metadata_neroued"
-FATCAT_VERSION = "0.1.2"
+FATCAT_VERSION = "0.1.3"
 FATCAT_REPOSITORY = "https://github.com/MOVIBALE/fatcat-metadata"
-FATCAT_SOURCE_COMMIT = "acdf8abdf00560759ecdf660eb080bb2083fd5bb"
+FATCAT_SOURCE_COMMIT = "5023982e03680e0cd89fb9175dd0ca401d41f6f4"
 FATCAT_LEGACY_DISTRIBUTION = "lumina-3mf-metadata-cpp"
 FATCAT_WRITER_DISTRIBUTION = "neroued-3mf"
-FATCAT_WRITER_VERSION = "0.4.0+fatcat.production.1"
-FATCAT_WRITER_REPOSITORY = "https://github.com/MOVIBALE/neroued_3mf.git"
-FATCAT_WRITER_SOURCE_COMMIT = "a6043434d6cd9a2a76553ffdcdf0dda081d9b19c"
+FATCAT_WRITER_VERSION = "0.4.2"
+FATCAT_WRITER_REPOSITORY = "https://github.com/Neroued/neroued_3mf.git"
+FATCAT_WRITER_SOURCE_COMMIT = "656f87c55caf742cef2e958a7fc5199cdba2c6f0"
 FATCAT_REQUIRED_ENTRY_POINTS = (
     "metadata_target",
     "metadata_resource_specs",
     "native_project_source_catalog",
+    "native_project_source",
     "list_native_fields",
     "compose_project_settings",
     "resolve_project_materials",
@@ -36,6 +37,7 @@ FATCAT_REQUIRED_ENTRY_POINTS = (
     "read_project_layout",
     "read_placement_warnings",
     "read_model_object_metadata",
+    "extract_source_material_slots",
     "serialize_layer_config_ranges",
     "template_import_parts",
     "resolve_template_build_plate",

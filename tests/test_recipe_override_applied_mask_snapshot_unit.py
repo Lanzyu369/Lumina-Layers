@@ -93,6 +93,9 @@ def _seed_material_archive_session(store: SessionStore) -> str:
     })
     store.put(session_id, "material_source", "material_archive")
     store.put(session_id, "selected_materials", ["fake/A", "fake/B"])
+    # A completed preview has already resolved its backing channel. Keep this
+    # fixture independent of a machine's material library during generation.
+    store.put(session_id, "material_backing_material_index", 0)
     store.put(session_id, "material_layer_count", 3)
     store.put(session_id, "material_layer_height_mm", 0.08)
     store.put(session_id, "lut_name", "__material_archive__")
@@ -239,7 +242,7 @@ def test_generate_resolves_override_after_selection_cleared(_iso):
     store.close(sid)
 
 
-def test_generate_route_uses_snapshot_footprint_end_to_end(_iso, tmp_path):
+def test_generate_route_uses_snapshot_footprint_end_to_end(_iso, tmp_path, monkeypatch):
     """API 级回归：替换→清空选区→/generate 全链路按快照足迹套用配方。
 
     直接调用内部 helper 的单测无法证明真实路由装配；本用例走
@@ -249,6 +252,12 @@ def test_generate_route_uses_snapshot_footprint_end_to_end(_iso, tmp_path):
     store = _iso["store"]
     pool = _iso["pool"]
     sid = _seed_material_archive_session(store)
+    # The synthetic material archive has no on-disk catalog; keep material
+    # preflight isolated while exercising the real snapshot-to-worker handoff.
+    monkeypatch.setattr(
+        "api.routers.converter.generate.require_material_selection",
+        lambda *args, **kwargs: {"ready": True},
+    )
 
     image_path = tmp_path / "input.png"
     out_path = tmp_path / "out.3mf"

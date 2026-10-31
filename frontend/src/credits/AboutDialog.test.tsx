@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { version as webVersion } from "../../package.json";
 import { I18nProvider } from "../i18n/context";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 import AboutDialog from "./AboutDialog";
@@ -56,7 +57,7 @@ describe("AboutDialog", () => {
   it("keeps the web build version when the desktop version lookup fails", async () => {
     desktop.getAppVersion.mockRejectedValue(new Error("Host unavailable"));
     render(<PageHost initialPage="about" onClose={vi.fn()} />);
-    expect(await screen.findByText("版本 2.0.0")).toBeInTheDocument();
+    expect(await screen.findByText(`版本 ${webVersion}`)).toBeInTheDocument();
   });
 
   it.each([

@@ -18,7 +18,7 @@ async function until(check) {
   }
 }
 
-async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}) {
+async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}, pythonPaths = null) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "lumina-source-desktop-"));
   prepareUserData(root);
   const windows = [], children = [], dialogs = [], errors = [], commands = [], signals = [];
@@ -131,7 +131,16 @@ async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}
       queueMicrotask(connected);
       return socket;
     } },
-    fs: { ...fs, createWriteStream: () => ({ write() {} }) },
+    fs: {
+      ...fs,
+      existsSync(file) {
+        if (pythonPaths && /^python(?:3|\.exe)?$/.test(path.basename(file))) {
+          return pythonPaths.includes(file);
+        }
+        return fs.existsSync(file);
+      },
+      createWriteStream: () => ({ write() {} }),
+    },
   };
   t.after(() => {
     for (const timer of timers) clearTimeout(timer);
@@ -186,6 +195,16 @@ test('macOS installs a menu during startup and accepts state only from its trust
 });
 
 for (const platform of ["win32", "darwin"]) {
+  test(`source desktop on ${platform} uses the project Python 3.12 environment before PATH`, async t => {
+    const python = path.join(path.dirname(mainPath), "..", ".venv312",
+      ...(platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
+    const f = await fixture(t, platform, "healthy", () => {}, [python]);
+    assert.equal(f.children[0].command, python);
+    await f.healthy();
+    assert.equal(f.errors.length, 0);
+    assert.equal(f.mainWindow().visible, true);
+  });
+
   test(`source desktop on ${platform} launches Python and Vite, then confirms and cleans up on exit`, async t => {
     const f = await fixture(t, platform);
     assert.equal(path.basename(f.children[0].args[0]), "api_server.py");
@@ -231,14 +250,12 @@ test("source desktop reports an exited backend and quits", async t => {
   assert.equal(f.mainWindow(), undefined);
 });
 
-test("source desktop opens on the shared layout room and only its page may change it", async t => {
+test("source desktop opens at native scale and only its page may change it", async t => {
   const f = await fixture(t, "win32");
   await f.healthy();
   const window = f.mainWindow();
-  // A 1920×1080 display at 100% needs 125% zoom to give the page the shared
-  // 1536×864 room, where the old 1440x900 window no longer fits.
-  assert.equal(window.options.webPreferences.zoomFactor, 1.25);
-  assert.equal(window.maximized, true);
+  assert.equal(window.options.webPreferences.zoomFactor, 1);
+  assert.equal(window.maximized, undefined);
   assert.equal(window.visible, true);
 
   const page = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
@@ -248,7 +265,7 @@ test("source desktop opens on the shared layout room and only its page may chang
   assert.deepEqual(await getScale(page), { status: "ok", preference: "100" });
   assert.deepEqual(await setScale(workshopFrame, "150"), { status: "error", code: "denied" });
   assert.deepEqual(await setScale(page, "150"), { status: "ok", preference: "150" });
-  assert.equal(window.webContents.zoomFactor, 1.875);
+  assert.equal(window.webContents.zoomFactor, 1.5);
   assert.deepEqual(JSON.parse(fs.readFileSync(f.interfaceScalePath, "utf8")), { schemaVersion: 1, preference: "150" });
 });
 
@@ -258,12 +275,10 @@ test("source desktop reopens at the interface scale saved last time", async t =>
   });
   await f.healthy();
   const window = f.mainWindow();
-  // 80% of the 125% room cancels out to no page zoom, and 1440x900 fits, so
-  // the window opens centered instead of maximized.
-  assert.equal(window.options.webPreferences.zoomFactor, 1);
+  assert.equal(window.options.webPreferences.zoomFactor, 0.8);
   assert.deepEqual(
     [window.options.x, window.options.y, window.options.width, window.options.height],
-    [240, 66, 1440, 900],
+    [384, 156, 1152, 720],
   );
   assert.equal(window.maximized, undefined);
 });

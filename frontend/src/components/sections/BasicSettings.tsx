@@ -329,6 +329,7 @@ export default function BasicSettings() {
     previewImageUrl,
     previewWarnings,
     generatedLargeFormatWarnings,
+    largeFormatFailedTiles,
     selectedMaterialDirNames,
     materialLayerCount,
     materialDynamicLayerCountEnabled,
@@ -396,6 +397,7 @@ export default function BasicSettings() {
     previewImageUrl: s.previewImageUrl,
     previewWarnings: s.previewWarnings,
     generatedLargeFormatWarnings: s.largeFormatWarnings,
+    largeFormatFailedTiles: s.largeFormatFailedTiles,
     selectedMaterialDirNames: s.selectedMaterialDirNames,
     materialLayerCount: s.materialLayerCount,
     materialDynamicLayerCountEnabled: s.materialDynamicLayerCountEnabled,
@@ -1046,12 +1048,17 @@ export default function BasicSettings() {
     () =>
       Array.from(
         new Set(
-          [...(previewWarnings ?? []), ...(generatedLargeFormatWarnings ?? [])].map(
+          [
+            ...(previewWarnings ?? []), ...(generatedLargeFormatWarnings ?? []),
+            ...(largeFormatFailedTiles.length ? [t("large_format_partial_result").replace(
+              "{tiles}", largeFormatFailedTiles.join(", "),
+            )] : []),
+          ].map(
             (warning) => localizeLargeFormatWarning(warning, t),
           ),
         ),
       ),
-    [previewWarnings, generatedLargeFormatWarnings, t],
+    [previewWarnings, generatedLargeFormatWarnings, largeFormatFailedTiles, t],
   );
 
   // A control that silently disappears reads as a missing feature. Keep both

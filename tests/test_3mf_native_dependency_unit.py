@@ -28,7 +28,7 @@ def _neroued_requirement() -> Requirement:
     raise AssertionError("requirements.txt does not declare neroued-3mf")
 
 
-def test_neroued_requirement_selects_first_zero_copy_release() -> None:
+def test_neroued_requirement_selects_official_production_path_release() -> None:
     requirement = _neroued_requirement()
 
     assert str(requirement.specifier) == f"=={FATCAT_WRITER_VERSION}"
@@ -58,11 +58,11 @@ def test_fatcat_build_contract_uses_public_root_and_writer_source() -> None:
     )
 
     assert FATCAT_REPOSITORY == "https://github.com/MOVIBALE/fatcat-metadata"
-    assert FATCAT_VERSION == "0.1.2"
+    assert FATCAT_VERSION == "0.1.3"
     assert len(FATCAT_SOURCE_COMMIT) == 40
     assert len(FATCAT_WRITER_SOURCE_COMMIT) == 40
-    assert FATCAT_WRITER_VERSION == "0.4.0+fatcat.production.1"
-    assert FATCAT_WRITER_REPOSITORY == "https://github.com/MOVIBALE/neroued_3mf.git"
+    assert FATCAT_WRITER_VERSION == "0.4.2"
+    assert FATCAT_WRITER_REPOSITORY == "https://github.com/Neroued/neroued_3mf.git"
     assert 'fatcat_root / "pyproject.toml"' in build_script
     assert '"source_commit": writer_commit' in build_script
     assert '"project_root": "."' in build_script
@@ -102,7 +102,7 @@ def test_shared_fatcat_packaging_contract_rejects_missing_target_data(
 def test_installed_neroued_exposes_explicit_zero_copy_mesh_view() -> None:
     import neroued_3mf
 
-    assert metadata.version("neroued-3mf").startswith("0.4.0")
+    assert metadata.version("neroued-3mf") == FATCAT_WRITER_VERSION
     assert callable(
         getattr(
             neroued_3mf.DocumentBuilder(),

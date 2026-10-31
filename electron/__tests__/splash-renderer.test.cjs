@@ -7,8 +7,11 @@ const vm = require('node:vm');
 async function playback({ readyAt = 400, targetAt = () => 3, reduced = false } = {}) {
   let now = 0, ready = false, frame, poll, finished = 0;
   const progress = { value: 0 };
-  const context = new Proxy({}, { get: (_, key) => key === 'createRadialGradient'
-    ? () => ({ addColorStop() {} }) : () => {} });
+  const pixels = (width, height) => ({ data: new Uint8ClampedArray(width * height * 4).fill(255), width, height });
+  const context = new Proxy({}, { get: (_, key) => key === 'getImageData'
+    ? (_x, _y, width, height) => pixels(width, height)
+    : key === 'createImageData' ? pixels : () => {} });
+  const { renderRipple } = await import('../splash-ripple.mjs');
   const canvas = () => ({ style: {}, getContext: () => context });
   const elements = {
     canvas: canvas(), progress,
@@ -22,6 +25,9 @@ async function playback({ readyAt = 400, targetAt = () => 3, reduced = false } =
     createPacer: () => ({ reach() {}, fastForward() {}, step: () => ready ? 10 : targetAt(now) }),
     fitMark: () => ({ cssWidth: 150, cssHeight: 207, deviceWidth: 150, deviceHeight: 207, cell: 1 }),
     snapOffset: () => 0,
+    MARK_WIDTH: 150,
+    MARK_HEIGHT: 207,
+    renderRipple,
     document: { querySelector: key => elements[key], createElement: canvas },
     Image: class { complete = true; naturalWidth = 150; },
     matchMedia: () => ({ matches: reduced }),

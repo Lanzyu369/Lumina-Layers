@@ -110,6 +110,22 @@ describe("printer-dependent output dimensions", () => {
     store.getState().setLargeFormatEnabled(false);
     expect(store.getState()).toMatchObject({ target_width_mm: 180, target_height_mm: 90 });
   });
+
+  it("clears previous missing tiles when changing the tiling configuration", async () => {
+    const { store } = await startConverter();
+    const changes = [
+      () => store.getState().setLargeFormatEnabled(false),
+      () => store.getState().setTileWidthMm(100),
+      () => store.getState().setTileHeightMm(120),
+      () => store.getState().setPuzzleEnabled(true),
+    ];
+    for (const change of changes) {
+      store.setState({ largeFormatFailedTiles: ["R1C2"], largeFormatWarnings: ["old result"] });
+      change();
+      expect(store.getState().largeFormatFailedTiles).toEqual([]);
+      expect(store.getState().largeFormatWarnings).toEqual([]);
+    }
+  });
 });
 
 describe("remembered output settings", () => {

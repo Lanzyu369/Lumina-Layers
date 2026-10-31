@@ -2,7 +2,7 @@
 """Build the exact native wheels required by Lumina's metadata export route.
 
 构建 Lumina 元数据导出路径所需的精确原生 wheel；脚本只在显式构建阶段运行，
-不会在产品运行时联网、安装依赖或回退到库存 writer。
+不会在产品运行时联网或安装依赖；writer 使用正式上游发布提交。
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -165,7 +164,6 @@ def build_native_wheels(
                 str(neroued_source),
             ],
             cwd=ROOT,
-            env={**os.environ, "SETUPTOOLS_SCM_PRETEND_VERSION": WRITER_VERSION},
         )
 
         fatcat_wheel = _one_wheel(fatcat_wheels, FATCAT_WHEEL_PREFIX)

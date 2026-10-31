@@ -345,6 +345,19 @@ def mutate_point_toggle(
     return next_mask
 
 
+def mutate_point_remove(
+    component_cache: dict[str, Any],
+    current: np.ndarray,
+    x: int,
+    y: int,
+) -> np.ndarray:
+    """Remove the visible component without reselecting an already removed one."""
+    label, _component = get_component_at(component_cache, x, y)
+    next_mask = current.copy()
+    next_mask[component_union_mask(component_cache, [label])] = False
+    return next_mask
+
+
 def _reference_color_hex(
     component_cache: dict[str, Any],
     x: int | None,
@@ -386,6 +399,38 @@ def mutate_same_color_toggle(
     reference_hex = _reference_color_hex(component_cache, x, y, color_hex)
     labels = component_labels_for_color(component_cache, reference_hex)
     return _toggle_component_group(component_cache, current, labels, reference_hex)
+
+
+def mutate_same_color_remove(
+    component_cache: dict[str, Any],
+    current: np.ndarray,
+    *,
+    x: int | None,
+    y: int | None,
+    color_hex: str | None,
+) -> np.ndarray:
+    """Remove every component of the requested visible colour, idempotently."""
+    reference_hex = _reference_color_hex(component_cache, x, y, color_hex)
+    rgb = parse_hex_color(reference_hex)
+    normalized = "#{:02x}{:02x}{:02x}".format(*rgb)
+    labels = component_labels_for_color(component_cache, normalized)
+    next_mask = current.copy()
+    next_mask[component_union_mask(component_cache, labels)] = False
+    return next_mask
+
+
+def mutate_colors_set(
+    component_cache: dict[str, Any],
+    color_hexes: list[str],
+) -> np.ndarray:
+    """Replace the selection with the union of the requested visible colours."""
+    colors = {"#{:02x}{:02x}{:02x}".format(*parse_hex_color(value)) for value in color_hexes}
+    labels = [
+        int(label)
+        for label, component in component_cache["components"].items()
+        if str(component["color_hex"]).lower() in colors
+    ]
+    return component_union_mask(component_cache, labels)
 
 
 def _labels_within_delta_e(
@@ -486,7 +531,21 @@ def mutate_brush_add(
     points: list[tuple[float, float]],
     radius: float,
 ) -> tuple[np.ndarray, int]:
-    stroke_mask = rasterize_brush_stroke(current.shape, points, radius)
+    return mutate_brush_strokes_add(component_cache, current, [points], radius)
+
+
+def mutate_brush_strokes_add(
+    component_cache: dict[str, Any],
+    current: np.ndarray,
+    strokes: list[list[tuple[float, float]]],
+    radius: float,
+) -> tuple[np.ndarray, int]:
+    """Union separate strokes without drawing connectors between pen lifts."""
+    if not strokes or sum(len(stroke) for stroke in strokes) > 10000:
+        raise ValueError("Brush selection requires between 1 and 10000 points.")
+    stroke_mask = np.zeros(current.shape, dtype=bool)
+    for points in strokes:
+        stroke_mask |= rasterize_brush_stroke(current.shape, points, radius)
     labels = component_labels_for_mask(component_cache, stroke_mask)
     if not labels:
         return current.copy(), 0

@@ -36,7 +36,7 @@ from core.workshop.registry_client import (
 )
 
 
-LUMINA_VERSION = "2.0.0"
+LUMINA_VERSION = "2.0.1"
 SeedPackageDownloader = Callable[[RegistryVersion], Path]
 
 

@@ -217,7 +217,7 @@ python start_all.py
 
 源码运行默认不连接在线耗材库，本地耗材档案可离线使用。连接自建或已获授权的云库时，需要另外配置服务地址，见 [Registry 连接说明](docs/material-registry-connection.md)。
 
-依赖中已固定 `lumina-svg-core==0.3.4` 和 `fatcat-metadata==0.1.2`，SVG、3MF 和材料元数据用到的原生包会一起装好，不用再克隆 SDK、找本地 wheelhouse、检出内部提交或编译 C++。如果安装时找不到匹配的 wheel，先核对上面的 Python、系统和架构要求。SVG 包的范围见 [发行说明](https://github.com/lumina-layer-studio/lumina-svg-core/blob/v0.3.4/docs/DISTRIBUTIONS.md)；完整应用仍按上表安装，排障可看 [原生依赖与桌面运行指南](docs/desktop-electron.md)。
+原生 3MF 依赖为 `fatcat-metadata==0.1.3` 和官方 `neroued-3mf==0.4.2`，均通过 `requirements.txt` 从 PyPI 安装，无需定制 writer wheelhouse。支持的平台见[原生依赖指南](docs/desktop-electron.md)。SVG 依赖仍为 `lumina-svg-core==0.3.4`。
 
 ### 可选：桌面窗口
 

@@ -55,6 +55,7 @@ interface FloodFillOptions {
 export function detectLocalRegionContours(
   previewBuffer: PreviewCanvasBuffer | null,
   options: FloodFillOptions,
+  cachedImage?: ImageData,
 ): LocalRegionResult | null {
   if (!previewBuffer) return null;
   const { width, height, context } = previewBuffer;
@@ -67,7 +68,7 @@ export function detectLocalRegionContours(
 
   let image: ImageData;
   try {
-    image = context.getImageData(0, 0, width, height);
+    image = cachedImage ?? context.getImageData(0, 0, width, height);
   } catch {
     return null;
   }
@@ -160,7 +161,7 @@ export function detectLocalRegionContours(
   };
 }
 
-function traceBoundaryPolygons(
+export function traceBoundaryPolygons(
   filled: Uint8Array,
   width: number,
   height: number,

@@ -1,6 +1,4 @@
 --only-binary=fatcat-metadata,neroued-3mf,lumina-svg-core,neroued-vectorizer
-# Public precompiled Production writer wheels (no local SDK build required).
---find-links https://github.com/MOVIBALE/neroued_3mf/releases/expanded_assets/fatcat-production-1
 
 pillow-heif>=0.18.0
 rawpy>=0.21.0
@@ -34,9 +32,9 @@ psutil>=5.9.8
 # Vectorizer (C++ image-to-SVG)
 neroued-vectorizer>=0.1.1
 # 3MF writer (C++ streaming 3MF with Production Extension).
-# CPython 3.12-3.14 uses public Production wheels, without consumer patches.
-neroued-3mf==0.4.0+fatcat.production.1
+# Official PyPI release includes Production layout and Windows native paths.
+neroued-3mf==0.4.2
 # Public SDK: https://github.com/MOVIBALE/fatcat-metadata
-# Release source: acdf8abdf00560759ecdf660eb080bb2083fd5bb.
-# Preserves inherited filament IDs required by startup G-code.
-fatcat-metadata==0.1.2
+# Required SDK source: 5023982e03680e0cd89fb9175dd0ca401d41f6f4.
+# Windows long paths and exact machine lookup; matching wheels are on PyPI.
+fatcat-metadata==0.1.3

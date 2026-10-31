@@ -1,15 +1,15 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import GradientGroupsPanel from "../components/sections/GradientGroupsPanel";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
-import type { GradientGroupItem } from "../api/types";
+import type { GradientGroupItem, SelectionDocumentResponse, SelectionMutationRequest } from "../api/types";
 
-// The store's ``selectGradientGroupColors`` calls ``apiColorHighlight`` as a
-// best-effort preview refresh; stub it so tests don't hit the network.
-// 这里替换掉 apiColorHighlight，避免测试里触发真实的网络请求。
+// Highlight dialogs and shared selection mutations use separate API paths.
 const colorHighlightMock = vi.hoisted(() => vi.fn());
+const mutateEditorSelectionMock = vi.hoisted(() => vi.fn());
+const getEditorSelectionMock = vi.hoisted(() => vi.fn());
 const replaceColorMock = vi.hoisted(() => vi.fn());
 const regionReplaceMock = vi.hoisted(() => vi.fn());
 const regionReplaceBatchMock = vi.hoisted(() => vi.fn());
@@ -31,6 +31,8 @@ vi.mock("../api/converter", async () => {
   return {
     ...actual,
     colorHighlight: colorHighlightMock,
+    mutateEditorSelection: mutateEditorSelectionMock,
+    getEditorSelection: getEditorSelectionMock,
     replaceColor: replaceColorMock,
     replaceColorsBatch: vi.fn().mockResolvedValue({
       status: "ok",
@@ -99,6 +101,7 @@ function _resetStores(
     gradientSelection: null,
     selectedGradientRegions: [],
     selectedColor: null,
+    selectionDocument: selectionDocument(++selectionRevision * 10, []),
     selectionMode: "current",
     selectedColors: new Set<string>(),
     selectedRegions: [],
@@ -107,9 +110,41 @@ function _resetStores(
     colorRemapMap: {},
     remapHistory: [],
     previewImageUrl: "/api/files/preview.png",
+    previewBaseImageUrl: "/api/files/preview.png",
+    historyCanUndo: false,
+    historyCanRedo: false,
+    historyBusy: false,
+    contentCommitStatus: "idle",
+    contentCommitOperationId: null,
     ...overrides,
   });
   useSettingsStore.setState({ autoReplaceGradientBanding: false });
+}
+
+let selectionRevision = 0;
+
+function selectionDocument(revision: number, colors: string[]): SelectionDocumentResponse {
+  const components = colors.map((color, index) => ({
+    label: index + 1,
+    region_id: `region-${color}`,
+    color_hex: `#${color}`,
+    pixel_count: 10,
+    bbox: [index * 10, 0, 10, 1],
+    anchor: [index * 10, 0],
+  }));
+  return {
+    selection_revision: revision,
+    content_revision: 1,
+    editor_content_revision: 1,
+    selected_pixel_count: colors.length * 10,
+    selected_component_count: colors.length,
+    selected_color_hexes: colors.map((color) => `#${color}`),
+    region_ids: components.map((component) => component.region_id),
+    components,
+    contours: [],
+    can_undo: colors.length > 0,
+    can_redo: false,
+  };
 }
 
 describe("GradientGroupsPanel", () => {
@@ -119,6 +154,10 @@ describe("GradientGroupsPanel", () => {
     colorHighlightMock.mockResolvedValue({
       preview_url: "/api/files/highlighted.png",
     });
+    mutateEditorSelectionMock.mockImplementation(async (request: SelectionMutationRequest) =>
+      selectionDocument(request.base_selection_revision + 1, request.color_hexes ?? ["d2aeb4", "cb9994"]),
+    );
+    getEditorSelectionMock.mockImplementation(async () => useConverterStore.getState().selectionDocument);
     fetchGradientGroupsMock.mockResolvedValue({
       status: "ok",
       groups: [_makeGroup()],
@@ -211,35 +250,43 @@ describe("GradientGroupsPanel", () => {
     ).toBeInTheDocument();
   });
 
-  it("select-group writes lowercase hexes into selectedColors and flips to select-all", () => {
+  it("select-group commits the shared selection and its history", async () => {
     render(<GradientGroupsPanel />);
-    fireEvent.click(
-      screen.getByRole("button", { name: /select all|选中整组/i }),
-    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /select all|选中整组/i }));
+    });
 
     const state = useConverterStore.getState();
     expect(state.selectionMode).toBe("select-all");
     expect(Array.from(state.selectedColors).sort()).toEqual(
       ["cb9994", "d2aeb4"].sort(),
     );
-    expect(state.selectedRegions).toEqual([]);
-    expect(state.selectedColor).toBeNull();
+    expect(state.selectedRegions.map((region) => region.regionId)).toEqual(["region-d2aeb4", "region-cb9994"]);
+    expect(state.selectedColor).toBe("cb9994");
+    expect(state.historyCanUndo).toBe(true);
     // Source stamp identifies which panel row initiated the multi-select.
     // 记录点击来源，供按钮排它性高亮判断。
     expect(state.gradientSelection).toEqual({
       kind: "group",
       groupIndex: 1,
     });
-    // The store triggers a single highlight call for the whole set. No
-    // scope is passed because the source is a whole group — the backend
-    // will scan the full canvas, which is correct for this scope.
-    // 整组批量不传 scope，让后端全图扫描。
-    expect(colorHighlightMock).toHaveBeenCalledTimes(1);
-    expect(colorHighlightMock).toHaveBeenCalledWith(
-      "sess-test",
-      expect.arrayContaining(["cb9994", "d2aeb4"]),
-      undefined,
-    );
+    expect(mutateEditorSelectionMock).toHaveBeenCalledWith(expect.objectContaining({
+      session_id: "sess-test",
+      operation: "colors-set",
+      color_hexes: expect.arrayContaining(["cb9994", "d2aeb4"]),
+    }));
+    expect(colorHighlightMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps local group selection available before a session exists", () => {
+    _resetStores({ sessionId: null, selectionDocument: null });
+    render(<GradientGroupsPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /select all|选中整组/i }));
+
+    expect(useConverterStore.getState().selectedColors).toEqual(new Set(["d2aeb4", "cb9994"]));
+    expect(useConverterStore.getState().gradientSelection).toEqual({ kind: "group", groupIndex: 1 });
+    expect(mutateEditorSelectionMock).not.toHaveBeenCalled();
+    expect(colorHighlightMock).not.toHaveBeenCalled();
   });
 
   it("shows a friendly error when the highlight response has no preview URL", async () => {
@@ -293,7 +340,7 @@ describe("GradientGroupsPanel", () => {
     expect(image).toHaveAttribute("src", "/api/files/highlight-dialog.png");
   });
 
-  it("expands regions and select-region writes the region's breakdown with a region-scoped source", () => {
+  it("expands regions and commits an exact region selection with a region-scoped source", async () => {
     render(<GradientGroupsPanel />);
     // Expand regions for the only group on screen.
     fireEvent.click(
@@ -304,7 +351,7 @@ describe("GradientGroupsPanel", () => {
       name: /select region|选中区域/i,
     });
     expect(regionBtns).toHaveLength(2);
-    fireEvent.click(regionBtns[0]);
+    await act(async () => { fireEvent.click(regionBtns[0]); });
 
     const state = useConverterStore.getState();
     expect(state.selectionMode).toBe("select-all");
@@ -319,20 +366,14 @@ describe("GradientGroupsPanel", () => {
       groupIndex: 1,
       regionIndex: 1,
     });
-    // And the highlight call carries (group_index, region_index) so the
-    // backend clips the preview overlay to the region's *exact* pixel
-    // mask — a rectangular bbox is not precise enough: a region's bbox
-    // routinely contains other same-colour pixels that belong to other
-    // regions of the same group, which is exactly the "clicking a
-    // sub-region lights up the whole group" bug the user reported.
-    // 高亮请求传 (group_index, region_index) 让后端按精确像素 mask 裁剪，
-    // 矩形 bbox 不够精细——bbox 内常常包含其它同色区域的像素，
-    // 这正是 "点小分组却把整组点亮" 的 bug。
-    const scopeCall = colorHighlightMock.mock.calls.at(-1);
-    expect(scopeCall?.[2]).toEqual({
-      gradientGroupIndex: 1,
-      gradientRegionIndex: 1,
-    });
+    expect(mutateEditorSelectionMock).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "gradient-region-set",
+      gradient_group_index: 1,
+      gradient_region_index: 1,
+    }));
+    expect(state.selectionDocument?.selected_component_count).toBe(2);
+    expect(state.historyCanUndo).toBe(true);
+    expect(colorHighlightMock).not.toHaveBeenCalled();
   });
 
   it("flatten-all button invokes applyAutoGradientReplace", async () => {
@@ -559,20 +600,14 @@ describe("GradientGroupsPanel", () => {
     expect(state.colorRemapMap).toEqual({});
   });
 
-  it("stale highlight response is discarded when the selection changed mid-flight", async () => {
-    // Control the first highlight call's resolution so a later click can
-    // supersede it before it settles.
-    // 手动控制第一次 highlight 的 resolve 时机，制造竞态。
-    const deferredA: { resolve: (v: { preview_url: string }) => void } = {
+  it("serializes consecutive group selections and publishes the latest confirmed mask", async () => {
+    const deferredA: { resolve: (v: SelectionDocumentResponse) => void } = {
       resolve: () => {},
     };
-    const promiseA = new Promise<{ preview_url: string }>((res) => {
+    const promiseA = new Promise<SelectionDocumentResponse>((res) => {
       deferredA.resolve = res;
     });
-    colorHighlightMock.mockReturnValueOnce(promiseA);
-    colorHighlightMock.mockResolvedValueOnce({
-      preview_url: "/api/files/highlight-B.png",
-    });
+    mutateEditorSelectionMock.mockReturnValueOnce(promiseA);
 
     const groupA = _makeGroup({
       group_index: 1,
@@ -591,35 +626,36 @@ describe("GradientGroupsPanel", () => {
       regions: [],
     });
     _resetStores({ gradientGroups: [groupA, groupB] });
+    const baseRevision = useConverterStore.getState().selectionDocument!.selection_revision;
 
     const { selectGradientGroupColors } = useConverterStore.getState();
-    // 1. Click group A (triggers promiseA, still pending).
     act(() => {
-      selectGradientGroupColors(["#AAAAAA", "#A1A1A1"]);
+      selectGradientGroupColors(["#AAAAAA", "#A1A1A1"], { kind: "group", groupIndex: 1 });
     });
-    expect(useConverterStore.getState().selectedColors.size).toBe(2);
+    await waitFor(() => expect(mutateEditorSelectionMock).toHaveBeenCalledTimes(1));
+    expect(useConverterStore.getState().selectedColors.size).toBe(0);
 
-    // 2. Click group B (supersedes A's selection).
     act(() => {
-      selectGradientGroupColors(["#BBBBBB", "#B1B1B1"]);
+      selectGradientGroupColors(["#BBBBBB", "#B1B1B1"], { kind: "group", groupIndex: 2 });
     });
-    expect(useConverterStore.getState().selectedColors).toEqual(
-      new Set(["bbbbbb", "b1b1b1"]),
-    );
+    expect(mutateEditorSelectionMock).toHaveBeenCalledTimes(1);
 
-    // 3. Resolve A's stale highlight last — this must NOT overwrite the
-    //    preview URL because selectedColors no longer matches A.
     await act(async () => {
-      deferredA.resolve({ preview_url: "/api/files/highlight-A.png" });
-      await Promise.resolve();
-      await Promise.resolve();
+      deferredA.resolve(selectionDocument(baseRevision + 1, ["aaaaaa", "a1a1a1"]));
     });
-
-    const previewUrl = useConverterStore.getState().previewImageUrl;
-    expect(previewUrl).not.toContain("highlight-A.png");
+    await waitFor(() => expect(useConverterStore.getState().selectionDocument?.selection_revision)
+      .toBe(baseRevision + 2));
+    expect(useConverterStore.getState().selectedColors).toEqual(new Set(["bbbbbb", "b1b1b1"]));
+    expect(useConverterStore.getState().gradientSelection).toEqual({ kind: "group", groupIndex: 2 });
+    expect(mutateEditorSelectionMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      operation: "colors-set",
+      base_selection_revision: baseRevision + 1,
+      color_hexes: ["bbbbbb", "b1b1b1"],
+    }));
+    expect(colorHighlightMock).not.toHaveBeenCalled();
   });
 
-  it("manual toggleColorInSelection clears the region-scoped gradientSelection", () => {
+  it("manual toggleColorInSelection clears the region-scoped gradientSelection", async () => {
     // Users who first click a region button and then tweak the multi-select
     // by clicking palette tiles end up with a selection that no longer
     // matches the region's exact colour list. The palette should recover
@@ -632,7 +668,7 @@ describe("GradientGroupsPanel", () => {
     const { selectGradientGroupColors, toggleColorInSelection } =
       useConverterStore.getState();
 
-    act(() => {
+    await act(async () => {
       selectGradientGroupColors(["#D2AEB4", "#CB9994"], {
         kind: "region",
         groupIndex: 1,
@@ -645,7 +681,7 @@ describe("GradientGroupsPanel", () => {
       regionIndex: 1,
     });
 
-    act(() => {
+    await act(async () => {
       toggleColorInSelection("AABBCC");
     });
 

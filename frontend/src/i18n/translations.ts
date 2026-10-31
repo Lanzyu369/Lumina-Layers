@@ -3060,8 +3060,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Interface scale",
   },
   "settings.interface_scale_description": {
-    zh: "界面的排版尺寸固定，不随屏幕分辨率或系统缩放变化：100% 时各种屏幕上的面板占比一致。想更大或更小再逐档调整，也可以按 Ctrl 加号或减号切换，Ctrl 0 回到 100%（Mac 上用 Command 键）。",
-    en: "The layout has one fixed size and does not follow the screen resolution or the system scaling: at 100% the panels take the same share of the screen everywhere. Pick a larger or smaller step if you want, or press Ctrl with plus or minus; Ctrl+0 returns to 100% (use Command on a Mac).",
+    zh: "100% 使用系统默认显示比例，不会因屏幕分辨率额外放大。可按需调整界面大小，或按 Ctrl 加号、减号逐档调整，Ctrl 0 回到 100%（Mac 上用 Command 键）。不影响模型和导出尺寸。",
+    en: "100% follows your system display scale without extra enlargement based on screen resolution. Adjust the interface size here or with Ctrl plus/minus; Ctrl+0 returns to 100% (use Command on Mac). Model and export dimensions are unchanged.",
   },
   "settings.interface_scale_failed": {
     zh: "无法读取或更改界面缩放，请重启软件后重试。",
@@ -3624,6 +3624,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   app_3d_scene_error: {
     zh: "3D 场景加载失败",
     en: "3D scene failed to load",
+  },
+  viewer_scene_recovery_hint: {
+    zh: "可以重试加载 3D 预览，图片和参数会保留。若仍失败，请检查浏览器的图形加速设置。",
+    en: "Retry the 3D preview; your image and settings are kept. If it still fails, check your browser's graphics acceleration settings.",
+  },
+  viewer_retry_scene: {
+    zh: "重试 3D 预览",
+    en: "Retry 3D preview",
+  },
+  viewer_lighting_fallback: {
+    zh: "环境光照加载失败，已使用基础光照。",
+    en: "Environment lighting could not load. Using basic lighting.",
+  },
+  viewer_retry_lighting: {
+    zh: "重试光照",
+    en: "Retry lighting",
   },
   app_toggle_language: {
     zh: "切换语言",
@@ -6015,6 +6031,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   large_format_warning_native_failure: {
     zh: "原生矢量切片生成失败，已自动改用栅格切片。",
     en: "Native vector tiling failed, so raster tiling was used automatically.",
+  },
+  large_format_partial_result: {
+    zh: "仅部分切片生成成功。下载包缺少以下切片：{tiles}。请重新生成这些部分后再拼装。",
+    en: "Only some tiles were generated. The download is missing: {tiles}. Generate these tiles again before assembling the model.",
   },
   wipe_tower_manual_adjustment_title: {
     zh: "打印前请手动检查摆放",

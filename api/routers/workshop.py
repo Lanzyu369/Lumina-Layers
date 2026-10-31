@@ -73,7 +73,7 @@ from core.workshop.registry_client import select_install_candidate
 router = APIRouter(prefix="/api/workshop/v1", tags=["Creative Workshop"])
 log = get_logger(__name__)
 
-LUMINA_VERSION = "2.0.0"
+LUMINA_VERSION = "2.0.1"
 _PUBLIC_ASSET_EXTENSIONS = frozenset(
     {".png", ".jpg", ".jpeg", ".webp"}
 )
@@ -459,13 +459,24 @@ def workshop_modules() -> WorkshopModulesResponse:
     返回不含私有文件系统路径的已安装模块状态。
     """
 
-    installer = get_workshop_installer()
-    return WorkshopModulesResponse(
-        modules=tuple(
-            _state_response(state, installer)
-            for state in installer.list()
+    try:
+        installer = get_workshop_installer()
+        return WorkshopModulesResponse(
+            modules=tuple(
+                _state_response(state, installer)
+                for state in installer.list()
+            )
         )
-    )
+    except OSError as exc:
+        _raise_workshop_http_error(
+            event="workshop_modules_list_failed",
+            exc=exc,
+            status_code=503,
+            detail=(
+                "Creative Workshop storage is unavailable. "
+                "Check the app data folder permissions and available disk space, then retry."
+            ),
+        )
 
 
 @router.post(
@@ -555,22 +566,19 @@ def _download_registry_package_with_retry(
     *,
     module_id: str,
 ) -> Path:
-    """Retry one idempotent Registry download after a read timeout.
-
-    Registry 下载仅在读取超时时重试一次；连接、校验及安装错误保持原样。
-    """
+    """Retry one idempotent download after a connection or read timeout."""
 
     for attempt in range(1, _REGISTRY_DOWNLOAD_MAX_ATTEMPTS + 1):
         try:
             return download_registry_package(candidate)
-        except httpx.ReadTimeout:
+        except (httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
             if attempt >= _REGISTRY_DOWNLOAD_MAX_ATTEMPTS:
                 raise
             log.warning(
                 "Creative Workshop Registry download timed out; retrying",
                 extra={
                     "event": "workshop_registry_download_retry",
-                    "error_type": "ReadTimeout",
+                    "error_type": type(exc).__name__,
                     "error_message": "Registry package download timed out",
                     "module_id": module_id,
                     "version": candidate.version,
@@ -670,6 +678,19 @@ def workshop_install_registry(
             detail=str(exc),
             module_id=payload.module_id,
             version=payload.version,
+        )
+    except httpx.TimeoutException as exc:
+        _raise_workshop_http_error(
+            event="workshop_module_install_failed",
+            exc=exc,
+            status_code=504,
+            detail=(
+                "The Registry package download timed out. "
+                "Check your network or proxy settings, then retry."
+            ),
+            module_id=payload.module_id,
+            version=payload.version,
+            log_error_message="Registry package download timed out",
         )
     except (httpx.HTTPError, OSError) as exc:
         _raise_workshop_http_error(

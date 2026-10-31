@@ -1,0 +1,186 @@
+name: Build private official runtime candidates
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Reviewed full Lumina-Layers commit on main
+        type: string
+        required: true
+      distribution_sha:
+        description: Reviewed full private Distribution commit
+        type: string
+        required: true
+      profile:
+        description: Official release track
+        type: choice
+        options: [nightly, public]
+        default: nightly
+        required: true
+      published_at:
+        description: Frozen Unix timestamp shared by both platforms and retries
+        type: string
+        required: true
+      release_notes:
+        description: Reviewed public change notes (inputs are public; never enter credentials)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-runtime-candidate-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'lumina-layer-studio/Lumina-Layers' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate frozen identity and reviewed public source
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          DISTRIBUTION_SHA: ${{ inputs.distribution_sha }}
+          PUBLISHED_AT: ${{ inputs.published_at }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        with:
+          script: |
+            const { SOURCE_SHA, DISTRIBUTION_SHA, PUBLISHED_AT, RELEASE_NOTES } = process.env;
+            if (![SOURCE_SHA, DISTRIBUTION_SHA].every(value => /^[a-f0-9]{40}$/.test(value)) ||
+                !/^[1-9][0-9]{0,12}$/.test(PUBLISHED_AT) ||
+                !RELEASE_NOTES?.trim() || Buffer.byteLength(RELEASE_NOTES, 'utf8') > 16384) {
+              throw new Error('Invalid frozen identity or release notes');
+            }
+            const { data } = await github.rest.repos.compareCommitsWithBasehead({
+              ...context.repo, basehead: `${SOURCE_SHA}...main`
+            });
+            if (!['ahead', 'identical'].includes(data.status)) {
+              throw new Error('Source commit must be on the reviewed main history');
+            }
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win32-x64
+            runner: windows-2022
+          - target: darwin-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: '1'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      DISTRIBUTION_SHA: ${{ inputs.distribution_sha }}
+      PUBLISHED_AT: ${{ inputs.published_at }}
+      RELEASE_PROFILE: ${{ inputs.profile }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - name: Preserve source bytes on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: distribution-token
+        with:
+          client-id: ${{ vars.DISTRIBUTION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: lumina-layer-studio
+          repositories: Lumina-Distribution
+          permission-contents: read
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: lumina-layer-studio/Lumina-Distribution
+          ref: ${{ inputs.distribution_sha }}
+          token: ${{ steps.distribution-token.outputs.token }}
+          path: distribution
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.33.2
+          run_install: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - name: Install private transport dependencies
+        run: python -m pip install --disable-pip-version-check boto3==1.43.90
+      - name: Build and verify the frozen native candidate
+        env:
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        shell: python
+        run: |
+          import os, pathlib, subprocess, sys
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'lumina-private-candidate'
+          root.mkdir(parents=True)
+          notes = root / 'release-notes.txt'
+          notes.write_text(os.environ['RELEASE_NOTES'], encoding='utf-8')
+          workspace = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+          command = [sys.executable, str(workspace / 'distribution/scripts/cloud_candidate.py'),
+              '--source', str(workspace / 'source'), '--root', str(root / 'run'),
+              '--source-sha', os.environ['SOURCE_SHA'], '--distribution-sha', os.environ['DISTRIBUTION_SHA'],
+              '--profile', os.environ['RELEASE_PROFILE'], '--published-at', os.environ['PUBLISHED_AT'],
+              '--notes-file', str(notes), '--target', os.environ['TARGET']]
+          with (root / 'bootstrap.log').open('w', encoding='utf-8') as log:
+              result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=False)
+          if result.returncode:
+              print('Native candidate failed; details are stored only in private diagnostics.')
+          sys.exit(result.returncode)
+      - name: Upload verified candidate directly to private R2
+        working-directory: distribution
+        env:
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        shell: python
+        run: |
+          import os, pathlib, subprocess, sys
+          candidate = pathlib.Path(os.environ['RUNNER_TEMP']) / 'lumina-private-candidate/run/candidate'
+          sys.exit(subprocess.run([sys.executable, '-m', 'scripts.ci_candidate', 'upload',
+              '--candidate', str(candidate), '--run-id', os.environ['GITHUB_RUN_ID'],
+              '--attempt', os.environ['GITHUB_RUN_ATTEMPT'], '--target', os.environ['TARGET'],
+              '--source-sha', os.environ['SOURCE_SHA']], check=False).returncode)
+      - name: Retain diagnostics privately
+        if: always()
+        continue-on-error: true
+        env:
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        shell: python
+        run: |
+          import os, pathlib, sys, zipfile
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'lumina-private-candidate'
+          if not root.is_dir():
+              sys.exit(0)
+          try:
+              import boto3
+              archive = root / 'diagnostics.zip'
+              paths = [root / 'bootstrap.log', root / 'run/private-error.log',
+                       root / 'run/candidate/build-steps.json']
+              paths.extend((root / 'run/candidate/build-logs').glob('*.log'))
+              with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as output:
+                  for path in paths:
+                      if path.is_file() and not path.is_symlink():
+                          output.write(path, path.relative_to(root))
+              client = boto3.client('s3', endpoint_url=os.environ['R2_ENDPOINT'],
+                  aws_access_key_id=os.environ['R2_ACCESS_KEY_ID'],
+                  aws_secret_access_key=os.environ['R2_SECRET_ACCESS_KEY'], region_name='auto')
+              key = f"ci-diagnostics/{os.environ['GITHUB_RUN_ID']}/{os.environ['GITHUB_RUN_ATTEMPT']}/{os.environ['TARGET']}.zip"
+              client.upload_file(str(archive), os.environ['R2_BUCKET'], key)
+          except Exception:
+              sys.exit('Private diagnostics upload failed; no diagnostic contents were printed.')

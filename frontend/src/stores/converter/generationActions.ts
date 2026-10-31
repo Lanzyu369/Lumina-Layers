@@ -242,6 +242,7 @@ export function createGenerationActions(
       puzzleResolvedCols: null,
       puzzleResolvedPieceCount: null,
       largeFormatWarnings: [],
+      largeFormatFailedTiles: [],
       ...(preservePreviews
         ? {}
         : {
@@ -533,7 +534,7 @@ export function createGenerationActions(
         isGenerating: true,
         error: null,
         generatePerformanceTiming: null,
-        generateWarnings: [],
+        // The previous download and its warnings remain available while retrying.
       });
       _generateRequestSequence += 1;
       const generateSequence = _generateRequestSequence;
@@ -649,6 +650,8 @@ export function createGenerationActions(
             downloadUrl,
             threemfDiskPath: null,
             generateWarnings: puzzleResponse.warnings ?? [],
+            largeFormatWarnings: [],
+            largeFormatFailedTiles: [],
             puzzleWarnings: puzzleResponse.warnings ?? [],
             puzzleResolvedRows: puzzleResponse.grid_rows ?? null,
             puzzleResolvedCols: puzzleResponse.grid_cols ?? null,
@@ -706,6 +709,7 @@ export function createGenerationActions(
             downloadUrl,
             generateWarnings: [],
             largeFormatWarnings: lfResponse.warnings ?? [],
+            largeFormatFailedTiles: lfResponse.failed_tiles ?? [],
           });
           _clientLog("generate: large-format zip received", {
             download_url: downloadUrl,
@@ -725,7 +729,9 @@ export function createGenerationActions(
             elapsed_ms: getElapsedMsSince(_generateStartTime),
             warning_count: (lfResponse.warnings ?? []).length,
           });
-          notifyCompletion("generation");
+          if (lfResponse.status !== "partial" && !lfResponse.failed_tiles?.length) {
+            notifyCompletion("generation");
+          }
           return null;
         }
 
@@ -768,6 +774,7 @@ export function createGenerationActions(
           generatePerformanceTiming: response.performance_timing ?? null,
           generateWarnings: response.warnings ?? [],
           largeFormatWarnings: [],
+          largeFormatFailedTiles: [],
         });
         _logGenerateTimer("UI unlocked (isGenerating=false, 3MF set)");
         _clientLog("generate: UI unlocked", {

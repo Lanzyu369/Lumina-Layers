@@ -1,5 +1,6 @@
 import { createPacer, LAYERS } from './splash-launchProgress.mjs';
-import { fitMark, snapOffset } from './splash-markSize.mjs';
+import { fitMark, MARK_HEIGHT, MARK_WIDTH, snapOffset } from './splash-markSize.mjs';
+import { renderRipple } from './splash-ripple.mjs';
 
 if (!window.studioSplash && new URLSearchParams(location.search).has('preview')) {
   window.studioSplash = await (await import('./splash-preview.mjs')).createPreview();
@@ -10,6 +11,10 @@ const box = document.querySelector('#art');
 const context = canvas.getContext('2d');
 const layerCanvas = document.createElement('canvas');
 const layerContext = layerCanvas.getContext('2d');
+const printCanvas = document.createElement('canvas');
+printCanvas.width = MARK_WIDTH;
+printCanvas.height = MARK_HEIGHT;
+const printContext = printCanvas.getContext('2d', { willReadFrequently: true });
 const progressBar = document.querySelector('progress');
 const status = document.querySelector('#status');
 const images = Array.from({ length: LAYERS }, (_, i) => {
@@ -18,9 +23,20 @@ const images = Array.from({ length: LAYERS }, (_, i) => {
   return image;
 });
 let state, pacer, origin, size, base = 0, current = 0, reveal = null, finishStarted = null;
-let lastTick = null, readyStep = null;
+let lastTick = null, readyStep = null, frame = null;
 const REVEAL_MS = 1600, HOLD_MS = 1000;
 const imageAt = layer => images[layer - 1]?.complete && images[layer - 1].naturalWidth ? images[layer - 1] : null;
+const printPixels = [];
+function pixelsAt(layer) {
+  const image = imageAt(layer);
+  if (!image) return null;
+  if (!printPixels[layer]) {
+    printContext.clearRect(0, 0, MARK_WIDTH, MARK_HEIGHT);
+    printContext.drawImage(image, 0, 0, MARK_WIDTH, MARK_HEIGHT);
+    printPixels[layer] = printContext.getImageData(0, 0, MARK_WIDTH, MARK_HEIGHT).data;
+  }
+  return printPixels[layer];
+}
 
 function layout() {
   const dpr = window.devicePixelRatio || 1;
@@ -34,6 +50,7 @@ function layout() {
   canvas.style.height = `${size.cssHeight}px`;
   canvas.width = layerCanvas.width = size.deviceWidth;
   canvas.height = layerCanvas.height = size.deviceHeight;
+  frame = null;
 }
 function draw() {
   const { deviceWidth: w, deviceHeight: h, cell } = size;
@@ -41,27 +58,13 @@ function draw() {
   context.imageSmoothingEnabled = false;
   const final = imageAt(LAYERS);
   if (final) { context.globalAlpha = .08; context.drawImage(final, 0, 0, w, h); context.globalAlpha = 1; }
-  if (imageAt(base)) context.drawImage(imageAt(base), 0, 0, w, h);
-  if (reveal && imageAt(reveal.layer)) {
-    const progress = reveal.progress;
-    const feather = 24 * cell;
-    const radius = (1 - (1 - progress) ** 3) * (Math.hypot(w, h) + feather);
-    layerContext.clearRect(0, 0, w, h);
-    layerContext.imageSmoothingEnabled = false;
-    layerContext.drawImage(imageAt(reveal.layer), 0, 0, w, h);
-    const gradient = () => layerContext.createRadialGradient(0, h, Math.max(0, radius - feather), 0, h, Math.max(.01, radius));
-    const mask = gradient();
-    mask.addColorStop(0, 'rgba(255,255,255,1)'); mask.addColorStop(1, 'rgba(255,255,255,0)');
-    layerContext.globalCompositeOperation = 'destination-in';
-    layerContext.fillStyle = mask; layerContext.fillRect(0, 0, w, h);
-    const crest = gradient();
-    crest.addColorStop(0, 'rgba(100,116,139,0)'); crest.addColorStop(.5, 'rgba(100,116,139,.35)'); crest.addColorStop(1, 'rgba(100,116,139,0)');
-    layerContext.globalCompositeOperation = 'source-atop';
-    layerContext.globalAlpha = Math.sin(Math.PI * progress);
-    layerContext.fillStyle = crest; layerContext.fillRect(0, 0, w, h);
-    layerContext.globalAlpha = 1; layerContext.globalCompositeOperation = 'source-over';
+  const incoming = reveal && pixelsAt(reveal.layer);
+  if (incoming) {
+    frame ??= layerContext.createImageData(w, h);
+    renderRipple(frame, pixelsAt(base), incoming, reveal.progress, cell);
+    layerContext.putImageData(frame, 0, 0);
     context.drawImage(layerCanvas, 0, 0);
-  }
+  } else if (imageAt(base)) context.drawImage(imageAt(base), 0, 0, w, h);
 }
 function tick() {
   if (!state) { requestAnimationFrame(tick); return; }

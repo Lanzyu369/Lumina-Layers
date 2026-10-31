@@ -4,6 +4,7 @@ import type { ConverterState } from "../stores/converter";
 import type {
   ColorReplaceResponse,
   RegionReplaceResponse,
+  SelectionDocumentResponse,
 } from "../api/types";
 
 /*
@@ -208,97 +209,6 @@ describe("confirmReplacement · gradient-region scope", () => {
     );
   });
 
-  it("does not repaint an older selection confirmation over a newer optimistic click", async () => {
-    seedStore({
-      gradientSelection: null,
-      selectionDocument: {
-        selection_revision: 1,
-        content_revision: 10,
-        selected_pixel_count: 4,
-        selected_component_count: 1,
-        selected_color_hexes: ["#111111"],
-        region_ids: ["old-region"],
-        components: [
-          {
-            label: 1,
-            region_id: "old-region",
-            color_hex: "#111111",
-            pixel_count: 4,
-            bbox: [0, 0, 2, 2],
-            anchor: [0, 0],
-          },
-        ],
-        contours: [
-          [[0, 0], [2, 0], [2, 2], [0, 2]],
-        ],
-        can_undo: false,
-        can_redo: false,
-      },
-    });
-    mockMutateEditorSelection.mockResolvedValueOnce({
-      selection_revision: 2,
-      content_revision: 10,
-      selected_pixel_count: 4,
-      selected_component_count: 1,
-      selected_color_hexes: ["#111111"],
-      region_ids: ["old-region"],
-      components: [
-        {
-          label: 1,
-          region_id: "old-region",
-          color_hex: "#111111",
-          pixel_count: 4,
-          bbox: [0, 0, 2, 2],
-          anchor: [0, 0],
-        },
-      ],
-      contours: [
-        [[0, 0], [2, 0], [2, 2], [0, 2]],
-      ],
-      can_undo: true,
-      can_redo: false,
-    });
-
-    const newerOptimisticDocument = {
-      ...useConverterStore.getState().selectionDocument!,
-      selection_revision: 3,
-      selected_pixel_count: 8,
-      selected_component_count: 2,
-      selected_color_hexes: ["#111111", "#222222"],
-      region_ids: ["old-region", "new-region"],
-      components: [
-        ...useConverterStore.getState().selectionDocument!.components,
-        {
-          label: -3,
-          region_id: "new-region",
-          color_hex: "#222222",
-          pixel_count: 4,
-          bbox: [3, 0, 2, 2],
-          anchor: [3, 0],
-        },
-      ],
-      contours: [
-        ...useConverterStore.getState().selectionDocument!.contours,
-        [[3, 0], [5, 0], [5, 2], [3, 2]],
-      ],
-    };
-
-    await useConverterStore.getState().applySelectionMutation({
-      operation: "point-toggle",
-      x: 0,
-      y: 0,
-      optimisticDocument: newerOptimisticDocument,
-    });
-
-    const state = useConverterStore.getState();
-    expect(state.selectionDocument?.selection_revision).toBe(3);
-    expect(state.selectionDocument?.selected_component_count).toBe(2);
-    expect(state.selectedRegions.map((region) => region.regionId)).toEqual([
-      "old-region",
-      "new-region",
-    ]);
-  });
-
   it("syncs the authoritative selection revision after selection-scoped replacement so clear-all still works", async () => {
     seedStore({
       gradientSelection: null,
@@ -448,4 +358,37 @@ describe("confirmReplacement · gradient-region scope", () => {
       replacePreviewLoading: false,
     });
   });
+
+  it.each(["clear", "point-toggle"] as const)(
+    "does not replace any pixels when a queued %s leaves the selection empty",
+    async (operation) => {
+      const empty: SelectionDocumentResponse = {
+        selection_revision: 2, content_revision: 10,
+        selected_pixel_count: 0, selected_component_count: 0,
+        selected_color_hexes: [], region_ids: [], components: [], contours: [],
+        can_undo: true, can_redo: false,
+      };
+      seedStore({
+        sessionId: `empty-selection-before-target-${operation}`,
+        gradientSelection: null,
+        selectionDocument: {
+          ...empty, selection_revision: 1, selected_pixel_count: 4,
+          selected_component_count: 1, selected_color_hexes: ["#aabbcc"],
+        },
+      });
+      const selectionResponse = deferred<SelectionDocumentResponse>();
+      mockMutateEditorSelection.mockReturnValueOnce(selectionResponse.promise);
+      const selection = useConverterStore.getState().applySelectionMutation({ operation, x: 0, y: 0 });
+      const replacement = useConverterStore.getState().confirmReplacement();
+      await vi.waitFor(() => expect(mockMutateEditorSelection).toHaveBeenCalledOnce());
+      expect(mockRegionReplace).not.toHaveBeenCalled();
+      selectionResponse.resolve(empty);
+      await Promise.all([selection, replacement]);
+      expect(mockRegionReplace).not.toHaveBeenCalled();
+      expect(mockReplaceColor).not.toHaveBeenCalled();
+      expect(useConverterStore.getState()).toMatchObject({
+        colorRemapMap: {}, regionReplacementCount: 0, error: null,
+      });
+    },
+  );
 });

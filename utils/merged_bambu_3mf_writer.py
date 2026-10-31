@@ -259,6 +259,7 @@ class _SourceAssembly:
     project_settings: dict[str, Any]
     root_metadata: dict[str, str]
     source_metadata: dict[str, Any]
+    source_build_transform: tuple[float, ...]
     source_model_index: int = 1
 
 
@@ -362,9 +363,16 @@ def _parse_source_assembly(
                     f"MergedItem[{item_idx}].source_3mf_path missing <build>"
                 )
             build_items = list(build_elem.findall(_qname_core("item")))
-            if not build_items:
+            if len(build_items) != 1:
                 raise MergedWriteError(
-                    f"MergedItem[{item_idx}].source_3mf_path has empty <build>"
+                    f"MergedItem[{item_idx}] must contain exactly one build assembly; "
+                    f"found {len(build_items)}. Export each source as a single object project."
+                )
+            source_build_transform = _parse_transform_matrix(build_items[0].get("transform", ""))
+            if not np.allclose(source_build_transform[:9], [1, 0, 0, 0, 1, 0, 0, 0, 1], atol=1e-9, rtol=0):
+                raise MergedWriteError(
+                    f"MergedItem[{item_idx}] has a rotated or scaled build assembly; "
+                    "apply its rotation and scale to the source geometry before merging."
                 )
             target_objectid = build_items[0].get("objectid")
             if target_objectid is None:
@@ -558,7 +566,8 @@ def _parse_source_assembly(
             return _SourceAssembly(
                 meshes=tuple(meshes),
                 source_assembly_id=int(target_objectid),
-                source_model_index=1,  # This parser selects build_items[0].
+                source_model_index=1,
+                source_build_transform=tuple(source_build_transform),
                 source_assembly_uuid=source_assembly_uuid,
                 source_build_item_uuid=source_build_item_uuid,
                 min_x=min_x,
@@ -804,7 +813,14 @@ def _resolve_merged_wipe_tower_placement(
         layout,
         model_bounds=model_bounds,
         model_height=model_height,
-        material_count=len({slot.slot_id for item in items for slot in item.slots}),
+        material_count=len({
+            slot.slot_id
+            for item, assembly in zip(items, assemblies)
+            for index, slot in enumerate(item.slots)
+            if "used_slot_indices" not in assembly.source_metadata
+            or (slot.source_slot_index if slot.source_slot_index is not None else index)
+            in assembly.source_metadata["used_slot_indices"]
+        }),
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
@@ -1403,7 +1419,7 @@ class MergedSlicer3MFWriter:
         if source_transform is None:
             dx = item.tx_mm - assembly.min_x
             dy = item.ty_mm - assembly.min_y
-            dz = 0.0
+            dz = assembly.source_build_transform[11]
             build_transform = [
                 1.0, 0.0, 0.0,
                 0.0, 1.0, 0.0,

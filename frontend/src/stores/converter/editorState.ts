@@ -58,21 +58,6 @@ export function selectionStateFromDocument(
   };
 }
 
-export function matchesColorHighlightSnapshot(
-  state: Pick<ConverterState, "sessionId" | "selectionMode" | "selectedColors">,
-  snapshot: {
-    sessionId: string;
-    selectionMode: SelectionMode;
-    selectedColors: string[];
-  },
-): boolean {
-  if (state.sessionId !== snapshot.sessionId) return false;
-  if (state.selectionMode !== snapshot.selectionMode) return false;
-  if (state.selectedColors.size !== snapshot.selectedColors.length)
-    return false;
-  return snapshot.selectedColors.every((hex) => state.selectedColors.has(hex));
-}
-
 export function normalizeHexNoHash(hex: string | null | undefined): string | null {
   if (!hex) return null;
   const raw = hex.replace(/^#/, "").trim();

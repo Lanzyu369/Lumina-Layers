@@ -21,6 +21,7 @@ from api.preview_cache_artifacts import (
 from api.selection_state import (
     RECIPE_OVERRIDE_APPLIED_MASKS_KEY,
     SELECTION_REGION_PREFIX,
+    get_selection_revision,
     selection_region_id,
 )
 from api.session_store import SessionStore
@@ -183,13 +184,6 @@ def push_replacement_checkpoint(
     # push 会丢条目或产生重复条目。
     with replacement_history_lock(session_id):
         undo_stack = [*_stack(session_data, REPLACEMENT_UNDO_STACK_KEY)]
-        if checkpoint.get("kind") == "content":
-            # Fold only the selection-building suffix since the previous content
-            # commit. Older selection entries remain reachable when older content
-            # operations are undone.
-            while undo_stack and undo_stack[-1].get("kind") == "selection":
-                undo_stack.pop()
-            checkpoint["preserve_selection_on_restore"] = True
         undo_stack.append(checkpoint)
         undo_stack = _trim_stack(undo_stack)
         session_data[REPLACEMENT_UNDO_STACK_KEY] = undo_stack
@@ -216,15 +210,11 @@ def restore_from_history(
         raise IndexError(f"No replacement {action} checkpoint available")
 
     checkpoint = source[-1]
-    preserve_selection = bool(checkpoint.get("preserve_selection_on_restore"))
-    current = snapshot_replacement_state(
-        session_data,
-        label=f"{action}_current",
-        kind=checkpoint.get("kind", "content"),
-        include_preview_cache=checkpoint.get("kind") != "selection",
+    current = (
+        snapshot_selection_state(session_data, label=f"{action}_current")
+        if checkpoint.get("kind") == "selection"
+        else snapshot_replacement_state(session_data, label=f"{action}_current")
     )
-    if preserve_selection:
-        current["preserve_selection_on_restore"] = True
     next_source = source[:-1]
     next_target = [*_stack(session_data, target_key), current]
     next_target = _trim_stack(next_target)
@@ -234,7 +224,6 @@ def restore_from_history(
         store,
         session_data,
         checkpoint,
-        preserve_selection=preserve_selection,
     )
     session_data[source_key] = next_source
     session_data[target_key] = next_target
@@ -286,6 +275,7 @@ def restore_replacement_checkpoint(
         store.put(session_id, "preview_cache", preview_cache)
 
     restored_fields = checkpoint.get("session_fields") or {}
+    current_selection_revision = get_selection_revision(session_data)
     defaults: dict[str, Any] = {
         "replacement_regions": [],
         "recipe_overrides": [],
@@ -312,6 +302,11 @@ def restore_replacement_checkpoint(
         else REPLACEMENT_SESSION_FIELDS
     )
     for key in restore_keys:
+        # Revisions identify publications in this live session, not historical
+        # snapshots. Rewinding them makes clients reject a successful undo as a
+        # stale response and lets delayed gestures match a reused revision.
+        if key in {"editor_selection_revision", "editor_selection_content_generation"}:
+            continue
         if preserve_selection and key in {
             "editor_selection_mask",
             "editor_selection_revision",
@@ -322,16 +317,18 @@ def restore_replacement_checkpoint(
         session_data[key] = value
         store.put(session_id, key, value)
 
-    # A restored selection must re-publish its synthetic region token so legacy
-    # recipe/region consumers can resolve the restored mask. The old (higher)
-    # revision's token is dropped first — keep exactly one entry, matching the
-    # restored revision.
-    # 恢复的选区必须重新发布合成 region token，否则 recipe/region 旧流程无法
-    # 从恢复后的 mask 解析（会 409 "No selected regions available"）。先清掉
-    # 旧（更高）revision 的条目，只保留与恢复 revision 对应的一条。
-    if checkpoint.get("kind") == "selection" and not preserve_selection:
+    # Both content and selection history can restore a mask. Publish a fresh
+    # revision and its compatibility token together; applied recipe masks keep
+    # their independent snapshots and do not depend on this temporary token.
+    if not preserve_selection:
         restored_mask = session_data.get("editor_selection_mask")
-        restored_rev = max(0, int(session_data.get("editor_selection_revision") or 0))
+        # Imported projects retain applied recipe masks keyed by their original
+        # selection tokens. Advance beyond the saved revision as well, so a new
+        # session cannot reuse a token and overwrite an earlier recipe footprint.
+        saved_selection_revision = get_selection_revision(restored_fields)
+        restored_rev = max(current_selection_revision, saved_selection_revision) + 1
+        session_data["editor_selection_revision"] = restored_rev
+        store.put(session_id, "editor_selection_revision", restored_rev)
         region_masks = session_data.get("selected_region_masks")
         if not isinstance(region_masks, dict):
             region_masks = {}
