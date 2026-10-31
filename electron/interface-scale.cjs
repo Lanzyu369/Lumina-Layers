@@ -11,6 +11,9 @@ const DEFAULT_PREFERENCE = "100";
 const SCALE_STEPS = Object.freeze(["80", "90", "100", "110", "125", "150", "175"]);
 const PREFERENCES = new Set(SCALE_STEPS);
 const DEFAULT_WINDOW_SIZE = { width: 1440, height: 900 };
+// Smallest page, in CSS pixels, at which the workspace panels and the 3D
+// toolbar still sit side by side without covering each other.
+const MIN_PAGE_SIZE = { width: 960, height: 620 };
 const MAX_WINDOWED_SHARE = 0.9;
 const MOVE_SETTLE_MS = 200;
 const DISPLAY_EVENTS = ["display-metrics-changed", "display-added", "display-removed"];
@@ -29,6 +32,27 @@ function resolveZoomFactor(preference, displaySize) {
     ? Number(preference)
     : Number(DEFAULT_PREFERENCE);
   return percent / 100;
+}
+
+/**
+ * Caps the zoom so the minimum page still fits the work area. Without this a
+ * high step on a small display would need a window larger than the screen.
+ */
+function fitZoomFactorToWorkArea(zoomFactor, workArea) {
+  const width = Number(workArea?.width);
+  const height = Number(workArea?.height);
+  if (!(width > 0 && height > 0)) return zoomFactor;
+  const largest = Math.min(width / MIN_PAGE_SIZE.width, height / MIN_PAGE_SIZE.height);
+  if (zoomFactor <= largest) return zoomFactor;
+  return Math.floor(largest * 1000) / 1000;
+}
+
+/** Window size that keeps the page at least MIN_PAGE_SIZE at this zoom. */
+function resolveMinimumWindowSize(zoomFactor) {
+  return {
+    width: Math.ceil(MIN_PAGE_SIZE.width * zoomFactor),
+    height: Math.ceil(MIN_PAGE_SIZE.height * zoomFactor),
+  };
 }
 
 /** Next preference for a zoom shortcut; stays put at either end. */
@@ -116,10 +140,15 @@ function createInterfaceScaleController({
     ? screen.getDisplayMatching(window.getBounds())
     : screen.getPrimaryDisplay());
 
+  const effectiveZoomFactor = display =>
+    fitZoomFactorToWorkArea(resolveZoomFactor(preference, display.size), display.workArea);
+
   function apply() {
     if (!isLive()) return;
     const display = currentDisplay();
-    const factor = resolveZoomFactor(preference, display.size);
+    const factor = effectiveZoomFactor(display);
+    const minimum = resolveMinimumWindowSize(factor);
+    window.setMinimumSize(minimum.width, minimum.height);
     if (Math.abs(window.webContents.getZoomFactor() - factor) < 0.001) return;
     window.webContents.setZoomFactor(factor);
     log(`Interface scale ${preference}: zoom ${factor} on a ${display.size.width}x${display.size.height} display`);
@@ -166,8 +195,12 @@ function createInterfaceScaleController({
 
   function initialPlacement() {
     const display = screen.getPrimaryDisplay();
-    const zoomFactor = resolveZoomFactor(preference, display.size);
-    return { zoomFactor, ...resolveInitialWindowPlacement(display.workArea, zoomFactor) };
+    const zoomFactor = effectiveZoomFactor(display);
+    return {
+      zoomFactor,
+      minimumSize: resolveMinimumWindowSize(zoomFactor),
+      ...resolveInitialWindowPlacement(display.workArea, zoomFactor),
+    };
   }
 
   return { attach, choose, initialPlacement, preference: () => preference };
@@ -188,13 +221,16 @@ function setInterfaceScale({ event, window, trustedUrl, controller, preference }
 }
 
 module.exports = {
+  MIN_PAGE_SIZE,
   SCALE_STEPS,
   createInterfaceScaleController,
+  fitZoomFactorToWorkArea,
   getInterfaceScale,
   interfaceScaleShortcut,
   isInterfaceScalePreference,
   readInterfaceScalePreference,
   resolveInitialWindowPlacement,
+  resolveMinimumWindowSize,
   resolveZoomFactor,
   setInterfaceScale,
   stepInterfaceScalePreference,

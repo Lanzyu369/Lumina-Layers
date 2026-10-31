@@ -60,6 +60,7 @@ async function fixture(t, platform, mode = "healthy", prepareUserData = () => {}
     loadFile() { return Promise.resolve(); }
     focus() {}
     getBounds() { return { x: this.options.x, y: this.options.y, width: this.options.width, height: this.options.height }; }
+    setMinimumSize(width, height) { this.minimumSize = { width, height }; }
     maximize() { this.maximized = true; this.show(); }
     show() { this.visible = true; this.emit('show'); }
     isVisible() { return !!this.visible; }
@@ -253,6 +254,8 @@ test("source desktop opens at native scale and only its page may change it", asy
   await f.healthy();
   const window = f.mainWindow();
   assert.equal(window.options.webPreferences.zoomFactor, 1);
+  assert.equal(window.options.minWidth, 960);
+  assert.equal(window.options.minHeight, 620);
   assert.equal(window.maximized, undefined);
   assert.equal(window.visible, true);
 
@@ -264,6 +267,7 @@ test("source desktop opens at native scale and only its page may change it", asy
   assert.deepEqual(await setScale(workshopFrame, "150"), { status: "error", code: "denied" });
   assert.deepEqual(await setScale(page, "150"), { status: "ok", preference: "150" });
   assert.equal(window.webContents.zoomFactor, 1.5);
+  assert.deepEqual(window.minimumSize, { width: 1440, height: 930 });
   assert.deepEqual(JSON.parse(fs.readFileSync(f.interfaceScalePath, "utf8")), { schemaVersion: 1, preference: "150" });
 });
 

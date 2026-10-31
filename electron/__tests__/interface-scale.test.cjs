@@ -6,12 +6,15 @@ const os = require("node:os");
 const path = require("node:path");
 const { EventEmitter } = require("node:events");
 const {
+  MIN_PAGE_SIZE,
   SCALE_STEPS,
   createInterfaceScaleController,
+  fitZoomFactorToWorkArea,
   getInterfaceScale,
   interfaceScaleShortcut,
   readInterfaceScalePreference,
   resolveInitialWindowPlacement,
+  resolveMinimumWindowSize,
   resolveZoomFactor,
   setInterfaceScale,
   stepInterfaceScalePreference,
@@ -54,6 +57,8 @@ function fakeWindow(bounds = { x: 0, y: 0, width: 1440, height: 900 }) {
   window.bounds = bounds;
   window.getBounds = () => window.bounds;
   window.isDestroyed = () => false;
+  window.minimumSizes = [];
+  window.setMinimumSize = (width, height) => window.minimumSizes.push([width, height]);
   const contents = new EventEmitter();
   contents.zoom = 1;
   contents.zoomCalls = [];
@@ -163,6 +168,23 @@ test("the first window is the old 1440x900 scaled by the zoom, maximized when th
   assert.deepEqual(placement.bounds, { x: 556, y: 1118, width: 1152, height: 676 });
 });
 
+test("the minimum window keeps the workspace page from being squeezed", () => {
+  assert.deepEqual(resolveMinimumWindowSize(1), { width: MIN_PAGE_SIZE.width, height: MIN_PAGE_SIZE.height });
+  assert.deepEqual(resolveMinimumWindowSize(0.9), { width: 864, height: 558 });
+  assert.deepEqual(resolveMinimumWindowSize(1.25), { width: 1200, height: 775 });
+});
+
+test("high steps are capped so the minimum window still fits the work area", () => {
+  // 4K at 250% system scaling: work area 1536x816 logical pixels.
+  const workArea = { x: 0, y: 0, width: 1536, height: 816 };
+  assert.equal(fitZoomFactorToWorkArea(1.25, workArea), 1.25);
+  assert.equal(fitZoomFactorToWorkArea(1.5, workArea), 1.316);
+  assert.equal(fitZoomFactorToWorkArea(1.75, workArea), 1.316);
+  const minimum = resolveMinimumWindowSize(fitZoomFactorToWorkArea(1.75, workArea));
+  assert.ok(minimum.width <= workArea.width && minimum.height <= workArea.height, JSON.stringify(minimum));
+  assert.equal(fitZoomFactorToWorkArea(1.5, { width: 0, height: 0 }), 1.5);
+});
+
 test("the controller applies, saves and announces a new preference", t => {
   const stateFile = tempStateFile(t);
   const screen = fakeScreen([display({ x: 0, y: 0, width: 1920, height: 1080 })]);
@@ -170,6 +192,7 @@ test("the controller applies, saves and announces a new preference", t => {
   assert.equal(controller.preference(), "100");
   assert.deepEqual(controller.initialPlacement(), {
     zoomFactor: 1,
+    minimumSize: { width: 960, height: 620 },
     maximize: false,
     bounds: { x: 240, y: 66, width: 1440, height: 900 },
   });
@@ -178,6 +201,7 @@ test("the controller applies, saves and announces a new preference", t => {
   controller.attach(window);
   assert.equal(controller.choose("150"), true);
   assert.deepEqual(window.webContents.zoomCalls, [1.5]);
+  assert.deepEqual(window.minimumSizes, [[1440, 930]]);
   assert.deepEqual(window.webContents.sent, [["interface-scale-changed", { preference: "150" }]]);
   assert.equal(readInterfaceScalePreference(stateFile), "150");
 
