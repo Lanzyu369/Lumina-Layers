@@ -6,12 +6,16 @@ const os = require("node:os");
 const path = require("node:path");
 const { EventEmitter } = require("node:events");
 const {
+  MIN_PAGE_SIZE,
   SCALE_STEPS,
   createInterfaceScaleController,
+  fitZoomFactorToWorkArea,
   getInterfaceScale,
   interfaceScaleShortcut,
   readInterfaceScalePreference,
+  resolveGrownWindowBounds,
   resolveInitialWindowPlacement,
+  resolveMinimumWindowSize,
   resolveZoomFactor,
   setInterfaceScale,
   stepInterfaceScalePreference,
@@ -54,6 +58,14 @@ function fakeWindow(bounds = { x: 0, y: 0, width: 1440, height: 900 }) {
   window.bounds = bounds;
   window.getBounds = () => window.bounds;
   window.isDestroyed = () => false;
+  window.maximized = false;
+  window.isMaximized = () => window.maximized;
+  window.isMinimized = () => false;
+  window.isFullScreen = () => false;
+  // Like the native window on macOS: raising the minimum does not resize it.
+  window.minimumSizes = [];
+  window.setMinimumSize = (width, height) => window.minimumSizes.push([width, height]);
+  window.setBounds = next => { window.bounds = { ...window.bounds, ...next }; };
   const contents = new EventEmitter();
   contents.zoom = 1;
   contents.zoomCalls = [];
@@ -163,6 +175,103 @@ test("the first window is the old 1440x900 scaled by the zoom, maximized when th
   assert.deepEqual(placement.bounds, { x: 556, y: 1118, width: 1152, height: 676 });
 });
 
+test("the minimum window keeps the workspace page from being squeezed", () => {
+  assert.deepEqual(resolveMinimumWindowSize(1), { width: MIN_PAGE_SIZE.width, height: MIN_PAGE_SIZE.height });
+  assert.deepEqual(resolveMinimumWindowSize(0.9), { width: 864, height: 558 });
+  assert.deepEqual(resolveMinimumWindowSize(1.25), { width: 1200, height: 775 });
+});
+
+test("high steps are capped so the minimum window still fits the work area", () => {
+  // 4K at 250% system scaling: work area 1536x816 logical pixels.
+  const workArea = { x: 0, y: 0, width: 1536, height: 816 };
+  assert.equal(fitZoomFactorToWorkArea(1.25, workArea), 1.25);
+  assert.equal(fitZoomFactorToWorkArea(1.5, workArea), 1.316);
+  assert.equal(fitZoomFactorToWorkArea(1.75, workArea), 1.316);
+  const minimum = resolveMinimumWindowSize(fitZoomFactorToWorkArea(1.75, workArea));
+  assert.ok(minimum.width <= workArea.width && minimum.height <= workArea.height, JSON.stringify(minimum));
+  assert.equal(fitZoomFactorToWorkArea(1.5, { width: 0, height: 0 }), 1.5);
+});
+
+test("a window below the minimum grows from its corner and stays inside the work area", () => {
+  const workArea = { x: 0, y: 25, width: 1470, height: 843 };
+  const minimum = { width: 1305, height: 843 };
+  assert.equal(resolveGrownWindowBounds({ x: 100, y: 100, width: 1400, height: 843 }, minimum, workArea), null);
+  assert.deepEqual(
+    resolveGrownWindowBounds({ x: 40, y: 60, width: 768, height: 496 }, minimum, workArea),
+    { x: 40, y: 25, width: 1305, height: 843 },
+  );
+  // Near the right edge it moves left rather than spilling off screen.
+  assert.deepEqual(
+    resolveGrownWindowBounds({ x: 600, y: 25, width: 768, height: 900 }, minimum, workArea),
+    { x: 165, y: 25, width: 1305, height: 900 },
+  );
+});
+
+test("raising the step grows a small window; lowering it leaves the window alone", t => {
+  // The macOS display from the #268 review: 1470x956 logical, 843-high work area.
+  const mac = { bounds: { x: 0, y: 0, width: 1470, height: 956 }, size: { width: 1470, height: 956 },
+    workArea: { x: 0, y: 25, width: 1470, height: 843 } };
+  const stateFile = tempStateFile(t);
+  writeInterfaceScalePreference(stateFile, "80");
+  const controller = createInterfaceScaleController({ screen: fakeScreen([mac]), stateFile });
+  const window = fakeWindow({ x: 40, y: 60, width: 768, height: 496 });
+  controller.attach(window);
+  window.webContents.emit("did-navigate");
+  assert.deepEqual(window.minimumSizes.at(-1), [768, 496]);
+  assert.deepEqual(window.bounds, { x: 40, y: 60, width: 768, height: 496 });
+
+  controller.choose("150");
+  const zoom = window.webContents.getZoomFactor();
+  assert.equal(zoom, 1.359);
+  assert.deepEqual(window.bounds, { x: 40, y: 25, width: 1305, height: 843 });
+  // The page itself, not just the limit, is back to the minimum.
+  assert.ok(window.bounds.width / zoom >= MIN_PAGE_SIZE.width - 1, JSON.stringify(window.bounds));
+  assert.ok(window.bounds.height / zoom >= MIN_PAGE_SIZE.height - 1, JSON.stringify(window.bounds));
+
+  controller.choose("80");
+  assert.deepEqual(window.minimumSizes.at(-1), [768, 496]);
+  assert.deepEqual(window.bounds, { x: 40, y: 25, width: 1305, height: 843 });
+  window.setBounds({ width: 800, height: 520 });
+  assert.deepEqual(window.bounds, { x: 40, y: 25, width: 800, height: 520 });
+
+  // A maximized window keeps the size the OS gave it.
+  window.maximized = true;
+  window.bounds = { x: 0, y: 25, width: 1470, height: 843 };
+  controller.choose("175");
+  assert.deepEqual(window.bounds, { x: 0, y: 25, width: 1470, height: 843 });
+});
+
+test("restoring after a maximized scale increase keeps the enlarged window on screen", t => {
+  const mac = { bounds: { x: 0, y: 0, width: 1470, height: 956 }, size: { width: 1470, height: 956 },
+    workArea: { x: 0, y: 33, width: 1470, height: 843 } };
+  const stateFile = tempStateFile(t);
+  writeInterfaceScalePreference(stateFile, "80");
+  const controller = createInterfaceScaleController({ screen: fakeScreen([mac]), stateFile });
+  const window = fakeWindow({ x: 600, y: 350, width: 768, height: 496 });
+  controller.attach(window);
+  window.webContents.emit("did-navigate");
+
+  window.maximized = true;
+  window.bounds = { ...mac.workArea };
+  controller.choose("150");
+  assert.deepEqual(window.bounds, mac.workArea);
+
+  // Native macOS restoration applies the raised minimum but retains the old x.
+  window.maximized = false;
+  window.bounds = { x: 600, y: 33, width: 1305, height: 843 };
+  window.emit("unmaximize");
+  assert.deepEqual(window.bounds, { x: 165, y: 33, width: 1305, height: 843 });
+  assert.equal(window.webContents.getZoomFactor(), 1.359);
+
+  // Do not pull a sufficiently large window back during ordinary dragging.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  window.bounds.x = 200;
+  window.emit("move");
+  t.mock.timers.tick(200);
+  assert.equal(window.bounds.x, 200);
+  window.emit("closed");
+});
+
 test("the controller applies, saves and announces a new preference", t => {
   const stateFile = tempStateFile(t);
   const screen = fakeScreen([display({ x: 0, y: 0, width: 1920, height: 1080 })]);
@@ -170,6 +279,7 @@ test("the controller applies, saves and announces a new preference", t => {
   assert.equal(controller.preference(), "100");
   assert.deepEqual(controller.initialPlacement(), {
     zoomFactor: 1,
+    minimumSize: { width: 960, height: 620 },
     maximize: false,
     bounds: { x: 240, y: 66, width: 1440, height: 900 },
   });
@@ -178,6 +288,7 @@ test("the controller applies, saves and announces a new preference", t => {
   controller.attach(window);
   assert.equal(controller.choose("150"), true);
   assert.deepEqual(window.webContents.zoomCalls, [1.5]);
+  assert.deepEqual(window.minimumSizes, [[1440, 930]]);
   assert.deepEqual(window.webContents.sent, [["interface-scale-changed", { preference: "150" }]]);
   assert.equal(readInterfaceScalePreference(stateFile), "150");
 
