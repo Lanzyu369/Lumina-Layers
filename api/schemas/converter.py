@@ -1277,7 +1277,11 @@ class SelectionMutationRequest(BaseModel):
     session_id: str = Field(..., description="Session ID")
     operation: Literal[
         "point-toggle",
+        "point-remove",
         "same-color-toggle",
+        "same-color-remove",
+        "colors-set",
+        "gradient-region-set",
         "color-range-toggle",
         "brush-add",
         "clear",
@@ -1287,6 +1291,9 @@ class SelectionMutationRequest(BaseModel):
     x: int | None = Field(None, ge=0)
     y: int | None = Field(None, ge=0)
     color_hex: str | None = None
+    color_hexes: list[str] | None = Field(None, max_length=10000)
+    gradient_group_index: int | None = Field(None, ge=1)
+    gradient_region_index: int | None = Field(None, ge=1)
     color_tolerance: float | None = Field(
         None,
         ge=0,
@@ -1295,6 +1302,7 @@ class SelectionMutationRequest(BaseModel):
     )
     brush_radius: float | None = Field(None, gt=0, le=4096)
     brush_points: list[SelectionPoint] = Field(default_factory=list, max_length=10000)
+    brush_strokes: list[list[SelectionPoint]] | None = Field(None, max_length=10000)
 
 
 class SelectionComponentItem(BaseModel):

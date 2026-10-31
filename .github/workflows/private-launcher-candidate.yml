@@ -1,0 +1,116 @@
+name: Build private launcher candidates
+
+on:
+  workflow_dispatch:
+    inputs:
+      distribution_sha:
+        description: Reviewed full private Distribution commit
+        type: string
+        required: true
+      seed_sha256:
+        description: Frozen private launcher seed digest (no URLs or credentials)
+        type: string
+        required: true
+      target:
+        description: Build both platforms, or retry one failed platform
+        type: choice
+        options: [both, win32-x64, darwin-arm64]
+        default: both
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-launcher-candidate-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'lumina-layer-studio/Lumina-Layers' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      platforms: ${{ steps.identity.outputs.platforms }}
+    steps:
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        id: identity
+        env:
+          DISTRIBUTION_SHA: ${{ inputs.distribution_sha }}
+          SEED_SHA256: ${{ inputs.seed_sha256 }}
+          TARGET: ${{ inputs.target }}
+        with:
+          script: |
+            const { DISTRIBUTION_SHA, SEED_SHA256, TARGET } = process.env;
+            if (!/^[a-f0-9]{40}$/.test(DISTRIBUTION_SHA) || !/^[a-f0-9]{64}$/.test(SEED_SHA256) ||
+                !['both', 'win32-x64', 'darwin-arm64'].includes(TARGET)) {
+              throw new Error('Invalid frozen launcher identity');
+            }
+            const platforms = [
+              { target: 'win32-x64', runner: 'windows-2022' },
+              { target: 'darwin-arm64', runner: 'macos-15' }
+            ].filter(item => TARGET === 'both' || item.target === TARGET);
+            core.setOutput('platforms', JSON.stringify(platforms));
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.validate.outputs.platforms) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - name: Preserve private source bytes on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: distribution-token
+        with:
+          client-id: ${{ vars.DISTRIBUTION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: lumina-layer-studio
+          repositories: Lumina-Distribution
+          permission-contents: read
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: lumina-layer-studio/Lumina-Distribution
+          ref: ${{ inputs.distribution_sha }}
+          token: ${{ steps.distribution-token.outputs.token }}
+          path: distribution
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.33.2
+          run_install: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - name: Install private transport and native inspection dependencies
+        run: python -m pip install --disable-pip-version-check boto3==1.43.90 pefile==2024.8.26
+      - name: Build, verify, and privately transfer the frozen launcher
+        working-directory: distribution
+        env:
+          PYTHONUTF8: '1'
+          DISTRIBUTION_SHA: ${{ inputs.distribution_sha }}
+          SEED_SHA256: ${{ inputs.seed_sha256 }}
+          TARGET: ${{ matrix.target }}
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        shell: python
+        run: |
+          import os, pathlib, subprocess, sys
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'lumina-private-launcher'
+          command = [sys.executable, '-m', 'scripts.launcher_cloud_candidate', 'run',
+              '--root', str(root), '--distribution-sha', os.environ['DISTRIBUTION_SHA'],
+              '--seed-sha256', os.environ['SEED_SHA256'], '--target', os.environ['TARGET'],
+              '--run-id', os.environ['GITHUB_RUN_ID'], '--attempt', os.environ['GITHUB_RUN_ATTEMPT']]
+          result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+          print('Private launcher candidate completed.' if result.returncode == 0 else
+                'Private launcher candidate failed; inspect private diagnostics.')
+          sys.exit(result.returncode)

@@ -93,6 +93,96 @@ describe("CanvasPreviewSurface", () => {
     globalThis.ResizeObserver = OriginalResizeObserver
   })
 
+  it("waits for comparison decode, ignores stale completions, and keeps the primary buffer", async () => {
+    const drawImage = vi.fn()
+    const ready = vi.fn()
+    installCanvasContextMock(() => ({
+      clearRect: vi.fn(), save: vi.fn(), restore: vi.fn(),
+      setTransform: vi.fn(), translate: vi.fn(), scale: vi.fn(), drawImage,
+    } as unknown as CanvasRenderingContext2D))
+    const props = {
+      src: "/preview.png", alt: "Preview", onSurfaceReady: ready,
+      overlay: <div data-testid="selection-fill">selection</div>,
+      screenSpaceOverlay: <div data-testid="selection-outline" style={{ visibility: "visible" }}>outline</div>,
+    }
+    const { rerender } = render(<CanvasPreviewSurface {...props} comparisonSrc="/original-a.png" showComparison />)
+    const primary = createdImages[0]
+    const oldComparison = createdImages[1]
+    const surface = screen.getByTestId("canvas-preview-surface")
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({ width: 200, height: 100 } as DOMRect)
+    act(() => primary.dispatchLoad())
+    let finishDecode!: () => void
+    Object.assign(oldComparison, { decode: () => new Promise<void>((resolve) => { finishDecode = resolve }) })
+    act(() => oldComparison.dispatchLoad())
+    expect(drawImage.mock.calls.at(-1)?.[0]).toBe(primary)
+
+    rerender(<CanvasPreviewSurface {...props} comparisonSrc="/original-b.png" showComparison />)
+    await act(async () => finishDecode())
+    expect(drawImage.mock.calls.at(-1)?.[0]).toBe(primary)
+    const comparison = createdImages[2]
+    await act(async () => comparison.dispatchLoad())
+    expect(drawImage.mock.calls.at(-1)?.[0]).toBe(comparison)
+    expect(ready).toHaveBeenCalledTimes(2)
+    expect(screen.getByTestId("selection-fill")).not.toBeVisible()
+    expect(screen.getByTestId("selection-outline")).not.toBeVisible()
+    // Unlike inherited visibility, opacity also hides GPU children that
+    // explicitly set visibility:visible. Verify the compositing boundary.
+    expect(screen.getByTestId("selection-outline").parentElement).toHaveStyle({ opacity: "0" })
+
+    rerender(<CanvasPreviewSurface {...props} comparisonSrc={null} showComparison />)
+    expect(drawImage.mock.calls.at(-1)?.[0]).toBe(primary)
+    expect(ready).toHaveBeenCalledTimes(2)
+    expect(screen.getByTestId("selection-fill")).toBeVisible()
+    expect(screen.getByTestId("selection-outline")).toBeVisible()
+    rerender(<CanvasPreviewSurface {...props} showComparison />)
+    expect(drawImage.mock.calls.at(-1)?.[0]).toBe(primary)
+  })
+
+  it.each(["load", "decode"] as const)("reports comparison %s failure only while held and clears it for a new source", async (failure) => {
+    const drawImage = vi.fn()
+    installCanvasContextMock(() => ({
+      clearRect: vi.fn(), save: vi.fn(), restore: vi.fn(),
+      setTransform: vi.fn(), translate: vi.fn(), scale: vi.fn(), drawImage,
+    } as unknown as CanvasRenderingContext2D))
+    const props = { src: "/preview.png", alt: "Preview", comparisonSrc: "/broken.png" }
+    const { rerender } = render(<CanvasPreviewSurface {...props} />)
+    const surface = screen.getByTestId("canvas-preview-surface")
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({ width: 200, height: 100 } as DOMRect)
+    act(() => createdImages[0].dispatchLoad())
+    if (failure === "load") {
+      act(() => createdImages[1].dispatchError())
+    } else {
+      Object.assign(createdImages[1], { decode: () => Promise.reject(new Error("decode failed")) })
+      await act(async () => createdImages[1].dispatchLoad())
+    }
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    rerender(<CanvasPreviewSurface {...props} showComparison />)
+    expect(screen.getByRole("alert")).toHaveTextContent(translations.canvas_preview_load_failed.zh)
+    expect(drawImage.mock.calls.at(-1)?.[0]).toBe(createdImages[0])
+
+    rerender(<CanvasPreviewSurface {...props} />)
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    expect(drawImage.mock.calls.at(-1)?.[0]).toBe(createdImages[0])
+    rerender(<CanvasPreviewSurface {...props} comparisonSrc="/working.png" showComparison />)
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    await act(async () => createdImages[2].dispatchLoad())
+    expect(drawImage.mock.calls.at(-1)?.[0]).toBe(createdImages[2])
+  })
+
+  it("ignores a stale comparison decode failure after switching sources", async () => {
+    let rejectDecode!: (error: Error) => void
+    const props = { src: "/preview.png", alt: "Preview", showComparison: true }
+    const { rerender } = render(<CanvasPreviewSurface {...props} comparisonSrc="/old.png" />)
+    Object.assign(createdImages[1], {
+      decode: () => new Promise<void>((_resolve, reject) => { rejectDecode = reject }),
+    })
+    act(() => createdImages[1].dispatchLoad())
+    rerender(<CanvasPreviewSurface {...props} comparisonSrc="/new.png" />)
+    await act(async () => createdImages[2].dispatchLoad())
+    await act(async () => rejectDecode(new Error("obsolete decode failed")))
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
   it("renders a real canvas preview surface and paints the loaded image onto it", () => {
     const readyPayloads: Array<CanvasPreviewSurfaceReadyPayload | null> = []
     const hoverSamples: Array<unknown> = []

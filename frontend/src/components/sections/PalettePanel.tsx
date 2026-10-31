@@ -276,6 +276,7 @@ export default function PalettePanel({
   const selectedColor = useConverterStore((s) => s.selectedColor);
   const selectedColors = useConverterStore((s) => s.selectedColors);
   const toggleColorInSelection = useConverterStore((s) => s.toggleColorInSelection);
+  const removeColorFromSelection = useConverterStore((s) => s.removeColorFromSelection);
   const enable_relief = useConverterStore((s) => s.enable_relief);
   const color_height_map = useConverterStore((s) => s.color_height_map);
   const updateColorHeight = useConverterStore((s) => s.updateColorHeight);
@@ -583,7 +584,7 @@ export default function PalettePanel({
                     key={hex}
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => handleSelect(hex)}
+                    onClick={() => removeColorFromSelection(hex)}
                     className="h-5 w-5 shrink-0 rounded-md border-2 border-amber-400 transition-transform hover:scale-110"
                     style={{ backgroundColor: `#${hex}` }}
                     title={`#${hex} — ${t("palette_multi_select_click_remove")}`}

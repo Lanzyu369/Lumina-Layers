@@ -335,12 +335,15 @@ function findPython() {
     ? [
         path.join(ROOT_DIR, "venv", "Scripts", "python.exe"),
         path.join(ROOT_DIR, ".venv", "Scripts", "python.exe"),
+        path.join(ROOT_DIR, ".venv312", "Scripts", "python.exe"),
       ]
     : [
         path.join(ROOT_DIR, ".venv", "bin", "python"),
         path.join(ROOT_DIR, "venv", "bin", "python"),
+        path.join(ROOT_DIR, ".venv312", "bin", "python"),
         path.join(ROOT_DIR, ".venv", "bin", "python3"),
         path.join(ROOT_DIR, "venv", "bin", "python3"),
+        path.join(ROOT_DIR, ".venv312", "bin", "python3"),
       ];
   for (const p of candidates) {
     if (fs.existsSync(p)) return p;
@@ -575,6 +578,8 @@ function createWindow() {
   const placement = interfaceScale.initialPlacement();
   const windowOptions = {
     ...placement.bounds,
+    minWidth: placement.minimumSize.width,
+    minHeight: placement.minimumSize.height,
     title: "Lumina Studio 2",
     // Keep macOS traffic lights while the renderer paints the title bar.
     ...(process.platform === "darwin" ? {

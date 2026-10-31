@@ -319,6 +319,107 @@ def test_editor_routes_restore_a_fresh_session_with_committed_selection(source_i
         client.close()
 
 
+def test_imported_project_recipe_masks_survive_next_recipe_application(
+    source_image: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi.testclient import TestClient
+    from api.app import app
+    from api.dependencies import get_file_registry, get_session_store
+    from api.file_registry import FileRegistry
+
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    metadata = LUTMetadata(
+        palette=[PaletteEntry("Red", "PETG"), PaletteEntry("White", "PETG")],
+        max_color_layers=3,
+        layer_height_mm=0.08,
+    )
+    lut_path = source_image.with_suffix(".msgpack")
+    lut_path.write_bytes(b"fixture")
+    original, fresh = store.create(), store.create()
+    for session_id in (original, fresh):
+        session = _session(source_image)
+        cache = session["preview_cache"]
+        cache["matched_rgb"][:2] = [255, 255, 255]
+        cache["quantized_image"] = cache["matched_rgb"].copy()
+        cache["lut_metadata"] = metadata
+        session.update({
+            "lut_path": str(lut_path),
+            "editor_selection_mask": None,
+            "editor_selection_revision": 0,
+            "editor_selection_content_generation": 0,
+        })
+        for key, value in session.items():
+            store.put(session_id, key, value)
+    monkeypatch.setattr(
+        "api.routers.converter.replace.LUTManager.load_lut_with_metadata",
+        lambda _path: (np.zeros((0, 3), dtype=np.uint8), None, metadata),
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.predict_recipe_color",
+        lambda *args, **kwargs: {
+            "rgb": [20, 210, 40], "lab": [55.0, 2.0, 3.0],
+            "source": "stage_model", "runtime_mode_key": "0.08x3",
+        },
+    )
+    monkeypatch.setattr("api.routers.converter.replace.schedule_glb_build", lambda *args, **kwargs: None)
+    monkeypatch.setattr("api.routers.converter.replace._schedule_or_run_overridden_glb_build", lambda *args, **kwargs: None)
+    previous = dict(app.dependency_overrides)
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app)
+
+    def mutate(operation: str, **fields: object) -> dict:
+        document = client.get(f"/api/convert/selection/{original}").json()
+        response = client.post("/api/convert/selection/mutate", json={
+            "session_id": original, "operation": operation,
+            "base_selection_revision": document["selection_revision"],
+            "content_revision": document["content_revision"], **fields,
+        })
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def apply_recipe(session_id: str, region_id: str, channel: int) -> None:
+        response = client.post("/api/convert/apply-recipe-override", json={
+            "session_id": session_id, "region_ids": [region_id],
+            "recipe": [channel] * 3, "layer_order": "Top2Bottom",
+            "color_layers": 3, "layer_height_mm": 0.08,
+        })
+        assert response.status_code == 200, response.text
+
+    try:
+        first_region = mutate("point-toggle", x=0, y=0)["region_ids"][0]
+        apply_recipe(original, first_region, 1)
+        mutate("clear")
+        saved_selection = mutate("point-toggle", x=0, y=3)
+        exported = client.get(f"/api/convert/editor-project/{original}")
+        assert exported.status_code == 200, exported.text
+        restored = client.post(
+            f"/api/convert/editor-project/{fresh}/restore",
+            files={"file": ("editor.json.gz", exported.content, "application/gzip")},
+            data={"operation_id": "restore-then-recipe"},
+        )
+        assert restored.status_code == 200, restored.text
+        document = client.get(f"/api/convert/selection/{fresh}").json()
+        new_region = document["region_ids"][0]
+        apply_recipe(fresh, new_region, 0)
+
+        session = store.get(fresh)
+        resolved = resolve_recipe_override_masks(session, session["recipe_overrides"], (4, 6))
+        first_mask = np.zeros((4, 6), dtype=bool)
+        first_mask[:2] = True
+        np.testing.assert_array_equal(resolved[first_region], first_mask)
+        np.testing.assert_array_equal(resolved[new_region], ~first_mask)
+        assert document["selection_revision"] > saved_selection["selection_revision"]
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous)
+        store.close(original)
+        store.close(fresh)
+        client.close()
+
+
 def test_editor_restore_route_rejects_different_source_before_session_mutation(source_image: Path) -> None:
     from fastapi.testclient import TestClient
     from api.app import app

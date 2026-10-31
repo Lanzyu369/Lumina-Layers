@@ -133,9 +133,12 @@ from api.replacement_history import (
 from api.selection_state import (
     get_selection_mask,
     get_selection_revision,
-    mutate_brush_add,
+    mutate_brush_strokes_add,
     mutate_color_range_toggle,
+    mutate_colors_set,
+    mutate_point_remove,
     mutate_point_toggle,
+    mutate_same_color_remove,
     mutate_same_color_toggle,
     pack_applied_region_mask,
     persist_selection_mask,
@@ -1969,7 +1972,7 @@ def replacement_history(
     # pending/unknown，不能把可能部分恢复的撤销/重做伪报为 failed。
     cache_published = False
     try:
-        with replacement_history_lock(request.session_id):
+        with _replacement_selection_lock(request.session_id):
             session_data = _require_session(store, request.session_id)
             operation_id = begin_editor_commit(
                 request.session_id,
@@ -2716,6 +2719,35 @@ def region_detect(
     )
 
 
+def _gradient_region_mask(
+    session_data: dict,
+    group_index: int,
+    region_index: int | None,
+    shape: tuple[int, int],
+) -> np.ndarray:
+    """Resolve the exact gradient footprint shared by selection and replacement."""
+    region_id_map = session_data.get("gradient_region_id_map")
+    if region_id_map is None:
+        raise HTTPException(status_code=409, detail=GRADIENT_REGION_METADATA_UNAVAILABLE_DETAIL)
+    region_ids = np.asarray(region_id_map)
+    if region_ids.shape != shape:
+        raise HTTPException(status_code=409, detail=GRADIENT_REGION_METADATA_STALE_DETAIL)
+    if group_index < 1 or (region_index is not None and not 1 <= region_index < REGION_ID_ENCODING_MULTIPLIER):
+        raise HTTPException(status_code=400, detail="Gradient group and region indices are invalid.")
+    encoded_id = group_index * REGION_ID_ENCODING_MULTIPLIER + (region_index or 0)
+    if encoded_id > np.iinfo(np.uint32).max:
+        raise HTTPException(status_code=400, detail="Gradient group index is out of range.")
+    if region_index is None:
+        mask = region_ids // np.uint32(REGION_ID_ENCODING_MULTIPLIER) == np.uint32(group_index)
+        description = f"gradient group {group_index}"
+    else:
+        mask = region_ids == np.uint32(encoded_id)
+        description = f"gradient group {group_index}, region {region_index}"
+    if not np.any(mask):
+        raise HTTPException(status_code=404, detail=f"No pixels found for {description}.")
+    return mask
+
+
 def _selection_document_response(
     session_data: dict,
     component_cache: dict,
@@ -2889,7 +2921,7 @@ def get_editor_selection(
     store: SessionStore = Depends(get_session_store),
 ) -> SelectionDocumentResponse:
     """Return the shared selection document for the current visible content."""
-    with selection_lock(session_id):
+    with _replacement_selection_lock(session_id):
         session_data = _require_session(store, session_id)
         cache = _require_preview_cache_fields(
             session_data,
@@ -3005,20 +3037,41 @@ def mutate_editor_selection(
         )
         brush_hits: int | None = None
         try:
-            if request.operation == "point-toggle":
+            if request.operation in {"point-toggle", "point-remove"}:
                 if request.x is None or request.y is None:
                     raise ValueError("Point selection requires x and y.")
-                next_mask = mutate_point_toggle(
+                mutate_point = (
+                    mutate_point_remove if request.operation == "point-remove" else mutate_point_toggle
+                )
+                next_mask = mutate_point(
                     component_cache, current, request.x, request.y
                 )
-            elif request.operation == "same-color-toggle":
-                next_mask = mutate_same_color_toggle(
+            elif request.operation in {"same-color-toggle", "same-color-remove"}:
+                mutate_color = (
+                    mutate_same_color_remove
+                    if request.operation == "same-color-remove"
+                    else mutate_same_color_toggle
+                )
+                next_mask = mutate_color(
                     component_cache,
                     current,
                     x=request.x,
                     y=request.y,
                     color_hex=request.color_hex,
                 )
+            elif request.operation == "colors-set":
+                if request.color_hexes is None:
+                    raise ValueError("Colour selection requires color_hexes.")
+                next_mask = mutate_colors_set(component_cache, request.color_hexes)
+            elif request.operation == "gradient-region-set":
+                if request.gradient_group_index is None:
+                    raise ValueError("Gradient selection requires gradient_group_index.")
+                next_mask = _gradient_region_mask(
+                    session_data,
+                    request.gradient_group_index,
+                    request.gradient_region_index,
+                    shape,
+                ) & np.asarray(cache["mask_solid"], dtype=bool)
             elif request.operation == "color-range-toggle":
                 if request.color_tolerance is None:
                     raise ValueError("Colour-range selection requires color_tolerance.")
@@ -3033,10 +3086,13 @@ def mutate_editor_selection(
             elif request.operation == "brush-add":
                 if request.brush_radius is None:
                     raise ValueError("Brush selection requires brush_radius.")
-                next_mask, brush_hits = mutate_brush_add(
+                if request.brush_strokes is not None and request.brush_points:
+                    raise ValueError("Brush selection accepts brush_strokes or brush_points, not both.")
+                strokes = request.brush_strokes if request.brush_strokes is not None else [request.brush_points]
+                next_mask, brush_hits = mutate_brush_strokes_add(
                     component_cache,
                     current,
-                    [(point.x, point.y) for point in request.brush_points],
+                    [[(point.x, point.y) for point in stroke] for stroke in strokes],
                     request.brush_radius,
                 )
             else:
@@ -3178,53 +3234,10 @@ def region_replace(
             except (KeyError, ValueError) as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
         elif gradient_group_idx is not None:
-            region_id_map = session_data.get("gradient_region_id_map")
-            if region_id_map is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail=GRADIENT_REGION_METADATA_UNAVAILABLE_DETAIL,
-                )
-            region_id_arr = np.asarray(region_id_map)
-            if region_id_arr.shape != (img_h, img_w):
-                raise HTTPException(
-                    status_code=409,
-                    detail=GRADIENT_REGION_METADATA_STALE_DETAIL,
-                )
-            if gradient_region_idx is not None:
-                # Single region within the group
-                mask_source = "gradient_region"
-                encoded_id = (
-                    int(gradient_group_idx) * REGION_ID_ENCODING_MULTIPLIER
-                    + int(gradient_region_idx)
-                )
-                region_mask = region_id_arr == np.uint32(encoded_id)
-                if not np.any(region_mask):
-                    raise HTTPException(
-                        status_code=404,
-                        detail=(
-                            f"No pixels found for gradient group "
-                            f"{gradient_group_idx}, region "
-                            f"{gradient_region_idx}."
-                        ),
-                    )
-            else:
-                # Whole group: mask all pixels whose encoded group matches
-                # 整组去海带纹：mask 覆盖该组所有像素
-                mask_source = "gradient_group"
-                group_of_pixel = region_id_arr // np.uint32(
-                    REGION_ID_ENCODING_MULTIPLIER
-                )
-                region_mask = group_of_pixel == np.uint32(
-                    int(gradient_group_idx)
-                )
-                if not np.any(region_mask):
-                    raise HTTPException(
-                        status_code=404,
-                        detail=(
-                            f"No pixels found for gradient group "
-                            f"{gradient_group_idx}."
-                        ),
-                    )
+            region_mask = _gradient_region_mask(
+                session_data, gradient_group_idx, gradient_region_idx, (img_h, img_w),
+            )
+            mask_source = "gradient_region" if gradient_region_idx is not None else "gradient_group"
         else:
             region_mask = _get_region_mask_items_for_ids(
                 session_data,
@@ -3980,44 +3993,10 @@ def _build_mask_for_region_batch_item(
     gradient_region_idx = item.gradient_region_index
 
     if gradient_group_idx is not None:
-        region_id_map = session_data.get("gradient_region_id_map")
-        if region_id_map is None:
-            raise HTTPException(
-                status_code=409,
-                detail=GRADIENT_REGION_METADATA_UNAVAILABLE_DETAIL,
-            )
-        region_id_arr = np.asarray(region_id_map)
-        if region_id_arr.shape != (img_h, img_w):
-            raise HTTPException(
-                status_code=409,
-                detail=GRADIENT_REGION_METADATA_STALE_DETAIL,
-            )
-        if gradient_region_idx is not None:
-            encoded_id = (
-                int(gradient_group_idx) * REGION_ID_ENCODING_MULTIPLIER
-                + int(gradient_region_idx)
-            )
-            mask = region_id_arr == np.uint32(encoded_id)
-            if not np.any(mask):
-                raise HTTPException(
-                    status_code=404,
-                    detail=(
-                        f"No pixels found for gradient group "
-                        f"{gradient_group_idx}, region "
-                        f"{gradient_region_idx}."
-                    ),
-                )
-            return mask, "gradient_region"
-        group_of_pixel = region_id_arr // np.uint32(REGION_ID_ENCODING_MULTIPLIER)
-        mask = group_of_pixel == np.uint32(int(gradient_group_idx))
-        if not np.any(mask):
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"No pixels found for gradient group {gradient_group_idx}."
-                ),
-            )
-        return mask, "gradient_group"
+        mask = _gradient_region_mask(
+            session_data, gradient_group_idx, gradient_region_idx, (img_h, img_w),
+        )
+        return mask, "gradient_region" if gradient_region_idx is not None else "gradient_group"
 
     # Click-detected path: resolve (click_x, click_y) through the same cached
     # visible-component label map as /region-detect.
@@ -4391,6 +4370,7 @@ def region_replace_batch(
             "matched_rgb",
             "material_matrix",
             "mask_solid",
+            "quantized_image",
         },
     )
     cache, history_checkpoint = cache_context.__enter__()

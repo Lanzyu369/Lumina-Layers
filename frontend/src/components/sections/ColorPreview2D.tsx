@@ -13,7 +13,6 @@ import { createPortal } from 'react-dom';
 import { sourceColorPick } from '../../api/converter';
 import { ModelingMode } from '../../api/types';
 import { buildLayerImagesSourceKey, useConverterStore } from '../../stores/converter';
-import type { SelectionDocument } from '../../stores/converter';
 import { useEyedropperStore } from '../../stores/eyedropperStore';
 import { useI18n } from '../../i18n/context';
 import CanvasPreviewSurface, { type CanvasPreviewSurfaceViewport } from '../ui/CanvasPreviewSurface';
@@ -39,6 +38,7 @@ import {
 import { resolvePreviewHoverPixel } from './actionBarHoverUtils';
 import { readPixelColor } from './colorPreview2DUtils';
 import { detectLocalRegionContours } from './localRegionDetect';
+import { buildSelectionVisualDraft } from './selectionVisualDraft';
 import { BRUSH_STROKE_OPACITY, drawBrushStrokes } from './brushDraftComposite';
 import SelectionOutlineOverlay from './SelectionOutlineOverlay';
 
@@ -309,6 +309,7 @@ export default function ColorPreview2D({
   // Shift 键盘快捷键：在非文本输入环境下按住 Shift 即可临时查看原图，
   // keyup 或窗口失焦时自动恢复，与长按按钮行为一致。
   useEffect(() => {
+    setShowOriginal(false);
     if (!originalUploadUrl) {
       return;
     }
@@ -361,6 +362,7 @@ export default function ColorPreview2D({
   const selectionMode = useConverterStore((s) => s.selectionMode);
   const selectionTool = useConverterStore((s) => s.selectionTool);
   const selectionDocument = useConverterStore((s) => s.selectionDocument);
+  const pendingSelectionMutations = useConverterStore((s) => s.pendingSelectionMutations);
   const applySelectionMutation = useConverterStore((s) => s.applySelectionMutation);
   const brushSizePx = useConverterStore((s) => s.brushSizePx);
   const colorRangeTolerance = useConverterStore((s) => s.colorRangeTolerance);
@@ -411,6 +413,8 @@ export default function ColorPreview2D({
   // stroke in brushPointsRef; both are submitted together on apply.
   const brushStrokesRef = useRef<Array<Array<{ x: number; y: number }>>>([]);
   const brushPointsRef = useRef<Array<{ x: number; y: number }>>([]);
+  const brushSubmissionRef = useRef<object | null>(null);
+  const [brushSubmitting, setBrushSubmitting] = useState(false);
   // Display→image scale captured at stroke time, so executeBrushDraft can
   // convert the display-pixel brush size into image pixels consistently with
   // how the draft stroke is drawn (appendBrushSample). 落笔时记录的显示→图像比例。
@@ -474,10 +478,10 @@ export default function ColorPreview2D({
   const handleSurfaceReady = useCallback((payload: { previewBuffer: PreviewCanvasBuffer | null } | null) => {
     const nextPreviewBuffer = payload?.previewBuffer ?? null;
     previewCanvasBufferRef.current = nextPreviewBuffer;
-    previewCanvasBufferSourceRef.current = nextPreviewBuffer ? activeCanvasSrc : null;
+    previewCanvasBufferSourceRef.current = nextPreviewBuffer ? displayUrl : null;
     setPreviewCanvasBuffer(nextPreviewBuffer);
     surfaceSampleCacheRef.current.clear();
-  }, [activeCanvasSrc]);
+  }, [displayUrl]);
 
   const readActivePreviewPixel = useCallback((sample: CanvasPreviewHoverSample): string | null => {
     const activeBuffer =
@@ -928,110 +932,19 @@ export default function ColorPreview2D({
       }
 
       if (
-        selectionDocument &&
+        sessionId &&
         selectionMode !== 'current' &&
         selectionMode !== 'region' &&
         (selectionTool === 'point' || selectionTool === 'same-color')
       ) {
-        const buffer =
-          activeCanvasSrc === displayUrl &&
-          previewCanvasBufferSourceRef.current === displayUrl
-            ? previewCanvasBufferRef.current
-            : null;
-        const widthMm =
-          previewWidthMm && previewWidthMm > 0
-            ? previewWidthMm
-            : previewPixelWidth;
-        const local =
-          buffer && widthMm
-            ? detectLocalRegionContours(buffer, {
-                pixelX,
-                pixelY,
-                naturalWidth: sample.naturalWidth,
-                naturalHeight: sample.naturalHeight,
-                previewWidthMm: widthMm,
-              })
-            : null;
-        if (!local) return;
-
-        if (selectionTool === 'point') {
-          const existing = selectionDocument.components.find(
-            (component) =>
-              component.color_hex.replace(/^#/, '').toLowerCase() === local.colorHex &&
-              component.pixel_count === local.pixelCount &&
-              component.bbox.join(',') === local.bbox.join(','),
-          );
-
-          // Toggle OFF: remove the clicked component from the display immediately.
-          // We match by component identity (color + pixel count + bbox), not by
-          // contour coordinates, because the backend may return simplified contours
-          // that don't exactly match the locally-detected polygons.
-          // 取消选择时按组件身份（颜色+像素数+bbox）匹配移除，不按轮廓坐标匹配，
-          // 因为后端返回的简化轮廓和本地检测的 polygon 可能不完全一致。
-          const existingIndex = existing
-            ? selectionDocument.components.indexOf(existing)
-            : -1;
-          const optimisticContours = existing
-            ? selectionDocument.contours.filter((_contour, index) => index !== existingIndex)
-            : [...selectionDocument.contours, ...local.polygons];
-          const optimisticComponents = existing
-            ? selectionDocument.components.filter((_component, index) => index !== existingIndex)
-            : [
-                ...selectionDocument.components,
-                {
-                  label: -Math.max(1, selectionDocument.selection_revision + 1),
-                  region_id: `__optimistic_selection__:${selectionDocument.selection_revision + 1}:${pixelX}:${pixelY}`,
-                  color_hex: `#${local.colorHex}`,
-                  pixel_count: local.pixelCount,
-                  bbox: [...local.bbox],
-                  anchor: [...local.anchor],
-                  contours: local.polygons,
-                },
-              ];
-          const optimisticColorHexes = Array.from(
-            new Set(optimisticComponents.map((component) => component.color_hex)),
-          );
-
-          const optimisticDocument: SelectionDocument = {
-            ...selectionDocument,
-            selection_revision: selectionDocument.selection_revision + 1,
-            selected_component_count: optimisticComponents.length,
-            selected_pixel_count: Math.max(
-              0,
-              selectionDocument.selected_pixel_count +
-              (existing ? -existing.pixel_count : local.pixelCount),
-            ),
-            selected_color_hexes: optimisticColorHexes,
-            region_ids: optimisticComponents.map((component) => component.region_id),
-            components: optimisticComponents,
-            contours: optimisticContours,
-          };
-
-          // Apply the optimistic state IMMEDIATELY so the user sees the new
-          // selection right away, then let the backend confirm it in the
-          // background. Previously we waited for the backend response before
-          // updating the UI, which caused the "new block disappears after a
-          // few seconds" bug when the backend was slow or failed.
-          // 立即应用乐观状态让用户看到新选区，后端在后台确认。之前等后端
-          // 响应才更新 UI，导致新色块几秒后消失。
-          useConverterStore.setState({
-            selectionDocument: optimisticDocument,
-          });
-
-          void applySelectionMutation({
-            operation: 'point-toggle',
-            x: pixelX,
-            y: pixelY,
-            optimisticDocument,
-          });
-        } else {
-          void applySelectionMutation({
-            operation: 'same-color-toggle',
-            x: pixelX,
-            y: pixelY,
-            colorHex: local.colorHex,
-          });
-        }
+        // Publish the intent immediately for the independent visual draft. The
+        // server still resolves the component and confirms the merged boundary.
+        // Coordinates remain usable while a replacement preview is loading.
+        void applySelectionMutation({
+          operation: selectionTool === 'point' ? 'point-toggle' : 'same-color-toggle',
+          x: pixelX,
+          y: pixelY,
+        });
         return;
       }
 
@@ -1197,7 +1110,7 @@ export default function ColorPreview2D({
       previewWidthMm,
       selectionMode,
       selectionTool,
-      selectionDocument,
+      sessionId,
       applySelectionMutation,
       colorRangeTolerance,
       eyedropperActive,
@@ -1263,17 +1176,39 @@ export default function ColorPreview2D({
     }
   }, [selectionMode, selectedRegions, optimisticRegions]);
 
-  // Collect the single authoritative union contour. Legacy branches remain as
-  // a compatibility fallback while gradient-panel callers migrate.
+  const selectionVisualDraft = useMemo(() => {
+    if (!sessionId) return null;
+    const contourWidth = resolvePreviewWidthForContours(previewWidthMm, previewPixelWidth);
+    if (!contourWidth) return null;
+    const mutations = pendingSelectionMutations
+      .filter((mutation) => mutation.sessionId === sessionId)
+      .map((mutation) => mutation.input);
+    // An old or original-image buffer cannot predict the current visible
+    // components. Keep sending gestures and let confirmation provide the shape.
+    const buffer = activeCanvasSrc === displayUrl && displayUrl === stableImageUrl &&
+      previewCanvasBufferSourceRef.current === displayUrl ? previewCanvasBuffer : null;
+    return buildSelectionVisualDraft({
+      document: selectionDocument,
+      mutations,
+      previewBuffer: buffer,
+      previewWidthMm: contourWidth,
+    });
+  }, [sessionId, selectionDocument, pendingSelectionMutations, previewCanvasBuffer,
+    previewWidthMm, previewPixelWidth, activeCanvasSrc, displayUrl, stableImageUrl]);
+
+  // A visual draft may show individual boundaries while gestures are pending.
+  // Each confirmation rebases remaining gestures onto the authoritative union;
+  // revisions, history and edit targets always stay on the confirmed document.
   const svgContours = useMemo(() => {
     if (!previewPixelWidth || !previewPixelHeight) return [];
-    if (selectionDocument && selectionDocument.contours.length > 0) {
-      return [
+    if (selectionVisualDraft !== null) return selectionVisualDraft;
+    if (selectionDocument) {
+      return selectionDocument.contours.length > 0 ? [
         {
           hex: selectionDocument.selected_color_hexes.at(-1)?.replace(/^#/, '') ?? 'ffffff',
           polygons: selectionDocument.contours,
         },
-      ];
+      ] : [];
     }
     const targets: Array<{ hex: string; polygons: number[][][] }> = [];
 
@@ -1345,6 +1280,7 @@ export default function ColorPreview2D({
   }, [
     selectionMode,
     selectionDocument,
+    selectionVisualDraft,
     selectedColor,
     selectedColors,
     selectedRegions,
@@ -1501,41 +1437,46 @@ export default function ColorPreview2D({
   }, [selectionBlinkEnabled, previewPixelWidth, previewPixelHeight]);
 
   const executeBrushDraft = useCallback(() => {
-    const hasDraft = brushStrokesRef.current.length > 0 || brushPointsRef.current.length > 0;
-    if (!selectionDocument || !hasDraft || !previewPixelWidth) return;
-    // 提交所有累积的笔（历史笔 + 当前笔）的点，打平成一列。
-    const points = [...brushStrokesRef.current, brushPointsRef.current].flat();
-    const beforeRevision = selectionDocument.selection_revision;
+    const strokes = [...brushStrokesRef.current, brushPointsRef.current]
+      .filter((stroke) => stroke.length > 0);
+    if (!sessionId || strokes.length === 0 || !previewPixelWidth || brushSubmissionRef.current) return;
+    const submission = {};
+    brushSubmissionRef.current = submission;
+    setBrushSubmitting(true);
     void applySelectionMutation({
       operation: 'brush-add',
-      // brushPoints are in image-pixel space; convert the display-pixel brush
-      // size with the same scale the draft stroke used so the backend hit-test
-      // matches what the user painted. 笔迹按图像像素绘制，半径也要按同样比例换算。
+      // Keep separate paths separate so the server never paints a connecting
+      // line across the unpainted space between two strokes.
       brushRadius: (brushSizePx / 2) * brushDisplayToImageScaleRef.current,
-      brushPoints: points,
-    }).then(() => {
-      const current = useConverterStore.getState();
+      brushStrokes: strokes.map((stroke) => stroke.map((point) => ({ ...point }))),
+    }).then((succeeded) => {
       if (
-        current.selectionDocument?.selection_revision === beforeRevision &&
-        current.error
-      ) {
-        return;
-      }
-      brushStrokesRef.current = [];
-      brushPointsRef.current = [];
-      brushDraftCanvasRef.current
-        ?.getContext('2d')
-        ?.clearRect(
-          0,
-          0,
-          brushDraftCanvasRef.current?.width ?? 0,
-          brushDraftCanvasRef.current?.height ?? 0,
+        !succeeded || brushSubmissionRef.current !== submission ||
+        useConverterStore.getState().sessionId !== sessionId
+      ) return;
+      // A later stroke may have been drawn while this operation was pending.
+      // Clear only the submitted draft, leaving new strokes ready to apply.
+      const submitted = new Set(strokes);
+      brushStrokesRef.current = brushStrokesRef.current.filter((stroke) => !submitted.has(stroke));
+      if (submitted.has(brushPointsRef.current)) brushPointsRef.current = [];
+      const context = brushDraftCanvasRef.current?.getContext('2d');
+      if (context) {
+        drawBrushStrokes(
+          context, brushStrokesRef.current, brushPointsRef.current,
+          useConverterStore.getState().brushSizePx * brushDisplayToImageScaleRef.current,
         );
+      }
       setBrushDraftVersion((version) => version + 1);
+    }).finally(() => {
+      if (brushSubmissionRef.current !== submission) return;
+      brushSubmissionRef.current = null;
+      setBrushSubmitting(false);
     });
-  }, [applySelectionMutation, brushSizePx, selectionDocument]);
+  }, [applySelectionMutation, brushSizePx, previewPixelWidth, sessionId]);
 
   const clearBrushDraft = useCallback(() => {
+    brushSubmissionRef.current = null;
+    setBrushSubmitting(false);
     brushStrokesRef.current = [];
     brushPointsRef.current = [];
     const canvas = brushDraftCanvasRef.current;
@@ -1794,6 +1735,8 @@ export default function ColorPreview2D({
           <button
             type="button"
             onClick={executeBrushDraft}
+            disabled={brushSubmitting}
+            aria-busy={brushSubmitting}
             className="action-control action-control-primary rounded-lg px-3 py-1.5 text-xs font-semibold"
           >
             {t('selection_brush_apply')}
@@ -1814,6 +1757,7 @@ export default function ColorPreview2D({
           aria-label={t('color_2d_hold_view_original')}
           title={t('color_2d_hold_view_original')}
           onPointerDown={(e) => {
+            if (e.button !== 0) return;
             e.preventDefault();
             e.stopPropagation();
             setShowOriginal(true);
@@ -1821,6 +1765,7 @@ export default function ColorPreview2D({
           onPointerUp={releaseOriginalView}
           onPointerLeave={releaseOriginalView}
           onPointerCancel={releaseOriginalView}
+          onLostPointerCapture={releaseOriginalView}
           onContextMenu={(e) => e.preventDefault()}
           data-testid="color-preview-2d-hold-original"
           data-active={showOriginal || undefined}
@@ -1858,7 +1803,7 @@ export default function ColorPreview2D({
   );
 
 
-  if (!activeCanvasSrc) {
+  if (!displayUrl) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-slate-500 dark:text-slate-400">
         {isLoading ? (
@@ -1876,7 +1821,9 @@ export default function ColorPreview2D({
   return (
     <>
       <CanvasPreviewSurface
-        src={activeCanvasSrc}
+        src={displayUrl}
+        comparisonSrc={originalUploadUrl}
+        showComparison={showOriginal}
         alt={previewAltText}
         dataTestId="color-preview-2d-container"
         className={
@@ -1895,7 +1842,7 @@ export default function ColorPreview2D({
         overlay={scaledPixelOverlay}
         screenSpaceOverlay={renderSelectionScreenOverlay}
         floatingOverlay={floatingOverlay}
-        interactionsDisabled={replacePreviewLoading}
+        interactionsDisabled={replacePreviewLoading || showOriginal}
         minScale={MIN_ZOOM}
         maxScale={MAX_ZOOM}
         wheelZoomStepMultiplier={ZOOM_STEP}
@@ -1912,7 +1859,7 @@ export default function ColorPreview2D({
         spacePanEnabled
         canStartDrag={(event) => event.button === 2}
       />
-      {hoverInspectorOverlay}
+      {!showOriginal && hoverInspectorOverlay}
     </>
   );
 }
