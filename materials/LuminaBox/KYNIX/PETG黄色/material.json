@@ -1,0 +1,57 @@
+{
+  "acquisition_source": "lumina_box_backed_gradient",
+  "archive_consistency": {
+    "acquisition_source": "lumina_box_backed_gradient",
+    "archive_id": "e72decc2-b6a7-4919-afe1-d3d9881cafb4",
+    "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+    "measurement_protocol_id": "lumina_box_backed_gradient/v1",
+    "objective_id": "backed_gradient_xyz_fixed_weak_logk_curvature/v1",
+    "optical_model_id": "backed_gradient_spectral_four_flux_smooth/v3",
+    "profile_kind": "lumina_box",
+    "reference_id": "3bd3d992e2fa23e015c0b8da8255c0b82199fc84a5f51ef53f20d28d0d48cfca",
+    "revision_id": "7edb422b-002e-4343-9321-1fe137a37fe8",
+    "schema_version": "1.0"
+  },
+  "brand": "KYNIX",
+  "capture_dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+  "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+  "created_at": "2026-10-02T09:34:34.199121+00:00",
+  "estimated_effective_d65_10_xyz_relative": [
+    0.943851676830272,
+    0.9219977836696033,
+    0.2284461177007307
+  ],
+  "estimated_rgb": [
+    255,
+    240,
+    99
+  ],
+  "kind": "lumina_box_material",
+  "material_kind": "color",
+  "material_name": "PETG黄色",
+  "material_symbol": "Y",
+  "material_type": "PETG",
+  "measurement_protocol_id": "lumina_box_backed_gradient/v1",
+  "measurements_file": "lumina_box_backed_gradient_measurements.json",
+  "notes": null,
+  "objective_id": "backed_gradient_xyz_fixed_weak_logk_curvature/v1",
+  "optical_model": "backed_gradient_spectral_four_flux_smooth/v3",
+  "optical_parameters_file": "lumina_box_backed_gradient_parameters.json",
+  "profile_kind": "lumina_box",
+  "reference_id": "3bd3d992e2fa23e015c0b8da8255c0b82199fc84a5f51ef53f20d28d0d48cfca",
+  "rmse_pp": 0.9939977627083485,
+  "schema_version": "1.0",
+  "sidecar_integrity": {
+    "algorithm": "sha256",
+    "measurements": {
+      "filename": "lumina_box_backed_gradient_measurements.json",
+      "sha256": "c1012f35f3851dfb920abeff7f30ec522eaaad8273c7c3866b525cd41d61311b"
+    },
+    "parameters": {
+      "filename": "lumina_box_backed_gradient_parameters.json",
+      "sha256": "ee8b0ff20d7c74c44121b5c5b94aa5356f27cdb4dc418564f43f8e9aac1adcc6"
+    }
+  },
+  "status": "complete",
+  "updated_at": "2026-10-07T09:50:12.363227+00:00"
+}

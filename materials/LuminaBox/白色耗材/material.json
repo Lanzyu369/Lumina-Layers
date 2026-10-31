@@ -1,0 +1,67 @@
+{
+  "acquisition_source": "lumina_box",
+  "archive_consistency": {
+    "acquisition_source": "lumina_box",
+    "archive_id": "c20f3f29-5887-43de-a8c5-53c977cb503b",
+    "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+    "measurement_protocol_id": "lumina_box_xyz_paired_diffuser_km/v2",
+    "objective_id": "box_spectral_paired_spectral_white/v3",
+    "optical_model_id": "box_reference_consistent_feedback/equal_xyz_v1",
+    "profile_kind": "lumina_box",
+    "reference_id": "7b063ffb429e5fe07e5f91e844e155ee4fe5d44194380984f741be2e4af3f6c5",
+    "revision_id": "fe13faee-4425-47a6-b366-2cf38d3c63fc",
+    "schema_version": "2.0"
+  },
+  "brand": null,
+  "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+  "created_at": "2026-10-02T11:40:32.945284+00:00",
+  "estimated_effective_d65_10_xyz_relative": [
+    0.9800000000000003,
+    0.9800000000000001,
+    0.9800000000000001
+  ],
+  "estimated_reflectance_thickness_mm": 3.0,
+  "estimated_rgb": [
+    253,
+    253,
+    253
+  ],
+  "is_reference_white": true,
+  "kind": "lumina_box_material",
+  "material_name": "白色耗材",
+  "material_type": null,
+  "measurement_backing_base_percent_xyz": [
+    19.8,
+    19.7,
+    24.7
+  ],
+  "measurement_backing_effective_percent_xyz": [
+    58.3951325753481,
+    58.269466733399376,
+    74.62199702600508
+  ],
+  "measurement_backing_scale": 3.212953618607688,
+  "measurement_protocol_id": "lumina_box_xyz_paired_diffuser_km/v2",
+  "measurement_reflection_boundary_id": "instrument_diffuser_recycled_white_reference/v1",
+  "measurement_thickness_offset_mm": 0.0,
+  "measurements_file": "lumina_box_measurements.json",
+  "notes": "用户提供的白色耗材原始测量数据，在拟合误差超限时保留。\nFit warnings retained: max absolute residual 26.160997 percentage points. Original capture: 97e4bdfa-a697-48d5-bc00-edc3aeb4cba6. Diffuser XYZ: 19.8/19.7/24.7, matching the other three material profiles.",
+  "objective_id": "box_spectral_paired_spectral_white/v3",
+  "optical_model": "box_reference_consistent_feedback/equal_xyz_v1",
+  "optical_parameters_file": "lumina_box_spectral_parameters.json",
+  "profile_kind": "lumina_box",
+  "reference_id": "7b063ffb429e5fe07e5f91e844e155ee4fe5d44194380984f741be2e4af3f6c5",
+  "schema_version": "3.0",
+  "sidecar_integrity": {
+    "algorithm": "sha256",
+    "measurements": {
+      "filename": "lumina_box_measurements.json",
+      "sha256": "df17e8f21758cc5867fd4d1758bf7696822cb4f2c07881f1c907a40f3affa35c"
+    },
+    "parameters": {
+      "filename": "lumina_box_spectral_parameters.json",
+      "sha256": "24572dd3b9f2f81534b724ec6935de6df55f7f28994f46fb2596faca40cb286b"
+    }
+  },
+  "updated_at": "2026-10-05T11:03:06.348049+00:00"
+}

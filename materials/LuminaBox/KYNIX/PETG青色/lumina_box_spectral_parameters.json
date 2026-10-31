@@ -1,0 +1,644 @@
+{
+  "archive_consistency": {
+    "acquisition_source": "lumina_box",
+    "archive_id": "21b74bb2-9fe8-4830-a545-70e5788af277",
+    "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+    "measurement_protocol_id": "lumina_box_xyz_paired_diffuser_km/v2",
+    "objective_id": "box_spectral_paired_spectral_white/v3",
+    "optical_model_id": "box_reference_consistent_feedback/equal_xyz_v1",
+    "profile_kind": "lumina_box",
+    "reference_id": "7b063ffb429e5fe07e5f91e844e155ee4fe5d44194380984f741be2e4af3f6c5",
+    "revision_id": "c455b0bb-6f01-4e60-8f69-d2adfd3da304",
+    "schema_version": "2.0"
+  },
+  "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+  "fit": {
+    "diagnostics": {
+      "channels": [
+        {
+          "channel": "X",
+          "reflectance_rmse": 0.010191586182686027,
+          "transmittance_rmse": 0.011949709193136955,
+          "warnings": []
+        },
+        {
+          "channel": "Y",
+          "reflectance_rmse": 0.01890826441971092,
+          "transmittance_rmse": 0.02350432978593572,
+          "warnings": []
+        },
+        {
+          "channel": "Z",
+          "reflectance_rmse": 0.014478778479791784,
+          "transmittance_rmse": 0.014399043965090183,
+          "warnings": []
+        }
+      ],
+      "jacobian_condition": 190.97323016034872,
+      "measurement_thickness_offset_mm": 0.0,
+      "message": "`ftol` termination condition is satisfied.",
+      "nfev": 25,
+      "objective_config": {
+        "absorption_curvature_weight": 0.05,
+        "absorption_parameterization": "independent_wavelength_anchors",
+        "fitted_thickness_offset": false,
+        "loss": "linear",
+        "material_parameter_count": 8,
+        "pair_weighting": "equal_absolute_xyz",
+        "reference_min_total_reflectance_y": 0.95,
+        "reference_reflectance": 0.98,
+        "reference_thickness_mm": 3.0,
+        "transmission_diffuser_return": true,
+        "xyz_residual_scale": 0.02
+      },
+      "objective_id": "box_spectral_paired_spectral_white/v3",
+      "robust_objective": 0.33226899086328093,
+      "start_count": 24,
+      "success": true,
+      "warnings": []
+    },
+    "estimated_effective_d65_10_xyz_relative": [
+      0.5702401055395976,
+      0.7116341647378377,
+      0.6865821592867201
+    ],
+    "estimated_reflectance_thickness_mm": 3.0,
+    "estimated_rgb": [
+      147,
+      236,
+      214
+    ],
+    "fit_quality": {
+      "reasons": [
+        "white_reference_lower_bound_active"
+      ],
+      "savable": true,
+      "thresholds": {
+        "max_abs_residual_percentage_points": 20.0,
+        "modality_rmse_percentage_points": 10.0,
+        "overall_rmse_percentage_points": 10.0
+      }
+    },
+    "is_reference_white": false,
+    "measurement_backing_base_percent_xyz": [
+      19.8,
+      19.7,
+      24.7
+    ],
+    "measurement_backing_effective_percent_xyz": [
+      40.53612774904172,
+      40.44889433765505,
+      51.80032428955781
+    ],
+    "measurement_backing_scale": 2.2303348342873544,
+    "measurement_reflection_boundary_id": "instrument_diffuser_recycled_white_reference/v1",
+    "measurement_thickness_offset_mm": 0.0,
+    "optical_model_id": "box_reference_consistent_feedback/equal_xyz_v1",
+    "parameters": {
+      "forward_scattering_fraction": 0.7336062312850374,
+      "log_absorption_anchors": [
+        -2.183565696553735,
+        -5.899305807618276,
+        -2.5823486578299364,
+        -0.26109519005831733
+      ],
+      "log_scattering_strength": 2.497842626091848,
+      "measurement_backing_scale": 2.2303348342873544,
+      "parameterization": "log_absorption4_log_scattering_power_forward_coupling/v1",
+      "scattering_power": 2.366227002198166,
+      "unit": "mm^-1"
+    },
+    "reference_physics": {
+      "absorption_percent_xyz": [
+        1.7961459403137425e-07,
+        1.798087422011374e-07,
+        1.811146448094103e-07
+      ],
+      "assigned_calibration_percent": 98.0,
+      "exact_white_reflectance_measured": false,
+      "lower_bound_active": true,
+      "minimum_total_reflectance_percent_y": 95.0,
+      "total_reflectance_percent_xyz": [
+        94.71440755698337,
+        94.99999999984999,
+        96.98847691163625
+      ],
+      "total_transmittance_percent_xyz": [
+        5.285592263402035,
+        4.999999820341264,
+        3.0115229072490988
+      ]
+    },
+    "residual_summary": {
+      "channel_rmse_percentage_points_xyz": [
+        1.1105493656737162,
+        2.133044751114861,
+        1.4438966261050028
+      ],
+      "max_abs_location": {
+        "channel": "Z",
+        "modality": "transmittance",
+        "signed_residual_percentage_points": 4.574943973070816,
+        "thickness_mm": 0.08
+      },
+      "max_abs_residual_percentage_points": 4.574943973070816,
+      "overall_rmse_percentage_points": 1.619468767912734,
+      "reflectance_channel_rmse_percentage_points_xyz": [
+        1.0191586182686023,
+        1.8908264419710932,
+        1.4478778479791783
+      ],
+      "reflectance_rmse_percentage_points": 1.4955778354331863,
+      "transmittance_channel_rmse_percentage_points_xyz": [
+        1.1949709193136964,
+        2.350432978593573,
+        1.4399043965090197
+      ],
+      "transmittance_rmse_percentage_points": 1.7345331125840635
+    },
+    "sample_predictions": [
+      {
+        "reflectance": {
+          "measured_percent_xyz": [
+            45.307518,
+            49.527805,
+            53.41901
+          ],
+          "predicted_percent_xyz": [
+            46.146875102406234,
+            48.28333601912001,
+            57.89384992825536
+          ],
+          "residual_percentage_points_xyz": [
+            0.8393571024062325,
+            -1.2444689808799936,
+            4.474839928255356
+          ]
+        },
+        "thickness_mm": 0.08,
+        "transmittance": {
+          "measured_percent_xyz": [
+            78.789391,
+            82.452461,
+            75.647812
+          ],
+          "predicted_percent_xyz": [
+            82.12662010685479,
+            83.47179937782542,
+            80.22275597307082
+          ],
+          "residual_percentage_points_xyz": [
+            3.3372291068547923,
+            1.0193383778254201,
+            4.574943973070816
+          ]
+        }
+      },
+      {
+        "reflectance": {
+          "measured_percent_xyz": [
+            50.563007,
+            57.155781,
+            60.336113
+          ],
+          "predicted_percent_xyz": [
+            51.037775439937725,
+            55.07768728635989,
+            61.87559223685769
+          ],
+          "residual_percentage_points_xyz": [
+            0.4747684399377263,
+            -2.078093713640108,
+            1.5394792368576944
+          ]
+        },
+        "thickness_mm": 0.16,
+        "transmittance": {
+          "measured_percent_xyz": [
+            66.437057,
+            72.02346,
+            64.108681
+          ],
+          "predicted_percent_xyz": [
+            65.81009860841172,
+            68.868701633066,
+            64.51625173039442
+          ],
+          "residual_percentage_points_xyz": [
+            -0.6269583915882748,
+            -3.1547583669340042,
+            0.4075707303944114
+          ]
+        }
+      },
+      {
+        "reflectance": {
+          "measured_percent_xyz": [
+            52.187347,
+            60.550163,
+            62.848801
+          ],
+          "predicted_percent_xyz": [
+            52.68014853194287,
+            58.14854900025662,
+            63.41209911223391
+          ],
+          "residual_percentage_points_xyz": [
+            0.4928015319428667,
+            -2.4016139997433754,
+            0.5632981122339089
+          ]
+        },
+        "thickness_mm": 0.24,
+        "transmittance": {
+          "measured_percent_xyz": [
+            56.116985,
+            63.29097,
+            54.959625
+          ],
+          "predicted_percent_xyz": [
+            55.07510095473518,
+            59.78493190137948,
+            54.69579786131072
+          ],
+          "residual_percentage_points_xyz": [
+            -1.0418840452648226,
+            -3.5060380986205217,
+            -0.26382713868927965
+          ]
+        }
+      },
+      {
+        "reflectance": {
+          "measured_percent_xyz": [
+            53.055275,
+            62.774883,
+            64.609367
+          ],
+          "predicted_percent_xyz": [
+            53.41551814297551,
+            60.01965128052892,
+            64.37780516499659
+          ],
+          "residual_percentage_points_xyz": [
+            0.36024314297550575,
+            -2.755231719471084,
+            -0.23156183500341854
+          ]
+        },
+        "thickness_mm": 0.32,
+        "transmittance": {
+          "measured_percent_xyz": [
+            47.820309,
+            56.124657,
+            47.563915
+          ],
+          "predicted_percent_xyz": [
+            47.14219962328161,
+            53.20159560312803,
+            47.120657693907745
+          ],
+          "residual_percentage_points_xyz": [
+            -0.678109376718389,
+            -2.9230613968719723,
+            -0.44325730609225644
+          ]
+        }
+      },
+      {
+        "reflectance": {
+          "measured_percent_xyz": [
+            52.935017,
+            63.746635,
+            64.098389
+          ],
+          "predicted_percent_xyz": [
+            53.87531200254657,
+            61.41034028485149,
+            65.103150497047
+          ],
+          "residual_percentage_points_xyz": [
+            0.94029500254657,
+            -2.3362947151485045,
+            1.0047614970469994
+          ]
+        },
+        "thickness_mm": 0.4,
+        "transmittance": {
+          "measured_percent_xyz": [
+            40.749786,
+            49.657612,
+            40.508904
+          ],
+          "predicted_percent_xyz": [
+            40.87600732198952,
+            47.96020451639297,
+            40.86660091920722
+          ],
+          "residual_percentage_points_xyz": [
+            0.12622132198951874,
+            -1.69740748360703,
+            0.35769691920722124
+          ]
+        }
+      },
+      {
+        "reflectance": {
+          "measured_percent_xyz": [
+            52.982182,
+            64.253227,
+            65.473267
+          ],
+          "predicted_percent_xyz": [
+            54.23850635951427,
+            62.55039983865521,
+            65.67731404051052
+          ],
+          "residual_percentage_points_xyz": [
+            1.2563243595142666,
+            -1.7028271613447856,
+            0.2040470405105168
+          ]
+        },
+        "thickness_mm": 0.48,
+        "transmittance": {
+          "measured_percent_xyz": [
+            35.966473,
+            45.050602,
+            36.363758
+          ],
+          "predicted_percent_xyz": [
+            35.73687588561052,
+            43.56961338567443,
+            35.591853518933924
+          ],
+          "residual_percentage_points_xyz": [
+            -0.2295971143894775,
+            -1.4809886143255682,
+            -0.7719044810660733
+          ]
+        }
+      },
+      {
+        "reflectance": {
+          "measured_percent_xyz": [
+            53.629028,
+            65.694809,
+            66.37455
+          ],
+          "predicted_percent_xyz": [
+            54.5550859895106,
+            63.5245201607595,
+            66.14083047641685
+          ],
+          "residual_percentage_points_xyz": [
+            0.9260579895106034,
+            -2.1702888392405058,
+            -0.2337195235831473
+          ]
+        },
+        "thickness_mm": 0.56,
+        "transmittance": {
+          "measured_percent_xyz": [
+            31.05587,
+            40.256386,
+            31.667841
+          ],
+          "predicted_percent_xyz": [
+            31.42975170496318,
+            39.790987785681544,
+            31.10543641730587
+          ],
+          "residual_percentage_points_xyz": [
+            0.37388170496318196,
+            -0.46539821431845496,
+            -0.5624045826941284
+          ]
+        }
+      },
+      {
+        "reflectance": {
+          "measured_percent_xyz": [
+            53.263653,
+            65.68438,
+            66.309586
+          ],
+          "predicted_percent_xyz": [
+            54.83841046491168,
+            64.37132367465384,
+            66.51934078235297
+          ],
+          "residual_percentage_points_xyz": [
+            1.5747574649116842,
+            -1.3130563253461673,
+            0.20975478235297373
+          ]
+        },
+        "thickness_mm": 0.64,
+        "transmittance": {
+          "measured_percent_xyz": [
+            27.757126,
+            37.015862,
+            28.462748
+          ],
+          "predicted_percent_xyz": [
+            27.771874212342528,
+            36.488946013148016,
+            27.27138683432242
+          ],
+          "residual_percentage_points_xyz": [
+            0.014748212342528433,
+            -0.5269159868519822,
+            -1.1913611656775807
+          ]
+        }
+      },
+      {
+        "reflectance": {
+          "measured_percent_xyz": [
+            54.309326,
+            67.302025,
+            67.509247
+          ],
+          "predicted_percent_xyz": [
+            55.09232771695882,
+            65.11337575153871,
+            66.83123851349156
+          ],
+          "residual_percentage_points_xyz": [
+            0.7830017169588217,
+            -2.1886492484612887,
+            -0.6780084865084461
+          ]
+        },
+        "thickness_mm": 0.72,
+        "transmittance": {
+          "measured_percent_xyz": [
+            23.82786,
+            32.838913,
+            24.553438
+          ],
+          "predicted_percent_xyz": [
+            24.63805512706846,
+            33.57542708327128,
+            23.98319090731242
+          ],
+          "residual_percentage_points_xyz": [
+            0.8101951270684573,
+            0.7365140832712811,
+            -0.5702470926875804
+          ]
+        }
+      },
+      {
+        "reflectance": {
+          "measured_percent_xyz": [
+            54.254295,
+            67.554626,
+            67.440002
+          ],
+          "predicted_percent_xyz": [
+            55.31882754037773,
+            65.76667073153307,
+            67.09030244094714
+          ],
+          "residual_percentage_points_xyz": [
+            1.0645325403777335,
+            -1.7879552684669306,
+            -0.34969955905286554
+          ]
+        },
+        "thickness_mm": 0.8,
+        "transmittance": {
+          "measured_percent_xyz": [
+            21.236364,
+            29.984375,
+            21.987572
+          ],
+          "predicted_percent_xyz": [
+            21.936084896661058,
+            30.98704104275985,
+            21.15444785505979
+          ],
+          "residual_percentage_points_xyz": [
+            0.6997208966610593,
+            1.0026660427598486,
+            -0.8331241449402107
+          ]
+        }
+      },
+      {
+        "reflectance": {
+          "measured_percent_xyz": [
+            55.452801,
+            70.197197,
+            68.927322
+          ],
+          "predicted_percent_xyz": [
+            56.54302752967085,
+            69.4007314701157,
+            68.26412590281798
+          ],
+          "residual_percentage_points_xyz": [
+            1.0902265296708507,
+            -0.7964655298843013,
+            -0.6631960971820234
+          ]
+        },
+        "thickness_mm": 1.6,
+        "transmittance": {
+          "measured_percent_xyz": [
+            6.490634,
+            11.446717,
+            6.84735
+          ],
+          "predicted_percent_xyz": [
+            8.010500673890578,
+            15.627173728754782,
+            7.034380176331225
+          ],
+          "residual_percentage_points_xyz": [
+            1.5198666738905775,
+            4.180456728754782,
+            0.1870301763312252
+          ]
+        }
+      },
+      {
+        "reflectance": {
+          "measured_percent_xyz": [
+            55.466194,
+            70.650604,
+            69.126694
+          ],
+          "predicted_percent_xyz": [
+            57.024010553959755,
+            71.16341647378377,
+            68.658215928672
+          ],
+          "residual_percentage_points_xyz": [
+            1.5578165539597535,
+            0.512812473783768,
+            -0.46847807132799346
+          ]
+        },
+        "thickness_mm": 3.0,
+        "transmittance": {
+          "measured_percent_xyz": [
+            1.523015,
+            3.155927,
+            1.697582
+          ],
+          "predicted_percent_xyz": [
+            2.151715619838563,
+            6.298141829670876,
+            1.7600813394204515
+          ],
+          "residual_percentage_points_xyz": [
+            0.628700619838563,
+            3.142214829670876,
+            0.062499339420451605
+          ]
+        }
+      }
+    ],
+    "warnings": [],
+    "white_reference": {
+      "assigned_reflectance": 0.98,
+      "backing_base_relative_xyz": [
+        0.198,
+        0.19699999999999998,
+        0.247
+      ],
+      "basis_id": "cie1931_d65_normalized_xyz_5nm/v1",
+      "measurement_sha256": "0ed1fa090e74470b28160e59f6925e99f6d1370221b8da414b07a87ae190218e",
+      "minimum_total_reflectance_y": 0.95,
+      "model_id": "box_reference_consistent_feedback/equal_xyz_v1",
+      "reference_id": "7b063ffb429e5fe07e5f91e844e155ee4fe5d44194380984f741be2e4af3f6c5",
+      "relative_xyz": [
+        0.8995660942096672,
+        0.902186734077856,
+        0.921491924449421
+      ],
+      "thickness_mm": 3.0,
+      "white_parameters": {
+        "forward_scattering_fraction": 0.05000000000648279,
+        "log_absorption_anchors": [
+          -23.025850909184925,
+          -23.02585092993996,
+          -23.02585092871164,
+          -23.025464500644652
+        ],
+        "log_scattering_strength": 2.344703550065923,
+        "measurement_backing_scale": 3.212953618607688,
+        "parameterization": "log_absorption4_log_scattering_power_forward_coupling/v1",
+        "scattering_power": 2.6415617529209596,
+        "unit": "mm^-1"
+      }
+    }
+  },
+  "measurement_protocol_id": "lumina_box_xyz_paired_diffuser_km/v2",
+  "objective_id": "box_spectral_paired_spectral_white/v3",
+  "optical_model": "box_reference_consistent_feedback/equal_xyz_v1",
+  "schema_version": "3.0"
+}

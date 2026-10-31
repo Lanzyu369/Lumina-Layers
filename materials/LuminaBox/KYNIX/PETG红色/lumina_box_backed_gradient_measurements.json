@@ -1,0 +1,4129 @@
+{
+  "archive_consistency": {
+    "acquisition_source": "lumina_box_backed_gradient",
+    "archive_id": "2d995386-61ad-49bf-9c15-cd0658da37c8",
+    "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+    "measurement_protocol_id": "lumina_box_backed_gradient/v1",
+    "objective_id": "backed_gradient_xyz_fixed_weak_logk_curvature/v1",
+    "optical_model_id": "backed_gradient_spectral_four_flux_smooth/v3",
+    "profile_kind": "lumina_box",
+    "reference_id": "3bd3d992e2fa23e015c0b8da8255c0b82199fc84a5f51ef53f20d28d0d48cfca",
+    "revision_id": "8487592a-7e63-4042-b4a4-9694c14e5024",
+    "schema_version": "1.0"
+  },
+  "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+  "measurement_protocol_id": "lumina_box_backed_gradient/v1",
+  "measurements": {
+    "brand": "KYNIX",
+    "capture_history": [
+      {
+        "backing": "W",
+        "backing_mm": 2.92,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 0,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:09:30.081Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:09:30.089247+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-1",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            48.50581,
+            28.853712,
+            15.220499
+          ],
+          "thickness_mm": 0.08,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            6.825051,
+            4.481574,
+            1.648838
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-1",
+        "notes": "",
+        "overlay_mm": 0.08,
+        "received_at": "2026-10-07T04:09:30.081Z",
+        "record_id": "8707159f-fc7f-48c5-b0e2-5e8bb40eadc9",
+        "reflectance_percent_xyz": [
+          48.50581,
+          28.853712,
+          15.220499
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 2.84,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 1,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:10:28.105Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:10:28.112573+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-2",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            39.398254,
+            20.438316,
+            5.899793
+          ],
+          "thickness_mm": 0.16,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            5.874165,
+            3.315685,
+            0.79261
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-2",
+        "notes": "",
+        "overlay_mm": 0.16,
+        "received_at": "2026-10-07T04:10:28.105Z",
+        "record_id": "879ef77e-49c4-436f-8e17-f4bf9dbb0b8b",
+        "reflectance_percent_xyz": [
+          39.398254,
+          20.438316,
+          5.899793
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 2.76,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 2,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:10:46.031Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:10:46.038736+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-3",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            34.499348,
+            17.047215,
+            3.613551
+          ],
+          "thickness_mm": 0.24,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            5.284876,
+            2.738055,
+            0.405825
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-3",
+        "notes": "",
+        "overlay_mm": 0.24,
+        "received_at": "2026-10-07T04:10:46.031Z",
+        "record_id": "620779ec-49d7-47e6-ab5b-ba56da1be185",
+        "reflectance_percent_xyz": [
+          34.499348,
+          17.047215,
+          3.613551
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 2.68,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 3,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:11:02.588Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:11:02.596103+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-4",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            31.663334,
+            15.356085,
+            3.196112
+          ],
+          "thickness_mm": 0.32,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            4.740965,
+            2.329532,
+            0.214985
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-4",
+        "notes": "",
+        "overlay_mm": 0.32,
+        "received_at": "2026-10-07T04:11:02.588Z",
+        "record_id": "4fa78ceb-9e40-4f94-8d82-dad419b2ac5b",
+        "reflectance_percent_xyz": [
+          31.663334,
+          15.356085,
+          3.196112
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 1.0,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 4,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:11:39.878Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:11:39.885951+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-5",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            25.98912,
+            12.44129,
+            3.129163
+          ],
+          "thickness_mm": 2,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            3.904162,
+            1.760804,
+            0.071745
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-5",
+        "notes": "",
+        "overlay_mm": 2.0,
+        "received_at": "2026-10-07T04:11:39.878Z",
+        "record_id": "febcf4d9-c960-4fb3-b097-7119fff0890b",
+        "reflectance_percent_xyz": [
+          25.98912,
+          12.44129,
+          3.129163
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": false,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 2.36,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 5,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:11:55.282Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:11:55.289807+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-6",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            25.967173,
+            12.439993,
+            3.132734
+          ],
+          "thickness_mm": 0.64,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            3.893505,
+            1.757332,
+            0.071461
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-6",
+        "notes": "",
+        "overlay_mm": 0.64,
+        "received_at": "2026-10-07T04:11:55.282Z",
+        "record_id": "0a805dce-8545-4ee5-a501-a7908c80235c",
+        "reflectance_percent_xyz": [
+          25.967173,
+          12.439993,
+          3.132734
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 1.72,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 6,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:12:08.231Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:12:08.238533+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-7",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            25.967974,
+            12.444936,
+            3.141216
+          ],
+          "thickness_mm": 1.28,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            3.065198,
+            1.301371,
+            0.055934
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-7",
+        "notes": "",
+        "overlay_mm": 1.28,
+        "received_at": "2026-10-07T04:12:08.231Z",
+        "record_id": "1f9d54f8-31f9-4c79-b721-fa32730c796b",
+        "reflectance_percent_xyz": [
+          25.967974,
+          12.444936,
+          3.141216
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": false,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 1.72,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 7,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:12:26.865Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:12:26.872158+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-8",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            22.163734,
+            10.59509,
+            2.852462
+          ],
+          "thickness_mm": 1.28,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            3.066574,
+            1.302421,
+            0.055757
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-8",
+        "notes": "",
+        "overlay_mm": 1.28,
+        "received_at": "2026-10-07T04:12:26.865Z",
+        "record_id": "9c860c92-885c-4c58-bd8d-c4a9dd9171db",
+        "reflectance_percent_xyz": [
+          22.163734,
+          10.59509,
+          2.852462
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": false,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 1.0,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 8,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:12:48.074Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:12:48.081755+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-9",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            21.641525,
+            10.820455,
+            3.613085
+          ],
+          "thickness_mm": 2,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            2.583271,
+            1.05827,
+            0.053058
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-9",
+        "notes": "",
+        "overlay_mm": 2.0,
+        "received_at": "2026-10-07T04:12:48.074Z",
+        "record_id": "97db2d39-30fc-46cf-88d9-6a9474854cfd",
+        "reflectance_percent_xyz": [
+          21.641525,
+          10.820455,
+          3.613085
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 1.72,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 9,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:13:34.413Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:13:34.421650+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-10",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            22.047625,
+            10.523666,
+            2.805795
+          ],
+          "thickness_mm": 1.28,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            3.067242,
+            1.302978,
+            0.056053
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-10",
+        "notes": "",
+        "overlay_mm": 1.28,
+        "received_at": "2026-10-07T04:13:34.413Z",
+        "record_id": "d5c44fac-1102-47e8-a006-4e365df66003",
+        "reflectance_percent_xyz": [
+          22.047625,
+          10.523666,
+          2.805795
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 2.92,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 10,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:32:39.327Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:32:39.338603+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-11",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            2.212472,
+            1.592123,
+            1.629967
+          ],
+          "thickness_mm": 0.08,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            8.2e-05,
+            0.000125,
+            1.5e-05
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-11",
+        "notes": "",
+        "overlay_mm": 0.08,
+        "received_at": "2026-10-07T04:32:39.327Z",
+        "record_id": "0b73a598-94a6-4f2b-b730-cd0ce64b2c9c",
+        "reflectance_percent_xyz": [
+          2.212472,
+          1.592123,
+          1.629967
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 2.84,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 11,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:33:07.064Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:33:07.070989+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-12",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            4.773092,
+            3.074258,
+            2.520309
+          ],
+          "thickness_mm": 0.16,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            0.000144,
+            0.000181,
+            0
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-12",
+        "notes": "",
+        "overlay_mm": 0.16,
+        "received_at": "2026-10-07T04:33:07.064Z",
+        "record_id": "b714b885-ecb8-4e73-a61c-d1a8c22d8531",
+        "reflectance_percent_xyz": [
+          4.773092,
+          3.074258,
+          2.520309
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 2.76,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 12,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:33:36.069Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:33:36.076839+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-13",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            6.698436,
+            3.92367,
+            2.337434
+          ],
+          "thickness_mm": 0.24,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            0.00024,
+            0.000248,
+            0
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-13",
+        "notes": "",
+        "overlay_mm": 0.24,
+        "received_at": "2026-10-07T04:33:36.069Z",
+        "record_id": "a9b33156-0644-4a3c-8212-e6520ec415a6",
+        "reflectance_percent_xyz": [
+          6.698436,
+          3.92367,
+          2.337434
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 2.68,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 13,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:33:58.845Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:33:58.853199+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-14",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            8.918631,
+            5.114393,
+            2.717488
+          ],
+          "thickness_mm": 0.32,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            0.000242,
+            0.000225,
+            0
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-14",
+        "notes": "",
+        "overlay_mm": 0.32,
+        "received_at": "2026-10-07T04:33:58.845Z",
+        "record_id": "09da90b5-ccbe-427c-8262-38d7dbb8ab9d",
+        "reflectance_percent_xyz": [
+          8.918631,
+          5.114393,
+          2.717488
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 2.36,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 14,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:34:26.591Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:34:26.598937+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-15",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            13.844499,
+            7.129293,
+            2.548884
+          ],
+          "thickness_mm": 0.64,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            0.000342,
+            0.000253,
+            1.5e-05
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-15",
+        "notes": "",
+        "overlay_mm": 0.64,
+        "received_at": "2026-10-07T04:34:26.591Z",
+        "record_id": "3a8f1d31-472b-4b97-a84e-5cea4f71977a",
+        "reflectance_percent_xyz": [
+          13.844499,
+          7.129293,
+          2.548884
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 1.0,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 15,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:35:03.111Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:35:03.119196+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-16",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            20.26129,
+            10.047796,
+            3.316498
+          ],
+          "thickness_mm": 2,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            0.001464,
+            0.000758,
+            1.6e-05
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-16",
+        "notes": "",
+        "overlay_mm": 2.0,
+        "received_at": "2026-10-07T04:35:03.111Z",
+        "record_id": "bca50d8f-1883-46d3-9e7c-7cb454aa2b53",
+        "reflectance_percent_xyz": [
+          20.26129,
+          10.047796,
+          3.316498
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 1.72,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 16,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:35:29.651Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:35:29.661607+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-17",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            17.893816,
+            8.734668,
+            2.52432
+          ],
+          "thickness_mm": 1.28,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            0.00058,
+            0.000397,
+            3.7e-05
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-17",
+        "notes": "",
+        "overlay_mm": 1.28,
+        "received_at": "2026-10-07T04:35:29.651Z",
+        "record_id": "284e3e7a-49d5-44eb-8924-4df2283ef103",
+        "reflectance_percent_xyz": [
+          17.893816,
+          8.734668,
+          2.52432
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      }
+    ],
+    "conditions": {
+      "diffuser_removed": true,
+      "observation_face": "bed_contact",
+      "total_mm": 3.0
+    },
+    "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+    "dataset_revision": 76,
+    "input_hash": "521dfbfa07118c57cac8110287096133a7c45dc7d27d9f928603a649f2aeb256",
+    "material_kind": "color",
+    "material_symbol": "R",
+    "material_type": "PETG",
+    "name": "R",
+    "notes": "",
+    "reference": {
+      "anchors": {
+        "K": [
+          0.102621,
+          0.080472,
+          0.065969
+        ],
+        "W": [
+          96.649864,
+          96.524185,
+          97.161522
+        ]
+      },
+      "black": {
+        "coefficients": [
+          1.838264269605024,
+          2.5988429096976846,
+          3.9999999999999996,
+          0.9799999999185977
+        ],
+        "kind": "black"
+      },
+      "model_id": "backed_gradient_spectral_four_flux_smooth/v3",
+      "reference_id": "3bd3d992e2fa23e015c0b8da8255c0b82199fc84a5f51ef53f20d28d0d48cfca",
+      "schema_version": "1.0",
+      "source": {
+        "capture_history": [
+          {
+            "backing": "K",
+            "backing_mm": 2.92,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 46,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:03:55.358Z"
+            },
+            "capture_id": "3d28290a-3cc5-4544-aae6-5f18e1b250ed",
+            "created_at": "2026-10-07T05:03:55.366631+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-14",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                9.014724,
+                9.316272,
+                11.94831
+              ],
+              "thickness_mm": 0.08,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.00069,
+                0.000797,
+                0.000678
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-14",
+            "notes": "",
+            "overlay_mm": 0.08,
+            "received_at": "2026-10-07T05:03:55.358Z",
+            "record_id": "9611c19d-f46c-457c-9f28-2ac96bfb6016",
+            "reflectance_percent_xyz": [
+              9.014724,
+              9.316272,
+              11.94831
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 2.84,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 47,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:04:55.860Z"
+            },
+            "capture_id": "3d28290a-3cc5-4544-aae6-5f18e1b250ed",
+            "created_at": "2026-10-07T05:04:55.867563+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-15",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                20.272497,
+                20.941214,
+                25.83935
+              ],
+              "thickness_mm": 0.16,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.001281,
+                0.001377,
+                0.001252
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-15",
+            "notes": "",
+            "overlay_mm": 0.16,
+            "received_at": "2026-10-07T05:04:55.860Z",
+            "record_id": "8fe76fa9-0695-4773-a3b5-3be8b703ea23",
+            "reflectance_percent_xyz": [
+              20.272497,
+              20.941214,
+              25.83935
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 2.76,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 48,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:05:24.478Z"
+            },
+            "capture_id": "3d28290a-3cc5-4544-aae6-5f18e1b250ed",
+            "created_at": "2026-10-07T05:05:24.488812+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-16",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                30.774372,
+                31.828447,
+                37.714931
+              ],
+              "thickness_mm": 0.24,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.00182,
+                0.001996,
+                0.001742
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-16",
+            "notes": "",
+            "overlay_mm": 0.24,
+            "received_at": "2026-10-07T05:05:24.478Z",
+            "record_id": "575800bc-8106-4dd2-b0c5-d9781b2357e1",
+            "reflectance_percent_xyz": [
+              30.774372,
+              31.828447,
+              37.714931
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 2.68,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 49,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:05:59.739Z"
+            },
+            "capture_id": "3d28290a-3cc5-4544-aae6-5f18e1b250ed",
+            "created_at": "2026-10-07T05:05:59.749358+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-17",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                38.259335,
+                39.221447,
+                45.789677
+              ],
+              "thickness_mm": 0.32,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.002172,
+                0.002397,
+                0.002045
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-17",
+            "notes": "",
+            "overlay_mm": 0.32,
+            "received_at": "2026-10-07T05:05:59.739Z",
+            "record_id": "a54d4edd-35e0-43c3-ae7d-626232fcdcf0",
+            "reflectance_percent_xyz": [
+              38.259335,
+              39.221447,
+              45.789677
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 2.36,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 50,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:06:55.740Z"
+            },
+            "capture_id": "3d28290a-3cc5-4544-aae6-5f18e1b250ed",
+            "created_at": "2026-10-07T05:06:55.748791+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-18",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                62.362999,
+                63.443668,
+                69.685402
+              ],
+              "thickness_mm": 0.64,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.003411,
+                0.003651,
+                0.003185
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-18",
+            "notes": "",
+            "overlay_mm": 0.64,
+            "received_at": "2026-10-07T05:06:55.740Z",
+            "record_id": "a2dc6728-4329-45ea-9951-c5ce5a9a28bb",
+            "reflectance_percent_xyz": [
+              62.362999,
+              63.443668,
+              69.685402
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 1.72,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 51,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:07:26.487Z"
+            },
+            "capture_id": "3d28290a-3cc5-4544-aae6-5f18e1b250ed",
+            "created_at": "2026-10-07T05:07:26.495020+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-19",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                80.700623,
+                81.396301,
+                85.336586
+              ],
+              "thickness_mm": 1.28,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.004458,
+                0.004653,
+                0.003932
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-19",
+            "notes": "",
+            "overlay_mm": 1.28,
+            "received_at": "2026-10-07T05:07:26.487Z",
+            "record_id": "26ec9368-0b43-45f2-acda-67ab3d0436ba",
+            "reflectance_percent_xyz": [
+              80.700623,
+              81.396301,
+              85.336586
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 1.0,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 52,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:07:59.674Z"
+            },
+            "capture_id": "3d28290a-3cc5-4544-aae6-5f18e1b250ed",
+            "created_at": "2026-10-07T05:07:59.683371+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-20",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                89.594795,
+                89.752739,
+                92.391243
+              ],
+              "thickness_mm": 2,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.006616,
+                0.006299,
+                0.004371
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-20",
+            "notes": "",
+            "overlay_mm": 2.0,
+            "received_at": "2026-10-07T05:07:59.674Z",
+            "record_id": "ee5918ce-4f74-4cd6-8cc5-9553a25e03e0",
+            "reflectance_percent_xyz": [
+              89.594795,
+              89.752739,
+              92.391243
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 2.92,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 53,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:09:17.898Z"
+            },
+            "capture_id": "d2f88f15-8eee-4a0e-8ac7-9fc67515dee5",
+            "created_at": "2026-10-07T05:09:17.906755+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-21",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                96.485611,
+                96.166199,
+                96.911392
+              ],
+              "thickness_mm": 0.08,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                10.24461,
+                9.618114,
+                5.702766
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-21",
+            "notes": "",
+            "overlay_mm": 0.08,
+            "received_at": "2026-10-07T05:09:17.898Z",
+            "record_id": "8dc1967f-179d-4f11-b76e-5e85d2808c49",
+            "reflectance_percent_xyz": [
+              96.485611,
+              96.166199,
+              96.911392
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 2.84,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 54,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:09:57.724Z"
+            },
+            "capture_id": "d2f88f15-8eee-4a0e-8ac7-9fc67515dee5",
+            "created_at": "2026-10-07T05:09:57.732979+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-22",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                96.468681,
+                96.180466,
+                96.865768
+              ],
+              "thickness_mm": 0.16,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                10.224912,
+                9.590693,
+                5.680923
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-22",
+            "notes": "",
+            "overlay_mm": 0.16,
+            "received_at": "2026-10-07T05:09:57.724Z",
+            "record_id": "119caddf-655c-4548-83c0-57bffd4982bd",
+            "reflectance_percent_xyz": [
+              96.468681,
+              96.180466,
+              96.865768
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 2.76,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 55,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:10:29.713Z"
+            },
+            "capture_id": "d2f88f15-8eee-4a0e-8ac7-9fc67515dee5",
+            "created_at": "2026-10-07T05:10:29.721664+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-23",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                97.08036,
+                96.789528,
+                97.370407
+              ],
+              "thickness_mm": 0.24,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                10.217643,
+                9.585829,
+                5.667408
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-23",
+            "notes": "",
+            "overlay_mm": 0.24,
+            "received_at": "2026-10-07T05:10:29.713Z",
+            "record_id": "3128825a-5a6b-4ee5-b94c-4344856d3162",
+            "reflectance_percent_xyz": [
+              97.08036,
+              96.789528,
+              97.370407
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 2.68,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 56,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:10:49.217Z"
+            },
+            "capture_id": "d2f88f15-8eee-4a0e-8ac7-9fc67515dee5",
+            "created_at": "2026-10-07T05:10:49.225982+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-24",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                97.035774,
+                96.724144,
+                97.33403
+              ],
+              "thickness_mm": 0.32,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                10.195391,
+                9.55653,
+                5.64865
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-24",
+            "notes": "",
+            "overlay_mm": 0.32,
+            "received_at": "2026-10-07T05:10:49.217Z",
+            "record_id": "4ef16663-99c6-49ac-9f0d-632aff517ab9",
+            "reflectance_percent_xyz": [
+              97.035774,
+              96.724144,
+              97.33403
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 2.36,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 57,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:11:01.739Z"
+            },
+            "capture_id": "d2f88f15-8eee-4a0e-8ac7-9fc67515dee5",
+            "created_at": "2026-10-07T05:11:01.748191+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-25",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                96.948402,
+                96.631088,
+                97.240189
+              ],
+              "thickness_mm": 0.64,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                10.172621,
+                9.531871,
+                5.634829
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-25",
+            "notes": "",
+            "overlay_mm": 0.64,
+            "received_at": "2026-10-07T05:11:01.739Z",
+            "record_id": "cddbb3e4-bc32-4a36-adba-fecbe1727cdf",
+            "reflectance_percent_xyz": [
+              96.948402,
+              96.631088,
+              97.240189
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 1.72,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 58,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:11:15.872Z"
+            },
+            "capture_id": "d2f88f15-8eee-4a0e-8ac7-9fc67515dee5",
+            "created_at": "2026-10-07T05:11:15.881108+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-26",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                96.865097,
+                96.513901,
+                97.16433
+              ],
+              "thickness_mm": 1.28,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                10.158752,
+                9.51619,
+                5.622627
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-26",
+            "notes": "",
+            "overlay_mm": 1.28,
+            "received_at": "2026-10-07T05:11:15.872Z",
+            "record_id": "b9b061fc-970c-42e3-9089-54add3a2e639",
+            "reflectance_percent_xyz": [
+              96.865097,
+              96.513901,
+              97.16433
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 1.0,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 59,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:11:27.911Z"
+            },
+            "capture_id": "d2f88f15-8eee-4a0e-8ac7-9fc67515dee5",
+            "created_at": "2026-10-07T05:11:27.920139+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-27",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                96.52108,
+                96.179825,
+                97.017029
+              ],
+              "thickness_mm": 2,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                10.142234,
+                9.493185,
+                5.61416
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-27",
+            "notes": "",
+            "overlay_mm": 2.0,
+            "received_at": "2026-10-07T05:11:27.911Z",
+            "record_id": "87b6a86e-373a-46c2-98e1-346aa95ec9d8",
+            "reflectance_percent_xyz": [
+              96.52108,
+              96.179825,
+              97.017029
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 2.92,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 60,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:12:40.368Z"
+            },
+            "capture_id": "091c281b-18c8-4d05-adb3-40b14f183ee4",
+            "created_at": "2026-10-07T05:12:40.377942+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-28",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                0,
+                0,
+                0
+              ],
+              "thickness_mm": 0.08,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.000252,
+                0.000308,
+                0.000131
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-28",
+            "notes": "",
+            "overlay_mm": 0.08,
+            "received_at": "2026-10-07T05:12:40.368Z",
+            "record_id": "00d4a426-1a11-4ebc-8d9f-6c1073b929a3",
+            "reflectance_percent_xyz": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 2.84,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 61,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:12:53.190Z"
+            },
+            "capture_id": "091c281b-18c8-4d05-adb3-40b14f183ee4",
+            "created_at": "2026-10-07T05:12:53.198455+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-29",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                0,
+                0,
+                0
+              ],
+              "thickness_mm": 0.16,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.000228,
+                0.000322,
+                7.8e-05
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-29",
+            "notes": "",
+            "overlay_mm": 0.16,
+            "received_at": "2026-10-07T05:12:53.190Z",
+            "record_id": "7ed57128-4abf-448c-8a4e-1edfe9ee7574",
+            "reflectance_percent_xyz": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 2.76,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 62,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:13:04.842Z"
+            },
+            "capture_id": "091c281b-18c8-4d05-adb3-40b14f183ee4",
+            "created_at": "2026-10-07T05:13:04.850205+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-30",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                0.013953,
+                0,
+                0
+              ],
+              "thickness_mm": 0.24,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.000273,
+                0.000318,
+                5.4e-05
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-30",
+            "notes": "",
+            "overlay_mm": 0.24,
+            "received_at": "2026-10-07T05:13:04.842Z",
+            "record_id": "0bec4614-2544-42a3-b1c3-19e724dbbcac",
+            "reflectance_percent_xyz": [
+              0.013953,
+              0.0,
+              0.0
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 2.68,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 63,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:13:24.418Z"
+            },
+            "capture_id": "091c281b-18c8-4d05-adb3-40b14f183ee4",
+            "created_at": "2026-10-07T05:13:24.440431+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-31",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                0.043185,
+                0.023034,
+                0.011932
+              ],
+              "thickness_mm": 0.32,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.000222,
+                0.000297,
+                0.000105
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-31",
+            "notes": "",
+            "overlay_mm": 0.32,
+            "received_at": "2026-10-07T05:13:24.418Z",
+            "record_id": "64fa7359-8d01-4374-a067-93d841a30f23",
+            "reflectance_percent_xyz": [
+              0.043185,
+              0.023034,
+              0.011932
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 2.36,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 64,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:13:36.016Z"
+            },
+            "capture_id": "091c281b-18c8-4d05-adb3-40b14f183ee4",
+            "created_at": "2026-10-07T05:13:36.024567+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-32",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                0.050247,
+                0.028791,
+                0.022116
+              ],
+              "thickness_mm": 0.64,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.000273,
+                0.000331,
+                0.000207
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-32",
+            "notes": "",
+            "overlay_mm": 0.64,
+            "received_at": "2026-10-07T05:13:36.016Z",
+            "record_id": "49217307-ccf1-4750-b074-e9412357fa2f",
+            "reflectance_percent_xyz": [
+              0.050247,
+              0.028791,
+              0.022116
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 1.72,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 65,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:14:03.476Z"
+            },
+            "capture_id": "091c281b-18c8-4d05-adb3-40b14f183ee4",
+            "created_at": "2026-10-07T05:14:03.487736+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-33",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                0.07272,
+                0.051923,
+                0.041094
+              ],
+              "thickness_mm": 1.28,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.000256,
+                0.000313,
+                0.000131
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-33",
+            "notes": "",
+            "overlay_mm": 1.28,
+            "received_at": "2026-10-07T05:14:03.476Z",
+            "record_id": "1ceac340-3f21-48bd-82c1-f559e95c4264",
+            "reflectance_percent_xyz": [
+              0.07272,
+              0.051923,
+              0.041094
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 1.0,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 66,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:14:16.791Z"
+            },
+            "capture_id": "091c281b-18c8-4d05-adb3-40b14f183ee4",
+            "created_at": "2026-10-07T05:14:16.799437+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-34",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                0.077364,
+                0.055272,
+                0.044417
+              ],
+              "thickness_mm": 2,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.000253,
+                0.000321,
+                0.000128
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-34",
+            "notes": "",
+            "overlay_mm": 2.0,
+            "received_at": "2026-10-07T05:14:16.791Z",
+            "record_id": "2ce2cc02-14f5-424c-b15d-2dd635cd18be",
+            "reflectance_percent_xyz": [
+              0.077364,
+              0.055272,
+              0.044417
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "K",
+            "backing_mm": 3.0,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 67,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:15:09.420Z"
+            },
+            "capture_id": "798cefb5-e25d-41f3-b78d-5e003a8739db",
+            "created_at": "2026-10-07T05:15:09.448262+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-35",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                0.102621,
+                0.080472,
+                0.065969
+              ],
+              "thickness_mm": 2,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.000249,
+                0.000339,
+                0.0001
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-35",
+            "notes": "",
+            "overlay_mm": 0.0,
+            "received_at": "2026-10-07T05:15:09.420Z",
+            "record_id": "48570136-5cc6-4273-bd54-4d9a7a596b81",
+            "reflectance_percent_xyz": [
+              0.102621,
+              0.080472,
+              0.065969
+            ],
+            "sample_name": "",
+            "sample_role": "bare_backing",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 3.0,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 68,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:15:58.283Z"
+            },
+            "capture_id": "ec65f9e8-aae0-46a6-a5b1-9b0320ef2221",
+            "created_at": "2026-10-07T05:15:58.291313+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-36",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                96.649864,
+                96.524185,
+                97.161522
+              ],
+              "thickness_mm": 2,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                10.152287,
+                9.51286,
+                5.62203
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "W",
+            "measurement_id": "1cdbd42d2a58-92375535-36",
+            "notes": "",
+            "overlay_mm": 0.0,
+            "received_at": "2026-10-07T05:15:58.283Z",
+            "record_id": "19f00e80-a9b5-4f8d-95e9-97687f13cb6d",
+            "reflectance_percent_xyz": [
+              96.649864,
+              96.524185,
+              97.161522
+            ],
+            "sample_name": "",
+            "sample_role": "bare_backing",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 2.92,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 69,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:17:10.800Z"
+            },
+            "capture_id": "e31760b9-289f-4d43-b3bb-3f08e2490e05",
+            "created_at": "2026-10-07T05:17:10.810165+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-37",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                11.69446,
+                11.105945,
+                8.313191
+              ],
+              "thickness_mm": 0.08,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                3.088536,
+                2.808199,
+                1.394674
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-37",
+            "notes": "",
+            "overlay_mm": 0.08,
+            "received_at": "2026-10-07T05:17:10.800Z",
+            "record_id": "c312a488-bcf2-471f-b4bd-2619ebf7d37b",
+            "reflectance_percent_xyz": [
+              11.69446,
+              11.105945,
+              8.313191
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 2.84,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 70,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:17:46.457Z"
+            },
+            "capture_id": "e31760b9-289f-4d43-b3bb-3f08e2490e05",
+            "created_at": "2026-10-07T05:17:46.465489+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-38",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                2.539391,
+                2.29311,
+                1.241572
+              ],
+              "thickness_mm": 0.16,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                1.529218,
+                1.355064,
+                0.589176
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-38",
+            "notes": "",
+            "overlay_mm": 0.16,
+            "received_at": "2026-10-07T05:17:46.457Z",
+            "record_id": "7f1ce54f-26a2-4c6b-a1cc-bb55113551f7",
+            "reflectance_percent_xyz": [
+              2.539391,
+              2.29311,
+              1.241572
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 2.76,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 71,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:18:15.463Z"
+            },
+            "capture_id": "e31760b9-289f-4d43-b3bb-3f08e2490e05",
+            "created_at": "2026-10-07T05:18:15.470578+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-39",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                0.862902,
+                0.767933,
+                0.506342
+              ],
+              "thickness_mm": 0.24,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.747392,
+                0.647986,
+                0.244159
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-39",
+            "notes": "",
+            "overlay_mm": 0.24,
+            "received_at": "2026-10-07T05:18:15.463Z",
+            "record_id": "6b19c72a-10f4-4229-b261-480645c22538",
+            "reflectance_percent_xyz": [
+              0.862902,
+              0.767933,
+              0.506342
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 2.68,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 72,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:18:37.005Z"
+            },
+            "capture_id": "e31760b9-289f-4d43-b3bb-3f08e2490e05",
+            "created_at": "2026-10-07T05:18:37.013979+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-40",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                0,
+                0,
+                0
+              ],
+              "thickness_mm": 0.32,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.401843,
+                0.341499,
+                0.114041
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-40",
+            "notes": "",
+            "overlay_mm": 0.32,
+            "received_at": "2026-10-07T05:18:37.005Z",
+            "record_id": "2db37f16-bbea-4625-ab3f-57380611f113",
+            "reflectance_percent_xyz": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 2.36,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 73,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:18:59.041Z"
+            },
+            "capture_id": "e31760b9-289f-4d43-b3bb-3f08e2490e05",
+            "created_at": "2026-10-07T05:18:59.050503+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-41",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                0,
+                0,
+                0
+              ],
+              "thickness_mm": 0.64,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.042938,
+                0.034914,
+                0.009282
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-41",
+            "notes": "",
+            "overlay_mm": 0.64,
+            "received_at": "2026-10-07T05:18:59.041Z",
+            "record_id": "a65a24b3-f855-4f61-8880-6465df313191",
+            "reflectance_percent_xyz": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 1.72,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 74,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:19:53.287Z"
+            },
+            "capture_id": "e31760b9-289f-4d43-b3bb-3f08e2490e05",
+            "created_at": "2026-10-07T05:19:53.296782+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-42",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                0.135745,
+                0.135624,
+                0.065703
+              ],
+              "thickness_mm": 1.28,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.005515,
+                0.005142,
+                0.00197
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-42",
+            "notes": "",
+            "overlay_mm": 1.28,
+            "received_at": "2026-10-07T05:19:53.287Z",
+            "record_id": "1d45109d-4adf-4f10-801a-30f53434a766",
+            "reflectance_percent_xyz": [
+              0.135745,
+              0.135624,
+              0.065703
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          },
+          {
+            "backing": "W",
+            "backing_mm": 1.0,
+            "capture_context": {
+              "batch": "",
+              "brand": "KYNIX",
+              "calibration_context": {
+                "black_reference_material": "K",
+                "black_reference_mm": 3.0,
+                "diffuser_removed": true,
+                "white_reference_mm": 3.0
+              },
+              "dataset_revision": 75,
+              "material_type": "PETG",
+              "materials": {
+                "B": "B",
+                "C": "C",
+                "G": "G",
+                "K": "K",
+                "M": "M",
+                "R": "R",
+                "W": "W",
+                "Y": "Y"
+              },
+              "observation_face": "bed_contact",
+              "original_received_at": "2026-10-07T05:20:21.979Z"
+            },
+            "capture_id": "e31760b9-289f-4d43-b3bb-3f08e2490e05",
+            "created_at": "2026-10-07T05:20:21.987854+00:00",
+            "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+            "device_measurement": {
+              "measurement_id": "1cdbd42d2a58-92375535-43",
+              "mode": "auto",
+              "protocol": "lumina-box",
+              "reflectance_xyz": [
+                0.409549,
+                0.42329,
+                0.26902
+              ],
+              "thickness_mm": 2,
+              "thickness_schedule_id": "backed_gradient_7/v1",
+              "transmittance_xyz": [
+                0.004794,
+                0.004838,
+                0.001857
+              ],
+              "type": "measurement",
+              "version": 2
+            },
+            "material_symbol": "K",
+            "measurement_id": "1cdbd42d2a58-92375535-43",
+            "notes": "",
+            "overlay_mm": 2.0,
+            "received_at": "2026-10-07T05:20:21.979Z",
+            "record_id": "4bab4064-86a7-4dc3-bf29-6bcdffb79e45",
+            "reflectance_percent_xyz": [
+              0.409549,
+              0.42329,
+              0.26902
+            ],
+            "sample_name": "",
+            "sample_role": "coated",
+            "selected": true,
+            "source": "device",
+            "total_mm": 3.0
+          }
+        ],
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "fit_id": "ff019aaa-22e8-4760-9d7f-8ad845371b55",
+        "input_hash": "828995604c3e824415d5309b68d078d5a856de6fadd86c99067fb75f9c7e65c9",
+        "materials": {
+          "K": "PETG黑色",
+          "W": "PETG白色"
+        }
+      },
+      "white": {
+        "coefficients": [
+          -2.6312918467992445,
+          2.97747720142352,
+          0.43790639847090973,
+          2.043942594101791e-27,
+          0.05000000000000001
+        ],
+        "kind": "white"
+      }
+    },
+    "reference_id": "3bd3d992e2fa23e015c0b8da8255c0b82199fc84a5f51ef53f20d28d0d48cfca",
+    "samples": [
+      {
+        "backing": "W",
+        "backing_mm": 2.92,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 0,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:09:30.081Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:09:30.089247+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-1",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            48.50581,
+            28.853712,
+            15.220499
+          ],
+          "thickness_mm": 0.08,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            6.825051,
+            4.481574,
+            1.648838
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-1",
+        "notes": "",
+        "overlay_mm": 0.08,
+        "received_at": "2026-10-07T04:09:30.081Z",
+        "record_id": "8707159f-fc7f-48c5-b0e2-5e8bb40eadc9",
+        "reflectance_percent_xyz": [
+          48.50581,
+          28.853712,
+          15.220499
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 2.84,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 1,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:10:28.105Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:10:28.112573+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-2",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            39.398254,
+            20.438316,
+            5.899793
+          ],
+          "thickness_mm": 0.16,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            5.874165,
+            3.315685,
+            0.79261
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-2",
+        "notes": "",
+        "overlay_mm": 0.16,
+        "received_at": "2026-10-07T04:10:28.105Z",
+        "record_id": "879ef77e-49c4-436f-8e17-f4bf9dbb0b8b",
+        "reflectance_percent_xyz": [
+          39.398254,
+          20.438316,
+          5.899793
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 2.76,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 2,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:10:46.031Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:10:46.038736+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-3",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            34.499348,
+            17.047215,
+            3.613551
+          ],
+          "thickness_mm": 0.24,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            5.284876,
+            2.738055,
+            0.405825
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-3",
+        "notes": "",
+        "overlay_mm": 0.24,
+        "received_at": "2026-10-07T04:10:46.031Z",
+        "record_id": "620779ec-49d7-47e6-ab5b-ba56da1be185",
+        "reflectance_percent_xyz": [
+          34.499348,
+          17.047215,
+          3.613551
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 2.68,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 3,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:11:02.588Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:11:02.596103+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-4",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            31.663334,
+            15.356085,
+            3.196112
+          ],
+          "thickness_mm": 0.32,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            4.740965,
+            2.329532,
+            0.214985
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-4",
+        "notes": "",
+        "overlay_mm": 0.32,
+        "received_at": "2026-10-07T04:11:02.588Z",
+        "record_id": "4fa78ceb-9e40-4f94-8d82-dad419b2ac5b",
+        "reflectance_percent_xyz": [
+          31.663334,
+          15.356085,
+          3.196112
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 2.36,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 5,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:11:55.282Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:11:55.289807+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-6",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            25.967173,
+            12.439993,
+            3.132734
+          ],
+          "thickness_mm": 0.64,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            3.893505,
+            1.757332,
+            0.071461
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-6",
+        "notes": "",
+        "overlay_mm": 0.64,
+        "received_at": "2026-10-07T04:11:55.282Z",
+        "record_id": "0a805dce-8545-4ee5-a501-a7908c80235c",
+        "reflectance_percent_xyz": [
+          25.967173,
+          12.439993,
+          3.132734
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 1.0,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 8,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:12:48.074Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:12:48.081755+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-9",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            21.641525,
+            10.820455,
+            3.613085
+          ],
+          "thickness_mm": 2,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            2.583271,
+            1.05827,
+            0.053058
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-9",
+        "notes": "",
+        "overlay_mm": 2.0,
+        "received_at": "2026-10-07T04:12:48.074Z",
+        "record_id": "97db2d39-30fc-46cf-88d9-6a9474854cfd",
+        "reflectance_percent_xyz": [
+          21.641525,
+          10.820455,
+          3.613085
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "W",
+        "backing_mm": 1.72,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 9,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:13:34.413Z"
+        },
+        "capture_id": "e05410ff-9a56-496a-9bd4-f128031baf0f",
+        "created_at": "2026-10-07T04:13:34.421650+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-10",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            22.047625,
+            10.523666,
+            2.805795
+          ],
+          "thickness_mm": 1.28,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            3.067242,
+            1.302978,
+            0.056053
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-10",
+        "notes": "",
+        "overlay_mm": 1.28,
+        "received_at": "2026-10-07T04:13:34.413Z",
+        "record_id": "d5c44fac-1102-47e8-a006-4e365df66003",
+        "reflectance_percent_xyz": [
+          22.047625,
+          10.523666,
+          2.805795
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 2.92,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 10,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:32:39.327Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:32:39.338603+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-11",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            2.212472,
+            1.592123,
+            1.629967
+          ],
+          "thickness_mm": 0.08,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            8.2e-05,
+            0.000125,
+            1.5e-05
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-11",
+        "notes": "",
+        "overlay_mm": 0.08,
+        "received_at": "2026-10-07T04:32:39.327Z",
+        "record_id": "0b73a598-94a6-4f2b-b730-cd0ce64b2c9c",
+        "reflectance_percent_xyz": [
+          2.212472,
+          1.592123,
+          1.629967
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 2.84,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 11,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:33:07.064Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:33:07.070989+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-12",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            4.773092,
+            3.074258,
+            2.520309
+          ],
+          "thickness_mm": 0.16,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            0.000144,
+            0.000181,
+            0
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-12",
+        "notes": "",
+        "overlay_mm": 0.16,
+        "received_at": "2026-10-07T04:33:07.064Z",
+        "record_id": "b714b885-ecb8-4e73-a61c-d1a8c22d8531",
+        "reflectance_percent_xyz": [
+          4.773092,
+          3.074258,
+          2.520309
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 2.76,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 12,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:33:36.069Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:33:36.076839+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-13",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            6.698436,
+            3.92367,
+            2.337434
+          ],
+          "thickness_mm": 0.24,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            0.00024,
+            0.000248,
+            0
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-13",
+        "notes": "",
+        "overlay_mm": 0.24,
+        "received_at": "2026-10-07T04:33:36.069Z",
+        "record_id": "a9b33156-0644-4a3c-8212-e6520ec415a6",
+        "reflectance_percent_xyz": [
+          6.698436,
+          3.92367,
+          2.337434
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 2.68,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 13,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:33:58.845Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:33:58.853199+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-14",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            8.918631,
+            5.114393,
+            2.717488
+          ],
+          "thickness_mm": 0.32,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            0.000242,
+            0.000225,
+            0
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-14",
+        "notes": "",
+        "overlay_mm": 0.32,
+        "received_at": "2026-10-07T04:33:58.845Z",
+        "record_id": "09da90b5-ccbe-427c-8262-38d7dbb8ab9d",
+        "reflectance_percent_xyz": [
+          8.918631,
+          5.114393,
+          2.717488
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 2.36,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 14,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:34:26.591Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:34:26.598937+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-15",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            13.844499,
+            7.129293,
+            2.548884
+          ],
+          "thickness_mm": 0.64,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            0.000342,
+            0.000253,
+            1.5e-05
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-15",
+        "notes": "",
+        "overlay_mm": 0.64,
+        "received_at": "2026-10-07T04:34:26.591Z",
+        "record_id": "3a8f1d31-472b-4b97-a84e-5cea4f71977a",
+        "reflectance_percent_xyz": [
+          13.844499,
+          7.129293,
+          2.548884
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 1.0,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 15,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:35:03.111Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:35:03.119196+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-16",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            20.26129,
+            10.047796,
+            3.316498
+          ],
+          "thickness_mm": 2,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            0.001464,
+            0.000758,
+            1.6e-05
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-16",
+        "notes": "",
+        "overlay_mm": 2.0,
+        "received_at": "2026-10-07T04:35:03.111Z",
+        "record_id": "bca50d8f-1883-46d3-9e7c-7cb454aa2b53",
+        "reflectance_percent_xyz": [
+          20.26129,
+          10.047796,
+          3.316498
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      },
+      {
+        "backing": "K",
+        "backing_mm": 1.72,
+        "capture_context": {
+          "batch": "",
+          "brand": "KYNIX",
+          "calibration_context": {
+            "black_reference_material": "K",
+            "black_reference_mm": 3.0,
+            "diffuser_removed": true,
+            "white_reference_mm": 3.0
+          },
+          "dataset_revision": 16,
+          "material_type": "PETG",
+          "materials": {
+            "B": "B",
+            "C": "C",
+            "G": "G",
+            "K": "K",
+            "M": "M",
+            "R": "R",
+            "W": "W",
+            "Y": "Y"
+          },
+          "observation_face": "bed_contact",
+          "original_received_at": "2026-10-07T04:35:29.651Z"
+        },
+        "capture_id": "55a1bf85-66f8-4e3f-ac7d-2ba18105e3ad",
+        "created_at": "2026-10-07T04:35:29.661607+00:00",
+        "dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+        "device_measurement": {
+          "measurement_id": "1cdbd42d2a58-e26c10dd-17",
+          "mode": "auto",
+          "protocol": "lumina-box",
+          "reflectance_xyz": [
+            17.893816,
+            8.734668,
+            2.52432
+          ],
+          "thickness_mm": 1.28,
+          "thickness_schedule_id": "backed_gradient_7/v1",
+          "transmittance_xyz": [
+            0.00058,
+            0.000397,
+            3.7e-05
+          ],
+          "type": "measurement",
+          "version": 2
+        },
+        "material_symbol": "R",
+        "measurement_id": "1cdbd42d2a58-e26c10dd-17",
+        "notes": "",
+        "overlay_mm": 1.28,
+        "received_at": "2026-10-07T04:35:29.651Z",
+        "record_id": "284e3e7a-49d5-44eb-8924-4df2283ef103",
+        "reflectance_percent_xyz": [
+          17.893816,
+          8.734668,
+          2.52432
+        ],
+        "sample_name": "",
+        "sample_role": "coated",
+        "selected": true,
+        "source": "device",
+        "total_mm": 3.0
+      }
+    ],
+    "selected_record_ids": [
+      "09da90b5-ccbe-427c-8262-38d7dbb8ab9d",
+      "0a805dce-8545-4ee5-a501-a7908c80235c",
+      "0b73a598-94a6-4f2b-b730-cd0ce64b2c9c",
+      "284e3e7a-49d5-44eb-8924-4df2283ef103",
+      "3a8f1d31-472b-4b97-a84e-5cea4f71977a",
+      "4fa78ceb-9e40-4f94-8d82-dad419b2ac5b",
+      "620779ec-49d7-47e6-ab5b-ba56da1be185",
+      "8707159f-fc7f-48c5-b0e2-5e8bb40eadc9",
+      "879ef77e-49c4-436f-8e17-f4bf9dbb0b8b",
+      "97db2d39-30fc-46cf-88d9-6a9474854cfd",
+      "a9b33156-0644-4a3c-8212-e6520ec415a6",
+      "b714b885-ecb8-4e73-a61c-d1a8c22d8531",
+      "bca50d8f-1883-46d3-9e7c-7cb454aa2b53",
+      "d5c44fac-1102-47e8-a006-4e365df66003"
+    ]
+  },
+  "objective_id": "backed_gradient_xyz_fixed_weak_logk_curvature/v1",
+  "optical_model": "backed_gradient_spectral_four_flux_smooth/v3",
+  "schema_version": "1.0"
+}

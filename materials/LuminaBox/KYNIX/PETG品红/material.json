@@ -1,0 +1,67 @@
+{
+  "acquisition_source": "lumina_box",
+  "archive_consistency": {
+    "acquisition_source": "lumina_box",
+    "archive_id": "3e4d3ce3-8f66-4b12-9b69-a345561d610f",
+    "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+    "measurement_protocol_id": "lumina_box_xyz_paired_diffuser_km/v2",
+    "objective_id": "box_spectral_paired_spectral_white/v3",
+    "optical_model_id": "box_reference_consistent_feedback/equal_xyz_v1",
+    "profile_kind": "lumina_box",
+    "reference_id": "7b063ffb429e5fe07e5f91e844e155ee4fe5d44194380984f741be2e4af3f6c5",
+    "revision_id": "1432d576-962d-49eb-9a6b-528ccc6906ad",
+    "schema_version": "2.0"
+  },
+  "brand": "KYNIX",
+  "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+  "created_at": "2026-10-05T12:02:35.439210+00:00",
+  "estimated_effective_d65_10_xyz_relative": [
+    0.4211387086042496,
+    0.26549540269503064,
+    0.2608053563566518
+  ],
+  "estimated_reflectance_thickness_mm": 3.0,
+  "estimated_rgb": [
+    224,
+    98,
+    141
+  ],
+  "is_reference_white": false,
+  "kind": "lumina_box_material",
+  "material_name": "PETG品红",
+  "material_type": "PETG",
+  "measurement_backing_base_percent_xyz": [
+    19.8,
+    19.7,
+    24.7
+  ],
+  "measurement_backing_effective_percent_xyz": [
+    33.47761835004985,
+    33.405574792464485,
+    42.780393275616454
+  ],
+  "measurement_backing_scale": 1.841969189493164,
+  "measurement_protocol_id": "lumina_box_xyz_paired_diffuser_km/v2",
+  "measurement_reflection_boundary_id": "instrument_diffuser_recycled_white_reference/v1",
+  "measurement_thickness_offset_mm": 0.0,
+  "measurements_file": "lumina_box_measurements.json",
+  "notes": null,
+  "objective_id": "box_spectral_paired_spectral_white/v3",
+  "optical_model": "box_reference_consistent_feedback/equal_xyz_v1",
+  "optical_parameters_file": "lumina_box_spectral_parameters.json",
+  "profile_kind": "lumina_box",
+  "reference_id": "7b063ffb429e5fe07e5f91e844e155ee4fe5d44194380984f741be2e4af3f6c5",
+  "schema_version": "3.0",
+  "sidecar_integrity": {
+    "algorithm": "sha256",
+    "measurements": {
+      "filename": "lumina_box_measurements.json",
+      "sha256": "de374fc69630f99257eec5685ce85bd35f03955859cf2c44835480fd6c1aaa64"
+    },
+    "parameters": {
+      "filename": "lumina_box_spectral_parameters.json",
+      "sha256": "9fc17bfa9d1bdcb8d11f7e5e7338f4e66b1682965851bb7f4dfeaf4004d84e5e"
+    }
+  },
+  "updated_at": "2026-10-05T12:02:35.439210+00:00"
+}

@@ -1,0 +1,57 @@
+{
+  "acquisition_source": "lumina_box_backed_gradient",
+  "archive_consistency": {
+    "acquisition_source": "lumina_box_backed_gradient",
+    "archive_id": "50aa1d03-d8cf-4fa2-9119-404c9f911e19",
+    "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+    "measurement_protocol_id": "lumina_box_backed_gradient/v1",
+    "objective_id": "backed_gradient_xyz_fixed_weak_logk_curvature/v1",
+    "optical_model_id": "backed_gradient_spectral_four_flux_smooth/v3",
+    "profile_kind": "lumina_box",
+    "reference_id": "3bd3d992e2fa23e015c0b8da8255c0b82199fc84a5f51ef53f20d28d0d48cfca",
+    "revision_id": "befad408-1a24-43f1-bdba-0106a719f20e",
+    "schema_version": "1.0"
+  },
+  "brand": "KYNIX",
+  "capture_dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
+  "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+  "created_at": "2026-10-04T08:50:23.318956+00:00",
+  "estimated_effective_d65_10_xyz_relative": [
+    0.00102621,
+    0.00080472,
+    0.00065969
+  ],
+  "estimated_rgb": [
+    5,
+    2,
+    2
+  ],
+  "kind": "lumina_box_material",
+  "material_kind": "black",
+  "material_name": "PETG黑色",
+  "material_symbol": "K",
+  "material_type": "PETG",
+  "measurement_protocol_id": "lumina_box_backed_gradient/v1",
+  "measurements_file": "lumina_box_backed_gradient_measurements.json",
+  "notes": null,
+  "objective_id": "backed_gradient_xyz_fixed_weak_logk_curvature/v1",
+  "optical_model": "backed_gradient_spectral_four_flux_smooth/v3",
+  "optical_parameters_file": "lumina_box_backed_gradient_parameters.json",
+  "profile_kind": "lumina_box",
+  "reference_id": "3bd3d992e2fa23e015c0b8da8255c0b82199fc84a5f51ef53f20d28d0d48cfca",
+  "rmse_pp": 0.4346468909941138,
+  "schema_version": "1.0",
+  "sidecar_integrity": {
+    "algorithm": "sha256",
+    "measurements": {
+      "filename": "lumina_box_backed_gradient_measurements.json",
+      "sha256": "d8533055b8c9c03d7711c610454e2adf28cc655f2782611b97cb4fc0a4e2d5d2"
+    },
+    "parameters": {
+      "filename": "lumina_box_backed_gradient_parameters.json",
+      "sha256": "4c078f16168bffa781eec3347d5a0f1f08d0e8b63da5b73e087bd7d74267de0c"
+    }
+  },
+  "status": "complete",
+  "updated_at": "2026-10-07T09:50:12.527527+00:00"
+}

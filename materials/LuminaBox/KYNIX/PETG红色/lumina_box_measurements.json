@@ -1,0 +1,170 @@
+{
+  "archive_consistency": {
+    "acquisition_source": "lumina_box",
+    "archive_id": "2d995386-61ad-49bf-9c15-cd0658da37c8",
+    "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+    "measurement_protocol_id": "lumina_box_xyz_paired_diffuser_km/v2",
+    "objective_id": "box_spectral_paired_spectral_white/v3",
+    "optical_model_id": "box_reference_consistent_feedback/equal_xyz_v1",
+    "profile_kind": "lumina_box",
+    "reference_id": "7b063ffb429e5fe07e5f91e844e155ee4fe5d44194380984f741be2e4af3f6c5",
+    "revision_id": "c89ee3dd-db3c-4a68-9f02-d344ee273919",
+    "schema_version": "2.0"
+  },
+  "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
+  "measurement_backing_percent_xyz": [
+    19.8,
+    19.7,
+    24.7
+  ],
+  "measurement_protocol_id": "lumina_box_xyz_paired_diffuser_km/v2",
+  "objective_id": "box_spectral_paired_spectral_white/v3",
+  "optical_model": "box_reference_consistent_feedback/equal_xyz_v1",
+  "samples": [
+    {
+      "reflectance_percent_xyz": [
+        21.3,
+        13.6,
+        9.9
+      ],
+      "thickness_mm": 0.08,
+      "transmittance_percent_xyz": [
+        61.3,
+        47.8,
+        40.3
+      ]
+    },
+    {
+      "reflectance_percent_xyz": [
+        21.0,
+        11.5,
+        5.1
+      ],
+      "thickness_mm": 0.16,
+      "transmittance_percent_xyz": [
+        47.0,
+        30.6,
+        19.0
+      ]
+    },
+    {
+      "reflectance_percent_xyz": [
+        21.2,
+        10.9,
+        3.5
+      ],
+      "thickness_mm": 0.24,
+      "transmittance_percent_xyz": [
+        38.3,
+        21.9,
+        8.8
+      ]
+    },
+    {
+      "reflectance_percent_xyz": [
+        21.6,
+        10.8,
+        3.2
+      ],
+      "thickness_mm": 0.32,
+      "transmittance_percent_xyz": [
+        32.3,
+        16.8,
+        3.9
+      ]
+    },
+    {
+      "reflectance_percent_xyz": [
+        21.6,
+        10.6,
+        3.0
+      ],
+      "thickness_mm": 0.4,
+      "transmittance_percent_xyz": [
+        28.5,
+        14.2,
+        2.0
+      ]
+    },
+    {
+      "reflectance_percent_xyz": [
+        21.9,
+        10.7,
+        3.3
+      ],
+      "thickness_mm": 0.48,
+      "transmittance_percent_xyz": [
+        25.1,
+        12.0,
+        1.0
+      ]
+    },
+    {
+      "reflectance_percent_xyz": [
+        21.9,
+        10.7,
+        3.3
+      ],
+      "thickness_mm": 0.56,
+      "transmittance_percent_xyz": [
+        23.2,
+        10.8,
+        0.7
+      ]
+    },
+    {
+      "reflectance_percent_xyz": [
+        21.6,
+        10.5,
+        3.2
+      ],
+      "thickness_mm": 0.64,
+      "transmittance_percent_xyz": [
+        21.5,
+        9.9,
+        0.5
+      ]
+    },
+    {
+      "reflectance_percent_xyz": [
+        21.5,
+        10.4,
+        3.1
+      ],
+      "thickness_mm": 0.72,
+      "transmittance_percent_xyz": [
+        19.9,
+        9.0,
+        0.4
+      ]
+    },
+    {
+      "reflectance_percent_xyz": [
+        21.2,
+        10.1,
+        2.8
+      ],
+      "thickness_mm": 0.8,
+      "transmittance_percent_xyz": [
+        18.2,
+        8.1,
+        0.3
+      ]
+    },
+    {
+      "reflectance_percent_xyz": [
+        21.7,
+        10.2,
+        2.6
+      ],
+      "thickness_mm": 3.0,
+      "transmittance_percent_xyz": [
+        2.7,
+        1.1,
+        0.1
+      ]
+    }
+  ],
+  "schema_version": "3.0",
+  "value_scale": "percent_0_100"
+}
