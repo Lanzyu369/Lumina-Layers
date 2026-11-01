@@ -39,6 +39,7 @@ import MaterialSolverCacheDialog from "../MaterialSolverCacheDialog";
 import LegacyLutSelector from "./LegacyLutSelector";
 import { tRuntime } from "../../i18n/runtime";
 import { useI18n } from "../../i18n/context";
+import { useImageThumbnail } from "../../hooks/useImageThumbnail";
 import {
   prepareImport,
   applyImport,
@@ -427,6 +428,7 @@ export default function BasicSettings() {
   const materialProfileKind = getMaterialArchiveProfileKind(source_version);
 
   const [uploaderExpanded, setUploaderExpanded] = useState(true);
+  const imageThumbnailUrl = useImageThumbnail(imagePreviewUrl);
   const startupRetryMountedRef = useRef(false);
   const legacyCatalogRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const legacyCatalogStartupAttemptRef = useRef(0);
@@ -1082,7 +1084,7 @@ export default function BasicSettings() {
       <Block label={t("basic_group_input")} tutorial="image-upload">
         <div hidden={!uploaderExpanded}>
           <UnifiedUploader
-            singlePreview={imagePreviewUrl ?? undefined}
+            singlePreview={imageThumbnailUrl ?? undefined}
             batchFiles={batchFiles}
             isBatchMode={batchMode}
             onFilesSelect={handleFilesSelect}
@@ -1098,9 +1100,9 @@ export default function BasicSettings() {
             onClick={() => setUploaderExpanded(true)}
             className="flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-slate-100/70 px-3 py-2 text-left transition-colors hover:bg-slate-100/90 dark:border-slate-700/60 dark:bg-slate-900/50 dark:hover:bg-slate-900/80"
           >
-            {imagePreviewUrl && (
+            {imageThumbnailUrl && (
               <img
-                src={imagePreviewUrl}
+                src={imageThumbnailUrl}
                 alt=""
                 className="h-8 w-8 shrink-0 rounded-lg object-cover"
               />
