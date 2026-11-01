@@ -98,8 +98,7 @@ export default function LuminaBoxStackSamplesPanel() {
   const upperLayers = capture.draft.recipe.length;
   const serialStatusKey = !serialSupported ? "lumina_box_serial_unsupported"
     : capture.serial.status === "disconnected" ? "lumina_box_stack_serial_disconnected"
-      : capture.serial.status === "connected" ? capture.serial.mode === "legacy"
-        ? "lumina_box_stack_serial_legacy_connected" : "lumina_box_stack_serial_connected"
+      : capture.serial.status === "connected" ? "lumina_box_stack_serial_connected"
         : `lumina_box_serial_${capture.serial.status}`;
   const serialIssue = capture.serial.issue === "invalid_recipe" || capture.serial.issue === "unsupported_mode"
     ? null : capture.serial.issue === "storage_unavailable"

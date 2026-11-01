@@ -130,7 +130,7 @@ describe("reliable LuminaBox delivery", () => {
     expect(d.store.getState().trace.some(t => t.event === "reader_recovered")).toBe(true);
   });
 
-  it("limits automatic recovery and never treats a lost reliable handshake as legacy success", async () => {
+  it("limits automatic recovery after a known Box stops answering", async () => {
     vi.useFakeTimers(); const d = device();
     d.store.getState().connect(vi.fn().mockReturnValue("applied"));
     await flush(); d.pong(); await flush();
@@ -139,7 +139,6 @@ describe("reliable LuminaBox delivery", () => {
     expect(d.port.close).toHaveBeenCalledTimes(3);
     expect(d.store.getState().status).toBe("disconnected");
     expect(d.store.getState().issue).toBe("connection_lost");
-    expect(d.store.getState().trace.some(t => t.event === "legacy_mode")).toBe(false);
   });
 
   it("retains reliable capability when clear replaces the capture identity", async () => {
@@ -150,8 +149,46 @@ describe("reliable LuminaBox delivery", () => {
     d.store.getState().resetCapture(); await flush();
     expect(d.store.getState().receivedCount).toBe(0);
     await vi.advanceTimersByTimeAsync(4000); await flush();
-    expect(d.store.getState().trace.some(t => t.event === "legacy_mode")).toBe(false);
+    // The known Box is retried on the same port rather than rejected as a silent port.
+    expect(d.store.getState().issue).not.toBe("no_response");
+    expect(d.store.getState().trace.some(t => t.event === "authorized_port_retry")).toBe(true);
     expect(d.store.getState().receivedCount).toBe(0);
+  });
+
+  it("rejects a port where no Box answers the handshake instead of reporting a connection", async () => {
+    vi.useFakeTimers(); const d = device();
+    const statuses: string[] = [];
+    d.store.subscribe((state) => statuses.push(state.status));
+    d.store.getState().connect(vi.fn().mockReturnValue("applied"));
+    await flush();
+    await vi.advanceTimersByTimeAsync(5000); await flush();
+    expect(d.commands.filter(c => c.type === "hello")).toHaveLength(2);
+    expect(statuses).not.toContain("connected");
+    expect(d.store.getState().status).toBe("disconnected");
+    expect(d.store.getState().issue).toBe("no_response");
+    expect(d.port.open).toHaveBeenCalledTimes(1);
+    expect(d.port.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails a port that cannot be written to instead of listening one-way", async () => {
+    const d = device();
+    Object.defineProperty(d.port, "writable", { get: () => null });
+    d.store.getState().connect(vi.fn().mockReturnValue("applied"));
+    await flush(); await flush();
+    expect(d.store.getState().status).toBe("disconnected");
+    expect(d.store.getState().issue).toBe("connection_failed");
+    expect(d.store.getState().lastError).toBe("serial_write_unavailable");
+    expect(d.port.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores bare measurement lines that arrive outside a delivery envelope", async () => {
+    const d = device(); const receive = vi.fn().mockReturnValue("applied");
+    d.store.getState().connect(receive); await flush(); d.pong(); await flush();
+    d.send(measurement); await flush();
+    expect(receive).not.toHaveBeenCalled();
+    expect(d.commands.some(c => c.type === "ack")).toBe(false);
+    d.deliver(); await flush();
+    expect(receive).toHaveBeenCalledTimes(1);
   });
 
   it("starts a different capture on material change and refuses old batch replay", async () => {

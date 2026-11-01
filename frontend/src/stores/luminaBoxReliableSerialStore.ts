@@ -8,12 +8,12 @@ import { LuminaBoxSerialTimeout, serialDeadline } from "../api/luminaBoxSerialDe
 
 export type LuminaBoxSerialIssue = Exclude<LuminaBoxCaptureResult, "applied">
   | "unsupported" | "connection_failed" | "connection_lost" | "invalid_measurement" | "material_changed"
-  | "operation_timeout" | "delivery_overflow" | "wrong_device" | "device_not_functioning";
+  | "operation_timeout" | "delivery_overflow" | "wrong_device" | "device_not_functioning" | "no_response";
 type Receiver = (measurement: LuminaBoxMeasurement) => LuminaBoxCaptureResult | Promise<LuminaBoxCaptureResult>;
 export interface LuminaBoxSerialStoreOptions {
   storageNamespace?: string;
 }
-type Mode = "unknown" | "handshaking" | "legacy" | "reliable";
+type Mode = "unknown" | "handshaking" | "reliable";
 type Status = "disconnected" | "connecting" | "handshaking" | "connected" | "recovering" | "disconnecting";
 type Trace = { at: number; event: string; measurementId?: string; detail?: string };
 interface SerialState {
@@ -180,20 +180,16 @@ export function createLuminaBoxSerialStore(
           ...(recovered ? { lastError: null } : {}) });
         return;
       }
-      const reliable = frame.kind === "delivery";
-      if (reliable && (frame.captureId !== captureId || active.mode !== "reliable")) { trace("scope_ignored"); return; }
-      if (!reliable && active.mode !== "legacy") { trace("legacy_frame_ignored"); return; }
-      if (reliable) {
-        active.heartbeatAt = Date.now();
-        set({ lastHeartbeatAt: active.heartbeatAt });
-      }
+      // Only acknowledged deliveries are accepted; a bare measurement line has no delivery guarantee.
+      if (frame.kind !== "delivery") { trace("unacknowledged_frame_ignored"); return; }
+      if (frame.captureId !== captureId || active.mode !== "reliable") { trace("scope_ignored"); return; }
+      active.heartbeatAt = Date.now();
+      set({ lastHeartbeatAt: active.heartbeatAt });
       const id = frame.measurement.measurement_id;
       if (appliedIds.has(id)) {
         trace("duplicate_received", id);
-        if (reliable) {
-          if (persistReceipts()) command(active, "ack", id);
-          else { set({ issue: "storage_unavailable" }); command(active, "reject", id); }
-        }
+        if (persistReceipts()) command(active, "ack", id);
+        else { set({ issue: "storage_unavailable" }); command(active, "reject", id); }
         return;
       }
       if (active.applyingIds.has(id)) { trace("duplicate_pending", id); return; }
@@ -205,7 +201,7 @@ export function createLuminaBoxSerialStore(
         if (result !== "applied") {
           set({ issue: result });
           trace("application_rejected", id, result);
-          if (reliable) command(active, "reject", id);
+          command(active, "reject", id);
           return;
         }
         appliedIds.add(id);
@@ -214,10 +210,8 @@ export function createLuminaBoxSerialStore(
           receivedCount: state.receivedCount + 1, lastMeasurement: frame.measurement }));
         trace("measurement_applied", id);
         recoveryAttempts = 0;
-        if (reliable) {
-          if (persistReceipts()) command(active, "ack", id);
-          else { set({ issue: "storage_unavailable" }); command(active, "reject", id); }
-        }
+        if (persistReceipts()) command(active, "ack", id);
+        else { set({ issue: "storage_unavailable" }); command(active, "reject", id); }
       };
       // Snapshot the receiver's capture context immediately; keep reading heartbeat frames.
       try {
@@ -294,23 +288,17 @@ export function createLuminaBoxSerialStore(
         opened = true;
         if (active.cancelled) return;
         active.writer = port.writable?.getWriter() ?? null;
-        if (active.writer) handshake(active);
-        else {
-          if (expectedDevice) { fail(active, "connection_lost", new Error("serial_write_unavailable")); return; }
-          active.mode = "legacy"; set({ status: "connected", mode: "legacy" });
-        }
+        if (!active.writer) { fail(active, "connection_failed", new Error("serial_write_unavailable")); return; }
+        handshake(active);
         active.timer = setInterval(() => {
           if (active.cancelled || active.fault) return;
           const now = Date.now();
           if (active.mode === "handshaking" && now - active.openedAt >= OPERATION_MS) {
-            if (expectedDevice || active.wasReliable) {
-              active.mode = "reliable";
-              fail(active, "connection_lost", new Error("handshake_timeout"));
-              return;
-            }
-            active.mode = "legacy";
-            set({ status: "connected", mode: "legacy" });
-            trace("legacy_mode");
+            // A known Box that stops answering is retried; a silent new port is not a Box.
+            const known = expectedDevice !== null || active.wasReliable;
+            if (known) active.mode = "reliable";
+            fail(active, known ? "connection_lost" : "no_response", new Error("handshake_timeout"));
+            return;
           } else if (active.mode === "handshaking" && active.helloAttempts++ < 2) command(active, "hello");
           else if (active.mode === "reliable") {
             if (now - active.heartbeatAt >= HEARTBEAT_MS) fail(active, "connection_lost", new Error("heartbeat_timeout"));
@@ -421,11 +409,8 @@ export function createLuminaBoxSerialStore(
         }
       },
       resetCapture: () => {
-        const legacyIds = connection?.mode === "legacy" ? [...appliedIds] : [];
         expectedDevice = null;
         rotate();
-        legacyIds.forEach((id) => appliedIds.add(id));
-        persistReceipts();
         const active = connection;
         if (active && !active.cancelled && active.writer && !active.fault) handshake(active);
       },

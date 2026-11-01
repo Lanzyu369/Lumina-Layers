@@ -221,7 +221,7 @@ export default function LuminaBoxMaterialPanel() {
             {dataset ? <Button variant="secondary" label={t("lumina_box_material_cancel")} onClick={() => setCreating(null)} /> : null}</div>
         </form> : null}
         {capture.error && !capture.failedPending.length ? <StatusBanner tone="error">{capture.error}</StatusBanner> : null}
-        {capture.serial.issue && ["connection_failed", "connection_lost", "operation_timeout", "wrong_device", "device_not_functioning"].includes(capture.serial.issue)
+        {capture.serial.issue && ["connection_failed", "connection_lost", "operation_timeout", "wrong_device", "device_not_functioning", "no_response"].includes(capture.serial.issue)
           ? <><StatusBanner tone="error">
             <div className="space-y-3">
               <p className="font-medium">{t(`lumina_box_serial_${capture.serial.issue}`)}</p>

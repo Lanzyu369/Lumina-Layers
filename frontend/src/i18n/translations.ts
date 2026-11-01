@@ -6139,8 +6139,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Prioritizes keeping color tones true during matching (e.g. reds won't drift toward orange). Good for colorful images where color accuracy matters.",
   },
   adv_unlock_quantize: {
-    zh: "解锁量化颜色数",
-    en: "Unlock quantize ceiling",
+    zh: "解锁打印颜色数量",
+    en: "Unlock print color ceiling",
   },
   adv_unlock_quantize_hint: {
     zh: "解锁后颜色数量上限从 256 提升到 8192。会明显增加内存占用和处理时间，仅在确有需要时使用。",
@@ -9112,10 +9112,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "串口已打开，正在确认设备通信…",
     en: "Port open. Verifying device communication…",
   },
-  lumina_box_serial_legacy_connected: {
-    zh: "单向采集已打开；请连接后重新测量。此固件无法确认收取或自动补发。",
-    en: "One-way capture is open. Measure again after connecting; this firmware cannot acknowledge or retry delivery.",
-  },
   lumina_box_serial_recovering: {
     zh: "设备通信中断，正在释放连接；已有数据保留。",
     en: "Device communication interrupted. Releasing the connection; captured data is retained.",
@@ -9163,6 +9159,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   lumina_box_serial_delivery_overflow: {
     zh: "仪器未确认缓存已满，部分旧读数已丢失。请核对厚度行并补测缺失的数据。",
     en: "The instrument's pending buffer overflowed and some older readings were lost. Check the thickness rows and remeasure missing data.",
+  },
+  lumina_box_serial_no_response: {
+    zh: "所选串口没有 Lumina Box 应答。请选择 Box 对应的 USB 串口（名称通常为“USB 串行设备”）后重试。",
+    en: "No Lumina Box responded on the selected port. Choose the Box's USB serial port (usually shown as a USB serial device) and try again.",
   },
   lumina_box_serial_wrong_device: {
     zh: "连接的仪器与本批次不同，已停止接收。请连接原仪器，或清空读数开始新批次。",
@@ -11485,10 +11485,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   lumina_box_stack_serial_disconnected: {
     zh: "未连接；连接后在 BOX 选择任意厚度，使用 AUTO 或反射测量即可保存样片。",
     en: "Disconnected. After connecting, choose any BOX thickness and measure in AUTO or reflection mode to save a sample.",
-  },
-  lumina_box_stack_serial_legacy_connected: {
-    zh: "已连接（兼容采集）；AUTO 或反射读数会直接保存为样片记录。",
-    en: "Connected in compatibility mode. AUTO or reflection readings are saved as sample records.",
   },
   lumina_box_stack_unsupported_mode: {
     zh: "该读数仅含透射，未保存。请切换 AUTO 或反射模式重新测量。",

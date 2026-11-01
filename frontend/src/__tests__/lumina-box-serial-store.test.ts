@@ -10,19 +10,36 @@ const message = {
 
 function createPort() {
   let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let captureId = "";
   const cancelled = vi.fn();
+  const emit = (value: unknown) => {
+    try { controller.enqueue(new TextEncoder().encode(`${JSON.stringify(value)}\n`)); }
+    catch { /* The test closed or errored the device stream. */ }
+  };
   const port = {
     readable: new ReadableStream<Uint8Array>({ start(value) { controller = value; }, cancel: cancelled }),
+    // Answer hello/ping like current Box firmware so the link completes its handshake.
+    writable: new WritableStream<Uint8Array>({ write(chunk) {
+      const command = JSON.parse(new TextDecoder().decode(chunk)) as { type: string; capture_id: string };
+      captureId = command.capture_id;
+      if (command.type === "hello" || command.type === "ping") {
+        emit({ protocol: "lumina-box", version: 3, type: "pong", capture_id: captureId,
+          boot_id: "box-boot", pending_count: 0, dropped_count: 0 });
+      }
+    } }),
     open: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
   };
-  return { port, controller, cancelled, send: (value: unknown) => controller.enqueue(new TextEncoder().encode(`${JSON.stringify(value)}\n`)) };
+  return { port, controller, cancelled,
+    send: (measurement: unknown) => emit({ protocol: "lumina-box", version: 3, type: "delivery", capture_id: captureId, measurement }) };
 }
 
 const stores: ReturnType<typeof createLuminaBoxSerialStore>[] = [];
 const makeStore = (getApi: Parameters<typeof createLuminaBoxSerialStore>[0]) => {
   const store = createLuminaBoxSerialStore(getApi);
   stores.push(store);
+  // Start a fresh capture scope so receipts persisted by earlier tests do not mark IDs as duplicates.
+  store.getState().resetCapture();
   return store;
 };
 
@@ -47,7 +64,7 @@ describe("Lumina Box serial connection", () => {
     ]));
   });
 
-  it("opens 115200 baud and delivers each measurement only once", async () => {
+  it("opens 115200 baud and applies each delivered measurement only once", async () => {
     const device = createPort();
     const store = makeStore(() => ({ requestPort: async () => device.port }));
     const receive = vi.fn().mockReturnValue("applied");
@@ -122,17 +139,18 @@ describe("Lumina Box serial connection", () => {
     expect(device.port.readable.locked).toBe(false);
   });
 
-  it.each(["end", "error"] as const)("releases resources on device %s", async (kind) => {
+  it.each(["end", "error"] as const)("releases resources on device %s after bounded same-port retries", async (kind) => {
     const device = createPort();
     const store = makeStore(() => ({ requestPort: async () => device.port }));
     store.getState().connect(vi.fn());
     await waitFor(() => expect(store.getState().status).toBe("connected"));
     if (kind === "end") device.controller.close();
     else device.controller.error(new Error("device removed"));
-    await waitFor(() => expect(store.getState().status).toBe("disconnected"));
+    await waitFor(() => expect(store.getState().status).toBe("disconnected"), { timeout: 6000 });
     expect(store.getState().issue).toBe("connection_lost");
     expect(device.port.readable.locked).toBe(false);
-    expect(device.port.close).toHaveBeenCalledTimes(1);
+    expect(device.port.open.mock.calls.length).toBeGreaterThan(1);
+    expect(device.port.close).toHaveBeenCalledTimes(device.port.open.mock.calls.length);
   });
 
   it("handles unsupported browsers, cancelled selection and denied/busy ports", async () => {
