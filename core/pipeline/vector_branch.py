@@ -35,7 +35,14 @@ import numpy as np
 import trimesh
 
 from api.structured_logging import get_logger
-from config import BedManager, PrinterConfig, normalize_nozzle_size
+from config import (
+    BedManager,
+    PrinterConfig,
+    SVG_GRADIENT_COLOR_BANDS_DEFAULT,
+    SVG_GRADIENT_COLOR_BANDS_MAX,
+    SVG_GRADIENT_COLOR_BANDS_MIN,
+    normalize_nozzle_size,
+)
 from core.errors import (
     CachedPreviewAnalysisError,
 )
@@ -1361,13 +1368,7 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
             },
         )
         processor = VectorProcessor.from_img_processor(matcher, "Material Archive")
-        try:
-            processor.gradient_color_bands = max(
-                16,
-                min(32, int(ctx.get("quantize_colors") or 16)),
-            )
-        except (TypeError, ValueError):
-            processor.gradient_color_bands = 16
+        _configure_svg_gradient_color_bands(processor, ctx)
         processor.layer_height_mm = layer_height_mm
         _configure_svg_hole_compensation(processor, ctx)
         return processor
@@ -1384,6 +1385,7 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
         fallback_color_mode,
         **processor_kwargs,
     )
+    _configure_svg_gradient_color_bands(processor, ctx)
     processor.layer_height_mm = layer_height_mm
     _configure_svg_hole_compensation(processor, ctx)
     return processor
@@ -1428,6 +1430,19 @@ def _build_vector_parse_cache_artifacts(
         "vector_parse_clip_cache_blob": _serialize_vector_parse_clip_cache(key, entry),
         "vector_parse_clip_cache_provenance": _vector_parse_clip_cache_provenance(key),
     }
+
+
+def _configure_svg_gradient_color_bands(processor: Any, ctx: dict) -> None:
+    try:
+        processor.gradient_color_bands = max(
+            SVG_GRADIENT_COLOR_BANDS_MIN,
+            min(
+                SVG_GRADIENT_COLOR_BANDS_MAX,
+                int(ctx.get("svg_gradient_color_bands", SVG_GRADIENT_COLOR_BANDS_DEFAULT)),
+            ),
+        )
+    except (TypeError, ValueError):
+        processor.gradient_color_bands = SVG_GRADIENT_COLOR_BANDS_DEFAULT
 
 
 def _configure_svg_hole_compensation(processor: Any, ctx: dict) -> None:
@@ -1633,6 +1648,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             "svg_hole_compensation_enabled": bool(ctx.get("svg_hole_compensation_enabled", False)),
             "svg_hole_max_area_mm2": ctx.get("svg_hole_max_area_mm2", 0.5),
             "svg_hole_max_width_mm": ctx.get("svg_hole_max_width_mm", 0.1),
+            "svg_gradient_color_bands": ctx.get(
+                "svg_gradient_color_bands", SVG_GRADIENT_COLOR_BANDS_DEFAULT,
+            ),
             "hue_weight": ctx.get("hue_weight", 0.0),
             "chroma_gate": ctx.get("chroma_gate", 15.0),
             "use_lut_constrained": bool(

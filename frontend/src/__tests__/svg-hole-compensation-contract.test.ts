@@ -361,6 +361,21 @@ describe("source SVG compensation product contract", () => {
     expect(restored.state).toMatchObject(OPTIONS);
   });
 
+  it("round-trips SVG gradient steps and keeps older recipes' effective steps", () => {
+    useConverterStore.setState({ svg_gradient_color_bands: 20, quantize_colors: 256 });
+    const recipe = wrapRecipe();
+    expect(recipe.recipe.converter!.base.svg_gradient_color_bands).toBe(20);
+    expect(restoreConverterRecipe(recipe, []).state.svg_gradient_color_bands).toBe(20);
+
+    delete recipe.recipe.converter!.base.svg_gradient_color_bands;
+    recipe.recipe.converter!.base.quantize_colors = 8;
+    expect(restoreConverterRecipe(recipe, []).state.svg_gradient_color_bands).toBe(16);
+    recipe.recipe.converter!.base.quantize_colors = 24;
+    expect(restoreConverterRecipe(recipe, []).state.svg_gradient_color_bands).toBe(24);
+    recipe.recipe.converter!.base.quantize_colors = 256;
+    expect(restoreConverterRecipe(recipe, []).state.svg_gradient_color_bands).toBe(32);
+  });
+
   it("restores old projects with compensation disabled", () => {
     const recipe = wrapRecipe();
     delete recipe.recipe.converter!.base.svg_hole_compensation_enabled;

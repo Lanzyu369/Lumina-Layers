@@ -128,6 +128,9 @@ class PrinterConfig:
 SVG_PIXELS_PER_MM_DEFAULT: float = 10.0
 SVG_PIXELS_PER_MM_MIN: float = 2.0
 SVG_PIXELS_PER_MM_MAX: float = 50.0
+SVG_GRADIENT_COLOR_BANDS_DEFAULT: int = 32
+SVG_GRADIENT_COLOR_BANDS_MIN: int = 8
+SVG_GRADIENT_COLOR_BANDS_MAX: int = 64
 
 
 def normalize_svg_pixels_per_mm(value: float | int | str | None) -> float:

@@ -181,6 +181,7 @@ function installActionHistoryBridge(): () => void {
     "svg_hole_compensation_enabled",
     "svg_hole_max_area_mm2",
     "svg_hole_max_width_mm",
+    "svg_gradient_color_bands",
   ] as const;
   const unsubToggles = TRACKED_ADVANCED_PARAMS.map((field) =>
     useConverterStore.subscribe(

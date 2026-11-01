@@ -101,6 +101,7 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   svg_hole_compensation_enabled?: boolean;
   svg_hole_max_area_mm2?: number;
   svg_hole_max_width_mm?: number;
+  svg_gradient_color_bands?: number;
   hue_weight?: number;
   chroma_gate?: number;
   is_dark?: boolean;
@@ -2167,6 +2168,7 @@ export interface BatchConvertParams {
   svg_hole_compensation_enabled?: boolean;
   svg_hole_max_area_mm2?: number;
   svg_hole_max_width_mm?: number;
+  svg_gradient_color_bands?: number;
   enable_coating?: boolean;
   coating_height_mm?: number;
   /** Deprecated selection accepted for compatibility; generation chooses the type automatically. */

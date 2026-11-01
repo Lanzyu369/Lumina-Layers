@@ -19,6 +19,7 @@ def build_common_generation_params(request: ConvertGenerateRequest) -> dict:
         "svg_pixels_per_mm": request.svg_pixels_per_mm,
         "svg_hole_max_area_mm2": request.svg_hole_max_area_mm2,
         "svg_hole_max_width_mm": request.svg_hole_max_width_mm,
+        "svg_gradient_color_bands": request.svg_gradient_color_bands,
         "separate_backing": request.separate_backing,
         "enable_relief": request.enable_relief,
         "color_height_map": request.color_height_map,

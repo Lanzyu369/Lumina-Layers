@@ -142,6 +142,7 @@ export function useAutoPreview(): void {
       state.svg_hole_compensation_enabled,
       state.svg_hole_max_area_mm2,
       state.svg_hole_max_width_mm,
+      state.svg_gradient_color_bands,
       state.quantize_colors,
       state.high_precision_3d_preview,
       state.enable_cleanup,

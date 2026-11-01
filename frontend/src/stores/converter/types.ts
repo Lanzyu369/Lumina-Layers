@@ -275,6 +275,7 @@ export interface ConverterState {
   svg_hole_compensation_enabled: boolean;
   svg_hole_max_area_mm2: number;
   svg_hole_max_width_mm: number;
+  svg_gradient_color_bands: number;
   hue_enable: boolean;
   use_lut_constrained: boolean;
   auto_dynamic_range: boolean;
@@ -586,6 +587,7 @@ export interface ConverterActions {
   setSvgHoleCompensationEnabled: (enabled: boolean) => void;
   setSvgHoleMaxAreaMm2: (area: number) => void;
   setSvgHoleMaxWidthMm: (width: number) => void;
+  setSvgGradientColorBands: (bands: number) => void;
   setHueEnable: (enabled: boolean) => void;
   setUseLutConstrained: (enabled: boolean) => void;
   setAutoDynamicRange: (enabled: boolean) => void;

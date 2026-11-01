@@ -60,6 +60,9 @@ from api.visible_region_cache import schedule_visible_region_cache_prewarm
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_generate_preview
 from config import (
+    SVG_GRADIENT_COLOR_BANDS_DEFAULT,
+    SVG_GRADIENT_COLOR_BANDS_MAX,
+    SVG_GRADIENT_COLOR_BANDS_MIN,
     SVG_PIXELS_PER_MM_DEFAULT,
     SVG_PIXELS_PER_MM_MAX,
     SVG_PIXELS_PER_MM_MIN,
@@ -921,7 +924,13 @@ async def convert_preview(
     model_only: bool = Form(False, description="仅使用模型匹配"),
     model_threshold: float | None = Form(None, description="模型回退阈值"),
     model_margin: float | None = Form(None, description="模型回退边距"),
-    quantize_colors: int = Form(48, description="K-Means 色彩细节（仅高保真模式生效）"),
+    quantize_colors: int = Form(48, description="K-Means 色彩细节（矢量模式下不生效，SVG 渐变见 svg_gradient_color_bands）"),
+    svg_gradient_color_bands: int = Form(
+        SVG_GRADIENT_COLOR_BANDS_DEFAULT,
+        ge=SVG_GRADIENT_COLOR_BANDS_MIN,
+        le=SVG_GRADIENT_COLOR_BANDS_MAX,
+        description="SVG 渐变切分颜色数（仅矢量模式生效）",
+    ),
     enable_cleanup: bool = Form(True, description="孤立像素清理"),
     svg_hole_compensation_enabled: Annotated[bool, Form(description="SVG 小洞补偿")] = False,
     svg_hole_max_area_mm2: Annotated[float, Form(ge=0.0, allow_inf_nan=False, description="补孔面积上限 (mm²)")] = 0.5,
@@ -1290,6 +1299,7 @@ async def convert_preview(
             svg_hole_compensation_enabled,
             svg_hole_max_area_mm2,
             svg_hole_max_width_mm,
+            svg_gradient_color_bands,
             resolved_material_profile_kind or "stage_a",
             spacer_thick,
         )

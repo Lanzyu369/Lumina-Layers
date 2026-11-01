@@ -125,6 +125,22 @@ class TestBuildVectorProcessorRouting:
         init_mock.assert_called_once_with("/tmp/test.npy", "4-Color (RYBW)")
         factory_mock.assert_not_called()
 
+    @pytest.mark.parametrize("requested, expected", [({}, 32), ({"svg_gradient_color_bands": 20}, 20)])
+    def test_lut_source_applies_gradient_color_bands(self, requested, expected):
+        from core.pipeline.vector_branch import _build_vector_processor
+
+        ctx = {
+            "material_source": "lut",
+            "actual_lut_path": "/tmp/test.npy",
+            "quantize_colors": 256,
+            **requested,
+        }
+
+        with patch("core.vector_engine.VectorProcessor.__init__", return_value=None):
+            vp = _build_vector_processor(ctx, fallback_color_mode="4-Color (RYBW)")
+
+        assert vp.gradient_color_bands == expected
+
     def test_lut_source_passes_hue_settings_to_constructor(self):
         from core.pipeline.vector_branch import _build_vector_processor
 
@@ -237,12 +253,26 @@ class TestBuildVectorProcessorRouting:
         from core.pipeline.vector_branch import _build_vector_processor
 
         ctx = _material_archive_ctx()
-        ctx["quantize_colors"] = 24
+        ctx["quantize_colors"] = 256
+        ctx["svg_gradient_color_bands"] = 24
 
         with _patch_material_cache_resolution():
             vp = _build_vector_processor(ctx, fallback_color_mode="4-Color (RYBW)")
 
         assert vp.gradient_color_bands == 24
+
+    @pytest.mark.parametrize("quantize_colors", [8, 48, 256])
+    def test_print_color_count_does_not_change_default_gradient_bands(self, quantize_colors):
+        from config import SVG_GRADIENT_COLOR_BANDS_DEFAULT
+        from core.pipeline.vector_branch import _build_vector_processor
+
+        ctx = _material_archive_ctx()
+        ctx["quantize_colors"] = quantize_colors
+
+        with _patch_material_cache_resolution():
+            vp = _build_vector_processor(ctx, fallback_color_mode="4-Color (RYBW)")
+
+        assert vp.gradient_color_bands == SVG_GRADIENT_COLOR_BANDS_DEFAULT
 
     def test_material_archive_custom_layer_height_drives_double_sided_mesh_z(self):
         from core.pipeline.vector_branch import _build_vector_processor

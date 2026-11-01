@@ -16,7 +16,7 @@ Design rules:
 
 import logging
 
-from config import SVG_PIXELS_PER_MM_DEFAULT
+from config import SVG_GRADIENT_COLOR_BANDS_DEFAULT, SVG_PIXELS_PER_MM_DEFAULT
 
 _HIGH_FIDELITY_PIXELS_PER_MM = 10.0
 
@@ -474,6 +474,7 @@ def worker_generate_preview(
     svg_hole_compensation_enabled: bool = False,
     svg_hole_max_area_mm2: float = 0.5,
     svg_hole_max_width_mm: float = 0.1,
+    svg_gradient_color_bands: int = SVG_GRADIENT_COLOR_BANDS_DEFAULT,
     material_profile_kind: str = "stage_a",
     spacer_thick: float = 1.2,
 ) -> dict:
@@ -491,7 +492,7 @@ def worker_generate_preview(
         target_width_mm (float): Target physical width in mm. (目标物理宽度，毫米)
         color_mode (str): Color system mode, e.g. "CMYW". (色彩系统模式)
         modeling_mode (str): Modeling mode string value, e.g. "high-fidelity". (建模模式字符串)
-        quantize_colors (int): Number of K-Means quantization colors. (仅高保真模式生效)
+        quantize_colors (int): Number of K-Means quantization colors. (矢量模式下不生效，SVG 渐变见 svg_gradient_color_bands)
         enable_cleanup (bool): Enable isolated-pixel cleanup. (启用孤立像素清理)
         enable_outline (bool): Enable vector outline metadata during preview.
             (预览时启用矢量描边元数据)
@@ -592,6 +593,7 @@ def worker_generate_preview(
             svg_hole_compensation_enabled=svg_hole_compensation_enabled,
             svg_hole_max_area_mm2=svg_hole_max_area_mm2,
             svg_hole_max_width_mm=svg_hole_max_width_mm,
+            svg_gradient_color_bands=svg_gradient_color_bands,
             is_dark=is_dark,
             hue_weight=hue_weight,
             chroma_gate=chroma_gate,
@@ -932,6 +934,7 @@ def worker_batch_convert_item(
     svg_hole_compensation_enabled: bool = False,
     svg_hole_max_area_mm2: float = 0.5,
     svg_hole_max_width_mm: float = 0.1,
+    svg_gradient_color_bands: int = SVG_GRADIENT_COLOR_BANDS_DEFAULT,
     enable_coating: bool = False,
     coating_height_mm: float = 0.08,
     native_filament_profiles: dict[str, str] | None = None,
@@ -971,7 +974,7 @@ def worker_batch_convert_item(
         modeling_mode_value: Modeling mode string, e.g. "high-fidelity". (建模模式字符串)
         color_layers: Optional explicit color layer count. (可选的颜色层数)
         layer_height_mm: Optional explicit layer height in mm. (可选的层厚)
-        quantize_colors: Number of K-Means quantization colors. (仅高保真模式生效)
+        quantize_colors: Number of K-Means quantization colors. (矢量模式下不生效，SVG 渐变见 svg_gradient_color_bands)
         enable_cleanup: Enable isolated-pixel cleanup. (启用孤立像素清理)
         artifact_prefix: Filename prefix for per-image intermediate
             artifacts (3MF / GLB / sidecar JSON). The parent process
@@ -1069,6 +1072,7 @@ def worker_batch_convert_item(
         svg_hole_compensation_enabled=svg_hole_compensation_enabled,
         svg_hole_max_area_mm2=svg_hole_max_area_mm2,
         svg_hole_max_width_mm=svg_hole_max_width_mm,
+        svg_gradient_color_bands=svg_gradient_color_bands,
         hue_weight=hue_weight,
         chroma_gate=chroma_gate,
         enable_relief=enable_relief,

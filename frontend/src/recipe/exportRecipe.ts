@@ -178,6 +178,7 @@ export function exportConverterRecipe(
       enable_cleanup: state.enable_cleanup,
       svg_pixels_per_mm: settings.svgPixelsPerMm,
       ...svgHoleCompensationOptions(state),
+      svg_gradient_color_bands: state.svg_gradient_color_bands,
       hue_enable: state.hue_enable,
       use_lut_constrained: state.use_lut_constrained,
       auto_dynamic_range: state.auto_dynamic_range,

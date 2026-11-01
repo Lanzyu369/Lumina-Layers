@@ -38,7 +38,7 @@ describe("AdvancedSettings contextual Wiki links", () => {
     ["3D高精度颜色预览", "/docs/reference/preview-and-palette/high-precision-3d-preview/"],
     ["色相保护", "/docs/reference/color-matching/hue-protection/"],
     ["暗色彩度门槛", "/docs/reference/color-matching/dark-chroma-gate/"],
-    ["解锁量化颜色数", "/docs/reference/color-matching/unlock-quantize-ceiling/"],
+    ["解锁打印颜色数量", "/docs/reference/color-matching/unlock-quantize-ceiling/"],
   ])("links %s to its matching Wiki article", (title, expectedPath) => {
     render(<AdvancedSettings />);
 

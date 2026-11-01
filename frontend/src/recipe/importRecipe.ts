@@ -39,6 +39,7 @@ import {
   svgHoleCompensationOptions,
   validSvgHoleCompensationOptions,
 } from "../constants/svgHoleCompensation";
+import { restoreSvgGradientColorBands } from "../constants/svgGradient";
 import { tRuntime } from "../i18n/runtime";
 
 // ========== Hex normalization ==========
@@ -654,6 +655,10 @@ export function restoreConverterRecipe(
     high_precision_3d_preview: Boolean(conv.base.high_precision_3d_preview),
     enable_cleanup: conv.base.enable_cleanup,
     ...svgCompensation,
+    svg_gradient_color_bands: restoreSvgGradientColorBands(
+      conv.base.svg_gradient_color_bands,
+      conv.base.quantize_colors,
+    ),
     hue_enable: dynamicMaterialEnabled ? false : conv.base.hue_enable,
     use_lut_constrained: Boolean(conv.base.use_lut_constrained),
     auto_dynamic_range: Boolean(conv.base.auto_dynamic_range),

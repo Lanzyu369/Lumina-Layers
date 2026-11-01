@@ -80,6 +80,10 @@ import {
   validSvgHoleCompensationOptions,
   type SvgHoleCompensationOptions,
 } from "../../constants/svgHoleCompensation";
+import {
+  SVG_GRADIENT_COLOR_BANDS_DEFAULT,
+  normalizeSvgGradientColorBands,
+} from "../../constants/svgGradient";
 import { tRuntime } from "../../i18n/runtime";
 import {
   postClientLog,
@@ -1961,6 +1965,7 @@ export const DEFAULT_STATE: ConverterState = {
   enable_cleanup: true,
   ...loadSvgHoleCompensationSettings(),
   svg_hole_compensation_enabled: false,
+  svg_gradient_color_bands: SVG_GRADIENT_COLOR_BANDS_DEFAULT,
   hue_enable: false,
   use_lut_constrained: false,
   auto_dynamic_range: false,
@@ -3451,6 +3456,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         threemfDiskPath: null,
         downloadUrl: null,
       }),
+    setSvgGradientColorBands: (bands: number) => {
+      set({
+        svg_gradient_color_bands: normalizeSvgGradientColorBands(bands),
+        threemfDiskPath: null,
+        downloadUrl: null,
+      });
+    },
     setSvgHoleCompensationEnabled: (enabled: boolean) => {
       const current = _get();
       if (enabled === current.svg_hole_compensation_enabled) return;

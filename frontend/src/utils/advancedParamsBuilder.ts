@@ -134,6 +134,7 @@ function buildGeneration(
     high_precision_3d_preview: state.high_precision_3d_preview,
     enable_cleanup: state.enable_cleanup,
     ...svgHoleCompensationOptions(state),
+    svg_gradient_color_bands: state.svg_gradient_color_bands,
     svg_pixels_per_mm:
       typeof options.svgPixelsPerMm === "number"
         ? options.svgPixelsPerMm

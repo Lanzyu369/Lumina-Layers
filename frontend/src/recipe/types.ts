@@ -65,6 +65,8 @@ export interface ConverterRecipeBase {
   svg_hole_compensation_enabled?: boolean;
   svg_hole_max_area_mm2?: number;
   svg_hole_max_width_mm?: number;
+  /** Vector-mode SVG gradient steps; absent on older recipes. */
+  svg_gradient_color_bands?: number;
   hue_enable: boolean;
   /** Constrain colour matching to colours represented by the active LUT. */
   use_lut_constrained?: boolean;

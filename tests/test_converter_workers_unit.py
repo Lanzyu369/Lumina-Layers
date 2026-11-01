@@ -155,7 +155,7 @@ class TestParameterAnnotations:
     def test_preview_has_expected_param_count(self) -> None:
         """worker_generate_preview should expose the full preview parameter set."""
         sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 38
+        assert len(sig.parameters) == 39
 
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""
@@ -188,6 +188,7 @@ class TestParameterAnnotations:
             "material_profile_kind", "spacer_thick",
             "svg_hole_compensation_enabled", "svg_hole_max_area_mm2",
             "svg_hole_max_width_mm",
+            "svg_gradient_color_bands",
         }
         assert set(sig.parameters.keys()) == expected
 

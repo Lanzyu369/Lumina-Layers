@@ -1,10 +1,11 @@
 import { StructureMode } from "../api/types";
 import type { ConverterState, ConverterActions } from "./converter/types";
 import { isMaterialArchiveSourceVersion } from "./converter/types";
+import { SVG_GRADIENT_COLOR_BANDS_MAX, SVG_GRADIENT_COLOR_BANDS_MIN } from "../constants/svgGradient";
 
 export const PRESET_OPTION_KEYS = {
   advanced: ["enable_cleanup", "separate_backing", "backingOutput", "use_lut_constrained",
-    "auto_dynamic_range", "high_precision_3d_preview", "hue_enable", "chroma_gate", "quantize_colors_unlocked"],
+    "auto_dynamic_range", "high_precision_3d_preview", "hue_enable", "chroma_gate", "quantize_colors_unlocked", "svg_gradient_color_bands"],
   outline: ["enable_outline", "outline_width"],
   coating: ["enable_coating", "coating_height_mm"],
 } as const;
@@ -87,6 +88,7 @@ export function captureConversionParameters(state: ConverterState): ConversionPa
     hue_enable: state.hue_enable,
     chroma_gate: state.chroma_gate,
     quantize_colors_unlocked: state.quantize_colors_unlocked,
+    svg_gradient_color_bands: state.svg_gradient_color_bands,
     enable_outline: state.enable_outline,
     outline_width: state.outline_width,
     enable_coating: state.enable_coating,
@@ -125,6 +127,9 @@ function normalizeParameters(value: unknown): ConversionParameters | null {
   if (booleans.some(key => p[key] !== undefined && typeof p[key] !== "boolean") ||
       (p.backingOutput !== undefined && p.backingOutput !== "same_project" && p.backingOutput !== "separate_project") ||
       (p.chroma_gate !== undefined && !number("chroma_gate", 0, 50)) ||
+      (p.svg_gradient_color_bands !== undefined && !number(
+        "svg_gradient_color_bands", SVG_GRADIENT_COLOR_BANDS_MIN, SVG_GRADIENT_COLOR_BANDS_MAX,
+      )) ||
       (p.outline_width !== undefined && !number("outline_width", 0.5, 10))) return null;
   // Build a whitelist; never restore sessions, resource URLs, images, or edits.
   const keys: Array<keyof ConversionParameters> = ["source_version", "structure_mode", "size_axis", "size_mm",
@@ -188,6 +193,7 @@ export function applyConversionParameters(getState: () => ConverterState & Conve
   if (p.hue_enable !== undefined && getState().hue_enable !== p.hue_enable) state.setHueEnable(p.hue_enable);
   if (p.chroma_gate !== undefined && getState().chroma_gate !== p.chroma_gate) state.setChromaGate(p.chroma_gate);
   if (p.quantize_colors_unlocked !== undefined && getState().quantize_colors_unlocked !== p.quantize_colors_unlocked) state.setQuantizeColorsUnlocked(p.quantize_colors_unlocked);
+  if (p.svg_gradient_color_bands !== undefined && getState().svg_gradient_color_bands !== p.svg_gradient_color_bands) state.setSvgGradientColorBands(p.svg_gradient_color_bands);
   if (p.enable_outline !== undefined && getState().enable_outline !== p.enable_outline) state.setEnableOutline(p.enable_outline);
   if (p.outline_width !== undefined && getState().outline_width !== p.outline_width) state.setOutlineWidth(p.outline_width);
   const ratio = getState().aspectRatio;

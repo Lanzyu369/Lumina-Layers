@@ -153,6 +153,7 @@ describe("submitBatch API 调用和状态管理", () => {
       svg_hole_compensation_enabled: false,
       svg_hole_max_area_mm2: 0.5,
       svg_hole_max_width_mm: 0.1,
+      svg_gradient_color_bands: 32,
       hue_weight: 0,
       chroma_gate: 0,
       use_lut_constrained: false,

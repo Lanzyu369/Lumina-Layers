@@ -87,6 +87,9 @@ from utils.merged_bambu_3mf_writer import (
 from utils.fatcat_metadata import MetadataTarget, select_metadata_target
 from config import (
     PrinterConfig,
+    SVG_GRADIENT_COLOR_BANDS_DEFAULT,
+    SVG_GRADIENT_COLOR_BANDS_MAX,
+    SVG_GRADIENT_COLOR_BANDS_MIN,
     SVG_PIXELS_PER_MM_DEFAULT,
     SVG_PIXELS_PER_MM_MAX,
     SVG_PIXELS_PER_MM_MIN,
@@ -1121,6 +1124,12 @@ def _preview_analysis_params_match(
         ("svg_pixels_per_mm", request.svg_pixels_per_mm, "float"),
         ("material_source", str(session_material_source or "lut"), "raw"),
     )
+    if str(_enum_value(core_modeling_mode)) == "vector" and "svg_gradient_color_bands" in cache:
+        # Gradient flattening changes the analysed vector shapes themselves.
+        # Previews cached before this option keep their analysed gradient steps.
+        checks += (
+            ("svg_gradient_color_bands", request.svg_gradient_color_bands, "int"),
+        )
     if str(session_material_source or "lut") == "material_archive":
         # The cache's colour analysis is tied to its optical model family.
         # Keep legacy sessions valid by treating an absent session key as
@@ -4753,7 +4762,13 @@ async def convert_batch(
     modeling_mode: str = Form("high-fidelity", description="建模模式"),
     color_layers: int | None = Form(None, ge=1, le=20, description="叠色层数"),
     layer_height_mm: float | None = Form(None, gt=0.0, le=1.0, description="叠色层高 (mm)"),
-    quantize_colors: int = Form(48, description="K-Means 色彩细节（仅高保真模式生效）"),
+    quantize_colors: int = Form(48, description="K-Means 色彩细节（矢量模式下不生效，SVG 渐变见 svg_gradient_color_bands）"),
+    svg_gradient_color_bands: int = Form(
+        SVG_GRADIENT_COLOR_BANDS_DEFAULT,
+        ge=SVG_GRADIENT_COLOR_BANDS_MIN,
+        le=SVG_GRADIENT_COLOR_BANDS_MAX,
+        description="SVG 渐变切分颜色数（仅矢量模式生效）",
+    ),
     enable_cleanup: bool = Form(True, description="孤立像素清理"),
     svg_pixels_per_mm: float = Form(
         SVG_PIXELS_PER_MM_DEFAULT,
@@ -5121,6 +5136,7 @@ async def convert_batch(
         svg_hole_compensation_enabled,
         svg_hole_max_area_mm2,
         svg_hole_max_width_mm,
+        svg_gradient_color_bands,
         enable_coating,
         coating_height_mm,
         selected_native_profiles,

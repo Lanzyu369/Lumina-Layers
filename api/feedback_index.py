@@ -400,6 +400,7 @@ def _format_advanced_params_section(context: dict[str, Any]) -> str:
             "svg_hole_compensation_enabled",
             "svg_hole_max_area_mm2",
             "svg_hole_max_width_mm",
+            "svg_gradient_color_bands",
             "backing_output",
         ):
             if field in generation:

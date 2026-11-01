@@ -20,6 +20,7 @@ import {
   StructureMode,
 } from "../../api/types";
 import { apiErrorToVisibleMessage } from "../../api/client";
+import { SVG_GRADIENT_COLOR_BANDS_MAX, SVG_GRADIENT_COLOR_BANDS_MIN } from "../../constants/svgGradient";
 import type { SavedMaterialLibraryItem } from "../../api/types";
 import { listGradientCardMaterials } from "../../api/extractor";
 import { LUMINA_BOX_PRODUCTION_MODEL_ID } from "../../api/luminaBoxMaterials";
@@ -1625,9 +1626,12 @@ function QuantizeColorsControl() {
   const { t } = useI18n();
   const quantize_colors = useConverterStore((s) => s.quantize_colors);
   const quantize_colors_unlocked = useConverterStore((s) => s.quantize_colors_unlocked);
+  const svgGradientColorBands = useConverterStore((s) => s.svg_gradient_color_bands);
+  const isVector = useConverterStore((s) => s.modeling_mode === ModelingMode.VECTOR);
   const imageFile = useConverterStore((s) => s.imageFile);
   const autoDetectLoading = useConverterStore((s) => s.autoDetectColorsLoading);
   const setQuantizeColors = useConverterStore((s) => s.setQuantizeColors);
+  const setSvgGradientColorBands = useConverterStore((s) => s.setSvgGradientColorBands);
   const autoDetectColors = useConverterStore((s) => s.autoDetectColors);
   const upperBound = quantize_colors_unlocked ? 8192 : 256;
   // Step must divide (upperBound - min=8) so the slider can reach the
@@ -1650,16 +1654,28 @@ function QuantizeColorsControl() {
         max={upperBound}
         step={step}
         onChange={setQuantizeColors}
+        disabled={isVector}
       />
       <Button
         label={autoDetectLoading ? t("conv_auto_color_calculating") : t("conv_auto_color_btn")}
         variant="secondary"
         size="sm"
         onClick={autoDetectColors}
-        disabled={!imageFile || autoDetectLoading}
+        disabled={!imageFile || autoDetectLoading || isVector}
         loading={autoDetectLoading}
         className="self-end"
       />
+      {isVector && (
+        <Slider
+          label={t("adv_svg_gradient_color_bands")}
+          tooltip={t("adv_svg_gradient_color_bands_hint")}
+          value={svgGradientColorBands}
+          min={SVG_GRADIENT_COLOR_BANDS_MIN}
+          max={SVG_GRADIENT_COLOR_BANDS_MAX}
+          step={1}
+          onChange={setSvgGradientColorBands}
+        />
+      )}
     </div>
   );
 }

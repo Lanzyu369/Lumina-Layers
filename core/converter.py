@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import List, Dict, Tuple, Optional
 
 from config import (
+    SVG_GRADIENT_COLOR_BANDS_DEFAULT,
     SVG_PIXELS_PER_MM_DEFAULT,
     PrinterConfig,
     ColorSystem,
@@ -364,6 +365,7 @@ def convert_image_to_3d(
     svg_hole_compensation_enabled: bool = False,
     svg_hole_max_area_mm2: float = 0.5,
     svg_hole_max_width_mm: float = 0.1,
+    svg_gradient_color_bands: int = SVG_GRADIENT_COLOR_BANDS_DEFAULT,
 ):
     """Main conversion function: Convert image to 3D model.
     主要转换函数：将图像转换为 3D 模型。
@@ -377,6 +379,8 @@ def convert_image_to_3d(
             criterion. (补孔面积上限，平方毫米；零关闭此筛选)
         svg_hole_max_width_mm: Maximum 2*area/perimeter for enclosed gaps;
             zero disables this criterion. (封闭细缝宽度指标上限，毫米；零关闭)
+        svg_gradient_color_bands: Color steps used to flatten SVG gradients in
+            vector mode. (矢量模式下 SVG 渐变切分颜色数)
         enable_fridge_magnet: Whether to enable opt-in fridge-magnet cavity
             handling in downstream raster/vector geometry stages.
             (是否在下游光栅/矢量几何阶段启用可选的冰箱贴磁铁槽处理)
@@ -552,6 +556,7 @@ def convert_image_to_3d(
         "svg_hole_compensation_enabled": svg_hole_compensation_enabled,
         "svg_hole_max_area_mm2": svg_hole_max_area_mm2,
         "svg_hole_max_width_mm": svg_hole_max_width_mm,
+        "svg_gradient_color_bands": svg_gradient_color_bands,
     }
     ctx = build_image_model_context(progress=progress, **ctx)
     _raise_dynamic_material_pipeline_error(ctx)
@@ -603,6 +608,7 @@ def generate_preview_cached(
     svg_hole_compensation_enabled: bool = False,
     svg_hole_max_area_mm2: float = 0.5,
     svg_hole_max_width_mm: float = 0.1,
+    svg_gradient_color_bands: int = SVG_GRADIENT_COLOR_BANDS_DEFAULT,
 ):
     """Generate preview and cache data. Thin wrapper, delegates to coordinator.
     生成预览图和缓存数据。薄包装函数，委托给 coordinator。
@@ -615,6 +621,8 @@ def generate_preview_cached(
             criterion. (补孔面积上限，平方毫米；零关闭此筛选)
         svg_hole_max_width_mm: Maximum 2*area/perimeter for enclosed gaps;
             zero disables this criterion. (封闭细缝宽度指标上限，毫米；零关闭)
+        svg_gradient_color_bands: Color steps used to flatten SVG gradients in
+            vector mode. (矢量模式下 SVG 渐变切分颜色数)
         material_backing_material_index: Selected backing material index.
             (用户选择的基板耗材索引)
         material_dynamic_layer_count_enabled: Enable exact dynamic effective
@@ -675,6 +683,7 @@ def generate_preview_cached(
         "svg_hole_compensation_enabled": svg_hole_compensation_enabled,
         "svg_hole_max_area_mm2": svg_hole_max_area_mm2,
         "svg_hole_max_width_mm": svg_hole_max_width_mm,
+        "svg_gradient_color_bands": svg_gradient_color_bands,
     }
 
     ctx = run_preview_pipeline(ctx)
@@ -818,6 +827,7 @@ def generate_final_model(
     svg_hole_compensation_enabled: bool = False,
     svg_hole_max_area_mm2: float = 0.5,
     svg_hole_max_width_mm: float = 0.1,
+    svg_gradient_color_bands: int = SVG_GRADIENT_COLOR_BANDS_DEFAULT,
 ):
     """Wrapper function for generating final model.
     包装函数，用于生成最终模型。
@@ -834,6 +844,8 @@ def generate_final_model(
             criterion. (补孔面积上限，平方毫米；零关闭此筛选)
         svg_hole_max_width_mm: Maximum 2*area/perimeter for enclosed gaps;
             zero disables this criterion. (封闭细缝宽度指标上限，毫米；零关闭)
+        svg_gradient_color_bands: Color steps used to flatten SVG gradients in
+            vector mode. (矢量模式下 SVG 渐变切分颜色数)
         enable_fridge_magnet: Whether to enable opt-in fridge-magnet cavity
             handling for supported generation flows. (是否为受支持的生成流程
             启用可选的冰箱贴磁铁槽处理)
@@ -962,6 +974,7 @@ def generate_final_model(
         svg_hole_compensation_enabled=svg_hole_compensation_enabled,
         svg_hole_max_area_mm2=svg_hole_max_area_mm2,
         svg_hole_max_width_mm=svg_hole_max_width_mm,
+        svg_gradient_color_bands=svg_gradient_color_bands,
         native_filament_profiles=native_filament_profiles,
         backing_infill_density_percent=backing_infill_density_percent,
         blur_kernel=0,

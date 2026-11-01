@@ -306,6 +306,25 @@ function isMultipleOfStep(value: number, step: number): boolean {
 }
 
 describe("BasicSettings", () => {
+  it("offers print colors outside vector mode and hides SVG gradient steps", () => {
+    useConverterStore.setState({ modeling_mode: ModelingModeEnum.HIGH_FIDELITY });
+    render(<BasicSettings />);
+
+    expect(screen.getByRole("slider", { name: "打印颜色数量" })).toBeEnabled();
+    expect(screen.queryByRole("slider", { name: "SVG 渐变切分颜色数" })).toBeNull();
+  });
+
+  it.each(["lumina_box", "legacy"] as const)("disables print colors and enables gradient steps for %s vector mode", (sourceVersion) => {
+    useConverterStore.setState({ modeling_mode: ModelingModeEnum.VECTOR, source_version: sourceVersion });
+    render(<BasicSettings />);
+
+    expect(screen.getByRole("slider", { name: "打印颜色数量" })).toBeDisabled();
+    const gradientSlider = screen.getByRole("slider", { name: "SVG 渐变切分颜色数" });
+    expect(gradientSlider).toBeEnabled();
+    fireEvent.change(gradientSlider, { target: { value: "20" } });
+    expect(useConverterStore.getState().svg_gradient_color_bands).toBe(20);
+  });
+
   it.each([
     [2, "宽度", "500", "250"],
     [0.5, "高度", "150", "300"],

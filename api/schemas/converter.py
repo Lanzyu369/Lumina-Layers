@@ -20,6 +20,9 @@ from api.schemas.dynamic_material import DynamicMaterialResultResponse
 from api.schemas.lut import LutSourceSelection
 from config import (
     PrinterConfig,
+    SVG_GRADIENT_COLOR_BANDS_DEFAULT,
+    SVG_GRADIENT_COLOR_BANDS_MAX,
+    SVG_GRADIENT_COLOR_BANDS_MIN,
     SVG_PIXELS_PER_MM_DEFAULT,
     SVG_PIXELS_PER_MM_MAX,
     SVG_PIXELS_PER_MM_MIN,
@@ -317,7 +320,7 @@ class ConvertPreviewRequest(LutSourceSelection, SvgHoleCompensationOptions):
         modeling_mode: 3D modeling strategy.
             建模模式。
         quantize_colors: Number of K-Means quantization colors.
-            K-Means 色彩细节（仅高保真模式生效）。
+            K-Means 色彩细节（矢量模式下不生效，SVG 渐变见 svg_gradient_color_bands）。
         enable_cleanup: Whether to clean up isolated pixels.
             是否启用孤立像素清理。
         enable_outline: Whether to request outline metadata in vector preview.
@@ -347,7 +350,13 @@ class ConvertPreviewRequest(LutSourceSelection, SvgHoleCompensationOptions):
     model_threshold: float | None = Field(None, description="模型回退阈值；空值或负数表示使用运行时默认值")
     model_margin: float | None = Field(None, description="模型回退边距；空值或负数表示使用运行时默认值")
     spacer_thick: float = Field(1.2, ge=0.2, le=MAX_BACKING_THICKNESS_MM, description="配色使用的实体底板厚度 (mm)")
-    quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节（仅高保真模式生效）")
+    quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节（矢量模式下不生效，SVG 渐变见 svg_gradient_color_bands）")
+    svg_gradient_color_bands: int = Field(
+        SVG_GRADIENT_COLOR_BANDS_DEFAULT,
+        ge=SVG_GRADIENT_COLOR_BANDS_MIN,
+        le=SVG_GRADIENT_COLOR_BANDS_MAX,
+        description="SVG 渐变切分颜色数（仅矢量模式生效）",
+    )
     enable_cleanup: bool = Field(True, description="孤立像素清理")
     enable_outline: bool = Field(False, description="启用描边")
     outline_width: float = Field(2.0, ge=0.5, le=10.0, description="描边宽度 (mm)")
@@ -484,7 +493,7 @@ class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
         modeling_mode: 3D modeling strategy.
             建模模式。
         quantize_colors: Number of K-Means quantization colors.
-            K-Means 色彩细节（仅高保真模式生效）。
+            K-Means 色彩细节（矢量模式下不生效，SVG 渐变见 svg_gradient_color_bands）。
         enable_cleanup: Whether to clean up isolated pixels.
             是否启用孤立像素清理。
         separate_backing: Whether to export backing plate as separate object.
@@ -561,7 +570,13 @@ class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
     model_only: bool = Field(False, description="仅使用模型匹配，跳过 DB 匹配")
     model_threshold: float | None = Field(None, description="模型回退阈值；空值或负数表示使用运行时默认值")
     model_margin: float | None = Field(None, description="模型回退边距；空值或负数表示使用运行时默认值")
-    quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节（仅高保真模式生效）")
+    quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节（矢量模式下不生效，SVG 渐变见 svg_gradient_color_bands）")
+    svg_gradient_color_bands: int = Field(
+        SVG_GRADIENT_COLOR_BANDS_DEFAULT,
+        ge=SVG_GRADIENT_COLOR_BANDS_MIN,
+        le=SVG_GRADIENT_COLOR_BANDS_MAX,
+        description="SVG 渐变切分颜色数（仅矢量模式生效）",
+    )
     enable_cleanup: bool = Field(True, description="孤立像素清理")
     svg_pixels_per_mm: float = Field(
         SVG_PIXELS_PER_MM_DEFAULT,

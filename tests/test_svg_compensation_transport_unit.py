@@ -99,6 +99,51 @@ def test_generation_reuses_only_identical_compensation_settings(changes, expecte
     assert matches is expected
 
 
+@pytest.mark.parametrize("cached_bands, expected", [(24, True), (32, False)])
+def test_lut_vector_preview_reuse_requires_same_gradient_bands(cached_bands, expected):
+    from api.routers.converter.generate import _preview_analysis_params_match
+    from config import ModelingMode
+
+    request = ConvertGenerateRequest(
+        lut_name="test.npy", modeling_mode="vector", svg_gradient_color_bands=24,
+    )
+    cache = {
+        **request.model_dump(), "target_width_mm": 220.0, "material_source": "lut",
+        "svg_gradient_color_bands": cached_bands,
+    }
+    matches, _ = _preview_analysis_params_match(
+        cache=cache, request=request, core_modeling_mode=ModelingMode.VECTOR,
+        session_material_source="lut", target_width_mm=220.0,
+    )
+    assert matches is expected
+
+
+@pytest.mark.parametrize("cached_bands, expected", [(24, True), (32, False)])
+def test_material_vector_preview_reuse_requires_same_gradient_bands(cached_bands, expected):
+    from api.routers.converter.generate import _preview_analysis_params_match
+    from config import ModelingMode
+
+    request = ConvertGenerateRequest(
+        lut_name="__material_archive__", modeling_mode="vector", svg_gradient_color_bands=24,
+    )
+    cache = {
+        **request.model_dump(), "target_width_mm": 220.0, "material_source": "material_archive",
+        "material_profile_kind": "stage_a", "svg_gradient_color_bands": cached_bands,
+    }
+    matches, _ = _preview_analysis_params_match(
+        cache=cache, request=request, core_modeling_mode=ModelingMode.VECTOR,
+        session_material_source="material_archive", session_material_profile_kind="stage_a",
+        target_width_mm=220.0,
+    )
+    assert matches is expected
+
+
+@pytest.mark.parametrize("bands", [7, 65])
+def test_gradient_bands_outside_supported_range_are_rejected(bands):
+    with pytest.raises(ValidationError):
+        ConvertGenerateRequest(lut_name="test.npy", svg_gradient_color_bands=bands)
+
+
 def test_old_uncompensated_preview_remains_reusable_when_disabled():
     from api.routers.converter.generate import _preview_analysis_params_match
     from config import ModelingMode

@@ -6099,12 +6099,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== Advanced Settings ====================
   adv_quantize_colors: {
-    zh: "量化颜色数",
-    en: "Quantize Colors",
+    zh: "打印颜色数量",
+    en: "Print Color Count",
   },
   adv_quantize_colors_hint: {
-    zh: "把图片归纳成多少种颜色再进行配色。数值越大，颜色过渡越细腻，但处理越慢；数值越小，色块越明显，处理越快。仅高保真模式有效，矢量模式下此参数不起作用。",
-    en: "How many colors the image is reduced to before color matching. Higher values give smoother color transitions but slower processing; lower values give more visible color blocks and faster processing. Only applies in High-Fidelity mode; has no effect in Vector mode.",
+    zh: "把图片归纳成多少种颜色再进行配色。数值越大，颜色过渡越细腻，但处理越慢；数值越小，色块越明显，处理越快。矢量模式下此项不可调。",
+    en: "How many colors the image is reduced to before color matching. Higher values give smoother color transitions but slower processing; lower values give more visible color blocks and faster processing. This setting is unavailable in Vector mode.",
+  },
+  adv_svg_gradient_color_bands: {
+    zh: "SVG 渐变切分颜色数",
+    en: "SVG Gradient Color Steps",
+  },
+  adv_svg_gradient_color_bands_hint: {
+    zh: "把 SVG 里的每个渐变切成多少种纯色。数值越大，过渡越平滑，但模型和处理时间也会增加。仅在矢量模式生效；纯色填充不受影响。",
+    en: "How many solid colors each SVG gradient is split into. Higher values give smoother transitions but increase model size and processing time. Only applies in Vector mode; solid fills are unaffected.",
   },
   adv_isolated_pixel_cleanup: {
     zh: "孤立像素清理",
