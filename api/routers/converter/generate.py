@@ -4816,6 +4816,8 @@ async def convert_batch(
     coating_height_mm: float = Form(0.08, ge=0.04, le=0.12, description="透明镀层厚度 (mm)"),
     coating_material: str | None = Form(None),
     backing_output: Literal["same_project", "separate_project"] = Form("same_project"),
+    enable_outline: bool = Form(False, description="启用外边框"),
+    outline_width: float = Form(2.0, ge=0.5, le=10.0, allow_inf_nan=False, description="外边框宽度 (mm)"),
 ) -> BatchResponse:
     """Batch-convert multiple images via process pool.
     通过进程池批量转换多张图像。
@@ -5142,6 +5144,8 @@ async def convert_batch(
         selected_native_profiles,
         selected_coating_material,
         resolved_material_profile_kind or "stage_a",
+        enable_outline,
+        outline_width,
     )
     batch_size = max(1, int(pool.max_workers))
     workers_completed = False

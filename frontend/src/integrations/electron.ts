@@ -17,7 +17,7 @@ interface ElectronAPI {
   setLanguage: (lang: string, serialLabels?: SerialPickerLabels) => void;
   platform?: string;
   alignTrafficLights?: (centerY: number, controlsHeight: number) => Promise<null>;
-  setTitlebarTheme?: (theme: "light" | "dark") => void;
+  setTitlebarTheme?: (theme: "light" | "dark", scrimmed?: boolean) => void;
   setApplicationMenuState?: (state: { commands?: Record<string, boolean>; labels?: Record<string, string> }) => void;
   onApplicationMenuCommand?: (listener: (command: string) => void) => () => void;
   getAppVersion: () => Promise<string>;
