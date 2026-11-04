@@ -12,6 +12,7 @@
     "revision_id": "aa9566bb-5e53-45b3-a10b-183c3c3fc317",
     "schema_version": "1.0"
   },
+  "backing_material_id": "8326c443-3b27-4851-b8e6-e87221a1905b",
   "brand": "KYNIX",
   "capture_dataset_id": "78e5b6bc-232a-465a-bc7d-7cf86e0b2a3f",
   "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",

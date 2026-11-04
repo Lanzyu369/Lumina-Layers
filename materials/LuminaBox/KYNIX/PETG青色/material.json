@@ -1,67 +1,58 @@
 {
-  "acquisition_source": "lumina_box",
+  "acquisition_source": "lumina_box_backed_gradient",
   "archive_consistency": {
-    "acquisition_source": "lumina_box",
+    "acquisition_source": "lumina_box_backed_gradient",
     "archive_id": "21b74bb2-9fe8-4830-a545-70e5788af277",
     "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
-    "measurement_protocol_id": "lumina_box_xyz_paired_diffuser_km/v2",
-    "objective_id": "box_spectral_paired_spectral_white/v3",
-    "optical_model_id": "box_reference_consistent_feedback/equal_xyz_v1",
+    "measurement_protocol_id": "lumina_box_backed_gradient/v1",
+    "objective_id": "backed_gradient_xyz_fixed_weak_logk_curvature/v1",
+    "optical_model_id": "backed_gradient_spectral_four_flux_smooth/v3",
     "profile_kind": "lumina_box",
-    "reference_id": "7b063ffb429e5fe07e5f91e844e155ee4fe5d44194380984f741be2e4af3f6c5",
-    "revision_id": "c455b0bb-6f01-4e60-8f69-d2adfd3da304",
-    "schema_version": "2.0"
+    "reference_id": "3bd3d992e2fa23e015c0b8da8255c0b82199fc84a5f51ef53f20d28d0d48cfca",
+    "revision_id": "177fbe9d-b77e-487b-810d-c8721a0e740f",
+    "schema_version": "1.0"
   },
+  "backing_material_id": null,
   "brand": "KYNIX",
+  "capture_dataset_id": "b6e4d1c4-d2ff-4b75-a979-d7f28289fee3",
   "color_bridge_id": "d65_10_to_d65_2_diagonal/v1",
   "created_at": "2026-10-04T09:33:03.516554+00:00",
   "estimated_effective_d65_10_xyz_relative": [
-    0.5702401055395976,
-    0.7116341647378377,
-    0.6865821592867201
+    0.5312680653276596,
+    0.6681916035639063,
+    0.6511179005424903
   ],
-  "estimated_reflectance_thickness_mm": 3.0,
   "estimated_rgb": [
-    147,
-    236,
-    214
+    138,
+    230,
+    210
   ],
-  "is_reference_white": false,
   "kind": "lumina_box_material",
+  "material_kind": "color",
   "material_name": "PETG青色",
+  "material_symbol": "material",
   "material_type": "PETG",
-  "measurement_backing_base_percent_xyz": [
-    19.8,
-    19.7,
-    24.7
-  ],
-  "measurement_backing_effective_percent_xyz": [
-    40.53612774904172,
-    40.44889433765505,
-    51.80032428955781
-  ],
-  "measurement_backing_scale": 2.2303348342873544,
-  "measurement_protocol_id": "lumina_box_xyz_paired_diffuser_km/v2",
-  "measurement_reflection_boundary_id": "instrument_diffuser_recycled_white_reference/v1",
-  "measurement_thickness_offset_mm": 0.0,
-  "measurements_file": "lumina_box_measurements.json",
+  "measurement_protocol_id": "lumina_box_backed_gradient/v1",
+  "measurements_file": "lumina_box_backed_gradient_measurements.json",
   "notes": null,
-  "objective_id": "box_spectral_paired_spectral_white/v3",
-  "optical_model": "box_reference_consistent_feedback/equal_xyz_v1",
-  "optical_parameters_file": "lumina_box_spectral_parameters.json",
+  "objective_id": "backed_gradient_xyz_fixed_weak_logk_curvature/v1",
+  "optical_model": "backed_gradient_spectral_four_flux_smooth/v3",
+  "optical_parameters_file": "lumina_box_backed_gradient_parameters.json",
   "profile_kind": "lumina_box",
-  "reference_id": "7b063ffb429e5fe07e5f91e844e155ee4fe5d44194380984f741be2e4af3f6c5",
-  "schema_version": "3.0",
+  "reference_id": "3bd3d992e2fa23e015c0b8da8255c0b82199fc84a5f51ef53f20d28d0d48cfca",
+  "rmse_pp": 1.1381201411038793,
+  "schema_version": "1.0",
   "sidecar_integrity": {
     "algorithm": "sha256",
     "measurements": {
-      "filename": "lumina_box_measurements.json",
-      "sha256": "d3defc84ad93ea1edf80e80f209153a2d7a472763092ebd88383561d1d7895c0"
+      "filename": "lumina_box_backed_gradient_measurements.json",
+      "sha256": "2dff9bb60b215c57cba8a62cadd91d1a2a30eab75b80e6177313d2428ae80bbe"
     },
     "parameters": {
-      "filename": "lumina_box_spectral_parameters.json",
-      "sha256": "e56d890c2b6eef23d71ff4c7596ea9b6123a343c2682516fd917fc8526c3864b"
+      "filename": "lumina_box_backed_gradient_parameters.json",
+      "sha256": "ed34fb37f7690f37e4507babc8ae0d4ad0987f21b63ca1bc5d89fe728b09469b"
     }
   },
-  "updated_at": "2026-10-05T11:04:21.321325+00:00"
+  "status": "complete",
+  "updated_at": "2026-11-01T10:02:36.551153+00:00"
 }
